@@ -1,0 +1,109 @@
+# Enfold v1 scope
+
+`DESIGN.md`, `FORMAT.md` and `SYNC.md` describe a system considerably larger than v1. This
+document says what v1 actually ships, so that a design covering sync, phones and post-quantum
+migration does not turn into a v1 that never gets finished.
+
+`DECISIONS.md` records the project's own assessment that **the most likely failure mode is not
+imperfect memory hygiene but never shipping.** This file exists to act on that.
+
+---
+
+## v1 ships
+
+**Platform:** **Windows 10 and later.** Go + Wails v2. No macOS, no Linux, no CI matrix.
+
+Windows 10 is in scope because a substantial number of people still run it, and that has
+consequences worth stating up front:
+
+- **TPM 2.0 cannot be assumed.** It is mandatory on Windows 11 and merely common on Windows 10, so
+  device binding treats it as an optional enhancement, not a prerequisite (`SYNC.md` §3.1).
+- **DPAPI machine scope is the floor and must be implemented and tested**, not left as a branch
+  nobody exercises. It is available on every Windows version, so an unbound identity never occurs
+  on this platform.
+- **The newer WebAuthn APIs are unavailable**, which rules out `prf-derived` slots on Windows 10.
+  They are reserved and unused in v1 regardless.
+
+**Keystore**
+
+- One keystore file, superblock A/B, slot region A/B, encrypted registry (`FORMAT.md` Part I)
+- Slot types: **hardware (YubiKey PIV 9d, P-256 ECDH)**, **standalone password**, **recovery**
+- Software slots are hybrid X25519 + ML-KEM-1024 (`FORMAT.md` §3.1)
+- Optional entangled password, off by default, with an entropy estimate shown
+- Recovery key: 48 digits, BitLocker encoding with its checksum
+- The slot invariant enforced as a predicate on every mutation
+- VMK rotation, pre-selected on removals and password changes
+- Manual keystore export: registry + recovery slot only
+
+**Archives**
+
+- Archive files with plaintext envelope, encrypted index, per-file DEKs (`FORMAT.md` Part II)
+- zstd with sampling-based skip for incompressible data; no seekable zstd
+- AES-256-GCM in the STREAM chunked construction, 64 KiB chunks
+- Add, extract, delete, in-place edit of one file, archive-key rotation
+- Free-space map with first-fit allocation and offline compaction
+
+**Application**
+
+- Unlock, lock, idle and absolute timeouts, the lock triggers in `DESIGN.md` §10
+- Unlocked-state banner with countdown, and a tray icon that changes when unlocked
+- Loopback HTTP streaming with Range support, for media preview
+- Secrets in `memguard`; `VirtualLock`; crash dumps suppressed
+- BitLocker detection with a warning when the system volume is unprotected
+
+## v1 does not ship
+
+Written down so that "just a small addition" has to argue with a list rather than with nobody.
+
+- **All of `SYNC.md`.** No pairing, no phone, no relay, no identity keys, no merge. The format
+  fields exist and are written; nothing reads them.
+- The phone application, in any form
+- Small-file packs (`pack_id` is reserved and written as zero)
+- Virtual filesystem (WinFsp / Dokan)
+- Post-quantum hardware slots — pending hardware that does not exist (`FORMAT.md` §16)
+- `prf-derived` slots
+- Seekable zstd
+- Automatic or scheduled backup
+- Per-archive authentication policy (the `policy` field is reserved)
+- Any online service
+
+**Sync fields are written but never read in v1.** That costs a few bytes per record and keeps a
+v1 keystore readable by a later version without migration. It is cheap insurance, not a
+commitment — with no users yet, a v1 → v2 format bump would be nearly free anyway.
+
+## Before the format is frozen
+
+Once v1 ships to anyone, `FORMAT.md` becomes a compatibility obligation. These three come first.
+
+**1. Test vectors for the KDF chain.** The path from `H` to `IK` is not a standard construction:
+an HMAC fold, then Argon2id, then HKDF, with a conditional branch when no password is set, and a
+hybrid variant for software slots. Nothing else will catch a transposed argument or a wrong
+`info` string, because every wrong version still produces 32 plausible-looking bytes. Fix the
+vectors before the code, not after.
+
+**2. Fuzz both parsers.** The keystore and archive readers both consume attacker-supplied bytes —
+an archive file is *expected* to come from an untrusted place. Fail-closed on unknown record types
+is the right rule and is exactly the kind of rule that is easy to state and easy to implement
+wrongly.
+
+**3. One external review of `FORMAT.md`.** Everything in this project so far has been reviewed by
+its own authors. One outside pass on the format specifically, before it becomes permanent.
+
+## Deliberately unresolved
+
+Recorded so they are not mistaken for oversights. Neither blocks v1.
+
+- **Automatic backup.** Manual export covers v1; automatic backup coheres only alongside an online
+  service that can own the questions it raises — when to write, where, and how stale copies
+  reconcile.
+- **First-contact transport** for pairing — LAN mDNS, bidirectional QR, or a relay (`SYNC.md` §8).
+  Deliberately deferred, because choosing a relay means hardcoding a hostname into distributed
+  binaries.
+- **Divergent archive files** — the same archive edited on two devices. Keystore sync handles keys
+  and metadata and deliberately does not merge archive contents (`SYNC.md` §5).
+
+## The rule this file exists to enforce
+
+> Anything not listed under "v1 ships" is not in v1, and moving something across that line is a
+> decision that gets written into `DECISIONS.md` with its reasoning — not a thing that happens
+> because it seemed small at the time.

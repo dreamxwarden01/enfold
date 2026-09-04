@@ -1,0 +1,24 @@
+# Build output
+/build/
+/bin/
+*.exe
+*.exe~
+*.dll
+*.syso
+
+# Wails
+/frontend/node_modules/
+/frontend/dist/
+
+# Go
+/vendor/
+
+# Local vault artefacts — never commit these
+*.enfoldkey
+*.enfold
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

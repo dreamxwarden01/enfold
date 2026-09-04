@@ -154,6 +154,108 @@ exists to release individual archive keys; if the sync identity private key were
 same domain, an over-broad request or an indexing bug could dispense it. Separate domains make
 that structurally impossible rather than something the code must remember not to do.
 
+### 3.3 Byte-exact rules
+
+Everything above reads unambiguously to a person and ambiguously to two implementers. Each rule
+below is a place where two reasonable implementations would otherwise diverge — and every wrong
+choice still yields 32 plausible bytes, so nothing but a test vector would ever notice.
+`testdata/kdf-vectors.json` pins each of these.
+
+**R1 — HKDF.** Always HKDF-SHA256 as Extract-then-Expand (RFC 5869). `salt = ∅` means a
+zero-length salt, which Extract treats as 32 zero bytes. Output length is 32 bytes unless a rule
+says otherwise. Go: `hkdf.Key(sha256.New, ikm, salt, info, n)`.
+
+**R2 — Concatenation.** `‖` is raw byte concatenation. No separators, no length prefixes, no
+padding. `info = "Enfold/v1/IK" ‖ vault_id ‖ recipient_id` is exactly 12 + 16 + 16 = 44 bytes.
+
+**R3 — Info strings.** ASCII, no terminator. The complete registry:
+
+| Derives | `info` prefix | IKM | salt | out |
+| --- | --- | --- | --- | --- |
+| `IK` from `pre` | `Enfold/v1/IK` ‖ vault_id ‖ recipient_id | `pre` | ∅ | 32 |
+| `seed_x`, recovery | `Enfold/v1/recovery/x25519` ‖ vault_id ‖ recipient_id | `R` | `slot_salt` | 32 |
+| `seed_k`, recovery | `Enfold/v1/recovery/mlkem` ‖ vault_id ‖ recipient_id | `R` | `slot_salt` | 64 |
+| `pre`, recovery | `Enfold/v1/recovery/combine` ‖ vault_id ‖ recipient_id | `H_x ‖ K_k` | ∅ | 32 |
+| `seed_x`, password | `Enfold/v1/password/x25519` ‖ vault_id ‖ recipient_id | `A` | `slot_salt` | 32 |
+| `seed_k`, password | `Enfold/v1/password/mlkem` ‖ vault_id ‖ recipient_id | `A` | `slot_salt` | 64 |
+| `pre`, password | `Enfold/v1/password/combine` ‖ vault_id ‖ recipient_id | `H_x ‖ K_k` | ∅ | 32 |
+| Metadata key | `Enfold/v1/metadata` ‖ vault_id | VMK | ∅ | 32 |
+| DB key | `Enfold/v1/db` ‖ vault_id | VMK | ∅ | 32 |
+| `KWK` | `Enfold/v1/wrap/archive` ‖ vault_id | VMK | ∅ | 32 |
+| `KWK_identity` | `Enfold/v1/wrap/identity` ‖ vault_id | VMK | ∅ | 32 |
+| archive index key | `Enfold/v1/archive/index` ‖ archive_id | archive key | ∅ | 32 |
+| archive wrap key | `Enfold/v1/archive/wrap` ‖ archive_id | archive key | ∅ | 32 |
+
+The recovery and password slots use **distinct** strings even though their shapes are identical.
+Domain separation is free, and it forecloses any construction in which one slot type's output
+could be mistaken for another's.
+
+**R4 — Passwords.** A password is the **UTF-8 encoding of the NFC-normalised string**. Not NFKC,
+not the raw code points the platform happened to produce. The same passphrase typed on two
+machines with different input methods must derive the same key, and combining sequences are the
+usual way that fails. **An empty password is rejected at input**; "no entangled password" is a
+state recorded by `flags` bit0, never inferred from length.
+
+**R5 — Raw ECDH outputs.** P-256 ECDH output is the **32-byte big-endian X coordinate** of the
+shared point, exactly as `crypto/ecdh` returns it. X25519 output is likewise the **raw 32-byte
+u-coordinate**. Nothing is hashed at this stage on either curve; `H` feeds the HMAC fold (or, with
+no password, HKDF) directly, and `H_x` feeds the combine step directly.
+
+**R6 — Argon2id.** Version `0x13`. `m` is in **KiB**. The number of threads used equals `p`
+exactly — an implementation may not "helpfully" use more cores, because `p` is part of the
+function. Output 32 bytes. Go: `argon2.IDKey(pwd, salt, t, m, p, 32)`.
+
+**R7 — The HMAC fold.** `pwd' = HMAC-SHA256(key = H, msg = P)` with `H` (32 bytes) as the key and
+the R4-encoded password as the message. Not the other way round.
+
+**R8 — The standalone password slot in full.** This was under-specified above; it is:
+
+```
+P      = UTF-8(NFC(password))                       R4
+salt'  = SHA-256(salt ‖ vault_id ‖ recipient_id)
+A      = Argon2id(P, salt', m, t, p) → 32           no HMAC fold — there is no H to fold with
+seed_x = HKDF(A, slot_salt, "Enfold/v1/password/x25519" ‖ …) → 32
+seed_k = HKDF(A, slot_salt, "Enfold/v1/password/mlkem"  ‖ …) → 64
+```
+
+and from there identical to the recovery slot, using the `password/combine` info.
+
+**R9 — Seeds to keypairs.** `seed_x` (32 bytes) is the X25519 private scalar as-is; clamping is
+the function's job, not the caller's. Go: `ecdh.X25519().NewPrivateKey(seed_x)`. `seed_k` (64
+bytes) is the FIPS 203 `d ‖ z` seed. Go: `mlkem.NewDecapsulationKey1024(seed_k)`. Both are
+deterministic — the same seed must always give the same public key, and a vector checks it.
+
+**R10 — Hybrid combine.** The IKM is `H_x ‖ K_k` in that order: the 32-byte X25519 shared secret,
+then the 32-byte ML-KEM shared key. 64 bytes.
+
+**R11 — Recovery key bytes and digits.** `R` is 16 bytes, read as **8 little-endian `u16`
+values** `v₀ … v₇`. Digit group `i` is `v_i × 11`, zero-padded to 6 digits; groups are printed in
+order, separated by `-`. Decoding checks each group is < 720 896 and divisible by 11 before
+dividing. This fixes the byte order the BitLocker description leaves open; no claim of
+compatibility with BitLocker's own key material is made or wanted.
+
+**R12 — `wrapped_vmk` plaintext.** `VMK ‖ u64 vmk_generation`, the integer little-endian per
+§1. 40 bytes in, 56 out with the tag. AES-256-GCM **keyed by that slot's `IK`**, 12-byte nonce,
+16-byte tag appended.
+
+**R13 — Two salts, and which is which.** A slot record carries two 32-byte salts with different
+jobs, and the prose above uses the bare word "salt" for one of them:
+
+| Field | Used as |
+| --- | --- |
+| `salt` | Input to `salt' = SHA-256(salt ‖ vault_id ‖ recipient_id)`, the Argon2id salt for hardware and password slots |
+| `slot_salt` | The HKDF salt when deriving `seed_x` and `seed_k` in software slots (R3, R8) |
+
+Wherever §3.1 or R8 writes `salt` unqualified, it means the `salt` field. The standalone password
+slot's Argon2id parameters are the slot record's own `argon2_m`, `argon2_t`, `argon2_p` — the same
+fields a hardware slot with an entangled password uses.
+
+**A note on what the vectors can and cannot catch.** These rules were checked by having an
+independent implementation written from this section and `testdata/kdf-inputs.json` alone, with
+no access to the reference generator; it matched the reference on every one of 63 values. R13 and
+the X25519 half of R5 exist because that implementer reported having to guess them — correctly,
+as it turned out, but a guess is a guess.
+
 ---
 
 # Part I — Keystore file
@@ -305,6 +407,11 @@ actionable while other slots still work; a match with a failed unwrap means corr
 For hybrid software slots, verify the X25519 half this way and let the ML-KEM half be checked by
 the AEAD — a wrong `dk` yields a wrong shared key, a wrong `pre`, a wrong `IK` and an
 authentication failure, with no separate verifier needed.
+
+Be aware *why* the AEAD is the only place that failure can surface: **ML-KEM uses implicit
+rejection.** Decapsulating with the wrong `dk` does not return an error; it returns a different,
+perfectly valid-looking 32-byte key. Nothing in the ML-KEM step itself will ever signal a problem.
+Code that expects `Decapsulate` to fail on a bad key is waiting for something that cannot happen.
 
 ### 6.4 Slot invariant
 

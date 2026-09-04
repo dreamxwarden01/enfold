@@ -1002,3 +1002,39 @@ AppData and therefore free of the MSIX redirection; the workspace directory was 
 is where the user will look for it, and because `GOTMPDIR` is a machine-wide Go setting, so the
 name is deliberately project-neutral rather than `enfold-something`. `/go-tmp/` is also in
 `.gitignore` in case it is ever pointed inside a repository.
+
+---
+
+## 2026-09-04 — `crypto/mlkem` ML-KEM-1024 verified against NIST ACVP; pre-freeze item 1 closed
+
+Go 1.26's standard-library ML-KEM-1024 was checked against the NIST ACVP-Server FIPS 203 vectors
+(`gen-val/json-files/ML-KEM-keyGen-FIPS203` at commit `15c0f3de`, sha256 `d7a62a2c…`;
+`ML-KEM-encapDecap-FIPS203` at `ad33b3d9`, sha256 `a556952c…`; parameter set confirmed
+ML-KEM-1024 in every group header):
+
+| Operation | Cases | Result |
+| --- | --- | --- |
+| keyGen, seed → `ek` (public API) | 25 | pass |
+| keyGen, seed → full 3168-byte `dk` incl. secret vector (stdlib internal hook) | 25 | pass |
+| decapsulation, valid ciphertext (accept branch) | 5 | pass |
+| decapsulation, modified ciphertext (**implicit-rejection branch**, `k = SHAKE256(z ‖ c)`) | 5 | pass — the rejection output was also computed independently in Python |
+| encapsulation, derandomised | 25 | pass |
+| determinism across two processes; rejection of seed lengths 0/32/63/65/96 | — | pass |
+| **negative control**: one hex digit flipped in each KAT file | — | exactly the expected failures, so the comparisons are not vacuous |
+
+**Two things learned.** ACVP ships only the *expanded* 3168-byte `dk` for decapsulation cases,
+which the public API cannot load — it takes the 64-byte seed — so full decapsulation coverage
+needed a `go test -overlay` into the stdlib package to reach the internal constructor. That route
+is too fragile to keep. And the earlier assumption that encapsulation cannot be KAT-checked was
+out of date: **Go 1.26 exports `crypto/mlkem/mlkemtest.Encapsulate1024(ek, random)`**, a
+derandomised variant, so encapsulation *is* pinned.
+
+**In the repository:** `testdata/mlkem-acvp-subset.json` (2 keyGen + 2 encapsulation cases, with
+provenance) and `internal/kdf/mlkem_kat_test.go`, public API only. The full run and the overlay
+test live under `D:\MyPersonalProjects\go-tmp\mlkem-kat\` and are reproducible from the notes
+there.
+
+**With this, SCOPE.md pre-freeze item 1 is complete on both axes:** every primitive in the chain
+(HKDF, Argon2id, ML-KEM-1024; X25519, P-256 ECDH, AES-GCM and HMAC being stdlib primitives with
+no project-specific configuration) is checked against a published authority, and the composition
+is checked against a clean-room implementation.

@@ -969,3 +969,26 @@ did not, because the cloud verdict overrides it.
 The answer is Authenticode signing and vendor false-positive submission, now recorded in
 `SCOPE.md` as a prerequisite for the first release. The test-binary workaround is not a security
 decision and confers no security property; it exists so `go test` runs on one machine.
+
+---
+
+## 2026-09-04 — Correction: stripping does not avoid the false positive; the exclusion never matched
+
+**Two things in the previous entry were wrong.**
+
+**Stripping symbols was observed being flagged.** The one run that survived coincided with
+protection being toggled; the anti-malware log afterwards shows stripped test binaries deleted at
+link time twice more. `-s -w` stays in `scripts/test.ps1` because it shrinks the trigger surface,
+but it is not the fix and must not be described as one.
+
+**The folder exclusion never matched, and the reason is worth knowing beyond this project.** The
+Claude desktop app is MSIX-packaged, so every process it spawns — `go.exe` included — has writes
+to `%LOCALAPPDATA%` silently redirected to `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\`.
+The exclusion was added for the real path; the files were at the redirected one, which the
+anti-malware product reported and which was easy to misread as the same directory. `GOTMPDIR` now
+lives at `%USERPROFILE%\go\tmp`, outside AppData, where the real path and the visible path are the
+same thing. The user spotted the path discrepancy in the log.
+
+**Consequence for the product, not only the toolchain:** the keystore's default location is under
+`%LOCALAPPDATA%`. A development build run from a Claude-spawned shell will write it to the
+redirected location, invisible to the same binary launched normally. Recorded in `SCOPE.md`.

@@ -14,8 +14,8 @@
 /vendor/
 
 # Local vault artefacts — never commit these
-*.enfoldkey
-*.enfold
+*.eks
+*.efd
 
 # Editor / OS
 .vscode/

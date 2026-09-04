@@ -27,12 +27,22 @@ change needs a format version bump.
 ## 2. Two file types
 
 ```
-Keystore file            one per device, default %LOCALAPPDATA%\Enfold\keystore.enfoldkey
+Keystore file  *.eks     one per device, default %LOCALAPPDATA%\Enfold\keystore.eks
   slots  +  encrypted registry of archives and their keys
 
-Archive file             many, anywhere — including untrusted places
+Archive file   *.efd     many, anywhere — including untrusted places
   envelope  +  encrypted file index  +  data
 ```
+
+`.eks` reads as **E**nfold **K**ey **S**tore; `.efd` as Enfold data. Neither extension is
+load-bearing — both files begin with magic bytes (`ENFOLDK\x01`, `ENFOLDA\x01`) and identification
+uses those, never the name. Extensions exist for the shell and the user, so a renamed file still
+opens and a correctly-named impostor still fails.
+
+Both are claimed elsewhere by obscure software — `.efd` by Parallels Desktop among others, `.eks`
+by a niche BI product — which was accepted after checking: the alternatives were worse (`.enf` is
+taken by Finale, EndNote and EnCase Forensic), and the magic bytes make a collision a shell
+annoyance rather than a correctness problem.
 
 **Archives are designed to live in relatively untrusted locations** — public cloud storage,
 removable media, someone else's machine. Nothing that could unlock one is ever written into it.
@@ -407,7 +417,7 @@ name in the registry   encrypted; unchangeable without unlocking the keystore
 ```
 
 **Every authorisation prompt shows the registry name.** Otherwise malware renames
-`tax-records.enfold` to `photos.enfold` and the user approves "open photos" without a second
+`tax-records.efd` to `photos.efd` and the user approves "open photos" without a second
 thought. Using the registry name closes that path, at the cost that a prompt can show a stale name
 after an out-of-band rename. That cost is worth paying: a trusted source overriding an untrusted
 one is exactly what is wanted.

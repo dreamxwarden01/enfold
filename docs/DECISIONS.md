@@ -567,8 +567,8 @@ notice, or "later" becomes "never".
 Two names exist for every archive: the one in the encrypted registry, and the filename on disk.
 Anyone can change the latter with no key at all.
 
-**Authorisation prompts show the registry name.** Otherwise malware renames `tax-records.enfold`
-to `photos.enfold` and the user approves "open photos" without a second thought. Using the registry
+**Authorisation prompts show the registry name.** Otherwise malware renames `tax-records.efd`
+to `photos.efd` and the user approves "open photos" without a second thought. Using the registry
 name closes that, at the cost that a prompt can show a stale name after an out-of-band rename —
 worth paying, since it is a trusted source overriding an untrusted one.
 
@@ -895,3 +895,27 @@ else uses it. The UI language describes the *session*, not a judgement about the
 
 - **Automatic backup** — deferred; v1 ships manual export of registry + recovery slot only.
 - Remaining items in the "Open" sections of `FORMAT.md` and `SYNC.md`.
+
+---
+
+## 2026-09-04 — File extensions: `.efd` for archives, `.eks` for the keystore
+
+`.eks` reads as **E**nfold **K**ey **S**tore. Replaces the earlier `.enfold` / `.enfoldkey`, which
+were simply long.
+
+**Neither extension is load-bearing.** Both files start with magic bytes (`ENFOLDA\x01`,
+`ENFOLDK\x01`) and identification uses those, never the filename — so a renamed file still opens
+and a correctly-named impostor still fails. A collision is a shell annoyance, not a correctness
+problem.
+
+**Checked rather than assumed**, since short extensions collide: `.efd` is claimed by Parallels
+Desktop and a few obscure formats; `.eks` by Empower, a niche BI product. **`.enf` was evaluated
+and rejected as worse** — Finale (Enigma Notation Format), EndNote filters, EnCase Forensic and
+Vicon Nexus all use it, and EndNote in particular is common on Windows.
+
+**A considered objection, resolved:** brevity was argued to be worth less than legibility for the
+keystore, since it is a single rarely-touched file whose loss is unrecoverable, and someone finding
+`keystore.enfoldkey` in an old backup knows immediately what it is. The acronym answers that — the
+name is not arbitrary, and it pairs with the product once seen. The asymmetry behind the objection
+still holds and is worth keeping in mind: archive extensions are seen constantly and benefit from
+being short, while the keystore's costs nothing either way.

@@ -22,3 +22,6 @@
 .idea/
 Thumbs.db
 desktop.ini
+
+# Go build temp dir, if ever pointed inside the repo
+/go-tmp/

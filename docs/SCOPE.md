@@ -96,8 +96,23 @@ its own authors. One outside pass on the format specifically, before it becomes 
 Unsigned Go binaries trip cloud heuristics in mainstream anti-malware products. During
 development this surfaced as Kaspersky's KSN flagging **test binaries** as
 `VHO:Trojan-Downloader.Win32.Convagent.gen` — a documented false positive driven by Go's symbol
-table and DWARF sections, not by anything the code does. Stripping symbols (`-ldflags=-s -w`,
-see `scripts/test.ps1`) avoids it on the development machine.
+table and DWARF sections, not by anything the code does.
+
+**On the development machine the fix is an anti-malware exclusion for `GOTMPDIR`**, which is
+pinned to `D:\MyPersonalProjects\go-tmp`. Stripping symbols (`-ldflags=-s -w`, kept in
+`scripts/test.ps1`) shrinks the trigger surface but was observed being flagged regardless; it is
+not the fix.
+
+Why that directory and not the default: the Claude desktop app is MSIX-packaged, and every process
+it spawns has its `%LOCALAPPDATA%` writes **silently redirected** to
+`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\`. An exclusion added for the real
+path never matched the redirected one, and the two are easy to mistake for each other in a log.
+Anywhere outside AppData — a workspace directory on another drive — has one path, not two.
+
+**The same redirection will hit the application's own keystore** at `%LOCALAPPDATA%\Enfold\` when
+a development build is launched from a Claude-spawned shell: the keystore lands in the redirected
+location and is invisible to the same binary started from Explorer. Verify file-location behaviour
+from a normal terminal before drawing conclusions from it.
 
 **That workaround must never become user-facing advice.** A release cannot ask people to whitelist
 it. The standard answer, required before any build leaves the developer's machine:

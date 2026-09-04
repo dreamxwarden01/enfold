@@ -992,3 +992,13 @@ same thing. The user spotted the path discrepancy in the log.
 **Consequence for the product, not only the toolchain:** the keystore's default location is under
 `%LOCALAPPDATA%`. A development build run from a Claude-spawned shell will write it to the
 redirected location, invisible to the same binary launched normally. Recorded in `SCOPE.md`.
+
+---
+
+## 2026-09-04 — `GOTMPDIR` is `D:\MyPersonalProjects\go-tmp`
+
+Supersedes the `%USERPROFILE%\go\tmp` location named in the previous entry. Both are outside
+AppData and therefore free of the MSIX redirection; the workspace directory was chosen because it
+is where the user will look for it, and because `GOTMPDIR` is a machine-wide Go setting, so the
+name is deliberately project-neutral rather than `enfold-something`. `/go-tmp/` is also in
+`.gitignore` in case it is ever pointed inside a repository.

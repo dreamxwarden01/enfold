@@ -11,7 +11,10 @@ imperfect memory hygiene but never shipping.** This file exists to act on that.
 
 ## v1 ships
 
-**Platform:** **Windows 10 and later.** Go + Wails v2. No macOS, no Linux, no CI matrix.
+**Platform:** **Windows 10 and later.** Go + Wails v3 (beta, pinned to one tag). No macOS, no
+Linux, no CI matrix. The installer checks for the WebView2 Evergreen runtime and runs Microsoft's
+bootstrapper when it is absent — it is part of Windows 11 but not guaranteed on every Windows 10
+machine.
 
 Windows 10 is in scope because a substantial number of people still run it, and that has
 consequences worth stating up front:
@@ -46,8 +49,15 @@ consequences worth stating up front:
 **Application**
 
 - Unlock, lock, idle and absolute timeouts, the lock triggers in `DESIGN.md` §10
+- A tray-resident process. **Provisional:** closing the window destroys it (and the WebView2
+  process group with it) and the window is recreated on demand — 7–9 MB idle against ~130 MB
+  open, measured 2026-09-04 (`DESIGN.md` §14). Settled once the real UI exists: kept if reopening
+  shows no noticeable delay, stutter or state loss; otherwise the window is hidden and ~130 MB
+  resident is accepted (see "Deliberately unresolved")
 - Unlocked-state banner with countdown, and a tray icon that changes when unlocked
-- Loopback HTTP streaming with Range support, for media preview
+- Loopback HTTP streaming with Range support, for media preview — every response `no-store`,
+  and the WebView2 profile with caching disabled, so the browser engine never writes decrypted
+  content to disk (`DESIGN.md` trap #13)
 - Secrets in `memguard`; `VirtualLock`; crash dumps suppressed
 - BitLocker detection with a warning when the system volume is unprotected
 
@@ -139,6 +149,9 @@ Recorded so they are not mistaken for oversights. Neither blocks v1.
   binaries.
 - **Divergent archive files** — the same archive edited on two devices. Keystore sync handles keys
   and metadata and deliberately does not merge archive contents (`SYNC.md` §5).
+- **Destroy or hide on close-to-tray.** The default is destroy (7–9 MB idle). It switches to hide
+  (~130 MB resident) if reopening the real interface shows noticeable delay, stutter or state
+  loss. A trade-off to be judged by use, not decided on paper (`DECISIONS.md` 2026-09-04).
 
 ## The rule this file exists to enforce
 

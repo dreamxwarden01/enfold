@@ -557,9 +557,12 @@ bypass the session timeout entirely.
 
 ### The WebView boundary
 
-If a web-based UI framework is used: **keys never cross into the WebView.** Anything handed to
+The UI is a WebView2 (Wails v3, §14). **Keys never cross into the WebView.** Anything handed to
 the renderer lives in a JS heap that cannot be zeroed. Send the index one screenful at a time
-rather than handing over the whole decrypted file list.
+rather than handing over the whole decrypted file list. The WebView2 also has a disk cache of
+its own — trap #13 in §11: nothing decrypted is served to it without `no-store`. Destroying the
+window on close-to-tray (provisional, §14) additionally discards the renderer's copy of whatever
+was on screen.
 
 ### Dependency on full-disk encryption
 
@@ -602,6 +605,12 @@ Correct in this document, and easy to lose during implementation.
     BitLocker-encrypted. This is the only mitigation for the post-quantum exposure in §2, and
     BitLocker is volume-level — it does nothing for a file uploaded off that volume
     (`FORMAT.md` §16).
+13. **The WebView2 disk cache.** The browser engine caches what it fetches in its user-data
+    folder. Every loopback response that carries decrypted content — the media-preview stream
+    above all — must be `Cache-Control: no-store`, and the WebView2 profile runs with caching
+    disabled or in-private where the framework exposes it. Verify by inspecting the profile
+    directory after a preview. Otherwise decrypted content is written to disk by a component
+    that is not this program.
 
 ## 12. Deferred
 
@@ -674,11 +683,29 @@ non-disjoint, so that configuration requires a recovery key.
 
 ## 14. Language and toolchain
 
-**Decision: Go**, with Wails v2 for the UI (v3 is still beta as of 2026-08).
+**Decision: Go**, with **Wails v3** for the UI — a web UI rendered in the system WebView2.
+v3 rather than v2 because only v3 can run as a zero-window tray process and destroy its window
+on close; v2 can only hide it, which keeps the whole WebView2 process group resident. v3 has
+been in beta since 2026-08-02; pin a specific beta tag, do not track nightly. The measurements
+and the reasoning, including why a web UI is accepted against the original objection to one, are
+in `DECISIONS.md` (2026-09-04). Fallback if the trade ever turns bad: `github.com/tailscale/walk`,
+native Win32 controls at ~4 MB, which the Go core would not notice.
+
+**Memory budget, measured 2026-09-04 (private working set, whole process tree):** idle in the
+tray with the window closed, one Go process, 7–9 MB. Window open, ~130 MB baseline from the
+WebView2 process group before any content — that group is an architectural floor of Chromium,
+not a setting. **Provisional default: closing to the tray destroys the window** rather than
+hiding it, which is what makes the idle figure real; reopening recreates it (0.2 s measured warm
+with the stock page — the real interface must be measured). **Pending, to be settled once the
+real UI exists**, on one criterion: if reopening shows no noticeable delay, stutter or state
+loss, destroy stays; if it does, the window is hidden instead and ~130 MB resident is accepted
+as the price (SCOPE.md, "Deliberately unresolved"). The session cache lives in the Go process
+either way and is unaffected.
 
 The whole dependency stack was verified to build and run with `CGO_ENABLED=0` on
-windows/amd64, so **no C compiler is required**. Wails v2 removed the CGO requirement on
-Windows by using the pure-Go `wailsapp/go-webview2`. Versions as resolved on 2026-08-31:
+windows/amd64, so **no C compiler is required**. Wails v3 carries its own pure-Go WebView2
+binding in-tree (`v3/internal/webview2`); the probe binary's build info confirms
+`CGO_ENABLED=0`. Versions as resolved on 2026-08-31 (Wails on 2026-09-04):
 
 | Dependency | Version | Role |
 | --- | --- | --- |
@@ -688,11 +715,16 @@ Windows by using the pure-Go `wailsapp/go-webview2`. Versions as resolved on 202
 | `golang.org/x/crypto` | v0.55.0 | argon2 (`IDKey` only — see §3) |
 | `crypto/ecdh` | stdlib | P-256 for YubiKey slots, X25519 for the recovery slot; validates points on `NewPublicKey` (trap #2) |
 | `crypto/hkdf`, `crypto/aes`, `crypto/cipher` | stdlib | HKDF, AES-256-GCM |
+| `github.com/wailsapp/wails/v3` | v3.0.0-beta.16 (pin) | UI: zero-window tray app, WebView2 window on demand, file drop, tray icon |
 
-Runtime requirement: the **WebView2 runtime** must be present. It ships with Windows 11, but
-it is a deployment consideration for Windows 10 users.
+Runtime requirement: the **WebView2 Evergreen runtime** must be present. It is part of Windows
+11; on Windows 10 it was rolled out by Microsoft in 2022–2023 and is installed by Microsoft 365
+Apps, but a small number of machines still lack it. The installer checks the runtime's `pv`
+registry value and runs Microsoft's ~2 MB bootstrapper when it is absent. Microsoft has committed
+to updating Edge and WebView2 on Windows 10 22H2 until at least October 2028.
 
-Still needed, not yet installed: the `wails` CLI, and a JS toolchain for the frontend.
+Installed on the development machine: the `wails3` CLI (v3.0.0-beta.16), Node 24 and npm 11 for
+the frontend build.
 
 ### Why Go, given the memory-hygiene argument
 

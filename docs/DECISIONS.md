@@ -1038,3 +1038,118 @@ there.
 (HKDF, Argon2id, ML-KEM-1024; X25519, P-256 ECDH, AES-GCM and HMAC being stdlib primitives with
 no project-specific configuration) is checked against a published authority, and the composition
 is checked against a clean-room implementation.
+
+---
+
+## 2026-09-04 — UI layer: Wails v3; destroy-on-close-to-tray as the provisional default
+
+**Trigger.** The user's Task Manager, the same day: two Electron chat applications idling at
+1,415 MB (10 processes) and 1,000 MB (15 processes). Their constraint: an idle footprint around
+100 MB is acceptable if the interface is good enough; 1 GB+ before the program has done anything
+is not. That matters more here than for most applications, because this one is designed to sit
+in the tray for hours (§10 session cache) — the UI baseline is a standing cost, unlike Argon2id's
+512 MB–1 GB, which is transient and returned after unlock.
+
+**A gap in this log.** The 2026-08-31 entry chose Go and named Wails v2 without recording that
+Wails renders the UI as HTML in WebView2 — a web UI, which the user had objected to at the very
+start of the project ("the most criticised way to build a Windows application"). That objection
+was never answered in writing. It is answered below, by measurement rather than argument.
+
+**Measured on the development machine** (Windows 11 26200, Go 1.26, every build
+`CGO_ENABLED=0`, WebView2 runtime 152): each candidate as a throwaway shell, launched, left alone,
+and the *private working set* summed over the whole descendant process tree — the figure Task
+Manager's Memory column shows. Screenshots were reviewed by the user.
+
+| Route | Shell content | Procs | Private WS |
+| --- | --- | ---: | ---: |
+| `lxn/walk` — native Win32 common controls | TreeView + virtual ListView, 5000 rows + tray icon | 1 | 4.1 MB |
+| Gio v0.10.2 — self-drawn, Direct3D 11 | virtual list, 5000 rows | 1 | 75.7 MB |
+| Wails v2.15.0, window visible | stock greeting page | 7 | 108.4 MB |
+| Wails v2.15.0, window **hidden** 25 s | same | 7 | 106.7 MB |
+| Wails v3.0.0-beta.16, window visible | stock greeting page | 7 | 127.3 MB |
+| Wails v3.0.0-beta.16, window **closed**, tray only | — | 1 | **6.8 MB** |
+| Wails v3.0.0-beta.16, window recreated from the tray | stock page | 7 | 130.2 MB |
+| Wails v3.0.0-beta.16, closed again | — | 1 | 9.0 MB |
+
+Two lines decide it. Hiding a Wails v2 window releases nothing — the WebView2 process group
+stays resident, and v2 offers no way to destroy it short of quitting. Closing a Wails v3 window
+destroys the group entirely and the process idles as a single Go process at WinRAR's size
+(WinRAR idles at 5.4 MB on the same machine); recreating the window from the tray took 0.2 s
+warm. The v3 probe also confirmed that a zero-window application keeps running with only a tray
+icon (`WindowsOptions.DisableQuitOnLastWindowClosed`) and that close → recreate → close works
+without incident. Probe sources, logs and the full research digest with sources are under
+`D:\MyPersonalProjects\go-tmp\ui-probe\` (`RESULTS.md`, `research-dump.txt`), outside the
+repository because they drag in three UI toolkits' dependencies.
+
+**What the research established** (WebView2 claims adversarially verified against the live
+sources; the toolkit claims spot-checked against the GitHub API):
+
+- The WebView2 process group — one browser process, at least one renderer, GPU and utility
+  processes — is an architectural floor, not a tunable: renderers cannot be shared because every
+  WebView2 frame is DevTools-attached, and `--single-process` is "actively unsupported" per
+  Microsoft. `TrySuspend` and `MemoryUsageTargetLevel` are best-effort and renderer-only. **Only
+  `Close` reaches zero**, at a cold-start cost on re-show. The measurements match this exactly.
+- `lxn/walk` upstream has been frozen since 2021-01-12 and has never had a release. The live
+  lineage is **`github.com/tailscale/walk`** (+ `tailscale/win`): maintained by Tailscale
+  engineers (commits 2026-07-02), used by Tailscale's own Windows client, CGO-free (the cgo
+  message loop was deleted), with a virtual-mode `TableView`, `TreeView`, `WM_DROPFILES`,
+  `NotifyIcon` with runtime icon changes and per-monitor-v2 DPI. Pseudo-versions only; the API
+  has drifted from upstream.
+- Gio has no file drop from Explorer (ticket open since 2020), no tray, no tree widget, and is
+  system-DPI-aware only. Fyne needs a C compiler on Windows. `windigo` is single-maintainer,
+  v0.x with a mid-2025 rewrite, no virtual list and no tray abstraction.
+- Wails v3 has been in beta since 2026-08-02 after two and a half years of alpha; betas are cut
+  nightly; the project calls the desktop API stable, says teams run it in production, and still
+  calls v2 "the current stable release". v3's WebView2 binding is vendored in-tree and pure Go,
+  so the whole stack stays `CGO_ENABLED=0` (confirmed with `go version -m` on the probe binary).
+  File drop from Explorer, tray icon changes, click handlers and per-monitor DPI are all present.
+- Windows 10: the WebView2 Evergreen runtime was rolled out to 1803+ Home/Pro in 2022–2023 and
+  is installed by Microsoft 365 Apps since 2021, but Microsoft says "a small number" of Windows
+  10 devices still lack it. Edge/WebView2 updates on Windows 10 22H2 are committed until at
+  least October 2028 without ESU.
+
+**Decision: Wails v3.** Pin a specific beta tag in `go.mod`; do not track nightly. The
+application is a tray-resident process that creates its window on demand. The session cache
+(KWK in `memguard`) lives in the Go process and is untouched by any of this; a user reopening
+the window within the session timeout does not re-authenticate.
+
+**Provisional, marked pending by the user: destroy on close-to-tray.** The window is destroyed
+rather than hidden when it closes, which is what makes the 7–9 MB idle figure real. This stays
+if reopening the *real* interface shows no noticeable delay, stutter or state loss; if it does,
+the window is hidden instead and ~130 MB resident is accepted — in the user's words, a
+trade-off, and the resident figure is not unacceptable. The v3 choice holds either way, since
+v2 could not offer the option at all. Listed in SCOPE.md under "Deliberately unresolved".
+
+**Why a web UI is now acceptable, against the original objection.** The objection to "web for
+Windows" has three parts. Two are avoided: no bundled browser engine (the system WebView2 is
+used; the binary is ~10 MB) and no Electron-class memory (the floor is ~130 MB with a window
+open, and 7–9 MB idle in the tray if destroy stays, both measured). The third — controls that
+are not native Windows controls — is accepted on purpose: Win32 common controls have no official
+dark mode (7-Zip has none; WinRAR gained it only in 7.x), the user is a web developer and can
+build and judge the interface directly, and the user's stated tolerance is ~100 MB *if the
+interface is good*, which is exactly the trade a web UI makes.
+
+**Rejected.** Wails v2 (cannot release the WebView; single window; no tray). Gio (75 MB, neither
+native-looking nor web-flexible, missing file drop and tray). Fyne (CGO). windigo (API churn,
+gaps). `lxn/walk` as such (frozen). **`tailscale/walk` is retained as the fallback**: the Go core
+does not know which UI sits on top of it, so switching costs only the UI layer, and its 4 MB /
+native-controls profile is the right answer if the WebView2 dependency or the ~130 MB open-window
+baseline ever becomes unacceptable.
+
+**Risks recorded.** v3 is beta software with nightly tags — mitigated by pinning, a thin UI layer,
+and the walk fallback. The WebView2 runtime is a deployment dependency: the installer must check
+the `pv` registry value and run Microsoft's ~2 MB bootstrapper when absent (SCOPE.md). Reopening
+a destroyed window is a cold start of the WebView2 process group — 0.2 s measured warm with the
+stock page; the real interface and a cold disk cache will cost more, which is precisely what the
+pending decision above will be judged on.
+
+**A new trap, discovered while looking at this.** WebView2 keeps a disk cache in its user-data
+folder. Anything served to the WebView over loopback — the media-preview stream in SCOPE.md —
+would be written to disk *decrypted* by the browser engine unless the response forbids it.
+Recorded as DESIGN.md trap #13: preview responses carry `Cache-Control: no-store`, and the
+WebView2 profile runs with caching disabled or in-private where the framework exposes it. If
+destroy-on-close stays, it has a security side effect too: the renderer's copy of whatever
+decrypted index data was on screen goes with it.
+
+**Toolchain now installed** on the development machine: `wails3` CLI v3.0.0-beta.16 (also `wails`
+v2.15.0 and `rsrc`, used only for the probes), Node 24.13 / npm 11.9.

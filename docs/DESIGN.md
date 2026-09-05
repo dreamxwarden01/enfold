@@ -646,6 +646,12 @@ Correct in this document, and easy to lose during implementation.
     verify it after every unlock and refuse to rotate, re-wrap or mutate slots while it
     mismatches. Found by the `internal/kdf` review on 2026-09-05, one layer before the code that
     would have had the bug.
+16. **Cap the zstd decoder from the index, not from the frame.** An archive is untrusted input;
+    a zstd frame declares its own window size and its own content size, and a hostile one can
+    demand a 512 MiB window or expand without bound. Decode with `WithDecoderMaxWindow` set to
+    the largest window this program ever writes and `WithDecoderMaxMemory` set to the file
+    record's `orig_size`, and treat either limit being hit as corruption. The same reasoning as
+    R24: the parameters are read before anything proves them honest.
 
 ## 12. Deferred
 

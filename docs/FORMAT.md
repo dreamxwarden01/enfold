@@ -993,3 +993,13 @@ number of archives, their sizes and their filenames disappear along with everyth
   is all a future KEM would need.
 - Whether the archive superblock needs the full 4 KiB or can be smaller for archives holding one
   small file.
+- **Compression parameters** (`SCOPE.md`, `DECISIONS.md` 2026-09-05). The pure-Go zstd
+  (`klauspost/compress`) exposes four speed presets rather than zstd's 22 levels, a match window of
+  1 KiB–512 MiB (default 4–8 MiB by level; the reference implementation's `--long` reaches 2 GiB),
+  and dictionaries built from caller-chosen samples rather than COVER-trained ones. The window
+  used to write a file is not recorded in the file record; a reader caps the decoder at the
+  largest window this program writes (`DESIGN.md` trap 16). Whether to record the window per
+  file, so that a future larger default does not orphan old readers, is open.
+- **Volumes and recovery records** are planned as forms *beside* the archive — a split export
+  with per-part headers, and Reed–Solomon parity over ciphertext as a sidecar or per part — so
+  that the live format is untouched. Their layouts are not specified yet.

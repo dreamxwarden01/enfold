@@ -80,8 +80,33 @@ Written down so that "just a small addition" has to argue with a list rather tha
 - Per-archive authentication policy (the `policy` field is reserved)
 - Any online service
 
-**Sync fields are written but never read in v1.** That costs a few bytes per record and keeps a
-v1 keystore readable by a later version without migration. It is cheap insurance, not a
+- Multi-volume archives and recovery records — **committed for 1.1**, see below; neither needs a
+  v1 format change, which is why they can wait
+
+## Committed for 1.1
+
+Two things the user has decided are not optional for a real archiver, recorded here so they are
+planned rather than rediscovered (`DECISIONS.md` 2026-09-05).
+
+**Multi-volume archives** — an archive of tens of gigabytes is awkward to transfer or back up
+online. The v1 file stays a single, live, editable file; volumes are an **export form**: the
+finished archive's bytes split into fixed-size parts, each with a small plaintext header (magic,
+`archive_id`, part index and count, byte range, SHA-256 of the part). Reassembly is
+concatenation; a reader can also open the parts in place, since offsets map to parts. Parts are
+immutable — editing means reassemble, edit, re-export — which matches how RAR volumes behave and
+keeps the free-space map and the superblock flip out of it. The per-part hash makes a transfer
+verifiable and resumable part by part. Nothing in the v1 format changes.
+
+**Recovery record** — optional Reed–Solomon parity so that scattered damage (bad sectors, bit
+rot, a corrupted transfer) can be repaired instead of losing the file. Computed over
+**ciphertext**, so repair needs no key — like `last_ciphertext_hash`, it is something a backup
+tool can do without unlocking anything. It lives **beside** the archive, never inside the live
+format: a parity sidecar for a single file, or one parity block per volume in the export form,
+where damage actually happens. Overhead equals the chosen parity fraction (RAR's default is 3%);
+it repairs up to that fraction of the archive in any distribution, and nothing beyond it — a
+truncated download is not what it is for. Damage location is already free: every 64 KiB chunk
+carries a GCM tag, so the damaged blocks are known exactly, which is the case Reed–Solomon
+erasure decoding is best at. Whether it is on by default for exports is undecided. It is cheap insurance, not a
 commitment — with no users yet, a v1 → v2 format bump would be nearly free anyway.
 
 ## Before the format is frozen

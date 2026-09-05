@@ -1414,3 +1414,43 @@ explicit rule, so a skipped prompt could degrade to the token-only derivation �
 claimed the X25519 ephemeral was wiped when `crypto/ecdh` offers no way to; Argon2 bounded in
 memory but not work (R24 now caps `m × t`); and P-256 public keys on a slot record were never
 checked to be on the curve — they are now, at parse time.
+
+---
+
+## 2026-09-05 — Compression knobs, and two RAR features promoted to 1.1
+
+The user asked what zstd offers against RAR's dials (dictionary size, volumes, speed) and what a
+recovery record is actually worth. Checked against the library we will use, not the reference
+implementation: `klauspost/compress` v1.19.2, the only CGO-free zstd in Go.
+
+**What we can actually expose.** Four speed presets (Fastest ≈ zstd 1–2, Default ≈ 3, Better ≈
+7–8 at 2–3× the CPU, Best), not 22 levels. A match window — what RAR calls "dictionary size" —
+from 1 KiB to 512 MiB, power of two, default 4–8 MiB by level; bigger costs memory on both sides
+and time on the writer. Real dictionaries for many small files, built by `BuildDict` from
+samples the caller picks (the library does not do COVER training). Block-level concurrency
+inside a stream. Padding to a multiple of n bytes, which blunts the compressed-size side channel.
+And on the decoder, the two limits that matter for untrusted input: `WithDecoderMaxWindow` and
+`WithDecoderMaxMemory` — recorded as `DESIGN.md` trap 16, to be applied when the compression
+layer is written; nothing decodes zstd yet.
+
+**What does not map.** Solid compression: incompatible with per-file DEKs and in-place editing,
+by design; the substitute for many small files is the trained dictionary now and small-file
+packs later. Random access inside a compressed file: none, which SCOPE already accepted by
+rejecting seekable zstd — video is stored raw, and the STREAM chunks give random access there.
+
+**Volumes → committed for 1.1.** The user's ruling: large archives must be transferable and
+backable-up online, so volumes are not optional; 1.0 can ship without them, 1.1 cannot. They
+will be an export form — split bytes with per-part headers and hashes, immutable, reassembled by
+concatenation — so the live format needs nothing now. `SCOPE.md` carries the plan.
+
+**Recovery record → committed for 1.1, form and default open.** What was verified about RAR:
+RAR5's record is Reed–Solomon, sized as a percentage (3% when not specified, at most 100%), and
+"N% recovery record can repair up to N% of continuously damaged data" while handling scattered
+damage far better than RAR4; repair is an explicit *Repair* command that writes
+`fixed.<name>.rar`, never something extraction does on its own; an archive with no record can at
+best recover its undamaged files. That matches the user's experience that damaged RARs simply
+fail: the record is opt-in and repair is a separate step most people never run. For us the
+design falls out cleanly: parity over **ciphertext**, so repair is keyless; damage location is
+already exact because every 64 KiB chunk carries a GCM tag; overhead is the chosen fraction; and
+it lives beside the archive (sidecar, or per volume) so the live format is untouched. The
+library would be `klauspost/reedsolomon`, pure Go with assembly, same author as our zstd.

@@ -1,6 +1,7 @@
 package format
 
 import (
+	"encoding/binary"
 	"strings"
 	"unicode/utf8"
 )
@@ -12,6 +13,11 @@ const MaxOrigSize = 1 << 48
 
 // MaxFileNameLen bounds a file record's name in bytes (R20).
 const MaxFileNameLen = 4096
+
+// MaxDictSize bounds the index's zstd dictionary (R27): 16 MiB, far above
+// the ~110 KiB a trained dictionary is worth and small enough that every
+// decoder holding a copy stays cheap.
+const MaxDictSize = 16 << 20
 
 // Index is the plaintext of the archive file index (§11): an optional trained
 // zstd dictionary followed by one record per file, tombstones included.
@@ -131,9 +137,14 @@ func (f *FileRecord) validate(hasDict bool) error {
 		return invalidf("file %x name is not valid UTF-8", f.FileID)
 	}
 	switch f.Storage {
-	case StorageRaw, StorageZstd:
-	case StorageZstdDict:
-		if !hasDict {
+	case StorageRaw:
+	case StorageZstd, StorageZstdDict:
+		if f.State == FileLive && f.OrigSize == 0 {
+			// R27: an empty file is stored raw; a zstd frame for it would
+			// have nothing to bound its window by.
+			return invalidf("file %x is empty but compressed", f.FileID)
+		}
+		if f.Storage == StorageZstdDict && !hasDict {
 			return invalidf("file %x uses a dictionary the index does not carry", f.FileID)
 		}
 	default:
@@ -217,6 +228,19 @@ func decodeFileBody(r *reader) *FileRecord {
 
 // Validate checks the whole index, including that file identities are unique.
 func (x *Index) Validate() error {
+	if len(x.Dict) > MaxDictSize {
+		return invalidf("index dictionary of %d bytes exceeds %d", len(x.Dict), MaxDictSize)
+	}
+	if len(x.Dict) > 0 {
+		// R27: a zstd dictionary in the reference format — the magic
+		// 0xEC30A437 little-endian, then a non-zero little-endian u32 ID.
+		if len(x.Dict) < 8 || string(x.Dict[:4]) != "\x37\xa4\x30\xec" {
+			return invalidf("index dictionary is not a zstd dictionary")
+		}
+		if binary.LittleEndian.Uint32(x.Dict[4:8]) == 0 {
+			return invalidf("index dictionary has ID 0")
+		}
+	}
 	seen := make(map[[16]byte]struct{}, len(x.Files))
 	for i := range x.Files {
 		f := &x.Files[i]

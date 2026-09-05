@@ -380,6 +380,27 @@ data only after the final chunk has authenticated — an empty file is one empty
 tag still has to verify. Counters run from 0 to at most 2^32 − 1: R19's 2^48-byte file limit is
 exactly 2^32 chunks, which is also the NIST SP 800-38D bound on AES-GCM invocations under one key.
 
+**R27 — The index dictionary, and what a compressed file's frame must say.** `dict` is at most
+16 MiB and, when non-empty, is a zstd dictionary in the reference format — the bytes `37 A4 30 EC`
+(the little-endian encoding of the magic 0xEC30A437) followed by a non-zero little-endian u32 ID;
+a reader rejects an index that breaks any of those. A live compressed file (`storage` 2 or 3)
+has `orig_size` ≥ 1 — an empty file is stored raw — and its content is exactly one zstd frame,
+optionally followed by skippable padding frames; a reader finds the end of the frame by walking
+its block headers, hands the decoder that frame and nothing else, and then accepts only
+skippable frames before the end of the content. An empty content, one that begins with a
+skippable frame, a second frame, or trailing bytes are corrupt. The frame header is checked
+against the record before anything is decoded: a `storage = 3` frame references the index
+dictionary's ID and a `storage = 2` frame references none; a declared content size, when present
+(the format carries one from 256 bytes), equals `orig_size`; and the window is at most the
+smallest power of two greater than `orig_size`, never below 1 KiB and never above 512 MiB, the
+largest this program writes — a frame cannot usefully reference further back than its content
+is long, so the decoder's window, and with it its allocation, is bounded by the record rather
+than by the frame. A single-segment frame declares no window; the format makes its content size
+the window, and the same rule applies to that. After decoding, the output is exactly `orig_size` bytes. Nothing in the frame
+is trusted to size an allocation (`DESIGN.md` §11 trap 16). The window used to write a frame is
+not recorded, so the 512 MiB ceiling is part of the format: a writer that wants more needs a new
+`storage` value.
+
 ---
 
 # Part I — Keystore file
@@ -811,10 +832,12 @@ u32    file_count
        … file records, each prefixed with u32 record_len (R15)
 ```
 
-`storage = 3` requires a non-empty dictionary. `chunk_size` must be 65536 in v1. For `storage = 1`
-(raw), `stored_size` must equal `orig_size` plus one 16-byte tag per chunk, with a zero-length
-file occupying exactly one empty final chunk (16 bytes); compressed files are checked by the
-archive layer, which knows the compressed length. Every live file has a `name` that satisfies
+`storage = 3` requires a non-empty dictionary, and the dictionary itself is bounded and checked
+by R27. A live file with `storage` 2 or 3 has `orig_size` ≥ 1: an empty file is stored raw
+(R27). `chunk_size` must be 65536 in v1. For `storage = 1` (raw), `stored_size` must equal
+`orig_size` plus one 16-byte tag per chunk, with a zero-length file occupying exactly one empty
+final chunk (16 bytes); compressed files are checked by the archive layer, which knows the
+compressed length, and their frames are held to the record by R27. Every live file has a `name` that satisfies
 R20; a tombstone may have any.
 
 | Field | Type | Notes |

@@ -581,8 +581,15 @@ func sampleIndex() *Index {
 	copy(f.WrappedDEK[:], seq(0x30, 48))
 	g := FileRecord{FileID: fill16(0xF2), State: FileTombstone, Name: "", Storage: StorageZstdDict, ChunkSize: ChunkSize, Alg: AlgAES256GCM}
 	z := FileRecord{FileID: fill16(0xF3), State: FileLive, Name: "empty.txt", OrigSize: 0, StoredSize: RawStoredSize(0),
-		Storage: StorageZstd, DataOff: 0x9000, ChunkSize: ChunkSize, Alg: AlgAES256GCM}
-	return &Index{Dict: seq(0, 100), Files: []FileRecord{f, g, z}}
+		Storage: StorageRaw, DataOff: 0x9000, ChunkSize: ChunkSize, Alg: AlgAES256GCM}
+	return &Index{Dict: fakeDict(1, 100), Files: []FileRecord{f, g, z}}
+}
+
+// fakeDict is a byte string with a zstd dictionary's magic and ID (R27) and
+// arbitrary bytes after; the format layer checks no more than that.
+func fakeDict(id uint32, n int) []byte {
+	d := append([]byte{0x37, 0xa4, 0x30, 0xec}, byte(id), byte(id>>8), byte(id>>16), byte(id>>24))
+	return append(d, seq(8, n-8)...)
 }
 
 func TestIndexRoundTripAndValidation(t *testing.T) {
@@ -616,6 +623,11 @@ func TestIndexRoundTripAndValidation(t *testing.T) {
 	bad("orig_size above the cap", func(x *Index) { x.Files[0].OrigSize = MaxOrigSize + 1; x.Files[0].StoredSize = 0 })
 	bad("overflowing raw record", func(x *Index) { x.Files[0].OrigSize = ^uint64(0) - 65535; x.Files[0].StoredSize = ^uint64(0) - 65519 })
 	bad("dict storage without dict", func(x *Index) { x.Dict = nil })
+	bad("dict too large", func(x *Index) { x.Dict = fakeDict(1, MaxDictSize+1) })
+	bad("dict wrong magic", func(x *Index) { x.Dict = seq(0, 100) })
+	bad("dict ID 0", func(x *Index) { x.Dict = fakeDict(0, 100) })
+	bad("dict too short", func(x *Index) { x.Dict = fakeDict(1, 8)[:7] })
+	bad("empty file compressed", func(x *Index) { x.Files[2].Storage = StorageZstd })
 	bad("live file without name", func(x *Index) { x.Files[0].Name = "" })
 	bad("duplicate file id", func(x *Index) { x.Files[2].FileID = x.Files[0].FileID })
 	bad("data in fixed region", func(x *Index) { x.Files[0].DataOff = 0x1000 })

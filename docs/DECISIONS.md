@@ -1511,3 +1511,73 @@ handler return; noted on the type for when that layer is written.
 reader that trusts the frame to say where it ends is what trap 16 warns about for zstd. No
 `ReadAt` on the Reader: the one-chunk cache is not safe for parallel calls, and a preview server
 that wants concurrency opens one Reader per request.
+
+---
+
+## 2026-09-05 — internal/compress: the zstd layer, R27, and a window bounded by the record
+
+**What landed.** `internal/compress`: `Params` (four presets, window, dictionary, concurrency,
+padding), `Writer` and `Reader` reusable through `Reset`, `Probe` for DESIGN §9's sampling policy,
+and `BuildDict`/`DictID`. Library: `klauspost/compress` **v1.20.0**, not the v1.19.2 the docs had
+named: the zstd Go sources are identical between the two, only regenerated assembly differs, and
+1.19.2 carries three dictionary fixes (BuildDict offsets, zero-literal corpora, a registered
+dictionary dropped when decoding past the window) that this layer needs. Verified by diffing the
+two module trees, not from release notes. `format.Index` gained the dictionary bound and checks.
+
+**The reader is held to the record (R27).** Before decoding a byte it parses the frame header with
+the library's `zstd.Header` and checks it against the index: dictionary ID against `storage`,
+declared content size against `orig_size`, window against a limit derived from `orig_size`. It
+hands the decoder exactly one frame — a block-header walker finds the end without decompressing —
+and afterwards accepts only skippable padding frames. Output must be exactly `orig_size` bytes.
+Every limit comes from the index or from a constant; nothing in the frame sizes an allocation.
+
+**Trap 16 was wrong as written, and the fix is better than the doc's intent.** The trap said to set
+the library's `WithDecoderMaxMemory` to `orig_size`. The review checked: in streaming mode that
+option is a *window* cap, not an output cap, and since every streaming header's window is the
+power of two *above* the content, the prescription would reject every frame this program writes —
+an implementer following the doc would have shipped green tests and unreadable archives. What
+actually bounds the decoder's allocation by the record is a rule the reviewers proposed and the
+writer already satisfies: **a frame's window may not exceed the smallest power of two above
+`orig_size`** — content cannot reference further back than it is long, and the library's own
+header window for a declared size is exactly that. Consequences, all pinned in R27: the writer
+always declares the size (there is no unknown-length mode), an empty file is stored raw (its
+frame would have nothing to bound its window by), and a 10-byte frame for a 10-byte file costs
+the decoder a 1 KiB window rather than the 513 MiB a hostile header could otherwise demand. 512 MiB stays
+as the format's ceiling, pinned in the code rather than aliased from the library.
+
+**Probe: median, not mean.** Three samples at start, middle and two thirds, as §9 says — but §9
+did not say how to combine them. The mean lets one compressible header vote a file of images into
+zstd (0.35, 1.0, 1.0 average to 0.78, "compress"); the median says 1.0, raw, which is the PDF case
+§9 was written for. The mirror case — a compressible middle between incompressible thirds — is
+stored raw and loses space only. Files up to three samples long are compressed whole.
+
+**Two things the fuzzer and the review found in the library's contract.** `zstd.BuildDict` panics
+(a negative slice bound in its history buffer) on any training sample longer than about 146 KiB;
+training samples are now truncated to 128 KiB, which the arithmetic shows is always safe, while
+the whole sample stays eligible as content. And a dictionary whose content contains a training
+sample verbatim yields "0 literals" — the trainer needs bytes that do *not* match — so content is
+taken from every other sample and the rest train the tables. A ten-second fuzz run also caught the
+frame walker skipping three bytes of padding that sat inside the 17-byte header read-ahead.
+
+**Review.** First round: three Opus reviewers, 36 findings, 15 confirmed (one blocker, the
+BuildDict panic; one major, trap 16), 3 refuted, 18 left unverified when the session limit hit.
+Those were triaged by hand, and nearly all were real or worth doing: the frame walker, the
+size-bound window, goroutine leaks from a parallel encoder on a failed stream (every failure
+path now resets the encoder, and `Release` is mandatory for `Concurrency` above 1),
+`Window × Concurrency` memory (documented, and bounded at a 32 MiB window), `MaxEncodedSize`
+rounded up to the padding, the probe encoder pooled instead of shared, and a run of doc and test
+corrections. Second round, on the reworked reader: two reviewers, 17 findings, 7 verified
+and all confirmed, none refuted. One blocker among them, and a good one: the library's
+`zstd.HeaderMaxSize` is 17 because it counts the spec's 14-byte frame header without the 4-byte
+magic, so a read-ahead sized from it could not hold the largest legal header — 18 bytes, a
+dictionary ID of 65536 or more together with a content size of 4 GiB or more — and the Reader
+would have called a frame its own Writer had produced corrupt. The read-ahead is now sized from
+the format, 21 bytes, with the library's constant deliberately not used. The rest: the padding
+bound was one step short for paddings under 8 bytes, single-segment frames were held to the
+window rule only implicitly, a source that never progresses could spin the reader, and the
+one-sample dictionary case could never succeed.
+
+**Not built, on purpose.** No one-shot `Compress`/`Decompress` helpers: a Writer or Reader reset
+per file is the same cost with one API. No COVER training: content selection is round-robin over
+the heads of every other sample, and a better selector needs no format change because the
+dictionary is just bytes in the index.

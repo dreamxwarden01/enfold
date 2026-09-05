@@ -508,7 +508,14 @@ the disk, which is a narrower claim.
 - **Sample several offsets, not just the head.** A PDF with embedded images has a compressible
   header and an incompressible body; judging from the first 256 KiB alone gets it backwards.
   Three samples — start, middle, and a point two thirds in — cost microseconds and are far more
-  representative.
+  representative. A file up to three samples long (768 KiB) is compressed whole instead — no
+  dearer than the samples it replaces, and exactly representative — and judged on that one
+  ratio. **For the three-sample case the decision is the median of the sample ratios, not their
+  mean**: a
+  mean lets one compressible header vote a file of images into zstd (a text head at 0.35 and two
+  image samples at 1.0 average to 0.78, which reads as "compress"); the median says 1.0, raw. The
+  price is the mirror case — a compressible middle between two incompressible thirds is stored
+  raw and loses the space it could have saved — which costs space only, never random access.
 - Consequence: **v1 does not need the zstd seekable format at all.** The files worth seeking
   into (video, audio) are exactly the files stored uncompressed. Seekable zstd can be added
   later behind the algorithm ID, when someone genuinely wants to seek inside a 20 GB
@@ -649,12 +656,22 @@ Correct in this document, and easy to lose during implementation.
     verify it after every unlock and refuse to rotate, re-wrap or mutate slots while it
     mismatches. Found by the `internal/kdf` review on 2026-09-05, one layer before the code that
     would have had the bug.
-16. **Cap the zstd decoder from the index, not from the frame.** An archive is untrusted input;
-    a zstd frame declares its own window size and its own content size, and a hostile one can
-    demand a 512 MiB window or expand without bound. Decode with `WithDecoderMaxWindow` set to
-    the largest window this program ever writes and `WithDecoderMaxMemory` set to the file
-    record's `orig_size`, and treat either limit being hit as corruption. The same reasoning as
-    R24: the parameters are read before anything proves them honest.
+16. **Cap the zstd decoder from the index and from constants, never from the frame.** An
+    archive is untrusted input; a zstd frame declares its own window size and its own content
+    size, and a hostile one can demand a 512 MiB window or expand without bound. The bound that
+    matters is the reader's own: a frame's window may not exceed the smallest power of two above
+    the record's `orig_size` (R27) — content cannot reference further back than it is long, and
+    our writer, always told the size, never asks for more — so the decoder's allocation is
+    bounded by the record, and a 10-byte frame for a 10-byte file costs the decoder a 1 KiB window
+    — a few kilobytes of buffers — not 512 MiB.
+    `WithDecoderMaxWindow` and `WithDecoderMaxMemory`, both set to the 512 MiB ceiling, are the
+    library-side backstop. Do **not** set `WithDecoderMaxMemory` to `orig_size`, as an earlier
+    version of this trap said: in streaming mode it is a *window* cap, not an output cap, and
+    since the header window is always the power of two *above* the content it would reject every
+    frame this program writes. The exact output length is enforced by counting against
+    `orig_size`, plus the header's declared content size when the format carries one — never by
+    a decoder option. The same reasoning as R24: the parameters are read before anything proves
+    them honest.
 
 17. **An error from a STREAM reader means discard, not keep.** Chunks authenticate one at a
     time, so a sequential reader can hand out 300 KiB of authentic plaintext and then fail on
@@ -763,7 +780,7 @@ binding in-tree (`v3/internal/webview2`); the probe binary's build info confirms
 | --- | --- | --- |
 | `github.com/go-piv/piv-go/v2` | v2.6.0 | YubiKey PIV; pure Go, talks to winscard directly. Verified on hardware 2026-09-04 (GET METADATA, AES management keys, ECDH). Lacks MOVE/DELETE KEY (0xF6) and never resets the card on disconnect — trap #14 |
 | `github.com/awnumar/memguard` | v0.23.0 (+ `memcall` v0.4.0) | secrets outside the GC heap |
-| `github.com/klauspost/compress` | v1.19.2 | zstd, pure Go |
+| `github.com/klauspost/compress` | v1.20.0 | zstd, pure Go. Bumped 2026-09-05: 1.19.2 fixed three dictionary bugs; 1.20.0 differs from it only in regenerated assembly |
 | `golang.org/x/crypto` | v0.55.0 | argon2 (`IDKey` only — see §3) |
 | `crypto/ecdh` | stdlib | P-256 for YubiKey slots, X25519 for the recovery slot; validates points on `NewPublicKey` (trap #2) |
 | `crypto/hkdf`, `crypto/aes`, `crypto/cipher` | stdlib | HKDF, AES-256-GCM |

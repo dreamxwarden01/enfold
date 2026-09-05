@@ -302,7 +302,8 @@ stored as given, not normalised — a filesystem does not normalise them either.
 **R21 — Canonical slot records.** `key_source` is on the wire for every slot type and must be
 zero for software slots; the reserved value 2 fails closed on every slot type. `credential_id`
 is on the wire with length zero and a non-zero length fails closed. An empty slot (`slot_state =
-0`) must be entirely zero apart from its state. The point of all three is that decoding is
+0`) must be entirely zero apart from its state. `recipient_id` is unique among the non-empty
+records of a region; a duplicate is invalid. The point of all three is that decoding is
 canonical — every accepted byte is represented — so that re-encoding a decoded record
 reproduces the bytes read, which is what an AAD computed from the struct relies on. The fuzz
 targets assert byte-exact round trips for slot records, the registry and the free-space map.
@@ -351,7 +352,10 @@ as written, authenticated by the registry's AEAD under the Metadata key. Rules:
 
 - Every write of the slot region also rewrites the registry with the new hash, in the order §8
   step 5 already fixes: slot region, then registry, then the superblock flip. The two are never
-  out of step, because they land in one flip.
+  out of step, because they land in one flip. The converse is a rule too: a registry write that
+  does not accompany a slot-region write carries the existing hash forward unchanged and never
+  recomputes it over the region on disk — otherwise the first routine registry update after a
+  detected mismatch would authenticate the tampered region and destroy the evidence.
 - After decrypting the registry, the reader verifies the live slot region against the hash. A
   mismatch is reported as **tampering of the slot region**, never as corruption and never
   silently repaired; the vault stays usable through the slot that just opened it, and no
@@ -400,6 +404,34 @@ the window, and the same rule applies to that. After decoding, the output is exa
 is trusted to size an allocation (`DESIGN.md` §11 trap 16). The window used to write a frame is
 not recorded, so the 512 MiB ceiling is part of the format: a writer that wants more needs a new
 `storage` value.
+
+**R28 — An export is a keystore file.** The backup of §15 is a keystore file of this same format,
+with the same `vault_id`, `vmk_generation` and registry, whose slot region holds only the active
+recovery slots — never a stale one — and whose superblocks start again at `seq` 1. The recovery
+key opens it like any keystore, which is how an export is verified before it is needed and how
+it is restored: open it, unlock with the recovery key, enrol new slots. Nothing else travels.
+
+**R29 — `rewrap_stale` is the one bit outside the slot AAD.** A rotation marks a slot it could not
+re-wrap by setting `rewrap_stale` while leaving `wrapped_vmk` "exactly as it is" (§8) — but
+`flags` is inside the AAD of R14, and a record cannot be re-authenticated without the slot's
+secret, which is precisely what the rotation lacked. So the AAD is computed with that one bit
+cleared. The bit is a hint for the UI and bookkeeping behind `rotation_pending`; the
+authenticated statement of staleness is the generation inside `wrapped_vmk` (§6.2), which an
+unlock compares against the superblock's whatever the bit says. An attacker who clears the bit
+changes nothing an unlock decides; one who sets it produces a spurious warning. Found when the
+keystore layer's first deferred rotation left a slot that could never open again.
+
+**R30 — Completing a deferred rotation needs the slot's own credential.** §8 says rotation needs
+no credential present, "only the entangled password, which the user just typed to unlock". That
+holds for the slot that opened the vault and for every slot without a password. For *another*
+hardware slot with an entangled password it holds only when that password is the same one — and
+nothing in the file can check a password without that slot's token, so re-wrapping with an
+unverified password would silently replace the slot's password with the unlocking one. Hence:
+a rotation re-wraps such slots only when the caller asserts that the password is shared, and
+otherwise marks them stale; and a stale slot is brought up to date only by presenting its own
+credential — token and password — which is checked against the record's existing wrap (the
+previous VMK, which is what a stale slot still holds) before the current VMK is wrapped in. A
+refused re-wrap leaves the record byte for byte as it was.
 
 ---
 
@@ -519,7 +551,9 @@ then slot_count records, each prefixed with u32 record_len
 
 The Argon2 parameters cannot be encrypted — they must be read before any key exists — but they
 must be authenticated, or an attacker rewrites `argon2_m` from 1 GiB to 8 KiB and brute-forces
-cheaply. Same for `epk`, `salt`, `flags`, `mlkem_ek` and `mlkem_ct`.
+cheaply. Same for `epk`, `salt`, `flags`, `mlkem_ek` and `mlkem_ct` — all of `flags` except the
+one bit `rewrap_stale`, which a rotation sets without the slot's secret and which therefore
+cannot be under it (R29).
 
 ### 6.2 `vmk_generation` travels *inside* the wrapped blob
 
@@ -723,9 +757,12 @@ stored `slot_pubkey`, software slots the stored `slot_pubkey` plus `mlkem_ek` �
 need be physically present** and rotation normally completes in full. A future symmetric hardware
 slot (§16) would be the exception.
 
-When a slot genuinely cannot be re-wrapped, it is marked `rewrap_stale` and its `wrapped_vmk` is
-**left exactly as it is**, which means that record alone still carries the *previous* VMK and its
-generation number.
+When a slot genuinely cannot be re-wrapped — in v1, a hardware slot whose entangled password is
+not the one that unlocked the vault, unless the caller asserts that it is (R30) — it is marked
+`rewrap_stale` (a bit outside the AAD, R29) and its `wrapped_vmk` is **left exactly as it is**,
+which means that record alone still carries the *previous* VMK and its generation number.
+Bringing it up to date takes that slot's own credential, checked against what it still holds
+(R30).
 
 > This is the one place a VMK survives a rotation, and it is worth stating plainly because §8
 > otherwise says no VMK history is retained. The history is not a separate structure: it is the
@@ -970,6 +1007,8 @@ The obvious options split badly:
 The way out is to carry exactly one:
 
 > **Export = registry + the recovery slot only.** No hardware slots, no standalone password slot.
+
+R28 pins the form: an export is a keystore file whose slot region holds only the recovery slots.
 
 This is restorable — the recovery key opens it, yielding the VMK, from which a fresh keystore is
 rebuilt and the YubiKeys re-enrolled. It is **post-quantum safe**, because the recovery slot is the

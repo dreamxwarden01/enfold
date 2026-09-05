@@ -354,7 +354,7 @@ func TestVectors(t *testing.T) {
 	copy(pt, vmk[:])
 	binary.LittleEndian.PutUint64(pt[KeySize:], v.Inputs.VMKGen)
 	expect(t, "wrapped_vmk.plaintext", pt, v.WrappedVMK.Plaintext)
-	wrapped, err := wrapVMKWithNonce(ik, vmk, v.Inputs.VMKGen, nonce, aad)
+	wrapped, err := WrapVMKWithNonce(ik, vmk, v.Inputs.VMKGen, nonce, aad)
 	if err != nil {
 		t.Fatal(err)
 	}

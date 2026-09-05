@@ -197,8 +197,12 @@ func (s *SlotRecord) Encode() ([]byte, error) {
 
 // AAD returns the associated data for this record's wrapped_vmk (§6.1, R14):
 // every byte of the record from slot_state through wrap_nonce inclusive,
-// followed by vault_id. Neither record_len nor wrapped_vmk is part of it. The
-// record is validated first, so the error is meaningful.
+// followed by vault_id, with one bit excepted — rewrap_stale (R29). That bit
+// is set by a rotation that could not reach the slot's secret, so it cannot
+// be authenticated by that secret; it is a hint for the UI, and the
+// authenticated truth about staleness is the generation inside wrapped_vmk
+// (§6.2). Neither record_len nor wrapped_vmk is part of the AAD. The record
+// is validated first, so the error is meaningful.
 func (s *SlotRecord) AAD(vaultID [16]byte) ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -209,9 +213,15 @@ func (s *SlotRecord) AAD(vaultID [16]byte) ([]byte, error) {
 	}
 	aad := make([]byte, 0, len(body)-WrappedVMKSize+16)
 	aad = append(aad, body[:len(body)-WrappedVMKSize]...)
+	aad[flagsOffset] &^= byte(FlagRewrapStale)
 	aad = append(aad, vaultID[:]...)
 	return aad, nil
 }
+
+// flagsOffset is where flags start in a record body: after slot_state,
+// slot_type, key_source, curve_id and recipient_id. FlagRewrapStale lives in
+// its first, little-endian byte.
+const flagsOffset = 4 + 16
 
 func decodeSlotBody(r *reader) *SlotRecord {
 	s := &SlotRecord{}
@@ -311,10 +321,19 @@ func DecodeSlotRegion(b []byte) ([]SlotRecord, error) {
 		return nil, invalidf("slot_count %d exceeds the cap of %d", n, MaxSlots)
 	}
 	slots := make([]SlotRecord, 0, n)
+	seen := make(map[[16]byte]struct{}, n)
 	for i := uint32(0); i < n; i++ {
 		s, err := decodeSlotRecord(r, "slot record "+itoa(int(i)))
 		if err != nil {
 			return nil, err
+		}
+		if s.State != SlotEmpty {
+			// R21: recipient_id names a slot; two records with one name
+			// would make removal and re-wrap ambiguous.
+			if _, dup := seen[s.RecipientID]; dup {
+				return nil, invalidf("slot record %d repeats recipient_id %x", i, s.RecipientID)
+			}
+			seen[s.RecipientID] = struct{}{}
 		}
 		slots = append(slots, *s)
 	}

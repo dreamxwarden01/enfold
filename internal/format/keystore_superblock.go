@@ -47,8 +47,8 @@ func (s *KeystoreSuperblock) ValidateExtents(fileSize uint64) error {
 	if fileSize < RegistryMinOff {
 		return invalidf("keystore file of %d bytes is shorter than its fixed regions (%d)", fileSize, RegistryMinOff)
 	}
-	end := s.RegistryOff + s.RegistryLen + TagSize // cannot overflow: both terms are bounded
-	if end > fileSize {
+	end := s.RegistryOff + s.RegistryLen + TagSize // RegistryLen is bounded; RegistryOff is not, hence the first test
+	if s.RegistryOff > fileSize || end > fileSize {
 		return invalidf("registry extent [0x%x, 0x%x) exceeds the file size %d", s.RegistryOff, end, fileSize)
 	}
 	return nil

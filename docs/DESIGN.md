@@ -258,6 +258,11 @@ slots, but forgetting that password kills both.
 This is a predicate evaluated before *every* slot add / remove / replace, not a check written
 once in the creation flow.
 
+Implementation note (2026-09-05): the file cannot tell two entangled passwords apart, so the
+predicate counts every entangled password as the same secret. Two tokens each with its own
+password therefore still need a recovery slot — conservative, and the recovery slot is what the
+design wants present anyway.
+
 | Configuration | Required-secret sets | Valid |
 | --- | --- | --- |
 | Two YubiKeys, no password | `{YK_A}` / `{YK_B}` | yes |
@@ -314,7 +319,10 @@ already carry a `slot_type` and an algorithm ID, so mixing curves across slot ty
 Result: **every slot type is asymmetric, and VMK rotation never requires any physical
 credential to be present** — only the entangled password, which the user just typed to unlock.
 Rotation can therefore be unconditional and invisible, which is the only way it will actually
-happen.
+happen. One qualification, `FORMAT.md` R30: a *second* hardware slot with an entangled password
+of its own is re-wrapped with the typed password only if the user says the password is shared —
+the file cannot check a password without that slot's token — and is otherwise left stale until
+that token and password are presented.
 
 ### Revocation
 
@@ -680,6 +688,17 @@ Correct in this document, and easy to lose during implementation.
     clean end (`io.EOF`), and never presents the prefix as the file. The reader's side of the
     bargain is that it never reports a clean end before the final chunk has authenticated (R26),
     so "read to EOF without error" is the whole acceptance test.
+
+18. **A re-wrap must not touch the record until it has succeeded.** Re-wrapping a slot replaces
+    `epk` (and `mlkem_ct`), the nonce and `wrapped_vmk` together; a refused or failed re-wrap must
+    leave every byte as it was, or the slot is unopenable — its old wrap authenticated against
+    the old `epk`. The keystore layer's first deferred rotation replaced `epk` before discovering
+    it had no password, and the slot it meant to leave stale never opened again. Build the new
+    record in a copy and assign it whole.
+
+19. **`rewrap_stale` cannot be authenticated by the slot it marks** (`FORMAT.md` R29): the
+    rotation that sets it is the one that lacked the slot's secret. It is the one bit of `flags`
+    outside the slot AAD, and a hint only; the generation inside `wrapped_vmk` is the truth.
 
 ## 12. Deferred
 

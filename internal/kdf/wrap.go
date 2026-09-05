@@ -41,11 +41,15 @@ func WrapVMK(ik []byte, vmk [KeySize]byte, generation uint64, aad []byte) (wrapp
 	if err != nil {
 		return wrapped, nonce, err
 	}
-	wrapped, err = wrapVMKWithNonce(ik, vmk, generation, nonce, aad)
+	wrapped, err = WrapVMKWithNonce(ik, vmk, generation, nonce, aad)
 	return wrapped, nonce, err
 }
 
-func wrapVMKWithNonce(ik []byte, vmk [KeySize]byte, generation uint64, nonce [NonceSize]byte, aad []byte) ([VMKWrapSize]byte, error) {
+// WrapVMKWithNonce is WrapVMK under a nonce the caller drew. The slot record's
+// AAD (R14) covers wrap_nonce, so the keystore layer must draw the nonce, put
+// it in the record, compute the AAD, and only then wrap — this is that path.
+// The caller is responsible for the nonce being fresh.
+func WrapVMKWithNonce(ik []byte, vmk [KeySize]byte, generation uint64, nonce [NonceSize]byte, aad []byte) ([VMKWrapSize]byte, error) {
 	var out [VMKWrapSize]byte
 	g, err := gcm(ik)
 	if err != nil {

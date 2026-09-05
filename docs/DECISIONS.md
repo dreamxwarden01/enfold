@@ -1581,3 +1581,87 @@ one-sample dictionary case could never succeed.
 per file is the same cost with one API. No COVER training: content selection is round-robin over
 the heads of every other sample, and a better selector needs no format change because the
 dictionary is just bytes in the index.
+
+---
+
+## 2026-09-05 — internal/keystore: unlock, rotation, the commit protocol, and three rules the code forced out of the spec
+
+**What landed.** `internal/keystore`: `Open`/`Create`, `Unlock` with a standalone password, the
+recovery key, or a token plus its entangled password, an `Unlocked` that holds the VMK for slot
+mutations (`AddSlot`, `RemoveSlot`, `Rotate`, `RewrapStale`, `Export`), and a `Session` with the
+three cached keys of DESIGN §10 and a transactional `UpdateRegistry`. A token is an interface of
+two methods — its public key and one ECDH — so the PIV layer plugs in later and the tests use a
+software P-256 key. Every change lands in one superblock flip: slot region into the inactive
+copy, registry into a location the live one does not occupy, sync, inactive superblock at
+seq + 1, sync, then the file is trimmed to the live registry's end. A fresh file writes copy A at
+seq 1 and copy B at seq 0, since the format reader treats a tie as corruption.
+
+**Three things the spec did not say, or said wrongly, that writing the code exposed.**
+
+*The invariant cannot see passwords.* §6.4 evaluates required-secret sets, and the table in
+DESIGN §5 distinguishes "two YubiKeys sharing one entangled password" from two with different
+ones — but the file stores no password material, so the code cannot tell the cases apart. It
+counts every entangled password as one secret (DESIGN §5, implementation note). Conservative:
+two tokens each with its own password still need a recovery slot, which is what the design wants
+present anyway.
+
+*`rewrap_stale` cannot be in the AAD.* §8 says a slot a rotation cannot reach is marked
+`rewrap_stale` with its `wrapped_vmk` left exactly as it is; R14 says the AAD covers every byte of
+the record including `flags`. Both cannot hold: setting the bit re-keys the AAD, and the rotation
+that sets it is the one without the slot's secret. The first deferred rotation the tests ran
+produced a slot that never opened again. **R29**: the bit is cleared when the AAD is computed —
+it is a hint for the UI and bookkeeping behind `rotation_pending`; the authenticated statement of
+staleness is the generation inside `wrapped_vmk`, which an unlock checks regardless. Changed in
+`internal/format`, with a test that the bit is on the wire but not in the AAD and every other
+flag bit is in both.
+
+*"Only the entangled password, which the user just typed" is true for one slot.* DESIGN §5's
+promise that rotation needs no credential present holds for the slot that opened the vault and
+for every slot without a password. For a second hardware slot with an entangled password it holds
+only if that password is the same one — and the file cannot check a password without that
+slot's token, so re-wrapping with the typed password would silently *replace* the other slot's
+password. The first draft did exactly that, and the test that expected a stale slot got a
+re-keyed one. **R30**: `Rotate` re-wraps other entangled slots only with
+`RotateOptions{SharedPassword: true}`, otherwise leaves them stale; `RewrapStale` takes the stale
+slot's own credential and verifies it against the slot's existing wrap — the previous VMK, which
+is what it still holds — before wrapping the current VMK in. DESIGN trap 18 records the
+companion bug: a re-wrap that replaced `epk` before discovering it had no password left the slot
+unopenable; records are now built in a copy and assigned whole.
+
+**Export is a keystore file (R28).** §15 said what an export carries; nothing said its form.
+Making it the same file format with only the recovery slots in the slot region answers the
+verifiability requirement for free: opening it with the recovery key *is* the test, and restoring
+is opening it and enrolling new slots.
+
+**Also.** `kdf.WrapVMKWithNonce` is exported: the slot AAD covers `wrap_nonce`, so the nonce must
+be drawn and placed in the record before the AAD exists, and the wrap-draws-its-own-nonce API of
+`internal/kdf` cannot be used for slots. The registry's tag is stored both after the ciphertext
+and in the superblock, and a reader requires them to agree.
+
+**Review.** Three Opus reviewers (spec conformance / hostile input and crashes / crypto and Go
+quality), 32 findings, 26 verified: 18 confirmed, 8 refuted, 6 nits judged by hand. The blocker
+was found by two lenses independently: a registry-only commit recomputed `slot_region_hash` over
+the live region as read from disk, so the first routine registry update after a detected
+mismatch — adding an archive — authenticated the tampered region and destroyed the evidence, and
+the next rotation would have handed the new VMK to the substituted key. The registry now carries
+its authenticated hash forward and recomputes it only when the slot region is actually written;
+R25 records the converse rule, and the tamper test reopens the file after an update. Two majors
+on handle lifetimes: `Unlocked` and `Session` each held their own copy of the registry, so a
+commit through one silently reverted the other's; and a `Session` derived before a rotation kept
+the old Metadata key and would have sealed the registry under it — unopenable by every slot,
+permanently. The registry is now one object per `Keystore`, and every handle is bound to the VMK
+generation it was derived at: after a rotation, anything older refuses with `ErrStale`. Also
+fixed: a commit failing at or after the superblock write now poisons the handle
+(`ErrIndeterminate`, `Keystore.Broken`) instead of leaving memory and disk disagreeing; the
+post-commit trim keeps the losing copy's registry addressable, so losing the live superblock
+opens the file one commit behind rather than not at all; `registry_off` had no upper bound and
+could wrap `ValidateExtents`; the new VMK was not zeroed on `Rotate`'s error paths; `create`
+left a file behind on one failure path; `Create` returned an `Unlocked` with no way to reach the
+`Keystore`; `recipient_id` is now unique within a region (R21) and `AddSlot` checks it; a
+`HardwareSlot` with Argon2 parameters and no password is refused; the fuzz target caps Argon2
+memory; and two tests that could not fail now can.
+
+**Not built, on purpose.** No physical-memory checks for Argon2 (DESIGN §6): they belong to the
+layer that owns the UI's parameter choice, with an OS query this package should not carry. No
+retired-slot semantics beyond ignoring them: nothing in v1 creates one. No automatic clearing of
+a spurious `rewrap_stale` bit.

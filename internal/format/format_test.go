@@ -182,6 +182,7 @@ func TestPickKeystoreSuperblock(t *testing.T) {
 
 func TestSlotRegionRoundTrip(t *testing.T) {
 	slots := []SlotRecord{hardwareSlot(), softwareSlot(SlotRecovery), softwareSlot(SlotStandalonePassword), {State: SlotEmpty}}
+	slots[2].RecipientID = fill16(0xB3) // recipient_id is unique within a region (R21)
 	b, err := EncodeSlotRegion(slots)
 	if err != nil {
 		t.Fatal(err)
@@ -204,6 +205,41 @@ func TestSlotRegionRoundTrip(t *testing.T) {
 	one, err := hs.Encode()
 	if err != nil || len(one) != 338 {
 		t.Fatalf("hardware slot record: %d bytes, %v", len(one), err)
+	}
+}
+
+func TestSlotRegionRejectsDuplicateRecipient(t *testing.T) {
+	a := hardwareSlot()
+	b := hardwareSlot()
+	region, err := EncodeSlotRegion([]SlotRecord{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSlotRegion(region); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate recipient_id accepted: %v", err)
+	}
+	b.RecipientID[0] ^= 1
+	region, err = EncodeSlotRegion([]SlotRecord{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSlotRegion(region); err != nil {
+		t.Fatalf("distinct recipient_ids refused: %v", err)
+	}
+	// Two empty slots share the zero recipient_id and that is fine.
+	region, err = EncodeSlotRegion([]SlotRecord{{}, {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSlotRegion(region); err != nil {
+		t.Fatalf("two empty slots refused: %v", err)
+	}
+}
+
+func TestKeystoreExtentsOverflow(t *testing.T) {
+	s := KeystoreSuperblock{SlotRegionOff: SlotRegionAOff, SlotRegionLen: 8, RegistryOff: ^uint64(0) - 15, RegistryLen: 0}
+	if err := s.ValidateExtents(1 << 20); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("wrapped registry extent accepted: %v", err)
 	}
 }
 
@@ -233,6 +269,34 @@ func TestSlotAADPinned(t *testing.T) {
 	aad2, _ := s2.AAD(fill16(0x55))
 	if bytes.Equal(aad, aad2) {
 		t.Fatal("argon2_m is not in the AAD")
+	}
+	// R29: rewrap_stale is the one bit outside the AAD; every other flag
+	// bit is inside it.
+	stale := s
+	stale.Flags |= FlagRewrapStale
+	aadStale, err := stale.AAD(fill16(0x55))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(aad, aadStale) {
+		t.Fatal("rewrap_stale changed the AAD")
+	}
+	if rec2, _ := stale.Encode(); bytes.Equal(rec, rec2) {
+		t.Fatal("rewrap_stale is not on the wire")
+	}
+	for _, bit := range []uint32{FlagEntangledPassword, FlagUVRequired} {
+		flagged := s
+		flagged.Flags |= bit
+		if flagged.Flags&FlagEntangledPassword != 0 {
+			flagged.Argon2M, flagged.Argon2T, flagged.Argon2P = 64, 1, 1
+		}
+		aadFlag, err := flagged.AAD(fill16(0x55))
+		if err != nil {
+			t.Fatalf("flag 0x%x: %v", bit, err)
+		}
+		if bytes.Equal(aad, aadFlag) {
+			t.Fatalf("flag 0x%x is not in the AAD", bit)
+		}
 	}
 	bad := s
 	bad.Curve = 9

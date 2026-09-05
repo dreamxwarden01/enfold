@@ -577,6 +577,11 @@ Still open:
   user, through to a full per-file merge inside the archive — the first is almost certainly right
   for v1, but the decision has not been made.
 - Tombstone GC horizon when a peer has not synced for a long time.
+- **A TTL on trust, distinct from identity.** Device identity is persistent — the TPM- or
+  DPAPI-wrapped blob of §3.1 — but the *trust* an enrolled device enjoys need not be. A pin record
+  could carry a last-confirmed time and expire, so that a device unseen for months does not keep
+  standing approval; renewal would be a re-confirmation from the phone, not a re-pairing. Raised
+  2026-09-04; cheap, and a natural fit next to the pin record's revision.
 - Whether `SetProcessMitigationPolicy` with `ProcessSignaturePolicy` (Microsoft-signed DLLs only)
   is worth enabling. It blocks a class of injection, but can conflict with anti-malware products
   and shell extensions, so it needs testing rather than a decision on paper. Note that it is

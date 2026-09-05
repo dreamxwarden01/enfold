@@ -70,6 +70,9 @@ Written down so that "just a small addition" has to argue with a list rather tha
 - The phone application, in any form
 - Small-file packs (`pack_id` is reserved and written as zero)
 - Virtual filesystem (WinFsp / Dokan)
+- A sandboxed child process for archive parsing (AppContainer). It would contain a parser
+  compromise — the one thing AppContainer is good for here — and is a v2 candidate alongside
+  fuzzing (`DECISIONS.md` 2026-09-04)
 - Post-quantum hardware slots — pending hardware that does not exist (`FORMAT.md` §16)
 - `prf-derived` slots
 - Seekable zstd
@@ -152,6 +155,12 @@ Recorded so they are not mistaken for oversights. Neither blocks v1.
 - **Destroy or hide on close-to-tray.** The default is destroy (7–9 MB idle). It switches to hide
   (~130 MB resident) if reopening the real interface shows noticeable delay, stutter or state
   loss. A trade-off to be judged by use, not decided on paper (`DECISIONS.md` 2026-09-04).
+- **PIV PIN policy and token session semantics.** How long a PIN verification should stand,
+  whether every operation needs a touch, and whether the app holds the exclusive card connection
+  for the session. The measured facts are in `DECISIONS.md` 2026-09-04 (Windows powers the card
+  down 10 s after the last disconnect; an explicit reset clears the state at once); the policy is
+  the user's call once the unlock UX exists. Settled regardless: never overwrite an occupied slot
+  by default, never reset the PIV application, never probe with the default PIN.
 
 ## The rule this file exists to enforce
 

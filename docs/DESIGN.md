@@ -41,9 +41,17 @@ host disk.
 > implicitly holds `WRITE_DAC`, so a same-user process rewrites the DACL and proceeds — and
 > `SetWindowsHookEx`-style injection never goes through `OpenProcess` at all. Real protection of
 > this kind is a kernel driver stripping rights via `ObRegisterCallbacks`, which is what
-> anti-malware does and is not available to an ordinary application. The only architectural answer
-> is a separate SID — an AppContainer — whose capability-gated file access is incompatible with an
-> archive manager whose core operation is opening a file anywhere the user points.
+> anti-malware does and is not available to an ordinary application. An AppContainer is **not**
+> an answer either, although it looks like one: measured 2026-09-04, an unelevated process of the
+> same user opened every running AppContainer process for `PROCESS_VM_READ` and read its memory,
+> and the isolated-storage folders grant the user full control. Microsoft's integrity mechanism
+> restricts lower-integrity subjects only — "preventing information disclosure is not a goal" —
+> and AppContainer exists to protect the system from the app, not the app from the user's other
+> programs. The one Microsoft mechanism aimed at this threat is a VBS enclave (Windows 11
+> 26100.2314+, Trusted Signing with enclave EKUs, MSVC-only, so closed to a Go codebase); PPL is
+> reserved for anti-malware vendors. A separate SID helps only as a genuinely different account —
+> a service process holding the keys — which changes what an attacker gets (use while unlocked,
+> not extraction) and is deferred (`DECISIONS.md` 2026-09-04).
 >
 > **Do not build any argument on same-user isolation, and do not add measures that imply it
 > exists.** What actually helps is already in the design: secrets in memory rather than on disk
@@ -555,6 +563,15 @@ bypass the session timeout entirely.
 - **The tray icon must change** when unlocked. When the window is minimised the banner is
   invisible, and a reminder nobody can see is not a reminder.
 
+### The token ceremony, in the order the user experiences it
+
+PIN first, then touch: the YubiKey asks for a touch only after the PIN has been accepted, and the
+person who just typed the PIN is then waiting with no cue (observed 2026-09-04 — "left standing"
+after the PIN). The moment the PIN is accepted the UI must switch to an unmistakable "now touch
+the key" prompt. Before asking for the PIN it must show the retries remaining: the counter is 3,
+and a blocked PUK means a PIV application reset that destroys every slot, including keys the user
+keeps on the same token for other purposes.
+
 ### The WebView boundary
 
 The UI is a WebView2 (Wails v3, §14). **Keys never cross into the WebView.** Anything handed to
@@ -611,6 +628,14 @@ Correct in this document, and easy to lose during implementation.
     disabled or in-private where the framework exposes it. Verify by inspecting the profile
     directory after a preview. Otherwise decrypted content is written to disk by a component
     that is not this program.
+14. **The token's PIN-once state outlives our connection.** Measured 2026-09-04 on a YubiKey
+    5.7.4 (`DECISIONS.md`): after a VERIFY the card stays verified until Windows powers it down,
+    which happens **10 s after the last application disconnects** — piv-go disconnects with
+    `SCARD_LEAVE_CARD` and never resets. In that window any process on the machine can use the
+    9d key without the PIN; touch is the only barrier. Whatever PIN policy is finally chosen
+    (open, `SCOPE.md`), the unlock path must not leave a verified card behind it: disconnect with
+    `SCARD_RESET_CARD` through winscard directly (verified to clear the state at once), or hold
+    the exclusive connection for the whole session, which locks every other process out.
 
 ## 12. Deferred
 
@@ -709,7 +734,7 @@ binding in-tree (`v3/internal/webview2`); the probe binary's build info confirms
 
 | Dependency | Version | Role |
 | --- | --- | --- |
-| `github.com/go-piv/piv-go/v2` | v2.6.0 | YubiKey PIV; pure Go, talks to winscard directly |
+| `github.com/go-piv/piv-go/v2` | v2.6.0 | YubiKey PIV; pure Go, talks to winscard directly. Verified on hardware 2026-09-04 (GET METADATA, AES management keys, ECDH). Lacks MOVE/DELETE KEY (0xF6) and never resets the card on disconnect — trap #14 |
 | `github.com/awnumar/memguard` | v0.23.0 (+ `memcall` v0.4.0) | secrets outside the GC heap |
 | `github.com/klauspost/compress` | v1.19.2 | zstd, pure Go |
 | `golang.org/x/crypto` | v0.55.0 | argon2 (`IDKey` only — see §3) |

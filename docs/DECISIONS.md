@@ -1153,3 +1153,129 @@ decrypted index data was on screen goes with it.
 
 **Toolchain now installed** on the development machine: `wails3` CLI v3.0.0-beta.16 (also `wails`
 v2.15.0 and `rsrc`, used only for the probes), Node 24.13 / npm 11.9.
+
+---
+
+## 2026-09-04 — Three questions before code: device identity, AppContainer, one key in slot 9d
+
+Raised by the user just before implementation was to start. Two were answered from the existing
+design plus verification; the third produced measurements on real hardware and a short list of
+things to settle before the hardware-slot code is written. Research was run as Sonnet finders
+with Opus verifiers (every claim re-fetched; two refuted on citation only); the local checks and
+the YubiKey probes are reproducible from `D:\MyPersonalProjects\go-tmp\ui-probe\actest.ps1` and
+`D:\MyPersonalProjects\go-tmp\piv-probe\` (`RESULTS.md`, `research2-dump.txt`).
+
+### 1. "Device identity must persist, but we cannot write persistent keys into the TPM"
+
+Already how `SYNC.md` §3.1 works, and confirmed as the same model Windows uses itself. The
+identity key is created under the TPM's storage root key and comes back as a wrapped blob that
+lives **in our keystore file**; it is loaded transiently to use and consumes no persistent TPM
+storage. Windows' Platform Crypto Provider does exactly this (`.PCPKEY` blobs on disk, keys
+loaded into the TPM on demand). The identity is persistent; nothing is written into the TPM. What
+is lost on TPM clear, reinstall or board swap is the blob's usability, which §3.1 already handles
+by re-pairing, never on the unlock path.
+
+Two additions from the discussion: **a TTL on trust, distinct from identity** (recorded in
+`SYNC.md` §8 — pin records could expire and be renewed by a re-confirmation from the phone); and
+the unverified point that Microsoft documents nowhere whether the TPM 2.0 storage hierarchy is
+left with empty authorization for applications. Practical consequence for later: prefer the PCP
+KSP through `ncrypt.dll` (Microsoft's supported path, pure syscalls) or test go-tpm directly on
+this machine (TPM 2.0 present, "Ready for storage"). Post-v1 either way.
+
+### 2. "AppContainer isolates memory and AppData between apps of the same user"
+
+**No — and the direction of the mistake matters.** Measured on the development machine: an
+unelevated PowerShell running as the user opened all 11 running AppContainer processes (WebView2
+renderers, SearchHost, ShellExperienceHost, LockApp, …) for `PROCESS_VM_READ` and read their
+image headers; the ACL of a Packages isolated-storage folder grants the user `(F)`. Microsoft's
+own words, verified: the integrity mechanism restricts lower-integrity subjects only, "preventing
+information disclosure is not a goal", and it "is not intended as an application sandbox" —
+AppContainer protects the system from the app. So it cannot replace device binding either, and
+could not even in principle: device binding defends against the keystore being copied to another
+machine, which no in-machine isolation addresses.
+
+What the survey found instead, all verified against Microsoft Learn:
+
+- **VBS enclaves** are the one mechanism Microsoft frames as protecting an app's secrets from a
+  higher-privilege attacker on the same machine. Third parties can use them since Windows 11
+  26100.2314, but the enclave must be MSVC-built against the enclave CRT and signed through
+  Trusted Signing with enclave EKUs. Not reachable from Go. **PPL** is anti-malware-only (ELAM).
+- **DPAPI does not isolate apps of the same user** — Microsoft: "all applications running under
+  the same user can access any protected data that they know about" — and `LOCAL_MACHINE`
+  scope gives "no real protection" on a workstation. `SYNC.md` §3.1's choice of machine scope
+  already rests on the phone approving every request, not on DPAPI as a boundary. Also noted:
+  the DPAPI prompt-struct flow is deprecated for removal in February 2027; the design never
+  used it.
+- What AppContainer *is* good for here: **containing our own parser.** An archive is untrusted
+  input; a parser compromise inside an AppContainer child process cannot reach the network or
+  the user's files. Recorded in `SCOPE.md` as a v2 candidate next to fuzzing.
+- A partial mitigation that is real: holding the keys in a **service under a different account**
+  would turn "unlocked = everything, forever" into "unlocked = what the attacker can make the
+  service do while the session lasts". Deferred; noted in `DESIGN.md` §2.
+
+`DESIGN.md` §2 previously called an AppContainer "the only architectural answer"; that sentence
+was wrong and is corrected.
+
+### 3. "Slot 9d holds one key — reuse across keystores? existing key? overwrite?"
+
+**Reuse across keystores is the design, not an exception.** Every keystore stores its own
+ephemeral `epk` and derives from ECDH against the same 9d private key; the token needs one key
+for any number of keystores, as it does for any number of encrypted e-mails. Costs: `slot_pubkey`
+is a cross-keystore linkable identifier; losing the token affects every keystore; rotating the
+hardware key means re-enrolling in each.
+
+**Measured on the user's YubiKey (firmware 5.7.4)** with a throwaway probe against slot 9d only;
+the user typed every PIN into the probe's own prompt, never into the conversation:
+
+| Fact | Measurement |
+| --- | --- |
+| Existing-key discovery | GET METADATA (firmware ≥ 5.3) gives algorithm, PIN/touch policy, origin and public key for every slot with no PIN, no touch, no certificate |
+| Management key | Not the default: AES-256 (piv-go's 24-byte default was rejected with "expected 32"); the PIN-protected key in the PRINTED object worked |
+| Generate P-256 in 9d, PIN once / touch always | 645 ms; attestation certificate available from F9 |
+| ECDH on the token vs `crypto/ecdh` | identical in every round; 1.7–2.7 s including the human touch |
+| **PIN-once state after our process exits** | **persists** — a later process did two ECDH rounds with no PIN |
+| Why it later disappears | **Windows powers the card down 10.03 s after the last disconnect** (`SCardGetStatusChange` shows `UNPOWERED`); a VERIFY followed by idle → state gone at reconnect |
+| Explicit `SCardDisconnect(SCARD_RESET_CARD)` | clears the state immediately; piv-go only ever uses `LEAVE_CARD` and `SHARE_EXCLUSIVE` |
+| piv-go v2.6.0 | has GET METADATA, AES management keys, PIN-protected management key, attestation, retired slots; **lacks MOVE/DELETE KEY (0xF6)** and any reset |
+
+**Verified from Yubico documentation** (firmware 5.7.4 tech manual, YubiKey SDK manual, ykman
+docs): move/delete need 5.7.4 (yubico-piv-tool says 5.7.0 — treat 5.7.4 as the floor); GET
+METADATA needs 5.3; retired slots 82–95 exist since 4.0 and accept generation; **PIN and touch
+policy are fixed at generation**; defaults PIN 123456 / PUK 12345678 / management key
+`0102…08` (3DES ≤ 5.6, AES-192 ≥ 5.7); retries 3/3; a blocked PUK has no unblock and forces a
+PIV reset that wipes every slot; 5.7+ has PIN complexity that **rejects 123456 outright on the
+Enhanced PIN series** and Unicode PINs counted in code points on an 8-byte wire field; the Bio
+Multi-protocol Edition shares one PIN between FIDO2 and PIV with the PUK disabled; the Security
+Key series and the Bio FIDO Edition have no PIV; FIPS keys need an 8-character PIN, forbid PIN
+policy "never" and (140-3) 3DES management keys, and allow P-256; metadata's `origin` is
+self-reported while the F9 attestation is signed; PIV works over NFC with touch inside 15 s;
+firmware 5.8 changes nothing in PIV.
+
+**Settled now** (small, and independent of the open policy):
+
+- **Never overwrite an occupied slot by default.** If 9d holds a P-256 key with acceptable
+  policies, reuse it and say so; if it holds RSA, P-384, a key with `touch=never`, or a key whose
+  public key cannot be read (firmware < 5.3 without a certificate), generate ours in a retired
+  slot 82–95 instead. Overwriting is an explicit, named, second-confirmed action on one slot.
+- **Never call PIV reset**, and never probe with the default PIN. Show retries before asking.
+- **Management key flow:** PIN-protected key first, then ask the user for theirs; if the default
+  works, warn. Read the 9b algorithm from metadata (FIPS 140-3 keys refuse 3DES).
+- **Rotation of the hardware key cannot depend on MOVE KEY** (piv-go lacks it): the new key goes
+  into a fresh slot, keystores are re-wrapped, the old slot stays until the user deletes it with
+  ykman. `DESIGN.md`'s earlier "retired slots hold superseded keys" wording is superseded by this.
+- **UI order: PIN, then touch.** The token asks for the touch only after the PIN is accepted and
+  the user is otherwise left waiting; recorded in `DESIGN.md` §10.
+
+**Open, deliberately** (`SCOPE.md`, "Deliberately unresolved"): the PIN policy and token session
+semantics — how long a verification stands, whether every operation needs a touch, whether the
+app holds the exclusive connection for the session (which locks every other process out of the
+card) or resets on every disconnect (which closes the 10 s window). The user asked for these to be
+decided on the unlock UX once it exists, not on paper. Also open: **a `piv_slot` (u8) and
+`token_serial` (u32) field in the hardware slot record**, needed if our key may live outside 9d
+and useful for matching the inserted token before prompting; proposed, not yet added to
+`FORMAT.md`. The format is not frozen, so the cost is the same now or later, as long as it lands
+before the hardware-slot code.
+
+**State left on the user's token:** slot 9d now holds the probe's P-256 key (no certificate,
+invisible to Windows' smart-card stack). It stays until the user deletes it (`ykman piv keys
+delete 9d`, firmware 5.7.4) or the product replaces it.

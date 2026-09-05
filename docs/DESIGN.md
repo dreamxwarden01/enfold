@@ -639,6 +639,13 @@ Correct in this document, and easy to lose during implementation.
     (open, `SCOPE.md`), the unlock path must not leave a verified card behind it: disconnect with
     `SCARD_RESET_CARD` through winscard directly (verified to clear the state at once), or hold
     the exclusive connection for the whole session, which locks every other process out.
+15. **Rotation re-wraps into stored public keys — verify the slot region first.** §8 step 4
+    re-wraps the new VMK to each slot's stored `slot_pubkey` / `mlkem_ek` with no credential
+    present. The slot region is only checksummed, so a substituted public key would receive the
+    new VMK. The registry carries an authenticated SHA-256 of the slot region (`FORMAT.md` R25);
+    verify it after every unlock and refuse to rotate, re-wrap or mutate slots while it
+    mismatches. Found by the `internal/kdf` review on 2026-09-05, one layer before the code that
+    would have had the bug.
 
 ## 12. Deferred
 

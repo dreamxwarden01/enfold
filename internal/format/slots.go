@@ -2,6 +2,7 @@ package format
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"unicode/utf8"
 )
 
@@ -90,8 +91,15 @@ func (s *SlotRecord) Validate() error {
 	if len(s.EPK) != pubSize || len(s.SlotPubkey) != pubSize {
 		return invalidf("public key lengths %d/%d do not match curve %d (want %d)", len(s.EPK), len(s.SlotPubkey), s.Curve, pubSize)
 	}
-	if s.Curve == CurveP256 && (s.EPK[0] != 0x04 || s.SlotPubkey[0] != 0x04) {
-		return invalidf("P-256 public keys must be uncompressed X9.62")
+	if s.Curve == CurveP256 {
+		// On-curve check (DESIGN.md §11 trap 2): crypto/ecdh rejects the point at
+		// infinity and off-curve encodings, so a hostile epk never reaches the token.
+		if _, err := ecdh.P256().NewPublicKey(s.EPK); err != nil {
+			return invalidf("epk is not a valid P-256 point: %v", err)
+		}
+		if _, err := ecdh.P256().NewPublicKey(s.SlotPubkey); err != nil {
+			return invalidf("slot_pubkey is not a valid P-256 point: %v", err)
+		}
 	}
 	argonNeeded := false
 	switch s.Type {
@@ -125,8 +133,23 @@ func (s *SlotRecord) Validate() error {
 	default:
 		return invalidf("slot_type %d unknown", s.Type)
 	}
-	if argonNeeded && (s.Argon2M < 8 || s.Argon2T < 1 || s.Argon2P < 1 || s.Argon2M < 8*uint32(s.Argon2P)) {
-		return invalidf("argon2 parameters m=%d t=%d p=%d unusable", s.Argon2M, s.Argon2T, s.Argon2P)
+	if argonNeeded {
+		if err := ValidateArgon2(s.Argon2M, s.Argon2T, s.Argon2P); err != nil {
+			return err
+		}
+	} else if s.Argon2M != 0 || s.Argon2T != 0 || s.Argon2P != 0 {
+		return invalidf("argon2 parameters m=%d t=%d p=%d on a slot that does not use Argon2id", s.Argon2M, s.Argon2T, s.Argon2P)
+	}
+	return nil
+}
+
+// ValidateArgon2 applies R24: m in [8·p, MaxArgon2MemKiB] KiB, t in
+// [1, MaxArgon2Time], p in [1, MaxArgon2Threads], and m × t ≤ MaxArgon2Work.
+func ValidateArgon2(memKiB, time uint32, threads uint8) error {
+	if threads < 1 || threads > MaxArgon2Threads || time < 1 || time > MaxArgon2Time ||
+		memKiB < MinArgon2MemKiB || memKiB < 8*uint32(threads) || memKiB > MaxArgon2MemKiB ||
+		uint64(memKiB)*uint64(time) > MaxArgon2Work {
+		return invalidf("argon2 parameters m=%d KiB t=%d p=%d outside R24 bounds", memKiB, time, threads)
 	}
 	return nil
 }

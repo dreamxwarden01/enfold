@@ -3,12 +3,13 @@
 A compression and archive manager whose distinguishing feature is security and privacy.
 Windows first, written in Go.
 
-**Status: design settled; implementation started with the file formats.** This repository holds
-the specification, the reasoning behind it, and the first code: `internal/format` encodes and
-decodes both file types byte-for-byte per `docs/FORMAT.md`, with fuzz targets for every decoder;
-`tools/kdfvec` generates `testdata/kdf-vectors.json`, which pins the key-derivation chain and has
-been confirmed against an independent implementation written from the spec alone; `internal/kdf`
-checks the underlying primitives against published vectors. Run tests with `scripts/test.ps1`.
+**Status: design settled; implementation in progress, bottom up.** This repository holds the
+specification, the reasoning behind it, and the first two layers of code: `internal/format`
+encodes and decodes both file types byte-for-byte per `docs/FORMAT.md`, with fuzz targets for
+every decoder; `internal/kdf` implements the whole key hierarchy of `docs/FORMAT.md` §3 and
+reproduces every value in `testdata/kdf-vectors.json`, which `tools/kdfvec` generated and an
+independent implementation written from the spec alone confirmed. Run tests with
+`scripts/test.ps1` (the full suite includes a 512 MiB Argon2id anchor; `-short` skips it).
 
 ## The shape of it
 

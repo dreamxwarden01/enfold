@@ -307,6 +307,64 @@ canonical — every accepted byte is represented — so that re-encoding a decod
 reproduces the bytes read, which is what an AAD computed from the struct relies on. The fuzz
 targets assert byte-exact round trips for slot records, the registry and the free-space map.
 
+**R22 — AADs for the three 32-byte key wraps.** §7.2 and §11 name the wrapped keys and their
+nonces but not their AADs. Each binds the wrapped key to the record that carries it, with an
+ASCII prefix for domain separation, so a wrapped key moved between records inside an otherwise
+authenticated structure fails to open:
+
+| Wrapped key | Under | AAD |
+| --- | --- | --- |
+| `wrapped_archive_key` (§7.2) | `KWK` | `"Enfold/v1/aad/archive-key"` ‖ archive_id ‖ kid |
+| `wrapped_dek` (§11) | archive wrap key | `"Enfold/v1/aad/dek"` ‖ archive_id ‖ file_id ‖ u32 dek_epoch |
+| `wrapped_identity_key` (§7) | `KWK_identity` | `"Enfold/v1/aad/identity"` ‖ vault_id ‖ device_id |
+
+All three are AES-256-GCM, 32 bytes in, 48 out, fresh 96-bit random nonce per wrap. `wrapped_vmk`
+keeps its own AAD (R14).
+
+**R23 — Recovery-key input.** Whitespace is ignored and the groups may be typed with `-`, with
+spaces, or run together; what is checked is exactly 48 digits, each group of 6 below 720 896 and
+divisible by 11. Rendering always uses the dashed form of R11.
+
+**R24 — Argon2id parameter bounds.** `argon2_m` in [8·p, 2 097 152] KiB (2 GiB), `argon2_t` in
+[1, 32], `argon2_p` in [1, 32], checked by the reader before any derivation. The lower bounds are
+the function's own; the upper bounds exist because the parameters are read from the slot record
+*before* anything is authenticated — they are in the AAD, but the AAD is only checked after
+Argon2id has run — so without a ceiling a hostile record turns an unlock attempt into a
+multi-gigabyte allocation. 2 GiB is twice the top of `DESIGN.md`'s recommended range. **Work is
+bounded as well as memory:** `argon2_m × argon2_t` ≤ 8 388 608 KiB·passes (2 GiB × 4, 1 GiB × 8,
+512 MiB × 16), since a memory ceiling alone would still let a hostile record demand 32 passes
+over 2 GiB. A slot that does not use Argon2id (hardware slot without an entangled password,
+recovery slot) carries all three as zero. Discovered the hard way: a review agent demonstrating
+the attack took the development machine down.
+
+**R25 — The registry authenticates the slot region.** The slot region is checksummed but not
+authenticated (§5), and each record's AAD is checked only when *that* slot is used to unlock. That
+left one attack unanalysed: an attacker with write access to the keystore replaces a software
+slot's `slot_pubkey` and `mlkem_ek` — or a hardware slot's `slot_pubkey` — with keys of their own,
+and waits. The next VMK rotation (§8 step 4, pre-selected on every slot change) re-wraps the new
+VMK to the stored public keys *without any credential present*, which is the design's own
+feature, and the attacker's key receives it. Splicing (§6.2) and Argon2 downgrade were analysed;
+this was not.
+
+Hence `slot_region_hash` in the registry plaintext: SHA-256 over the encoded slot region exactly
+as written, authenticated by the registry's AEAD under the Metadata key. Rules:
+
+- Every write of the slot region also rewrites the registry with the new hash, in the order §8
+  step 5 already fixes: slot region, then registry, then the superblock flip. The two are never
+  out of step, because they land in one flip.
+- After decrypting the registry, the reader verifies the live slot region against the hash. A
+  mismatch is reported as **tampering of the slot region**, never as corruption and never
+  silently repaired; the vault stays usable through the slot that just opened it, and no
+  rotation, re-wrap or slot mutation proceeds until the user has seen the message.
+- Rotation refuses to re-wrap into any region that does not match. That closes the substitution
+  above, and it turns the spliced old region of §6.2 from "detectable after the next rotation"
+  into "detected at the next unlock".
+- An export (§15) carries the registry, hash included; a restore builds a fresh region and
+  recomputes it.
+
+The P-256 public keys in a hardware slot are also validated as curve points on read (`DESIGN.md`
+§11 trap 2), so an off-curve `epk` never reaches the token.
+
 ---
 
 # Part I — Keystore file
@@ -486,6 +544,7 @@ u8[16] device_id               this replica's stable identity (SYNC.md)
 i64    modified_at
 u8[48] wrapped_identity_key    device identity X25519 private key, under KWK_identity
 u8[12] identity_nonce
+u8[32] slot_region_hash        SHA-256 of the live slot region as written (R25)
 u32    archive_count
        … archive records
 u32    peer_count

@@ -1351,3 +1351,66 @@ three more (R19–R21). The ones worth remembering:
 Nothing found was a wire-layout defect — both the conformance and the quality reviewer checked
 every field table against the encoders and found none — which is the part of the format that
 would have been expensive to fix later.
+
+---
+
+## 2026-09-04 — `internal/kdf` landed; a reviewer found the missing Argon2 ceiling by detonating it
+
+The package implements every derivation of `FORMAT.md` §3 and §3.3 — hardware slot with and
+without the entangled password, both hybrid software slots end to end (seeds, key pairs, offline
+wrap, unlock, the §6.3 verifier), the recovery-key digit encoding, the subordinate keys below
+the VMK and the archive key, and the AES-256-GCM wraps of the VMK and of 32-byte keys. All 63
+pinned values in `testdata/kdf-vectors.json` reproduce, including the 512 MiB Argon2id anchor;
+`tools/kdfvec` stays as the independent reference that produced them. Three more rules were
+pinned on the way (`FORMAT.md` R22–R24): the AADs for the three key wraps, tolerant recovery-key
+input, and Argon2id parameter bounds.
+
+**The incident.** The three-lens review workflow that had worked for `internal/format` was run
+again. The cryptographic-misuse reviewer was asked "who bounds `argon2_m` — is a hostile slot
+record a denial of service?", and answered by writing a probe that called Argon2id with
+`m = 0xFFFFFFFF` KiB — 4 TiB — and running it. It reached 4.8 GB resident before the machine
+froze; Claude Code itself died with `0xC0000409`, and the user rebooted. The finding was real:
+`format.SlotRecord.Validate` enforced only the lower bounds, so a record could demand any
+amount of memory *before* anything was authenticated (the parameters are in the AAD, but the
+AAD is checked only after Argon2id has run). Now R24: `m` ≤ 2 GiB, `t` ≤ 32, `p` ≤ 32, checked by
+the format layer on read and again by `kdf.Argon2Params.Validate` before any derivation; slots
+that do not run Argon2id carry all three as zero.
+
+The reviewers never delivered their reports — the process died under them — but their scratch
+work showed what they were testing, and each of those probes became a fix: the VMK wrap took a
+caller-supplied nonce, so a rotation that kept the record's old nonce under an unchanged IK
+would have been textbook GCM nonce reuse — **wraps now draw their own nonce and return it**;
+`salt` and `slot_salt` were both bare `[32]byte`, so R13's confusion was one typo away —
+**they are distinct types now**; the exported HKDF and Argon2id could panic on absurd
+arguments — **unexported, reachable only through validated paths**; the subordinate-key
+derivations took `[]byte` and accepted a 7-byte "VMK" — **fixed-size secrets are arrays now**;
+`ParseRecoveryDigits` rejected the en dashes and ideographic spaces a document paste carries —
+**any Unicode space or dash is ignored (R23)**; and every output key in the vector file is now
+asserted, not most of them.
+
+**The rule that comes out of it**, recorded in the working memory as well as here: an agent that
+may execute code is told, in its prompt, never to run a demonstration above 256 MiB or 30 s,
+never to fuzz or benchmark, to run test suites with `-short`, and to prove denial-of-service
+claims from the code and the library source. The follow-up review of this package ran under
+those limits — and found the most important thing in this entry.
+
+**A design gap, one layer before the code that would have had it.** VMK rotation re-wraps the
+new VMK into every slot using the public keys *stored in the slot region*, with no credential
+present — the property `DECISIONS.md` 2026-08-31 chose asymmetric slots for. The slot region is
+checksummed, not authenticated, and a record's AAD is verified only when that slot unlocks the
+vault. So an attacker with write access to the keystore file substitutes their own
+`slot_pubkey`/`mlkem_ek` into, say, the recovery slot, and the next rotation — pre-selected on
+every slot change — hands them the new VMK. Splicing and Argon2 downgrade had been analysed;
+public-key substitution had not, by anyone, across two months of design and two reviews.
+**Fix (`FORMAT.md` R25, `DESIGN.md` trap 15): the registry plaintext carries a SHA-256 of the
+slot region as written**, authenticated by the registry AEAD under the Metadata key, which is
+available exactly when a rotation runs. The reader verifies it after every unlock; a mismatch is
+reported as slot-region tampering and blocks every rotation, re-wrap and slot mutation. It also
+promotes the §6.2 splice from "caught after the next rotation" to "caught at the next unlock".
+Smaller findings from the same pass, all fixed: recovery-key parse errors echoed five correct
+digits of key material; `HardwarePre` inferred "no password" from a nil slice against R4's
+explicit rule, so a skipped prompt could degrade to the token-only derivation — split into
+`HardwarePreToken` and `HardwarePreEntangled`; two HKDF outputs left unzeroed; a comment that
+claimed the X25519 ephemeral was wiped when `crypto/ecdh` offers no way to; Argon2 bounded in
+memory but not work (R24 now caps `m × t`); and P-256 public keys on a slot record were never
+checked to be on the curve — they are now, at parse time.

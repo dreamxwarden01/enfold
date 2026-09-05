@@ -2,6 +2,8 @@ package format
 
 import (
 	"bytes"
+	"crypto/ecdh"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"reflect"
@@ -31,9 +33,19 @@ func fill32(v byte) (a [32]byte) {
 	return
 }
 
+// p256Point derives a real P-256 public key from a fixed scalar, so fixtures
+// pass the on-curve check.
+func p256Point(scalar byte) []byte {
+	k, err := ecdh.P256().NewPrivateKey(seq(scalar, 32))
+	if err != nil {
+		panic(err)
+	}
+	return k.PublicKey().Bytes()
+}
+
 func hardwareSlot() SlotRecord {
-	epk := append([]byte{0x04}, seq(0x10, 64)...)
-	pub := append([]byte{0x04}, seq(0x50, 64)...)
+	epk := p256Point(0x10)
+	pub := p256Point(0x50)
 	s := SlotRecord{
 		State: SlotActive, Type: SlotExternalECDH, KeySource: KeySourceYubiKeyPIV, Curve: CurveP256,
 		RecipientID: fill16(0xA1), Flags: FlagEntangledPassword, Label: "YubiKey 5C — desk", CreatedAt: 1_756_000_000,
@@ -273,12 +285,40 @@ func TestSlotValidation(t *testing.T) {
 	bad("unknown key source", func(s *SlotRecord) { s.KeySource = 9 })
 	bad("compressed P-256 key", func(s *SlotRecord) { s.EPK = seq(0x02, 33) })
 	bad("wrong key length", func(s *SlotRecord) { s.SlotPubkey = seq(1, 64) })
+	bad("off-curve P-256 epk", func(s *SlotRecord) { s.EPK = append([]byte{0x04}, seq(0x10, 64)...) })
+	bad("off-curve P-256 slot_pubkey", func(s *SlotRecord) { s.SlotPubkey[10] ^= 1 })
+	bad("argon2 work above the cap", func(s *SlotRecord) { s.Argon2M = MaxArgon2MemKiB; s.Argon2T = 5 })
 	bad("hardware slot with mlkem", func(s *SlotRecord) { s.MLKEMEK = seq(0, 10) })
 	bad("entangled password without argon2", func(s *SlotRecord) { s.Argon2T = 0 })
 	bad("argon2 m below 8p", func(s *SlotRecord) { s.Argon2M = 16; s.Argon2P = 4 })
 	bad("unknown state", func(s *SlotRecord) { s.State = 7 })
 	bad("unknown type", func(s *SlotRecord) { s.Type = 4 })
 	bad("empty slot with junk", func(s *SlotRecord) { s.State = SlotEmpty })
+	// R24: bounds, and no parameters on a slot that does not run Argon2id.
+	bad("argon2 m above the cap", func(s *SlotRecord) { s.Argon2M = MaxArgon2MemKiB + 1 })
+	bad("argon2 t above the cap", func(s *SlotRecord) { s.Argon2T = MaxArgon2Time + 1 })
+	bad("argon2 p above the cap", func(s *SlotRecord) { s.Argon2P = MaxArgon2Threads + 1; s.Argon2M = 8 * (MaxArgon2Threads + 1) })
+	bad("argon2 4 TiB", func(s *SlotRecord) { s.Argon2M = 0xFFFFFFFF })
+	bad("params on a slot without a password", func(s *SlotRecord) { s.Flags &^= FlagEntangledPassword })
+	if s := hardwareSlot(); true {
+		s.Flags &^= FlagEntangledPassword
+		s.Argon2M, s.Argon2T, s.Argon2P = 0, 0, 0
+		if _, err := s.Encode(); err != nil {
+			t.Errorf("hardware slot without password and zero params rejected: %v", err)
+		}
+	}
+	if s := softwareSlot(SlotRecovery); true {
+		s.Argon2M = 8192
+		if _, err := s.Encode(); !errors.Is(err, ErrInvalid) {
+			t.Errorf("recovery slot with argon2 params accepted: %v", err)
+		}
+	}
+	if s := hardwareSlot(); true {
+		s.Argon2M = MaxArgon2MemKiB
+		if _, err := s.Encode(); err != nil {
+			t.Errorf("argon2 m at the cap rejected: %v", err)
+		}
+	}
 
 	sw := softwareSlot(SlotRecovery)
 	sw.Curve = CurveP256
@@ -414,9 +454,48 @@ func TestRegistryRoundTripAndValidation(t *testing.T) {
 	}
 	// A hostile archive_count must not allocate.
 	h := append([]byte(nil), b...)
-	copy(h[4+16+8+48+12:], []byte{0xFF, 0xFF, 0xFF, 0x7F})
+	copy(h[4+16+8+48+12+32:], []byte{0xFF, 0xFF, 0xFF, 0x7F})
 	if _, err := DecodeRegistry(h); !errors.Is(err, ErrInvalid) {
 		t.Errorf("hostile count: %v", err)
+	}
+}
+
+// R25: the registry's authenticated hash of the slot region catches a
+// substituted public key, an added record, and a spliced-in old region.
+func TestSlotRegionHashDetectsSubstitution(t *testing.T) {
+	region, err := EncodeSlotRegion([]SlotRecord{hardwareSlot(), softwareSlot(SlotRecovery)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := sampleRegistry()
+	g.SlotRegionHash = SlotRegionHash(region)
+	if g.SlotRegionHash != sha256.Sum256(region) {
+		t.Fatal("SlotRegionHash is not SHA-256 of the region")
+	}
+	if err := g.VerifySlotRegion(region); err != nil {
+		t.Fatalf("intact region rejected: %v", err)
+	}
+	// The attack: replace the recovery slot's public key with the attacker's.
+	slots, _ := DecodeSlotRegion(region)
+	slots[1].SlotPubkey = seq(0x99, 32)
+	swapped, _ := EncodeSlotRegion(slots)
+	if err := g.VerifySlotRegion(swapped); !errors.Is(err, ErrInvalid) {
+		t.Fatal("substituted slot_pubkey went undetected")
+	}
+	// An added slot, and an old region spliced back.
+	added, _ := EncodeSlotRegion(append(slots[:1], softwareSlot(SlotStandalonePassword)))
+	if err := g.VerifySlotRegion(added); !errors.Is(err, ErrInvalid) {
+		t.Fatal("added slot went undetected")
+	}
+	old, _ := EncodeSlotRegion([]SlotRecord{hardwareSlot()})
+	if err := g.VerifySlotRegion(old); !errors.Is(err, ErrInvalid) {
+		t.Fatal("spliced old region went undetected")
+	}
+	// The hash rides inside the registry plaintext.
+	b, _ := g.Encode()
+	d, _ := DecodeRegistry(b)
+	if d.SlotRegionHash != g.SlotRegionHash {
+		t.Fatal("hash lost in the round trip")
 	}
 }
 

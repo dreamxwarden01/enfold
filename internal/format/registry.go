@@ -1,5 +1,7 @@
 package format
 
+import "crypto/sha256"
+
 // Registry is the plaintext of the keystore registry (docs/FORMAT.md §7): the
 // device's own sync identity, one record per archive with all of its versions,
 // and the pinned peers.
@@ -8,8 +10,13 @@ type Registry struct {
 	ModifiedAt         int64
 	WrappedIdentityKey [WrappedKeySize]byte // device identity X25519 private key under KWK_identity
 	IdentityNonce      [NonceSize]byte
-	Archives           []ArchiveRecord
-	Peers              []PeerPin
+	// SlotRegionHash is the SHA-256 of the live slot region exactly as written
+	// (R25). The slot region is only checksummed; this is the authenticated copy
+	// of it, verified after the registry is decrypted and before any rotation
+	// re-wraps the VMK into a slot's stored public key.
+	SlotRegionHash [32]byte
+	Archives       []ArchiveRecord
+	Peers          []PeerPin
 }
 
 // ArchiveRecord is one archive with all of its versions (§7.1).
@@ -154,6 +161,7 @@ func (g *Registry) Encode() ([]byte, error) {
 	w.i64(g.ModifiedAt)
 	w.fixed(g.WrappedIdentityKey[:])
 	w.fixed(g.IdentityNonce[:])
+	w.fixed(g.SlotRegionHash[:])
 	w.u32(uint32(len(g.Archives)))
 	for i := range g.Archives {
 		a := &g.Archives[i]
@@ -192,6 +200,22 @@ func (g *Registry) Encode() ([]byte, error) {
 	return w.done()
 }
 
+// SlotRegionHash is the value the registry stores for an encoded slot region
+// (R25): SHA-256 over the region exactly as written.
+func SlotRegionHash(encodedRegion []byte) [32]byte { return sha256.Sum256(encodedRegion) }
+
+// VerifySlotRegion compares the live slot region against the registry's
+// authenticated hash. A mismatch means the region was modified by someone
+// without the Metadata key — a substituted public key, an added record, or a
+// spliced-in old region — and must be reported, never silently repaired, and
+// never re-wrapped into.
+func (g *Registry) VerifySlotRegion(encodedRegion []byte) error {
+	if sha256.Sum256(encodedRegion) != g.SlotRegionHash {
+		return invalidf("slot region does not match the registry's authenticated hash: the slot region was modified outside the unlocked vault")
+	}
+	return nil
+}
+
 // DecodeRegistry parses a registry plaintext.
 func DecodeRegistry(b []byte) (*Registry, error) {
 	r := newReader(b, "registry")
@@ -203,6 +227,7 @@ func DecodeRegistry(b []byte) (*Registry, error) {
 	g.ModifiedAt = r.i64()
 	r.fixed(g.WrappedIdentityKey[:])
 	r.fixed(g.IdentityNonce[:])
+	r.fixed(g.SlotRegionHash[:])
 	na := r.count(r.u32(), minArchiveRecord)
 	g.Archives = make([]ArchiveRecord, 0, na)
 	for i := 0; i < na && r.err == nil; i++ {

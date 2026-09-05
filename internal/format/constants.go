@@ -35,6 +35,19 @@ const (
 	MLKEMCTSize   = 1568
 	P256PubSize   = 65 // 0x04 ‖ X ‖ Y
 	X25519PubSize = 32
+
+	// Argon2id parameter bounds (R24). The lower bounds are the function's
+	// own; the upper bounds exist so that a hostile slot record cannot turn an
+	// unlock attempt into a multi-gigabyte allocation. 2 GiB is twice the top
+	// of DESIGN.md's recommended range.
+	MinArgon2MemKiB  = 8
+	MaxArgon2MemKiB  = 2 << 20 // 2 GiB
+	MaxArgon2Time    = 32
+	MaxArgon2Threads = 32
+	// MaxArgon2Work bounds m_KiB × t: 8 GiB·passes, i.e. 2 GiB × 4, 1 GiB × 8
+	// or 512 MiB × 16. The memory ceiling alone would still allow 32 passes
+	// over 2 GiB from a hostile record.
+	MaxArgon2Work = 8 << 20
 )
 
 // Magic values. Files are identified by these, never by extension (§2).

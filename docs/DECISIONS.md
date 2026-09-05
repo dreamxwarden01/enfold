@@ -1305,14 +1305,49 @@ Trust carries a TTL and a level separate from identity, and expiry means the ful
 ceremony. Direction only; the details are designed together with the sync feature
 (`SYNC.md` §8).
 
-**3. PIN session: the card-side session is not sustainable on Windows.** With the card powered
-down 10 s after the last disconnect, a "PIN once per session" model cannot rest on the token's
-own state. The user is comfortable with a touch per operation inside a continuous session — for
-instance opening several files in a row when the long-unlock option is off and `KWK` is not in
-memory. The concrete scheme (hold the exclusive connection, reset on release, cached PIN policy,
-or something else) is deferred until the unlock UX exists (`SCOPE.md`).
+**3. PIN session: the boundary is user participation, not session length.** The user's precise
+formulation: a touch per operation *instead of* a PIN per operation is acceptable, and the card's
+PIN-verified state need not expire at once — **what must never happen is the card releasing a key
+with no user involved, turning it into an oracle for malware.** Touch policy *always* is that
+guarantee, and it holds regardless of how long the PIN state lives; the 10 s power-down is
+therefore a nuisance that forces re-entering the PIN, not a safety mechanism, and the earlier
+"unsustainable" wording overstated it. The concrete scheme — hold the exclusive connection,
+reset on release, re-prompt on power-down, or something else — is deferred until the unlock UX
+exists (`SCOPE.md`).
 
 **Implementation starts now**, bottom-up as agreed: `internal/format` (keystore and archive
 codecs with fuzz targets), then `internal/kdf`, `internal/stream`, PIV, UI last. The hardware
 slot record is implemented as specified today; the proposed `piv_slot` / `token_serial` fields
 stay an open item and cost the same to add any time before the format is frozen.
+
+---
+
+## 2026-09-04 — `internal/format` landed; what the first review found
+
+The package encodes and decodes both file types per `FORMAT.md`, with a fuzz target per decoder.
+Writing it pinned five places the prose left open (`FORMAT.md` §3.4, R14–R18). A three-lens
+review — specification conformance, parser robustness under hostile input, Go quality; Opus,
+process kept out of the main context — then found what a first draft finds, and the fixes pinned
+three more (R19–R21). The ones worth remembering:
+
+- **A byte inside the AAD range that the AAD did not cover.** The decoder discarded `key_source`
+  for software slots and the encoder wrote zero, so the AAD — computed from the struct — no
+  longer matched the bytes on disk for exactly one byte, and that byte could be changed without
+  an authentication failure. The reviewer found it by flipping every byte of a record and asking
+  whether the recomputed AAD moved. That probe is now a permanent test, and decoding is
+  canonical by rule (R21): every accepted byte is represented, and the fuzz targets assert
+  byte-exact round trips.
+- **`slot_state = 0` short-circuited every check**, so an unknown type, curve or flag rode in on
+  an "empty" record. Empty records must now be entirely zero.
+- **Three fuzz targets could never pass their own checksum**, so they only ever exercised the
+  reject path. They now let the fuzzer own the body and add the checksum themselves.
+- **No upper bounds** on `registry_len`, `index_len` or `freemap_len`, and chunk arithmetic that
+  wrapped near 2^64 (R19). **No rules for file names**, so `../x` decoded cleanly (R20).
+- Smaller: `ErrTruncated` and `ErrTrailing` were not `ErrInvalid` and carried no offset; the
+  superblock pickers returned a bare int and swallowed the damaged copy's error; `pack_id` was
+  round-tripped instead of treated as reserved; duplicate KIDs were accepted; a size assertion
+  discarded its error.
+
+Nothing found was a wire-layout defect — both the conformance and the quality reviewer checked
+every field table against the encoders and found none — which is the part of the format that
+would have been expensive to fix later.

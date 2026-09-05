@@ -1,0 +1,29 @@
+// Package format implements the byte-level encoding of Enfold's two file types
+// as specified in docs/FORMAT.md: the keystore (superblock, slot region,
+// registry plaintext) and the archive (envelope, superblock, file index
+// plaintext, free-space map), plus the AAD and nonce constructions that the
+// crypto layer feeds to AES-256-GCM.
+//
+// The package does no encryption. It turns structs into bytes and bytes into
+// structs, and it is strict in both directions: every integer is little-endian,
+// strings are UTF-8 with a u16 length prefix, reserved fields are written as
+// zero and ignored on read, and anything unknown — a slot type, a key source,
+// an algorithm identifier, a flag bit — makes decoding fail closed rather than
+// skip. Decoders never panic on hostile input; that property is the subject of
+// the fuzz targets in fuzz_test.go.
+//
+// Choices this package pins where FORMAT.md left room (each is mirrored back
+// into FORMAT.md §3.4):
+//
+//   - The AAD for wrapped_vmk is every byte of the slot record from slot_state
+//     through wrap_nonce inclusive, followed by vault_id. record_len and
+//     wrapped_vmk are not part of it.
+//   - Public keys carry a u16 length prefix, like strings and byte fields.
+//   - The archive superblock has magic ENFOLDS\x01 and carries the index
+//     (offset, ciphertext length, nonce, tag) and the free-space map (offset,
+//     length, SHA-256). Both are relocatable extents.
+//   - The index plaintext is: u32 index_version=1, u32-prefixed zstd dictionary,
+//     u32 file_count, then file records each prefixed by a u32 record_len.
+//   - The free-space map is plaintext, hashed in the superblock, and must be
+//     sorted, non-overlapping and free of zero-length extents.
+package format

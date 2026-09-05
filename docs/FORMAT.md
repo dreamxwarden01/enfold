@@ -256,6 +256,57 @@ no access to the reference generator; it matched the reference on every one of 6
 the X25519 half of R5 exist because that implementer reported having to guess them — correctly,
 as it turned out, but a guess is a guess.
 
+### 3.4 Pinned during implementation (2026-09-04)
+
+`internal/format` is the reference for the byte layouts below. Each item is a place where the
+prose above admitted two readings; the code takes one and this section records it.
+
+**R14 — The slot AAD.** The AAD for `wrapped_vmk` is **every byte of the record from
+`slot_state` through `wrap_nonce` inclusive, followed by `vault_id`.** `record_len` is not part
+of it, and neither is `wrapped_vmk` — the phrase "with `wrapped_vmk` zeroed" in §6.1 meant
+"excluded", not "present as 56 zero bytes". For a hardware slot this is the record minus 4 minus
+56, plus 16.
+
+**R15 — Length prefixes.** Public keys (`pubkey`) carry a `u16` length prefix, the same as
+`string` and `bytes (u16 len)`. Records inside a region — slot records in §6, file records in
+§11 — carry a `u32 record_len` and must be consumed exactly; a record with bytes left over is
+invalid, not tolerated.
+
+**R16 — Reserved values fail closed; reserved fields do not.** A reader meeting `key_source = 2`
+(prf-derived) or `alg_id = 2` (ChaCha20-Poly1305) rejects the record, per §1's rule on the
+unrecognised. Reserved *fields* (`reserved0`, `reserved1`, `pack_id`) are ignored on read, also
+per §1. Unknown bits in `flags`, `policy` and `capabilities` are rejected.
+
+**R17 — Archive superblock, index plaintext and free-space map.** Specified in §11 and §13
+below, which previously said only "mirrors §5".
+
+**R18 — A hardware slot record is 338 bytes** with a 19-byte label, not ~250: the estimate in §4
+forgot the two 32-byte salts. Nothing else changes; three realistic slots still encode to under
+8 KB.
+
+**R19 — Bounds.** Every variable-length extent has a ceiling beyond which a superblock is corrupt
+rather than describing something large: `registry_len` ≤ 64 MiB, `index_len` ≤ 1 GiB,
+`freemap_len` ≤ 64 MiB, and a file's `orig_size` ≤ 2^48 (256 TiB). The last keeps the chunk
+arithmetic far from overflow; the others keep a hostile superblock from directing a gigabyte
+read. A reader also checks that the registry, index and free-map extents lie inside the file and,
+for the archive, do not overlap each other.
+
+**R20 — File names.** A live file record's `name` is a relative path with `/` separators, at most
+4096 bytes of valid UTF-8, with no empty, `.` or `..` elements, no control character, none of
+`\ : * ? " < > |`, no element ending in a space or a dot, and no Windows reserved device name
+(`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, with or without an extension) as an
+element. The reader enforces this, not only the writer: an archive from an untrusted place must
+not be able to name a file `..\..\something`. Tombstones keep whatever name they had. Names are
+stored as given, not normalised — a filesystem does not normalise them either.
+
+**R21 — Canonical slot records.** `key_source` is on the wire for every slot type and must be
+zero for software slots; the reserved value 2 fails closed on every slot type. `credential_id`
+is on the wire with length zero and a non-zero length fails closed. An empty slot (`slot_state =
+0`) must be entirely zero apart from its state. The point of all three is that decoding is
+canonical — every accepted byte is represented — so that re-encoding a decoded record
+reproduces the bytes read, which is what an AAD computed from the struct relies on. The fuzz
+targets assert byte-exact round trips for slot records, the registry and the free-space map.
+
 ---
 
 # Part I — Keystore file
@@ -297,7 +348,7 @@ case:
 
 | Slot type | Record size | Why |
 | --- | --- | --- |
-| Hardware (PIV) | ~250 bytes | one P-256 `epk`, one `slot_pubkey`, no credential ID |
+| Hardware (PIV) | ~340 bytes | one P-256 `epk`, one `slot_pubkey`, two 32-byte salts, no credential ID |
 | Recovery / standalone password | **~3.3 KB** | hybrid: `ek` 1568 + `ct` 1568, plus the X25519 halves (§3.1) |
 | `prf-derived` *(reserved)* | up to ~1.3 KB | a FIDO credential ID may reach 1023 bytes |
 
@@ -369,8 +420,8 @@ then slot_count records, each prefixed with u32 record_len
 
 ### 6.1 AAD for `wrapped_vmk`
 
-**Every byte of the record from `slot_state` through `wrap_nonce`, with `wrapped_vmk` zeroed**,
-plus `vault_id`.
+**Every byte of the record from `slot_state` through `wrap_nonce` inclusive**, followed by
+`vault_id`. `record_len` and `wrapped_vmk` are not part of it (R14).
 
 The Argon2 parameters cannot be encrypted — they must be read before any key exists — but they
 must be authenticated, or an attacker rewrites `argon2_m` from 1 GiB to 8 KiB and brute-forces
@@ -647,7 +698,29 @@ copy lives in the encrypted index.
 ## 11. Archive superblock and file index
 
 The superblock mirrors §5 in structure — `seq`, offsets and lengths for the index and free map,
-a checksum — and alternates the same way, so an edit is atomic.
+a checksum — and alternates the same way, so an edit is atomic. Fixed 4096 bytes:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `magic` | `u8[8]` | ASCII `ENFOLDS\x01` — distinct from the envelope's, so neither can be mistaken for the other |
+| `format_version` | `u16` | `1` |
+| `reserved0` | `u16` | |
+| `seq` | `u64` | Higher valid copy wins |
+| `index_off` | `u64` | ≥ `0x3000` |
+| `index_len` | `u64` | Ciphertext length, excluding tag |
+| `index_nonce` | `u8[12]` | |
+| `index_tag` | `u8[16]` | |
+| `freemap_off` | `u64` | ≥ `0x3000` |
+| `freemap_len` | `u64` | |
+| `freemap_hash` | `u8[32]` | SHA-256 of the encoded free-space map (§13) |
+| `reserved1` | `u8[…]` | Zero-filled to 4064 |
+| `checksum` | `u8[32]` | SHA-256 over `[0, 4064)` |
+
+**The index and the free-space map are relocatable extents**, not fixed regions: the index is
+rewritten wholesale on every change and grows, so a new copy is written into free space (or
+appended) and the old extent is released. `0x3000` in §9 is where the first index lands, not
+where every index lives. `archive_id` and `kid` are taken from the envelope; the index AAD binds
+them, so a swapped envelope fails authentication rather than misdirecting a decryption.
 
 The file index is one AES-256-GCM ciphertext under the **archive index key**.
 
@@ -655,7 +728,20 @@ The file index is one AES-256-GCM ciphertext under the **archive index key**.
 AAD = archive_id ‖ kid ‖ index_off ‖ index_len ‖ index_nonce ‖ format_version
 ```
 
-Plaintext: a `zstd` trained dictionary (optional, for many small files) followed by file records.
+Plaintext:
+
+```
+u32    index_version          1
+bytes  dict (u32 len)         zstd trained dictionary; empty when unused
+u32    file_count
+       … file records, each prefixed with u32 record_len (R15)
+```
+
+`storage = 3` requires a non-empty dictionary. `chunk_size` must be 65536 in v1. For `storage = 1`
+(raw), `stored_size` must equal `orig_size` plus one 16-byte tag per chunk, with a zero-length
+file occupying exactly one empty final chunk (16 bytes); compressed files are checked by the
+archive layer, which knows the compressed length. Every live file has a `name` that satisfies
+R20; a tombstone may have any.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -720,6 +806,15 @@ then per extent:  u64 offset, u64 length
 
 First-fit with coalescing on free. Rewritten with the index and covered by the same superblock
 flip, so it is always consistent with the extents the index references.
+
+**Plaintext, hashed rather than encrypted**: the superblock carries its SHA-256 (`freemap_hash`),
+and a reader rejects a map that does not hash to it. What the map reveals — where the gaps are —
+is already visible from the ciphertext layout. A reader also requires the extents to be sorted
+by offset, non-empty, non-overlapping and entirely past `0x3000`; whether they lie inside the
+file is checked by the archive layer, which knows the file size. Nothing in the map is trusted for
+*safety*: before writing into a free extent the archive layer verifies it does not overlap any
+extent the index references, so a tampered map can waste space but cannot direct a write over
+existing data.
 
 Compaction is an explicit offline operation. It is the only operation that moves file data without
 changing a DEK, which is permissible because ciphertext bytes are copied verbatim rather than

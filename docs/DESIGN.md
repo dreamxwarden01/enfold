@@ -50,8 +50,11 @@ host disk.
 > programs. The one Microsoft mechanism aimed at this threat is a VBS enclave (Windows 11
 > 26100.2314+, Trusted Signing with enclave EKUs, MSVC-only, so closed to a Go codebase); PPL is
 > reserved for anti-malware vendors. A separate SID helps only as a genuinely different account —
-> a service process holding the keys — which changes what an attacker gets (use while unlocked,
-> not extraction) and is deferred (`DECISIONS.md` 2026-09-04).
+> a service process holding the keys, which would change what an attacker gets (use while
+> unlocked, not extraction) at the price of administrator rights at install. **Rejected on
+> least-privilege grounds: the application never asks for rights it does not need**, and the
+> limitation is accepted as Windows' own (`DECISIONS.md` 2026-09-04). The core/UI boundary is
+> nevertheless message-shaped, with `KWK` and session state on the core side only.
 >
 > **Do not build any argument on same-user isolation, and do not add measures that imply it
 > exists.** What actually helps is already in the design: secrets in memory rather than on disk

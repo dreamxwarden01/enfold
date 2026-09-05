@@ -159,8 +159,13 @@ Recorded so they are not mistaken for oversights. Neither blocks v1.
   whether every operation needs a touch, and whether the app holds the exclusive card connection
   for the session. The measured facts are in `DECISIONS.md` 2026-09-04 (Windows powers the card
   down 10 s after the last disconnect; an explicit reset clears the state at once); the policy is
-  the user's call once the unlock UX exists. Settled regardless: never overwrite an occupied slot
-  by default, never reset the PIV application, never probe with the default PIN.
+  the user's call once the unlock UX exists. Known already: the card-side PIN session is not
+  sustainable on Windows (10 s power-down), and a touch per operation inside a continuous session
+  is acceptable. Settled regardless: never overwrite an occupied slot by default, never reset the
+  PIV application, never probe with the default PIN.
+- **Sync identity and trust model.** Direction set 2026-09-04 (device identity + keystore-resident
+  key co-signing; trust with TTL and level; expiry means a full pairing ceremony); the details are
+  designed with the sync feature itself (`SYNC.md` §8).
 
 ## The rule this file exists to enforce
 

@@ -1279,3 +1279,40 @@ before the hardware-slot code.
 **State left on the user's token:** slot 9d now holds the probe's P-256 key (no certificate,
 invisible to Windows' smart-card stack). It stays until the user deletes it (`ykman piv keys
 delete 9d`, firmware 5.7.4) or the product replaces it.
+
+---
+
+## 2026-09-04 — Decided: least privilege over a service split; dual-signed identity; PIN session deferred
+
+The user's rulings on the three questions above, after the assessment.
+
+**1. No service split. Least privilege.** The only Windows mechanism that isolates one user's
+programs from each other is a different account, which for us means the key-holding core running
+as a Windows service — and that means asking for administrator rights at install. Rejected: the
+application does not ask for rights it does not need, and the same-user limitation is accepted as
+Windows' own (`DESIGN.md` §2 now says so). What remains of the idea is free: the core/UI
+boundary is message-shaped from the first line of code, with `KWK` and session state on the
+core side only, so the option is not foreclosed.
+
+**2. Identity: a device key *and* a keystore-resident key, co-signing.** The proposal to move the
+identity out of the keystore into device-local storage as a single key was not adopted. The user's
+model: the keystore keeps its own key — never synchronised, allowed into a full *local* backup
+alongside the slots, useless off this machine because it is TPM/DPAPI-wrapped — and that key
+signs together with the device identity to prove **"this keystore on this computer"**. The
+reasoning is that trusting a device identity and then shipping the whole keystore to it is a
+persistent, high-trust state, and a second factor bound to the keystore itself is worth its cost.
+Trust carries a TTL and a level separate from identity, and expiry means the full pairing
+ceremony. Direction only; the details are designed together with the sync feature
+(`SYNC.md` §8).
+
+**3. PIN session: the card-side session is not sustainable on Windows.** With the card powered
+down 10 s after the last disconnect, a "PIN once per session" model cannot rest on the token's
+own state. The user is comfortable with a touch per operation inside a continuous session — for
+instance opening several files in a row when the long-unlock option is off and `KWK` is not in
+memory. The concrete scheme (hold the exclusive connection, reset on release, cached PIN policy,
+or something else) is deferred until the unlock UX exists (`SCOPE.md`).
+
+**Implementation starts now**, bottom-up as agreed: `internal/format` (keystore and archive
+codecs with fuzz targets), then `internal/kdf`, `internal/stream`, PIV, UI last. The hardware
+slot record is implemented as specified today; the proposed `piv_slot` / `token_serial` fields
+stay an open item and cost the same to add any time before the format is frozen.

@@ -457,9 +457,11 @@ Accepted cost: no solid compression across files, and one index record (~60 byte
 
 - **AES-256-GCM**, 64 KiB chunks. Windows x86-64 always has AES-NI, making this several times
   faster than ChaCha20-Poly1305 on multi-GB archives.
-- Nonce = 11-byte big-endian counter + 1-byte final-chunk flag (`0x00` / `0x01`), following
-  the STREAM construction used by age and Tink. The counter prevents reordering; the final
-  flag prevents truncation. Reaching EOF without decrypting a final chunk is an error.
+- Nonce = 11-byte **little-endian** counter + 1-byte final-chunk flag (`0x00` / `0x01`),
+  following the STREAM construction used by age and Tink but with this project's one byte order
+  (FORMAT.md §1; age's is big-endian). The counter prevents reordering; the final flag prevents
+  truncation. Reaching EOF without decrypting a final chunk is an error, and the reader learns
+  which chunk is final from the authenticated `stored_size`, never by trial decryption (R26).
 - **Do not invent a construction here.**
 - **Do not use CBC or bare CTR.** CTR gives random access with zero authentication, meaning an
   attacker can flip bits in a stored file. CBC additionally brings padding oracles and
@@ -467,8 +469,9 @@ Accepted cost: no solid compression across files, and one index record (~60 byte
   to add files to an archive comes from its per-file block layout, not from its use of CBC.)
 - Chunk-size trade-off: the 16-byte tag costs 0.024% at 64 KiB and 0.39% at 4 KiB, and a seek
   wastes at most one chunk. 64 KiB is the sweet spot; below 16 KiB there is nothing to gain.
-- Store the plaintext length in the authenticated header so random access can tell which chunk
-  is final.
+- Store both lengths in the authenticated index: `stored_size` fixes the STREAM framing, and so
+  which chunk is final — for compressed files too, where `orig_size` says nothing about the
+  chunk count; `orig_size` sizes the plaintext the caller sees.
 - **Any modification to an existing file mints a fresh DEK.** This is the rule that makes nonce
   reuse structurally impossible rather than merely avoided by care.
 - Put an **algorithm ID in the header** so ChaCha20-Poly1305 can be added later without a
@@ -652,6 +655,14 @@ Correct in this document, and easy to lose during implementation.
     the largest window this program ever writes and `WithDecoderMaxMemory` set to the file
     record's `orig_size`, and treat either limit being hit as corruption. The same reasoning as
     R24: the parameters are read before anything proves them honest.
+
+17. **An error from a STREAM reader means discard, not keep.** Chunks authenticate one at a
+    time, so a sequential reader can hand out 300 KiB of authentic plaintext and then fail on
+    the chunk after it. Anything that materialises a file — extraction, preview spooling, an
+    export — builds into a temporary and renames it into place only after the reader returned a
+    clean end (`io.EOF`), and never presents the prefix as the file. The reader's side of the
+    bargain is that it never reports a clean end before the final chunk has authenticated (R26),
+    so "read to EOF without error" is the whole acceptance test.
 
 ## 12. Deferred
 

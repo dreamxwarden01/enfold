@@ -1454,3 +1454,60 @@ design falls out cleanly: parity over **ciphertext**, so repair is keyless; dama
 already exact because every 64 KiB chunk carries a GCM tag; overhead is the chosen fraction; and
 it lives beside the archive (sidecar, or per volume) so the live format is untouched. The
 library would be `klauspost/reedsolomon`, pure Go with assembly, same author as our zstd.
+
+---
+
+## 2026-09-05 — internal/stream: the STREAM layer, R26, and an EOF that had to be earned
+
+**What landed.** `internal/stream`: `Writer` and `Reader` for §12's chunked AES-256-GCM, built on
+`format.ChunkNonce`/`ChunkAAD`, with `PlaintextLen` as the exact inverse of `format.RawStoredSize`.
+The Writer buffers one chunk and seals it only once it knows whether more follows, so the blob
+never depends on how the caller split its writes, and a plaintext that is a multiple of 64 KiB
+ends in a full chunk marked final. The Reader takes an `io.ReaderAt` and the blob's length and
+implements `io.ReadSeeker`, which is what `http.ServeContent` needs for the loopback preview
+server; a seek costs at most one re-decrypted chunk.
+
+**Length-driven, not trial-driven.** age's reader learns which chunk is final by reading ahead to
+EOF and, for a full last chunk, by trying the non-final nonce and then the final one. We have
+something age does not: `stored_size` in an index the archive layer has already authenticated.
+So the Reader derives the framing from the length, refuses any length that no canonical encoding
+produces — including the "full chunk, then an empty final chunk" that age v1.0.0 emitted — and
+never opens a chunk under two nonces. The final flag stays as the independent check: a blob cut
+at a chunk boundary has a perfectly canonical length and is caught only because its last chunk
+was sealed non-final. Pinned as **R26**. The counter bound of 2^32 chunks turns out to be exactly
+R19's 2^48 bytes and NIST SP 800-38D's invocation limit — a coincidence worth writing down, not a
+design.
+
+**The bug the tests found first.** An empty file is one empty final chunk: 16 bytes of tag and
+nothing else. The first Reader never opened it — with nothing to return, `Read` reported EOF
+without touching the chunk, so any 16 bytes were an "authentic" empty file. Harmless for
+confidentiality, wrong in principle, and a crack in the "everything authenticates" story. The fix
+is an invariant, not a special case: **`io.EOF` is only ever returned after the final chunk has
+opened**, which also covers a Seek past the end. `TestEOFAuthenticatesFinalChunk` pins it.
+
+**Errors are not sticky in the Reader.** Each Read decides from the position; a chunk that failed
+fails again. That lets a salvage tool seek around a damaged chunk, and it is what
+`ServeContent`'s sniff-then-rewind needs. The cost lands on the caller: an error after 300 KiB of
+authentic plaintext means "discard what you built", written down as `DESIGN.md` trap 17 —
+extraction goes through a temporary file and a rename.
+
+**Review.** Three Opus reviewers (spec conformance / hostile input / Go quality and crypto
+misuse), 21 findings, one adversarial verifier per finding: 8 confirmed, all minor or nit, 11
+refuted. Fixed: §11's `orig_size` row still said the plaintext length tells the reader which
+chunk is final — false for compressed files, where the blob covers compressed bytes, and the one
+finding that could have misled the archive layer; the §12 bullet "the last chunk is short" and a
+`DESIGN.md` bullet from before R26 saying the same; a hostile `io.ReaderAt` returning a negative
+count was treated as a full read (fail-closed regardless, since stale bytes cannot authenticate,
+but now `ErrTruncated`); the chunk-count formula lived in two places with the Reader's slice
+bounds depending on both agreeing; `TestSeek` would have panicked rather than failed on a
+past-the-end draw the seed never produced; a fuzz seed built on a zero `testing.T`. Also fixed
+from the read-through: `DESIGN.md` §8 still said "big-endian" — `FORMAT.md` §1 has said
+little-endian since the byte-order decision, and the code was already right. Verified in GOROOT
+while checking a refuted finding: `ServeContent` answers a multi-range request from a goroutine
+of its own that can outlive the handler, so the preview layer must not Close the Reader on
+handler return; noted on the type for when that layer is written.
+
+**Not built, on purpose.** No unknown-length mode: every blob's length is in the index, and a
+reader that trusts the frame to say where it ends is what trap 16 warns about for zstd. No
+`ReadAt` on the Reader: the one-chunk cache is not safe for parallel calls, and a preview server
+that wants concurrency opens one Reader per request.

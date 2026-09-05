@@ -365,6 +365,21 @@ as written, authenticated by the registry's AEAD under the Metadata key. Rules:
 The P-256 public keys in a hardware slot are also validated as curve points on read (`DESIGN.md`
 §11 trap 2), so an off-curve `epk` never reaches the token.
 
+**R26 — STREAM framing is canonical and length-driven.** Chunk *i* of a file's content occupies
+bytes [65552·*i*, 65552·(*i*+1)) of its extent. Every chunk but the last carries exactly 65536
+plaintext bytes; the last carries between 1 and 65536, or 0 only when it is the only chunk — a
+plaintext whose length is a multiple of 65536 ends in a full chunk marked final, never in an
+empty trailing one (the encoding age v1.0.0 produced and later versions reject). A plaintext of
+*n* bytes therefore has exactly one encoding, of length *n* + 16·⌈*n*/65536⌉ (16 for *n* = 0),
+and `stored_size` fixes the framing. A reader works out which chunk is final from `stored_size`,
+which reaches it through the authenticated index; it rejects a `stored_size` that no canonical
+framing produces, and never tries a chunk under both values of the final flag. The flag inside
+the nonce is the second, independent check: a blob cut at a chunk boundary has a canonical length
+and is caught only because its last chunk was sealed non-final. A reader reports a clean end of
+data only after the final chunk has authenticated — an empty file is one empty final chunk whose
+tag still has to verify. Counters run from 0 to at most 2^32 − 1: R19's 2^48-byte file limit is
+exactly 2^32 chunks, which is also the NIST SP 800-38D bound on AES-GCM invocations under one key.
+
 ---
 
 # Part I — Keystore file
@@ -807,7 +822,7 @@ R20; a tombstone may have any.
 | `file_id` | `u8[16]` | Stable across edits; the identity used in merge |
 | `state` | `u8` | `1` live · `2` tombstone — the record survives deletion so a sync cannot resurrect it |
 | `name` | `string` | |
-| `orig_size` | `u64` | Plaintext length; also tells the reader which chunk is final |
+| `orig_size` | `u64` | Plaintext length; `stored_size` is what tells the reader which chunk is final (R26) |
 | `stored_size` | `u64` | |
 | `storage` | `u8` | `1` raw · `2` zstd · `3` zstd + dictionary |
 | `content_hash` | `u8[32]` | SHA-256 of the **plaintext** |
@@ -836,7 +851,9 @@ Each file's content is an independent STREAM-chunked AEAD blob:
   STREAM construction of age and Tink but with this project's byte order (§1). The counter
   prevents reordering; the final flag prevents truncation. **Reaching the end of an extent
   without decrypting a chunk marked final is an error.**
-- 65536 bytes of plaintext per chunk plus a 16-byte tag; the last chunk is short.
+- 65536 bytes of plaintext per chunk plus a 16-byte tag; only the last chunk may be shorter, and
+  it is empty only when it is the only chunk. R26 pins the framing and how a reader finds the
+  final chunk.
 - AAD per chunk: `archive_id ‖ file_id ‖ alg_id ‖ chunk_size`.
 
 **Any modification to an existing file mints a fresh DEK** and rewrites its extent. Never reuse a

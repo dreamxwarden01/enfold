@@ -1,6 +1,7 @@
 # Build output
-/build/
 /bin/
+/build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+.task/
 *.exe
 *.exe~
 *.dll
@@ -8,7 +9,8 @@
 
 # Wails
 /frontend/node_modules/
-/frontend/dist/
+/frontend/dist/*
+!/frontend/dist/.gitkeep
 
 # Go
 /vendor/

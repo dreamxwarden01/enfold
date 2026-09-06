@@ -3,6 +3,7 @@
 package keystore
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +51,12 @@ func lockFile(f *os.File, path string) (*fileLock, error) {
 		openMu.Lock()
 		delete(openPaths, key)
 		openMu.Unlock()
-		return nil, fmt.Errorf("%w: %v", ErrBusy, err)
+		// Only contention means "open elsewhere"; a file system that cannot
+		// lock at all is an I/O failure, not another Enfold.
+		if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING) {
+			return nil, fmt.Errorf("%w: %v", ErrBusy, err)
+		}
+		return nil, fmt.Errorf("keystore: locking %s: %w", path, err)
 	}
 	return &fileLock{f: f, path: key}, nil
 }

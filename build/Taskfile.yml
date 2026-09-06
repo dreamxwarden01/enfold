@@ -1,0 +1,91 @@
+# Common tasks shared by the platform Taskfile. Trimmed from the Wails
+# template to what a Windows-only, npm-only project needs.
+version: '3'
+
+tasks:
+  go:mod:tidy:
+    summary: Runs `go mod tidy`
+    internal: true
+    run: once
+    cmds:
+      - go mod tidy
+
+  install:frontend:deps:
+    summary: Installs the frontend's dependencies from the lockfile
+    run: once
+    dir: frontend
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    preconditions:
+      - sh: npm version
+        msg: "npm is required (https://nodejs.org)"
+    cmds:
+      - npm ci
+
+  build:frontend:
+    label: build:frontend (DEV={{.DEV}})
+    summary: Builds the frontend into frontend/dist
+    run: once
+    dir: frontend
+    sources:
+      - "**/*"
+      - exclude: node_modules/**/*
+      - exclude: dist/**/*
+    generates:
+      - dist/**/*
+    deps:
+      - task: install:frontend:deps
+      - task: generate:bindings
+        vars:
+          BUILD_FLAGS:
+            ref: .BUILD_FLAGS
+    cmds:
+      - npm run {{if eq .DEV "true"}}build:dev{{else}}build{{end}} -q
+    env:
+      PRODUCTION: '{{if eq .DEV "true"}}false{{else}}true{{end}}'
+
+  generate:bindings:
+    summary: Generates the TypeScript bindings and models (committed; a diff is a review item)
+    run: once
+    deps:
+      - task: go:mod:tidy
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - frontend/bindings/**/*
+    cmds:
+      - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true -ts -i
+
+  generate:icons:
+    summary: Renders build/appicon.png from internal/brand and the Windows .ico from it
+    run: once
+    sources:
+      - internal/brand/brand.go
+      - tools/appicon/main.go
+    generates:
+      - build/appicon.png
+      - build/windows/icon.ico
+    cmds:
+      - go run ./tools/appicon -o build/appicon.png
+      - mkdir -p bin
+      # The generator always writes a macOS bundle too; it goes to the ignored bin/.
+      - wails3 generate icons -input build/appicon.png -windowsfilename build/windows/icon.ico -macfilename bin/icon.icns
+
+  dev:frontend:
+    summary: Runs Vite in development mode
+    deps:
+      - task: install:frontend:deps
+    dir: frontend
+    cmds:
+      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+
+  update:build-assets:
+    summary: Regenerates the build assets from build/config.yml
+    dir: build
+    cmds:
+      - wails3 update build-assets -name "{{.APP_NAME}}" -binaryname "{{.APP_NAME}}" -config config.yml -dir .

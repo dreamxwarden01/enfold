@@ -519,6 +519,17 @@ func (a *Archive) FreeMapRebuilt() error {
 // Stat reports the file's size, its live file count, and how much of it the
 // published free map lists as free. On a closed or broken Archive it
 // reports zeros: the last known state is not the file's.
+// Seq is the live superblock's sequence number: the keyless identity of
+// the file's state (FORMAT.md R36). Zero when the Archive is not usable.
+func (a *Archive) Seq() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.usable() != nil || a.sb == nil {
+		return 0
+	}
+	return a.sb.Seq
+}
+
 func (a *Archive) Stat() (size uint64, files int, free uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

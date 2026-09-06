@@ -3,13 +3,22 @@
 A compression and archive manager whose distinguishing feature is security and privacy.
 Windows first, written in Go.
 
-**Status: design settled; implementation in progress, bottom up.** This repository holds the
-specification, the reasoning behind it, and the first two layers of code: `internal/format`
-encodes and decodes both file types byte-for-byte per `docs/FORMAT.md`, with fuzz targets for
-every decoder; `internal/kdf` implements the whole key hierarchy of `docs/FORMAT.md` §3 and
-reproduces every value in `testdata/kdf-vectors.json`, which `tools/kdfvec` generated and an
-independent implementation written from the spec alone confirmed. Run tests with
-`scripts/test.ps1` (the full suite includes a 512 MiB Argon2id anchor; `-short` skips it).
+**Status: every layer built; the application is being exercised by hand.** The libraries
+(`internal/format`, `kdf`, `stream`, `compress`, `keystore`, `archive`, `piv`) each went through a
+design draft, an adversarial critique, implementation and a review before landing; the
+application core (`internal/app`), the Wails shell (repository root) and the Svelte frontend
+(`frontend/`) followed the same path (`docs/APP.md`). Run the Go tests with `scripts/test.ps1`
+(the full suite includes a 512 MiB Argon2id anchor; `-short` skips it) and the frontend's with
+`npm test` in `frontend/`.
+
+## Building
+
+Windows, Go 1.26, Node 24 and the `wails3` CLI (v3.0.0-beta.16). `wails3 build` produces
+`bin/enfold.exe` (production: security headers on, no debug logging); `wails3 package` wraps it
+in an installer. `wails3 dev` runs a development build with DevTools and debug logging on —
+point it only at a throwaway vault, and set `ENFOLD_DATA_DIR` to keep its settings and WebView2
+profile away from the real ones. The TypeScript bindings under `frontend/bindings` are generated
+and committed; a diff there is a change to the API the page can call.
 
 ## The shape of it
 

@@ -2086,3 +2086,54 @@ the ceremony (a grace window would defeat the reason §10 destroys it). The regi
 `no_compression`); it does not gain file counts. Svelte 5 + TypeScript. **Open for the user:**
 an unelevated BitLocker check — the documented mechanism is admin-only, so either a measured
 alternative exists or the SCOPE bullet moves.
+
+## 2026-09-06 — The application layer, built (checkpoint; the review is still running)
+
+**What landed.** `internal/app` (the core of `APP.md`: session state machine, ceremony with
+prompt mailboxes, archives with the staged overlay and two clocks, operations, the loopback
+preview server, settings, receipts owed and paid), `internal/app/api` (the bound view structs,
+guarded by a reflected-method allowlist test and `MarshalError`), `internal/app/pivcards` (the
+one importer of `internal/piv`), `internal/brand` (the mark and the tray icons drawn in code),
+the Wails shell at the repository root (`main_windows.go`, `tray_windows.go`,
+`lockwatch_windows.go`: single instance, three-state tray, the window created on demand, secrets
+over the raw message channel, CSP and Permissions-Policy from the asset middleware, the
+message-only Win32 window for WTS and power notifications, `GetLastInputInfo` as the activity
+corroborator, the ordered shutdown), the Svelte 5 + TypeScript frontend on the Native look with
+its generated bindings committed, and the `wails3` build pipeline trimmed to Windows.
+
+**Verified.** The core runs against a fake `Cards`/`Card`, a manual clock and an event
+recorder: password and token unlocks, wrong PIN and retries, parked states (busy, no match,
+blocked), the prompt deadline, lock triggers during a ceremony, idle and absolute timers, the
+heartbeat needing real input, the archive round trip through the projection, the archive
+clocks, shutdown committing dirty archives, settings in the registry, enrolment and removal,
+vault creation with the one-time recovery URL. The production build was started against a
+throwaway data folder (`ENFOLD_DATA_DIR`): the window, the tray and the lock watch come up, the
+page renders under the production CSP. Every screen was exercised against a mock backend that
+answers the Wails call transport.
+
+**The review, so far.** A five-dimension review (core state, archives and operations, shell and
+Win32, frontend, the stage-1 format and keystore changes) with adversarial verification is in
+progress. The core-state dimension's findings were real and are fixed in this checkpoint: a lock
+trigger in Unlocked left a running slot-change ceremony — the VMK and the PIN-verified card —
+alive until its prompt deadline (`LockNow` now latches and cancels the ceremony in every state,
+and the lock's close of the handle waits for it); a rotation could install the re-derived
+session behind a lock that landed meanwhile (it re-checks the state and zeroes the new keys
+otherwise, and a session is never replaced without being zeroed); slot changes committed to
+the keystore from their own goroutine while registry receipts were written under the state
+mutex (**registry writes now wait for a slot change** — a Save meanwhile owes its receipt, paid
+when the ceremony ends — and a slot change does not start while a registry-writing operation
+runs); `Save` held the state mutex across the archive commit, so a Modern Standby lock could
+not zero the keys in time (the commit runs under the archive's own mutex only); enrolling a
+second YubiKey opened the reader while the unlocking key was still held exclusively and parked
+at "busy" (the key is released first and the reader set must empty before the next key is
+accepted); a cancel during derivation was ignored at the publish point (the cancellation is
+checked there, as the latch is). Also fixed: a stale session is locked rather than reported as
+"internal", `CreateVault` keeps the configured vault until the new one exists and is refused
+in Broken or Busy, an open of another vault closes a Broken handle and forgets its owed
+receipts, a reopen waits for a pending lock's close instead of reporting the vault busy, a
+parked unlock releases the vault file, a missing or garbage vault file is named as such, the
+absolute deadline follows a changed setting and the idle deadline is never extended by a
+non-input path, timeouts can be restored to their defaults, an indeterminate or conflicting
+slot-change commit enters Broken, only lock contention means "open in another Enfold", and an
+export is dated no earlier than the vault it came from. The remaining dimensions' findings are
+handled in the next entry.

@@ -67,7 +67,7 @@ func Create(path string, opts CreateOptions) (*Unlocked, error) {
 	}
 	meta := kdf.MetadataKey(vmk, vaultID)
 	defer kdf.Zero(meta)
-	k, err := create(path, vaultID, slots, reg, meta, gen)
+	k, err := create(path, vaultID, slots, reg, meta, gen, 0)
 	if err != nil {
 		kdf.Zero(vmk[:])
 		return nil, err
@@ -375,7 +375,7 @@ func (u *Unlocked) Export(path string) error {
 	}
 	meta := kdf.MetadataKey(u.vmk, u.k.sb.VaultID)
 	defer kdf.Zero(meta)
-	k, err := create(path, u.k.sb.VaultID, slots, reg, meta, u.gen)
+	k, err := create(path, u.k.sb.VaultID, slots, reg, meta, u.gen, u.k.sb.ModifiedAt)
 	if err != nil {
 		return err
 	}

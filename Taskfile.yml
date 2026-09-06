@@ -1,0 +1,34 @@
+# Build orchestration for the Wails shell (wails3 build / wails3 dev / wails3
+# package). Windows is the only target (docs/SCOPE.md). The libraries' tests
+# are run with scripts/test.ps1, not from here.
+version: '3'
+
+vars:
+  APP_NAME: "enfold"
+  BIN_DIR: "bin"
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the application (production; -tags production)
+    cmds:
+      - task: windows:build
+
+  package:
+    summary: Packages a production build (NSIS installer by default, FORMAT=msix for MSIX)
+    cmds:
+      - task: windows:package
+
+  run:
+    summary: Runs the built application
+    cmds:
+      - task: windows:run
+
+  dev:
+    summary: Runs the application in development mode (throwaway vault only)
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}

@@ -373,13 +373,15 @@ func (k *Keystore) registryTarget(n uint64) uint64 {
 // create writes a brand-new keystore file: superblock A with seq 1 and B
 // with seq 0, slot region A, and the registry at the fixed offset. path must
 // not exist.
-func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *format.Registry, meta []byte, gen uint64) (*Keystore, error) {
+func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *format.Registry, meta []byte, gen uint64, prev int64) (*Keystore, error) {
 	region, err := format.EncodeSlotRegion(slots)
 	if err != nil {
 		return nil, err
 	}
 	reg.SlotRegionHash = format.SlotRegionHash(region)
-	reg.ModifiedAt = stamp(0)
+	// prev is the source's modified_at for an export, so that a clock set
+	// back cannot date a backup before the vault it was taken from (R35).
+	reg.ModifiedAt = stamp(prev)
 	plain, err := reg.Encode()
 	if err != nil {
 		return nil, err

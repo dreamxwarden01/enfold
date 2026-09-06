@@ -1,0 +1,45 @@
+# Wails project configuration. `info` feeds the Windows version resource and
+# the installers (build/windows/info.json, wails.exe.manifest, nsis, msix);
+# after changing it, run `wails3 task common:update:build-assets`.
+version: '3'
+
+info:
+  companyName: "dreamxwarden01"
+  productName: "Enfold"
+  productIdentifier: "com.dreamxwarden01.enfold"
+  description: "Compression and encryption archives, unlocked by a YubiKey."
+  copyright: "(c) 2026, dreamxwarden01"
+  comments: "https://github.com/dreamxwarden01/enfold"
+  version: "0.1.0"
+
+# Dev mode. A dev build has debug logging, DevTools and the native context
+# menu on: point it only at a throwaway vault (docs/APP.md §1).
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - bin
+      - docs
+      - testdata
+    file:
+      - .gitignore
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary
+
+fileAssociations:
+
+other:

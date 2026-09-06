@@ -2,7 +2,7 @@
 
 The layer that turns the four libraries — `internal/keystore`, `internal/archive`, `internal/piv`
 and `internal/format` — into a Windows program: the Go core (`internal/app`), the Wails v3 shell
-(`cmd/enfold`, `main.go` at the repository root as Wails requires) and the frontend
+(`main_windows.go` and its companions at the repository root, as Wails requires) and the frontend
 (`frontend/`, Svelte 5 + TypeScript, the Native look of `docs/ui/native.html`). It is the
 implementation of `DESIGN.md` §10 (session model) and §14 (toolchain) and of the Application
 bullets of `SCOPE.md`. Where this document and the code disagree, this document is wrong until
@@ -46,7 +46,7 @@ there is no other channel to a human (DESIGN §10 records the exception).
 standalone password, the recovery key's digits, and the PIV management key typed as hex. None of
 them is a bound-method argument: bound calls are marshalled and stringified by Wails before any
 log-level check, and would be logged at debug level. They go through the raw message channel
-(`Options.RawMessageHandler`), which Wails does not log, as `secret <promptID> <value>` messages
+(`Options.RawMessageHandler`), which Wails does not log, as `secret <kind> <promptID> <value>` messages (the kind is `pin`, `password`, `recovery` or `mgmtkey`; the shell accepts them from the main frame of the page's own origin only)
 the core parses and hands to the waiting prompt. Even so a JS string cannot be zeroed and the Go
 side keeps at least the copies the transport makes; the frontend clears its input on submit and
 the ceremony dialogs are unmounted when they finish, and the design claims nothing more. The
@@ -306,8 +306,10 @@ registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
 
-**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile`, `Quit` (asks
-about dirty archives and owed receipts, then `resolveForShutdown`, then `app.Quit()`). File
+**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile`, `Reveal`, `Quit`
+(names the unsaved changes in a native question, then `ResolveForShutdown`, then `app.Quit()`;
+never asked twice). The service lives in `internal/app/api` like the others and holds the Wails
+calls behind an unexported `Hooks` value the shell supplies, so nothing of Wails is reflected. File
 drop: the window is created with `EnableFileDrop`; the shell re-emits the dropped paths and the
 drop target's `data-archive-id` / `data-folder` to the frontend, which calls `AddFiles`; the
 core validates that the archive is open and the folder exists in the projection, and refuses
@@ -329,8 +331,8 @@ same-user process reads regardless (DESIGN §2); the unguessable path is the acc
 **The page's CSP is a response header from the asset middleware** (production only; in
 `wails3 dev` Vite's HMR needs its own origin):
 `default-src 'self'; img-src 'self' http://127.0.0.1:<port>; media-src 'self'
-http://127.0.0.1:<port>; connect-src 'self'; script-src 'self'; style-src 'self'; object-src
-'none'; base-uri 'none'; form-action 'none'; frame-src 'none'`, plus
+http://127.0.0.1:<port>; connect-src 'self' http://127.0.0.1:<port>; script-src 'self'; style-src 'self'; object-src
+'none'; base-uri 'none'; form-action 'none'; frame-src 'none'`, — `connect-src` names the loopback because the recovery key's one-time URL (§1) is fetched from the page, and a CORS preflight on that URL must not consume the secret — plus
 `Permissions-Policy` denying camera, microphone, geolocation, sensors, display-capture,
 clipboard, midi, local-fonts, window-management. **No preview surface may expose a
 browser-provided save or print affordance**: the window is created with
@@ -411,7 +413,8 @@ The core is tested without Wails: it takes app-side interfaces `Cards` (`Readers
 `piv` error the states depend on; one windows-tagged adapter is the only importer of
 `internal/piv`. Lock triggers are an interface the shell implements and the tests drive. Keystore
 and archive are the real packages over temp files; timers take a clock. The shell is exercised
-by hand in `wails3 dev` against a throwaway vault. Frontend tests cover the copy mapping of
+by hand in `wails3 dev` against a throwaway vault; `ENFOLD_DATA_DIR` points any build at a throwaway
+data folder (settings, log, WebView2 profile) instead of `%LOCALAPPDATA%\Enfold`. Frontend tests cover the copy mapping of
 ceremony states and the "never 0 attempts" rule.
 
 ## 11. Format changes this layer needs (FORMAT.md §7)

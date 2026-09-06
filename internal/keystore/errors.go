@@ -42,6 +42,13 @@ var (
 	ErrPasswordRequired = errors.New("keystore: this slot requires its entangled password")
 	// ErrNoRecoverySlot: an export needs a recovery slot to carry.
 	ErrNoRecoverySlot = errors.New("keystore: no recovery slot to export")
+	// ErrBusy: another process holds the keystore file open; this program
+	// opens it exclusively.
+	ErrBusy = errors.New("keystore: already open in another process")
+	// ErrConflict: the file on disk moved on since this handle read it —
+	// another writer committed — so this handle's view is stale. Nothing was
+	// written; reopen the file.
+	ErrConflict = errors.New("keystore: file changed on disk since it was opened")
 	// ErrClosed: the Keystore, Unlocked or Session has been closed or locked.
 	ErrClosed = errors.New("keystore: closed")
 	// ErrDuplicate: the token's key is already enrolled, or the new slot's

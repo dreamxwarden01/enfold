@@ -486,6 +486,22 @@ cannot be acted on: the copy still shows the false date, but it fails to unlock.
 own `modified_at` inside the ciphertext is the same value. Filesystem timestamps are not consulted for anything: copying,
 syncing and restoring rewrite them.
 
+**R36 — A save records identity, not a hash.** Every commit that publishes an archive records
+`last_seq` (the receipt's superblock `seq`), `last_stored_size`, `last_written_at` and
+`revision` in the archive record. `last_ciphertext_hash` is a whole-file read and is refreshed
+only where the file is already read end to end — compaction, and an explicit verify — with
+`hash_at_seq` set to the `last_seq` of that moment; a hash whose `hash_at_seq` is behind
+`last_seq` is stale by that many commits and is shown as such, never as corruption. Reason: a
+manager that re-read 48 GB to save three renames would not be used. Key rotation and envelope
+repair change bytes without refreshing the hash, so they too leave it behind.
+
+**R37 — Session timeouts live in the registry.** `idle_minutes` and `absolute_minutes` are
+authenticated under the Metadata key, so a process that cannot unlock cannot lengthen them; a
+settings file is never consulted for them. Zero means the reader's default (10 and 60). A reader
+clamps what it finds (idle at most 30 minutes, absolute at most 8 hours) and treats absent,
+zero or out-of-range values as the default, never as "no timeout"; there is no value that
+means off.
+
 ---
 
 # Part I — Keystore file
@@ -669,6 +685,8 @@ i64    modified_at
 u8[48] wrapped_identity_key    device identity X25519 private key, under KWK_identity
 u8[12] identity_nonce
 u8[32] slot_region_hash        SHA-256 of the live slot region as written (R25)
+u16    idle_minutes            session idle lock, 0 = the reader's default (R37)
+u16    absolute_minutes        session absolute lock, 0 = the reader's default (R37)
 u32    archive_count
        … archive records
 u32    peer_count
@@ -684,20 +702,23 @@ One per archive, carrying **all of its versions**.
 | `archive_id` | `u8[16]` | Stable identity. **Never match on filename** |
 | `name` | `string` | The trusted name — see §7.4 |
 | `last_path` | `string` | Where it was last seen. A hint, never an identity |
-| `policy` | `u32` | bit0 `always_require_full_auth` (ignores the session cache) |
+| `policy` | `u32` | bit0 `always_require_full_auth` (ignores the session cache) · bit1 `hidden` (not listed; the record and its keys stay) · bit2 `no_compression` (every file stored raw, trap 8) |
 | `created_at` | `i64` | |
 | `current_kid` | `u8[16]` | Which version record is in use now |
-| `last_ciphertext_hash` | `u8[32]` | SHA-256 of the whole archive file as last written by the manager |
+| `last_ciphertext_hash` | `u8[32]` | SHA-256 of the whole archive file as of `hash_at_seq` — refreshed by compaction and by an explicit verify, never by an ordinary save (R36) |
 | `last_stored_size` | `u64` | |
 | `last_written_at` | `i64` | |
 | `revision` | `u64` | Merge (SYNC.md §5) |
 | `last_writer` | `u8[16]` | Merge |
+| `last_seq` | `u64` | The archive superblock's `seq` at the last commit this record saw: the keyless identity of a copy (R36) |
+| `hash_at_seq` | `u64` | The `last_seq` at which `last_ciphertext_hash` was computed; equal to `last_seq` means the hash is current; never greater |
 | `version_count` | `u32` | |
 | … | | version records |
 
 **`last_ciphertext_hash` is over the ciphertext on purpose**, and it is computable with **no keys
-at all**. Plugging in a USB stick is enough to answer "is this copy the current one, and is it
-intact?" without unlocking anything. That is a different question from the per-file **plaintext**
+at all**. Plugging in a USB stick is enough to answer "is this copy intact?" without unlocking
+anything, and `last_seq` answers "is this copy the current one?" from the copy's own plaintext
+superblock, also without a key and without reading the whole file. That is a different question from the per-file **plaintext**
 hashes inside the archive (§11), which verify that a decryption produced the right bytes. Both
 exist; do not conflate them.
 

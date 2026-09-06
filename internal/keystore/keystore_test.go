@@ -549,13 +549,15 @@ func TestRotate(t *testing.T) {
 	// superblock and registry (§6.2). Each old record still opens, but to
 	// generation 1, which the superblock's 2 exposes as stale.
 	oldK := mustOpen(t, path)
+	newRegionOff := oldK.sb.SlotRegionOff
+	oldK.Close() // one handle per file: the lock refuses a second
 	restore(t, path, before)
 	oldOpen := mustOpen(t, path)
+	oldRegion := bytes.Clone(oldOpen.region)
+	oldOpen.Close()
 	restore(t, path, after)
 	spliced := bytes.Clone(after)
-	copy(spliced[oldK.sb.SlotRegionOff:], oldOpen.region)
-	oldK.Close()
-	oldOpen.Close()
+	copy(spliced[newRegionOff:], oldRegion)
 	// The live superblock must point at the copy we overwrote and record
 	// the old length; rewrite it with the same seq.
 	k = mustOpen(t, path)
@@ -900,25 +902,87 @@ func TestRegistryUpdates(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("update %d: %v", i, err)
 		}
-		k := mustOpen(t, path)
-		if k.sb.Seq != seq+uint64(i)+1 {
-			t.Fatalf("update %d: seq %d", i, k.sb.Seq)
+		// The file holds exactly what the handle believes: the lock allows
+		// no second handle, so the on-disk facts are read directly.
+		if u.k.sb.Seq != seq+uint64(i)+1 {
+			t.Fatalf("update %d: seq %d", i, u.k.sb.Seq)
 		}
-		if a, b := registryEnds(t, path); k.size != max(a, b) {
-			t.Errorf("update %d: file %d bytes, registries end at %d and %d", i, k.size, a, b)
+		if a, b := registryEnds(t, path); u.k.size != max(a, b) {
+			t.Errorf("update %d: file %d bytes, registries end at %d and %d", i, u.k.size, a, b)
 		}
-		u2, err := k.Unlock(PasswordCredential{Password: "p"})
-		if err != nil {
-			t.Fatalf("update %d: %v", i, err)
-		}
-		if len(u2.Registry().Archives) != i+1 {
-			t.Fatalf("update %d: %d archives", i, len(u2.Registry().Archives))
-		}
-		u2.Close()
-		k.Close()
 	}
 	s.Lock()
 	u.k.Close()
+	// Reopened, the last state is what a fresh handle sees.
+	k := mustOpen(t, path)
+	if k.sb.Seq != seq+12 {
+		t.Fatalf("reopened: seq %d", k.sb.Seq)
+	}
+	u2, err := k.Unlock(PasswordCredential{Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u2.Registry().Archives) != 12 {
+		t.Fatalf("reopened: %d archives", len(u2.Registry().Archives))
+	}
+	u2.Close()
+	k.Close()
+}
+
+// TestOneHandlePerFile: the OS lock refuses a second handle on an open
+// keystore (ErrBusy), and a commit through a handle whose view of the file
+// is stale is refused before anything is written (ErrConflict).
+func TestOneHandlePerFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v.eks")
+	rk := recoveryKey(t)
+	u := mustCreate(t, path, PasswordSlot{Password: "p", Argon2: fast}, RecoverySlot{Key: rk})
+	if _, err := Open(path); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second handle: %v", err)
+	}
+	u.Close()
+	u.k.Close()
+	k := mustOpen(t, path)
+	u, err := k.Unlock(PasswordCredential{Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := u.Session()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Live(); err != nil {
+		t.Fatalf("live session: %v", err)
+	}
+	// Another writer moved the file on: both superblock copies re-dated
+	// with a higher seq, valid checksums.
+	data := snapshot(t, path)
+	for _, c := range []format.Copy{format.CopyA, format.CopyB} {
+		off := c.KeystoreSuperblockOff()
+		sb, err := format.DecodeKeystoreSuperblock(data[off : off+format.SuperblockSize])
+		if err != nil {
+			continue
+		}
+		sb.Seq += 10
+		enc, err := sb.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		copy(data[off:], enc)
+	}
+	restore(t, path, data)
+	err = s.UpdateRegistry(func(g *format.Registry) error { return nil })
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale handle committed: %v", err)
+	}
+	if k.Broken() == nil || s.Live() == nil {
+		t.Fatal("a conflict must mark the handle for reopening")
+	}
+	s.Lock()
+	if !errors.Is(s.Live(), ErrClosed) && !errors.Is(s.Live(), ErrConflict) {
+		t.Fatalf("locked session live: %v", s.Live())
+	}
+	u.Close()
+	k.Close()
 }
 
 // TestCrashBeforeFlip builds the file as a crash would leave it — the new

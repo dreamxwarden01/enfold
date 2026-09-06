@@ -105,8 +105,14 @@ const (
 // Archive record policy bits (§7.1).
 const (
 	PolicyAlwaysRequireFullAuth uint32 = 1 << 0
+	// PolicyHidden: the archive is not listed; its record, keys included,
+	// stays in the registry. The reversible form of "remove from list".
+	PolicyHidden uint32 = 1 << 1
+	// PolicyNoCompression: every file in the archive is stored raw (DESIGN.md
+	// §11 trap 8); a writer's choice that must travel with the archive.
+	PolicyNoCompression uint32 = 1 << 2
 
-	knownPolicyBits = PolicyAlwaysRequireFullAuth
+	knownPolicyBits = PolicyAlwaysRequireFullAuth | PolicyHidden | PolicyNoCompression
 )
 
 // VersionState is the state of a version record (§7.2).

@@ -499,6 +499,8 @@ func sampleRegistry() *Registry {
 
 func TestRegistryRoundTripAndValidation(t *testing.T) {
 	g := sampleRegistry()
+	g.IdleMinutes, g.AbsoluteMinutes = 15, 90
+	g.Archives[0].LastSeq, g.Archives[0].HashAtSeq = 12, 12
 	b, err := g.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -527,6 +529,7 @@ func TestRegistryRoundTripAndValidation(t *testing.T) {
 	bad("retired without retired_at", func(g *Registry) { g.Archives[0].Versions[0].RetiredAt = 0 })
 	bad("no versions", func(g *Registry) { g.Archives[0].Versions = nil })
 	bad("unknown policy bit", func(g *Registry) { g.Archives[0].Policy = 1 << 4 })
+	bad("hash ahead of last_seq", func(g *Registry) { g.Archives[0].LastSeq = 3; g.Archives[0].HashAtSeq = 4 })
 	bad("duplicate archive", func(g *Registry) {
 		g.Archives = append(g.Archives, g.Archives[0])
 		g.Archives[1].Versions = []VersionRecord{{KID: fill16(0x03), State: VersionCurrent}}
@@ -553,7 +556,7 @@ func TestRegistryRoundTripAndValidation(t *testing.T) {
 	}
 	// A hostile archive_count must not allocate.
 	h := append([]byte(nil), b...)
-	copy(h[4+16+8+48+12+32:], []byte{0xFF, 0xFF, 0xFF, 0x7F})
+	copy(h[4+16+8+48+12+32+2+2:], []byte{0xFF, 0xFF, 0xFF, 0x7F})
 	if _, err := DecodeRegistry(h); !errors.Is(err, ErrInvalid) {
 		t.Errorf("hostile count: %v", err)
 	}

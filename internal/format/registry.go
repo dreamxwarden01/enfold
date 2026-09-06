@@ -15,8 +15,13 @@ type Registry struct {
 	// of it, verified after the registry is decrypted and before any rotation
 	// re-wraps the VMK into a slot's stored public key.
 	SlotRegionHash [32]byte
-	Archives       []ArchiveRecord
-	Peers          []PeerPin
+	// IdleMinutes and AbsoluteMinutes are the session timeouts of DESIGN.md
+	// §10 (R37): authenticated here rather than trusted from a settings
+	// file; zero means the reader's default, and the reader clamps them.
+	IdleMinutes     uint16
+	AbsoluteMinutes uint16
+	Archives        []ArchiveRecord
+	Peers           []PeerPin
 }
 
 // ArchiveRecord is one archive with all of its versions (§7.1).
@@ -32,7 +37,13 @@ type ArchiveRecord struct {
 	LastWrittenAt      int64
 	Revision           uint64
 	LastWriter         [16]byte
-	Versions           []VersionRecord
+	// LastSeq is the archive superblock's seq at the last commit this
+	// registry recorded — the keyless identity of a copy (R36). HashAtSeq
+	// is the LastSeq at which LastCiphertextHash was computed; equal means
+	// the hash is current, lower means it is behind by that many commits.
+	LastSeq   uint64
+	HashAtSeq uint64
+	Versions  []VersionRecord
 }
 
 // VersionRecord is a key, not a snapshot (§7.2).
@@ -57,7 +68,7 @@ type PeerPin struct {
 
 const (
 	registryVersion  = 1
-	minArchiveRecord = 16 + 2 + 2 + 4 + 8 + 16 + 32 + 8 + 8 + 8 + 16 + 4
+	minArchiveRecord = 16 + 2 + 2 + 4 + 8 + 16 + 32 + 8 + 8 + 8 + 16 + 8 + 8 + 4
 	minVersionRecord = 16 + WrappedKeySize + NonceSize + 8 + 8 + 1
 	minPeerRecord    = 2 + X25519PubSize + 2 + 8 + 8 + 4 + 1
 )
@@ -84,6 +95,9 @@ func (a *ArchiveRecord) validate(kids map[[16]byte]struct{}) error {
 	}
 	if len(a.Versions) == 0 {
 		return invalidf("archive %x has no versions", a.ArchiveID)
+	}
+	if a.HashAtSeq > a.LastSeq {
+		return invalidf("archive %x hash_at_seq %d is ahead of last_seq %d", a.ArchiveID, a.HashAtSeq, a.LastSeq)
 	}
 	current := 0
 	found := false
@@ -162,6 +176,8 @@ func (g *Registry) Encode() ([]byte, error) {
 	w.fixed(g.WrappedIdentityKey[:])
 	w.fixed(g.IdentityNonce[:])
 	w.fixed(g.SlotRegionHash[:])
+	w.u16(g.IdleMinutes)
+	w.u16(g.AbsoluteMinutes)
 	w.u32(uint32(len(g.Archives)))
 	for i := range g.Archives {
 		a := &g.Archives[i]
@@ -176,6 +192,8 @@ func (g *Registry) Encode() ([]byte, error) {
 		w.i64(a.LastWrittenAt)
 		w.u64(a.Revision)
 		w.fixed(a.LastWriter[:])
+		w.u64(a.LastSeq)
+		w.u64(a.HashAtSeq)
 		w.u32(uint32(len(a.Versions)))
 		for j := range a.Versions {
 			v := &a.Versions[j]
@@ -228,6 +246,8 @@ func DecodeRegistry(b []byte) (*Registry, error) {
 	r.fixed(g.WrappedIdentityKey[:])
 	r.fixed(g.IdentityNonce[:])
 	r.fixed(g.SlotRegionHash[:])
+	g.IdleMinutes = r.u16()
+	g.AbsoluteMinutes = r.u16()
 	na := r.count(r.u32(), minArchiveRecord)
 	g.Archives = make([]ArchiveRecord, 0, na)
 	for i := 0; i < na && r.err == nil; i++ {
@@ -243,6 +263,8 @@ func DecodeRegistry(b []byte) (*Registry, error) {
 		a.LastWrittenAt = r.i64()
 		a.Revision = r.u64()
 		r.fixed(a.LastWriter[:])
+		a.LastSeq = r.u64()
+		a.HashAtSeq = r.u64()
 		nv := r.count(r.u32(), minVersionRecord)
 		a.Versions = make([]VersionRecord, 0, nv)
 		for j := 0; j < nv && r.err == nil; j++ {

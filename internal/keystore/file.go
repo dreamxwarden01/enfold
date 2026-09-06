@@ -39,6 +39,7 @@ type Keystore struct {
 	slots  []format.SlotRecord
 	ct     []byte           // registry ciphertext ‖ tag
 	reg    *format.Registry // the decrypted registry, once a credential opened it
+	lock   *fileLock        // exclusive while open: one process, one handle
 	// Stale is the damage found on the superblock copy that lost, when it
 	// lost by being damaged rather than older: the file opened, but its last
 	// write may not have completed. nil when both copies were sound.
@@ -71,11 +72,18 @@ func Open(path string) (*Keystore, error) {
 	if err != nil {
 		return nil, err
 	}
-	k, err := load(f, path)
+	lock, err := lockFile(f, path)
 	if err != nil {
 		f.Close()
 		return nil, err
 	}
+	k, err := load(f, path)
+	if err != nil {
+		lock.release()
+		f.Close()
+		return nil, err
+	}
+	k.lock = lock
 	return k, nil
 }
 
@@ -127,7 +135,41 @@ func (k *Keystore) Close() error {
 		return nil
 	}
 	k.closed = true
+	if k.lock != nil {
+		k.lock.release()
+		k.lock = nil
+	}
 	return k.f.Close()
+}
+
+// Live reports whether the Session can still be used: nil, or ErrClosed
+// after Lock, ErrStale after a rotation, or the keystore's own failure.
+// The application gates every archive write that owes the registry a
+// receipt on it before starting the write.
+func (s *Session) Live() error { return s.live() }
+
+// checkOnDisk refuses a commit whose view of the file is stale: another
+// writer (another process — the OS lock stops the common case, not a
+// non-cooperating one — or an earlier handle in this process) committed
+// since this handle read the superblock. Nothing has been written when it
+// fails; the handle is marked so the caller reopens the file.
+func (k *Keystore) checkOnDisk() error {
+	var a, b [format.SuperblockSize]byte
+	if _, err := k.f.ReadAt(a[:], int64(format.KeystoreSuperblockAOff)); err != nil {
+		return err
+	}
+	if _, err := k.f.ReadAt(b[:], int64(format.KeystoreSuperblockBOff)); err != nil {
+		return err
+	}
+	sb, _, _, err := format.PickKeystoreSuperblock(a[:], b[:])
+	if err != nil {
+		return err
+	}
+	if sb.Seq != k.sb.Seq || sb.VaultID != k.sb.VaultID {
+		k.broken = fmt.Errorf("%w: seq %d on disk, %d in memory", ErrConflict, sb.Seq, k.sb.Seq)
+		return k.broken
+	}
+	return nil
 }
 
 // VaultID is the vault's immutable identity.
@@ -212,6 +254,9 @@ func (k *Keystore) commit(tx txn) error {
 	// unlock again.
 	if tx.reg == nil {
 		return fmt.Errorf("%w: commit without a registry", ErrParams)
+	}
+	if err := k.checkOnDisk(); err != nil {
+		return err
 	}
 	next := *k.sb
 	next.Seq++
@@ -368,11 +413,18 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 	if err != nil {
 		return nil, err
 	}
+	lock, err := lockFile(f, path)
+	if err != nil {
+		f.Close()
+		os.Remove(path)
+		return nil, err
+	}
 	// Every failure after the exclusive create leaves no file behind, so
 	// that "path must not exist" holds for the retry.
 	failed := true
 	defer func() {
 		if failed {
+			lock.release()
 			f.Close()
 			os.Remove(path)
 		}
@@ -414,6 +466,7 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 	if err != nil {
 		return nil, err
 	}
+	k.lock = lock
 	failed = false
 	return k, nil
 }

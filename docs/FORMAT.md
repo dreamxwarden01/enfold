@@ -465,6 +465,16 @@ leaves an archive under one of two keys the registry holds — the reverse order
 a crash, an archive under a key that exists nowhere. A reader opening an archive therefore tries
 the envelope's kid first and the archive's other known kids after it.
 
+**R34 — One token, one slot.** No two non-empty slot records in a region may carry the same
+`slot_pubkey`; a decoder refuses the region (alongside R21's `recipient_id` rule), and a writer
+refuses the mutation that would produce it (in this implementation the keystore's invariant
+check, which every mutation passes through; the format encoder validates records, not sets). Reason: an unlock walks every active slot and runs
+the credential's ceremony against each one whose verifier matches, and the region is only
+checksummed — a file spliced to name one token in 32 slots would put 32 touch prompts in front
+of the user before the registry's authenticated hash (R25) could say the region was altered.
+Touch is the one barrier a hardware slot keeps against software on the machine, and a user
+trained to touch through a run of prompts has lost it.
+
 ---
 
 # Part I — Keystore file

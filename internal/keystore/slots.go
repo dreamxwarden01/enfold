@@ -22,7 +22,10 @@ type Token interface {
 	PublicKey() []byte
 	// ECDH returns the 32-byte X coordinate of the shared point with epk, an
 	// uncompressed P-256 point the caller has already validated. On a token
-	// this is where the PIN and touch happen.
+	// this is where the PIN and touch happen; the keystore calls it once per
+	// unlock, from one goroutine, and passes its error through unchanged.
+	// A Token may stop working once whoever made it closes the connection
+	// behind it.
 	ECDH(epk []byte) ([]byte, error)
 }
 
@@ -164,6 +167,20 @@ func checkInvariant(slots []format.SlotRecord) error {
 	}
 	if hardware && password {
 		return ErrPolicy
+	}
+	// R34: a token is enrolled once. The decoder refuses a region in which
+	// two non-empty records share a slot_pubkey; this keeps Create and every
+	// mutation from producing one. Every non-empty record counts, as in the
+	// decoder — an empty one carries no key.
+	seenPub := make(map[string]struct{}, len(slots))
+	for i := range slots {
+		if slots[i].State == format.SlotEmpty {
+			continue
+		}
+		if _, dup := seenPub[string(slots[i].SlotPubkey)]; dup {
+			return ErrDuplicate
+		}
+		seenPub[string(slots[i].SlotPubkey)] = struct{}{}
 	}
 	for i := range active {
 		for j := i + 1; j < len(active); j++ {

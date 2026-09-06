@@ -1769,3 +1769,135 @@ the handle; DESIGN §10's per-archive timeout is enforced there). No streaming A
 size: the caller spools, on an encrypted volume, and says so to the user (trap 6). No dictionary
 retraining that rewrites existing files. No cross-process advisory beyond the lock: a folder a
 sync client rewrites is out of scope for in-place transactions.
+
+---
+
+## 2026-09-05 — `internal/piv`: the token layer as built
+
+The hardware-token layer: `keystore.Token` over a YubiKey's PIV application, plus enrollment —
+finding the key a slot record names, generating one, reading the PIN-protected management key.
+Windows-only (`//go:build windows` on every file, and on every importer), on piv-go v2.6.0 with
+a PC/SC layer of the package's own for what piv-go cannot do. The design was critiqued before
+any code by three Opus critics (security and threat model / PC/SC, YubiKey and piv-go realities
+/ API fit and testability), 37 findings, 34 verified adversarially: 24 confirmed, 10 refuted, 3
+nits judged by hand. Every critic independently found the same blocker.
+
+**The reuse predicate is exact, and the same one everywhere** (trap 22). The draft admitted any
+touch policy "not never", which let a *cached* key — released for 15 s after one touch — through
+the one invariant SCOPE.md calls immovable; and it never looked at the PIN policy, so a
+*pin=never* key would have been enrolled with the PIN factor silently gone, and a Bio key
+enrolled and then refused at every unlock. `KeyInfo.Usable` is now P-256, public key reported,
+touch *always*, PIN *once* or *always*; `Generate` accepts only what `Usable` would accept;
+`Token` asserts it again. A key that fails is reported with the reason and left where it is.
+
+**Occupancy is a key or a certificate.** GET METADATA alone read a certificate-only slot —
+another program's provisioning — as empty, and the "first empty slot" rule would have generated
+over it. `Inspect` reads the certificate object too; only "not found" means absent, and an
+unparsable certificate is still an object. `GenerateOptions.Slot` has no "pick for me" zero
+value, because the one call that can destroy a key names its target: `FirstEmptySlot` picks,
+`Generate` takes the slot, and `Overwrite` is only ever about that slot.
+
+**The package owns a PC/SC probe and the reset, not the transport** (trap 24; answers the
+draft's open question). piv-go's `Open` leaks an exclusive connection on two failure paths and
+its handle is unexported; forking its 300-line PC/SC layer would in truth mean forking the
+library, since nothing above it has a seam. Instead every reader is probed first over the
+package's own winscard connection — SELECT PIV, GET VERSION, then a disconnect that resets the
+card — with typed errors from the real return codes, so the reachable leak (a YubiKey with PIV
+disabled, a non-PIV card behind a "yubi" reader, a busy card, an old firmware) is refused before
+piv-go connects; only the microsecond race between connect and transaction remains. The reset on
+`Close` connects *shared* — the mode that was measured to work, and the one nothing else can
+refuse since it transmits nothing — with the context and reader name prepared before piv-go's
+own disconnect, so the gap is sub-millisecond; a failed reset reconnects and asks the card with
+the retry-free empty VERIFY, and warns only if it is still verified — or, after a `Generate`,
+whenever the reset did not happen, since the management-key authentication piv-go leaves on the
+card cannot be asked about. A read-only sweep of the readers (enrollment step 1) still resets
+each card the probe succeeds on, once, before piv-go connects — that is how a `Card` starts
+unverified whatever a program that has since released the card left behind (a card another
+program still holds is refused with `ErrBusy`, not reset) — and closes without a second reset,
+because nothing was verified through it.
+
+**The ceremony is the package's, not piv-go's.** The PIN is read from the caller's `Prompter`
+with the card's own state shown first — the retries, or that they are unreadable because the
+card is already verified (a card answers the empty VERIFY with success then, and the draft would
+have shown "0 retries"; a blocked PIN is not prompted for at all) — verified by the package,
+and piv-go is told the key needs no PIN so it can neither prompt nor verify. Touch goes up after
+the VERIFY and before the agreement, numbered: `Prompter.Touch` carries the operation's ordinal,
+and a `Token` performs at most `MaxOperations` (8) before refusing, so a run of prompts is
+countable and bounded. Status word `6982` is disambiguated after the fact (trap 23). The ECDH
+result is piv-go's own buffer so the keystore's zeroing reaches it; the management key read from
+the PRINTED object is cloned for the caller and zeroed in piv-go's decoded response.
+
+**R34, one token, one slot** — found on the keystore side by the security critic. `AddSlot`
+refused a duplicate token, but the region is only checksummed and `Unlock` walks every slot:
+a spliced file naming one token in 32 slots would have run 32 touch prompts before the R25 check
+could report tampering. The decoder now refuses a repeated `slot_pubkey` as it refuses a repeated
+`recipient_id`, and the keystore's invariant check refuses to produce one, so `Create` is covered
+too. With that, at most one slot can ever match a token and one unlock is one ceremony.
+
+**Also from the critique:** `Attest` returns a *verified* statement (piv-go's `Verify` against
+the roots it embeds; the F9 certificate object is the one read outside the allowlist, PIN-free
+and retry-free) or `ErrAttestation` — never an unchecked certificate; the allowlist is stated as
+what it is (key operations target 9d and 82–95 only; the management-key authentication piv-go
+runs inside `Generate` names object 9b, and the fake asserts what crosses the interface, the
+hardware tests the rest); `Card` has a lifetime (`ErrClosed` after `Close`, idempotent `Close`,
+`ResetFailed` sticky) and a concurrency rule (one operation at a time, a second refused with
+`ErrInUse` rather than queued, `Close` waits for the one in flight); the ECDH call takes the
+already-validated `*ecdh.PublicKey`; `DefaultManagementKey` is a function returning a copy;
+`ParseSlot`/`AllSlots` replace an index-based constructor; the firmware floor is 5.3 (GET
+METADATA) and is checked in the probe, before piv-go connects; PINs longer than 8 bytes or
+empty are refused before any APDU.
+
+**Not built, on purpose.** No `Inspect` outside the allowlist — the overwrite confirmation names
+the slot being overwritten and what it holds, and a token inventory can wait for a UI that wants
+one. No Bio support. No `piv_slot`/`token_serial` record fields: the slot is found by public key
+from metadata without a PIN, and the token by trying each reader, so the fields remain the UX
+optimisation they were proposed as and the decision stays open (`Serial` is exposed for a
+registry-side note later). The PIN policy and the session semantics stay the user's call: the
+package builds both mechanisms — hold the `Card`, or close and reset — and decides neither.
+`tools/pivtool` (readers / info / generate / selftest / resetcheck) is the in-repo way to run the PIN-bearing
+steps in the user's own terminal; it never overwrites, never tries the factory management key,
+and reads the PIN without echo and never from an argument.
+
+**Measured on the user's YubiKey 5.7.4 (USB-A Keychain) on 2026-09-05**, through the finished
+package and `tools/pivtool`, every PIN typed in the user's own terminal: the read-only sweep
+(probe, exclusive open, PIN state, metadata of all 21 slots, first empty slot, close without
+reset) takes 180 ms; a second `Open` on a held card is refused at the probe with `ErrBusy` and an
+unknown reader name with `ErrNoReader`, from the real return codes; generation of P-256 in 9d
+with PIN once / touch always, using the PIN-protected AES-256 management key, 635 ms; the
+attestation of the new key verifies against Yubico's roots and agrees with the metadata and the
+serial; two ECDH rounds on the token matched `crypto/ecdh`, the first in 5.0 s including the PIN
+and the touch, the second in 1.6 s with the touch alone — PIN once asked once, touch asked every
+time, the prompt numbered. `pivtool resetcheck` proves the trap-14 mechanism end to end: a
+VERIFY through a Card, `Close`, and the card answers "not verified" to a shared-connection probe
+from outside, well inside the 10 s window that would otherwise keep it verified.
+
+**Review.** Three Opus reviewers (conformance to the design, the critique and the docs / PC/SC,
+piv-go and YubiKey realities / Go correctness, concurrency, secrets and tests), 18 findings, 15
+verified: 11 confirmed, 4 refuted, 3 nits judged by hand. The blocker was found by all three
+lenses: `Close` sampled its "something to reset" flag *before* waiting for the operation in
+flight, so a Close issued while the PIN dialog stood open — the UI's cancel path — waited for the
+PIN to be verified and then released the card without a reset, returned nil, and reported
+nothing: the one state the mechanism exists to prevent, behind a successful Close. The flag is
+now read after the wait, and a deterministic test holds an operation in its prompt, closes from
+another goroutine, waits for the Card to mark itself closed, releases the prompt and checks the
+reset happened. A major on the same path: the fallback probe after a failed reset can only ask
+about the PIN, while `Generate` leaves the management-key authentication on the card — which no
+APDU can ask about — so a failed reset after a Generate now reports `ErrResetFailed` regardless
+of what the PIN probe says, and the reset's two halves are split so that the PC/SC context and
+the reader name are prepared before piv-go's disconnect, as the entry above already claimed.
+Also fixed: a verified state a Card did not create (a probe reset that did not take, another
+program's VERIFY) is no longer trusted for a PIN-once key — the PIN is asked once; `Generate`
+classified a card pulled during the management-key handshake as "management key refused", the
+one message that points a user toward a PIV reset (transport first now); the keystore's R34 check
+walked active records while the decoder walks every non-empty one (both non-empty now, in the
+invariant and in `AddSlot`); `pivtool` read the typed management key through a string it could
+not wipe (bytes end to end now, the PIN's raw bytes wiped too); the shared secret was dropped
+unwiped on the one error path that does not return it; and two sentences of this entry said the
+opposite of the code about the probe's reset and the read-only sweep. Refuted, with reasons
+worth keeping: piv-go's `Metadata` already maps a missing PRINTED object to an empty struct, so
+`ErrNoProtectedKey` is reachable; the probe cannot close piv-go's leak on the connect-to-Begin
+race and the docs say so. The three lenses agree on what holds: every string the package matches
+is verbatim in piv-go v2.6.0; `KeyAuth{PINPolicyNever}` suppresses piv-go's VERIFY and its
+metadata fetch inside the one transaction that spans our VERIFY and the agreement; the 258-byte
+receive buffer with 61xx chaining, the SCARD_IO_REQUEST, the multi-string parse and the SELECT
+APDU are right; no path burns a retry without the user's intent.

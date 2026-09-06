@@ -322,6 +322,7 @@ func DecodeSlotRegion(b []byte) ([]SlotRecord, error) {
 	}
 	slots := make([]SlotRecord, 0, n)
 	seen := make(map[[16]byte]struct{}, n)
+	seenPub := make(map[string]struct{}, n)
 	for i := uint32(0); i < n; i++ {
 		s, err := decodeSlotRecord(r, "slot record "+itoa(int(i)))
 		if err != nil {
@@ -334,6 +335,14 @@ func DecodeSlotRegion(b []byte) ([]SlotRecord, error) {
 				return nil, invalidf("slot record %d repeats recipient_id %x", i, s.RecipientID)
 			}
 			seen[s.RecipientID] = struct{}{}
+			// R34: one public key, one slot. A region that names the same
+			// token in several slots would run the token's ceremony once
+			// per slot on an unlock — a run of touch prompts from a file
+			// that is only checksummed.
+			if _, dup := seenPub[string(s.SlotPubkey)]; dup {
+				return nil, invalidf("slot record %d repeats slot_pubkey", i)
+			}
+			seenPub[string(s.SlotPubkey)] = struct{}{}
 		}
 		slots = append(slots, *s)
 	}

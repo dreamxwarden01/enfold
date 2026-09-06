@@ -183,6 +183,7 @@ func TestPickKeystoreSuperblock(t *testing.T) {
 func TestSlotRegionRoundTrip(t *testing.T) {
 	slots := []SlotRecord{hardwareSlot(), softwareSlot(SlotRecovery), softwareSlot(SlotStandalonePassword), {State: SlotEmpty}}
 	slots[2].RecipientID = fill16(0xB3) // recipient_id is unique within a region (R21)
+	slots[2].SlotPubkey = seq(0x71, 32) // and so is slot_pubkey (R34)
 	b, err := EncodeSlotRegion(slots)
 	if err != nil {
 		t.Fatal(err)
@@ -208,6 +209,30 @@ func TestSlotRegionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSlotRegionRejectsDuplicatePublicKey(t *testing.T) {
+	// R34: one token, one slot. Two active records naming the same
+	// slot_pubkey would run the token's ceremony twice on one unlock.
+	a := hardwareSlot()
+	b := hardwareSlot()
+	b.RecipientID[0] ^= 1
+	region, err := EncodeSlotRegion([]SlotRecord{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSlotRegion(region); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate slot_pubkey accepted: %v", err)
+	}
+	// A retired record still counts: it names the token as well.
+	b.State = SlotRetired
+	region, err = EncodeSlotRegion([]SlotRecord{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSlotRegion(region); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate slot_pubkey on a retired record accepted: %v", err)
+	}
+}
+
 func TestSlotRegionRejectsDuplicateRecipient(t *testing.T) {
 	a := hardwareSlot()
 	b := hardwareSlot()
@@ -219,6 +244,7 @@ func TestSlotRegionRejectsDuplicateRecipient(t *testing.T) {
 		t.Fatalf("duplicate recipient_id accepted: %v", err)
 	}
 	b.RecipientID[0] ^= 1
+	b.SlotPubkey = p256Point(0x51) // distinct token too (R34)
 	region, err = EncodeSlotRegion([]SlotRecord{a, b})
 	if err != nil {
 		t.Fatal(err)

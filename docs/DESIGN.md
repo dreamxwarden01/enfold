@@ -591,7 +591,11 @@ person who just typed the PIN is then waiting with no cue (observed 2026-09-04 �
 after the PIN). The moment the PIN is accepted the UI must switch to an unmistakable "now touch
 the key" prompt. Before asking for the PIN it must show the retries remaining: the counter is 3,
 and a blocked PUK means a PIV application reset that destroys every slot, including keys the user
-keeps on the same token for other purposes.
+keeps on the same token for other purposes. One case the counter cannot be read in: a card that
+is already PIN-verified answers the empty VERIFY with success instead of a count (the count is
+then at its maximum, since a correct PIN restores it). A prompt in that state — PIN policy
+*always* on a card verified moments ago — says the count is not readable, never "0 left", and
+a blocked PIN is never prompted for at all (`internal/piv`, `PINStatus`).
 
 ### The WebView boundary
 
@@ -654,9 +658,14 @@ Correct in this document, and easy to lose during implementation.
     which happens **10 s after the last application disconnects** — piv-go disconnects with
     `SCARD_LEAVE_CARD` and never resets. In that window any process on the machine can use the
     9d key without the PIN; touch is the only barrier. Whatever PIN policy is finally chosen
-    (open, `SCOPE.md`), the unlock path must not leave a verified card behind it: disconnect with
-    `SCARD_RESET_CARD` through winscard directly (verified to clear the state at once), or hold
-    the exclusive connection for the whole session, which locks every other process out.
+    (open, `SCOPE.md`), the unlock path must not leave a verified card behind it. Built in
+    `internal/piv`: a `Card` is the exclusive connection (holding it is one session mechanism),
+    and `Close` resets the card through the package's own winscard connection — a *shared*
+    connect dropped with `SCARD_RESET_CARD`, the mode that was measured, the one nothing else can
+    refuse — whenever a PIN went through the Card or a verified state was used; if the reset
+    cannot be done and the card answers "verified", `Close` says so (`ErrResetFailed`,
+    `Card.ResetFailed`) and the UI warns. `Open` resets too, so every Card starts unverified.
+    The gap between piv-go's disconnect and the reset connect is sub-millisecond and accepted.
 15. **Rotation re-wraps into stored public keys — verify the slot region first.** §8 step 4
     re-wraps the new VMK to each slot's stored `slot_pubkey` / `mlkem_ek` with no credential
     present. The slot region is only checksummed, so a substituted public key would receive the
@@ -714,6 +723,31 @@ Correct in this document, and easy to lose during implementation.
     that only exists in RAM is lost on the next crash; a registry that holds a key the archive
     has not adopted yet is harmless, because the reader tries every kid it knows (`FORMAT.md`
     R33). The same shape as trap 18: the irreversible write goes last.
+
+22. **A reused token key must have exactly the policies we would generate: touch *always*, PIN
+    *once* or *always*.** The reject list in `DECISIONS.md` ("RSA, P-384, touch=never") is
+    illustrative; the rule is the invariant. Touch *cached* releases the key for 15 s after one
+    touch — an oracle for anything on the machine during that window; PIN *never* drops the PIN
+    factor the hardware slot's derivation is defined after (`FORMAT.md` §3); the Bio *match*
+    policies cannot be driven without fingerprint support. `piv.KeyInfo.Usable` is that
+    predicate, used at enrollment and asserted again when a `Token` is made, so a slot record
+    can never name a key the unlock would then refuse. A key that fails it is left alone and
+    ours goes into an empty slot — never over it (found by all three design critics,
+    2026-09-05).
+23. **Status word `6982` is overloaded.** The card answers "security status not satisfied" both
+    for a missing touch and for an unsatisfied PIN policy (and, on the management-key path, a
+    failed challenge). The package maps it by call site — `ErrManagementKey` inside `Generate`,
+    and on the ECDH path it asks the card afterwards with the retry-free empty VERIFY: still
+    verified means the touch (`ErrTouch`), not verified means the PIN (`ErrPINRequired`). Do not
+    quote a touch timeout: Yubico documents 15 s only for the *cached* touch window; the wait for
+    a touch is observed, not specified.
+24. **piv-go's `Open` leaks an exclusive connection** when the card is pulled between connect
+    and transaction, or when the PIV SELECT fails (v2.6.0 `piv.go:172–179`) — the handle is
+    unexported, and the lock lasts until the process exits, a tray process's lifetime. Every
+    reader is probed first over the package's own PC/SC connection (SELECT, GET VERSION, reset
+    disconnect) with typed errors from the real return codes (`ErrBusy`, `ErrNoCard`,
+    `ErrNoPIVApplet`, `ErrUnsupported`), so piv-go is only handed a reader that just answered.
+    Never retry a reader in a loop after a failed `Open`.
 
 ## 12. Deferred
 
@@ -812,7 +846,7 @@ binding in-tree (`v3/internal/webview2`); the probe binary's build info confirms
 
 | Dependency | Version | Role |
 | --- | --- | --- |
-| `github.com/go-piv/piv-go/v2` | v2.6.0 | YubiKey PIV; pure Go, talks to winscard directly. Verified on hardware 2026-09-04 (GET METADATA, AES management keys, ECDH). Lacks MOVE/DELETE KEY (0xF6) and never resets the card on disconnect — trap #14 |
+| `github.com/go-piv/piv-go/v2` | v2.6.0 | YubiKey PIV; pure Go, talks to winscard directly. Verified on hardware 2026-09-04 (GET METADATA, AES management keys, ECDH). Lacks MOVE/DELETE KEY (0xF6), never resets the card on disconnect (trap 14), leaks an exclusive connection on two `Open` failure paths (trap 24); `internal/piv` wraps it with its own PC/SC probe and reset |
 | `github.com/awnumar/memguard` | v0.23.0 (+ `memcall` v0.4.0) | secrets outside the GC heap |
 | `github.com/klauspost/compress` | v1.20.0 | zstd, pure Go. Bumped 2026-09-05: 1.19.2 fixed three dictionary bugs; 1.20.0 differs from it only in regenerated assembly |
 | `golang.org/x/crypto` | v0.55.0 | argon2 (`IDKey` only — see §3) |

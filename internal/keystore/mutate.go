@@ -104,7 +104,7 @@ func (u *Unlocked) AddSlot(spec SlotSpec) error {
 	}
 	if hs, ok := spec.(HardwareSlot); ok {
 		for i := range u.k.slots {
-			if u.k.slots[i].State == format.SlotActive && u.k.slots[i].Type == format.SlotExternalECDH &&
+			if u.k.slots[i].State != format.SlotEmpty && u.k.slots[i].Type == format.SlotExternalECDH &&
 				string(u.k.slots[i].SlotPubkey) == string(hs.PublicKey) {
 				return ErrDuplicate
 			}

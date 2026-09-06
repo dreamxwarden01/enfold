@@ -253,6 +253,7 @@ func TestInvariant(t *testing.T) {
 		{"two tokens, entangled", []SlotSpec{HardwareSlot{PublicKey: tokA.PublicKey(), Password: "a", Argon2: fast}, HardwareSlot{PublicKey: tokB.PublicKey(), Password: "b", Argon2: fast}}, ErrInvariant},
 		{"one token, entangled, plus recovery", []SlotSpec{HardwareSlot{PublicKey: tokA.PublicKey(), Password: "a", Argon2: fast}, RecoverySlot{Key: rk}}, nil},
 		{"two tokens, plain", []SlotSpec{HardwareSlot{PublicKey: tokA.PublicKey()}, HardwareSlot{PublicKey: tokB.PublicKey()}}, nil},
+		{"one token twice (R34)", []SlotSpec{HardwareSlot{PublicKey: tokA.PublicKey()}, HardwareSlot{PublicKey: tokA.PublicKey()}, RecoverySlot{Key: rk}}, ErrDuplicate},
 		{"two passwords", []SlotSpec{PasswordSlot{Password: "p", Argon2: fast}, PasswordSlot{Password: "q", Argon2: fast}}, ErrInvariant},
 		{"password + recovery", []SlotSpec{PasswordSlot{Password: "p", Argon2: fast}, RecoverySlot{Key: rk}}, nil},
 		{"entangled without argon2", []SlotSpec{HardwareSlot{PublicKey: tokA.PublicKey(), Password: "a"}, RecoverySlot{Key: rk}}, ErrParams},
@@ -312,6 +313,20 @@ func TestHardware(t *testing.T) {
 	u := mustCreate(t, path, HardwareSlot{PublicKey: tokA.PublicKey(), Label: "A"}, RecoverySlot{Key: rk})
 	if err := u.AddSlot(HardwareSlot{PublicKey: tokB.PublicKey(), Password: "with pass", Argon2: fast, Label: "B"}); err != nil {
 		t.Fatal(err)
+	}
+	// R34 counts every non-empty record, retired ones included, as the
+	// decoder does.
+	retired := cloneSlots(u.k.slots)
+	for i := range retired {
+		if retired[i].Type == format.SlotExternalECDH {
+			retired[i].State = format.SlotRetired
+		}
+	}
+	dup := retired[0]
+	dup.RecipientID[0] ^= 1
+	dup.State = format.SlotActive
+	if err := checkInvariant(append(retired, dup)); !errors.Is(err, ErrDuplicate) {
+		t.Errorf("retired duplicate slot_pubkey accepted by the invariant: %v", err)
 	}
 	if err := u.AddSlot(HardwareSlot{PublicKey: tokA.PublicKey()}); !errors.Is(err, ErrDuplicate) {
 		t.Errorf("enrolling A twice: %v", err)

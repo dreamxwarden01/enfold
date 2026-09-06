@@ -7,5 +7,15 @@
 # The actual fix is an AV exclusion for GOTMPDIR, pinned to D:\MyPersonalProjects\go-tmp --
 # deliberately outside AppData, whose writes an MSIX-packaged launcher silently redirects.
 # Drop the flag only when you need to attach a debugger to a test.
-$env:CGO_ENABLED = "0"
-go test -ldflags="-s -w" @args ./...
+#
+# -Race runs the suite under the race detector, which needs cgo and therefore a C compiler on
+# PATH (MinGW-w64 GCC; the dev machine has WinLibs at D:\mingw64\bin). Everything else keeps
+# CGO_ENABLED=0: a compiler on PATH must never turn cgo on by accident.
+param([switch]$Race)
+if ($Race) {
+    $env:CGO_ENABLED = "1"
+    go test -race -ldflags="-s -w" @args ./...
+} else {
+    $env:CGO_ENABLED = "0"
+    go test -ldflags="-s -w" @args ./...
+}

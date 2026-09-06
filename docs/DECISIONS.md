@@ -1758,8 +1758,11 @@ committed without truncating a tail a failed store had appended (a failed store 
 reservation back at once); and the test that was to prove the quarantine could not fail, and the
 crash test's fallback case did not depend on it — both rewritten, and a test now aborts an
 in-flight transaction over a freed extent and proves the fallback state still extracts. The
-race detector needs cgo and this machine has no C compiler, so the concurrency test is run
-repeatedly instead; it must run under `-race` on a machine that has one before 1.0.
+race detector needs cgo; the dev machine had no C compiler at commit time, so the concurrency
+test was first run repeatedly without it. A MinGW-w64 GCC (WinLibs 16.1.0, UCRT) was installed
+the same day and the module's `-short` suite passes under `-race`, the concurrency test twenty
+times over; `scripts/test.ps1 -Race` is the wrapper. Release builds keep `CGO_ENABLED=0`
+explicit — a compiler on PATH must never turn cgo on by accident.
 
 **Not built, on purpose.** No idle timeout inside the archive (the app owns timers and closes
 the handle; DESIGN §10's per-archive timeout is enforced there). No streaming Add of unknown

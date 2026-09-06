@@ -1901,3 +1901,25 @@ is verbatim in piv-go v2.6.0; `KeyAuth{PINPolicyNever}` suppresses piv-go's VERI
 metadata fetch inside the one transaction that spans our VERIFY and the agreement; the 258-byte
 receive buffer with 61xx chaining, the SCARD_IO_REQUEST, the multi-string parse and the SELECT
 APDU are right; no path burns a retry without the user's intent.
+
+---
+
+## 2026-09-05 — Decided: PIN + touch at every unlock, the token released at once
+
+The user's ruling on the token policy `SCOPE.md` had left open: **the first unlock is PIN and
+touch, always.** Together with DESIGN §10 that settles the rest, because after the unlock the
+token has nothing to do: the VMK is derived once and destroyed, the KWK, DB and Metadata keys
+are what a session uses, archive keys come out of the registry under the KWK, and the token is
+next needed only at the next unlock — after the idle timeout, the absolute cap, a workstation
+lock — or for a slot mutation, which is its own ceremony. So there is no session to hold the
+card for: the `piv.Card` is opened for the unlock, `ECDH` runs the ceremony (PIN with the
+retries shown, then touch), the VMK is derived, and the Card is closed — which resets the card,
+so the PIN-once state does not survive it (trap 14) and every other CCID application has the
+token back within a millisecond. The 9d key stays PIN policy *once* (DESIGN §3): *always* would
+change nothing the user sees, since one operation follows one VERIFY either way, and *once*
+keeps the design's option of a second operation in the same ceremony without a second PIN.
+"How long a verification stands" is therefore: as long as the Card, which is as long as the
+unlock. The `SCOPE.md` bullet is closed; the invariant in it stands.
+
+**Restated the same day:** closing to the tray destroys the window; it switches to hide only if
+the real UI shows delay, stutter or state loss on reopening (the 2026-09-04 ruling, unchanged).

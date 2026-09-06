@@ -700,6 +700,21 @@ Correct in this document, and easy to lose during implementation.
     rotation that sets it is the one that lacked the slot's secret. It is the one bit of `flags`
     outside the slot AAD, and a hint only; the generation inside `wrapped_vmk` is the truth.
 
+20. **The allocation pool is not the published free map.** The map a commit writes lists what
+    the new state does not use, including what the commit itself just freed. A writer that
+    allocates from that map overwrites, one commit later, the very extents the losing superblock
+    copy still references — its index, its free map, the files it had — and the A/B pair
+    protects against nothing but a torn write of the current commit. Freed extents are
+    quarantined for one further commit (`FORMAT.md` R31), reader-held extents for as long as
+    the reader lives, and nothing is truncated but a reservation the transaction made itself.
+    Three independent design critiques found this before a line was written; the keystore's
+    trim bug was the same mistake in miniature.
+
+21. **Re-key the registry before the archive, never after.** An archive re-sealed under a key
+    that only exists in RAM is lost on the next crash; a registry that holds a key the archive
+    has not adopted yet is harmless, because the reader tries every kid it knows (`FORMAT.md`
+    R33). The same shape as trap 18: the irreversible write goes last.
+
 ## 12. Deferred
 
 - **Small-file packs.** Bundle files under ~64 KB into ~4 MB packs, one DEK per pack, solid

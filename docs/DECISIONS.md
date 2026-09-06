@@ -1665,3 +1665,104 @@ memory; and two tests that could not fail now can.
 layer that owns the UI's parameter choice, with an OS query this package should not carry. No
 retired-slot semantics beyond ignoring them: nothing in v1 creates one. No automatic clearing of
 a spurious `rewrap_stale` bit.
+
+---
+
+## 2026-09-05 — internal/archive: designed under critique first, then built
+
+**Process change.** The archive layer has more design decisions than any layer before it —
+allocation with an unknown compressed size, in-place edits, crash atomicity across three
+relocatable structures, readers that outlive the writes under them — so the design was written
+down and critiqued before a line of code: three independent Opus critiques (crash atomicity and
+allocation / the API the app and preview server need / spec conformance and the real APIs of the
+packages below), 74 findings, with seven questions the draft asked answered by all three. The
+critique reversed or sharpened most of the draft. What follows is the design as built.
+
+**The allocation pool is not the published free map** (`FORMAT.md` R31, `DESIGN.md` trap 20).
+The draft freed extents into the map at the commit that released them and let the next
+transaction allocate them. All three critics pointed out that the next transaction would then
+overwrite exactly what the losing superblock copy still references — its index, its free map,
+the data of files just deleted — so the A/B pair would protect against a torn write of the
+current commit and nothing else. The keystore had made the same mistake in miniature (the trim
+that destroyed the loser's registry). Now: what a commit frees is published as free but
+quarantined from allocation for one further commit; reader-held extents are quarantined for the
+reader's life; nothing is truncated but a reservation the transaction made itself at the end of
+the file. A torn live copy opens one commit behind with every file of that state intact, and the
+test proves it by committing on top and then tearing the live copy.
+
+**The free map is appended, and the index goes wherever it fits.** The draft wrote the map into
+free space, which is a fixpoint problem — the map must describe the extent it occupies, whose
+size depends on the map. Appending it at the end of the file dissolves the problem; the map is
+at most 64 MiB and its old extent is reclaimed two commits later.
+
+**Small compressed files are sealed into memory first; large ones reserve at the end.** The draft
+reserved `MaxEncodedSize` — a bound slightly *above* the plaintext — out of a first-fit hole for
+every compressed file, which the critics showed would fragment the map into tails nothing could
+reuse and make an edited file grow the archive without bound. Files up to `InMemoryBelow`
+(8 MiB) are now compressed and sealed into memory and placed at their exact size, exact fits
+preferred; larger ones reserve the bound at EOF and truncate the unused tail; raw files, whose
+stored size is exact, go first-fit.
+
+**Registry first on key rotation** (R33, trap 21). The draft left the order open. It is not
+open: an archive re-sealed under a key that exists only in RAM is lost on the next crash; a
+registry that holds a key the archive has not adopted yet is harmless, because Open takes every
+kid the registry knows and reports which one opened the index. Open never writes; a stale
+envelope after an interrupted rotation is a reported condition and `RepairEnvelope` is explicit.
+
+**Also from the critique:** `Create` (there was none), an explicit transaction so that adding a
+folder is one index rewrite rather than one per file, `ErrIndeterminate`/`Broken` after the
+commit point, a single writer per path (an in-process table plus a Windows byte-range lock at
+offset 2^62, where it cannot block reads of real data — the first draft locked byte 0 and could
+not read its own envelope), `Compact` as a method that carries tombstones and the dictionary,
+keeps `archive_id`, verifies the new file and closes the handle before the rename, an
+independent `Reader` per request with a Seek on compressed files that restarts and discards (so
+`http.ServeContent` works without a plaintext temp file, trap 6), the writer-side overlap
+assertion before every data write (§13), `context.Context` on every long operation, receipts
+from every commit for the registry's size and time fields, a `NoCompression` option and the
+padding knob for trap 8, a tombstone shape (R32) that drops the dictionary reference and keeps
+`dek_epoch` monotone, and a probe policy that uses the dictionary without probing for files
+below `DictBelow` — the probe has no dictionary and would call a 90-byte JSON record
+incompressible for the frame overhead alone.
+
+**Review.** Three Opus reviewers (spec and design conformance / hostile input and crashes /
+atomicity and concurrency), 38 findings, 28 verified: 28 confirmed, 0 refuted, 9 nits judged by
+hand. Two blockers were found by all three lenses. First, the transaction path ran without the
+Archive's mutex: `Tx.Add` iterated the held-extent map while `OpenReader` wrote it, so the
+documented case — a preview server holding a Reader per request while the archive is written —
+was a fatal "concurrent map iteration and map write". The lock is now taken around every piece
+of bookkeeping (allocation, the overlap assertion, the free/held/pool sets) and never around a
+compress-and-seal, so readers stay live through a large add. Second, the dictionary: `plan` and
+the cached encoder read the committed index's dictionary rather than the transaction's, so a
+transaction that replaced the dictionary and then added a small file wrote a frame naming the
+old dictionary's ID under an index carrying the new one — a file nobody could ever open — and a
+transaction that cleared it and added a file always failed at Commit. Both now read the working
+index, the encoder is keyed on the dictionary it was built with, and Commit drops it when the
+dictionary changes. Hostile-input blockers in Open: the quarantine set was built with the
+unguarded insert that panics on overlap, so a crafted losing superblock crashed Open, and the
+live/loser gap merge was quadratic, so a checksummed free map of interleaved one-byte extents
+cost hours of CPU on a 72 MiB file. Loser extents now go through a tolerant union after the
+losing index is checked against the file, and the merge is one linear pass; deterministic tests
+feed a lying free map (over a live file, past the end, tens of thousands of interleaved extents)
+and an overlapping loser extent, because `FuzzOpen` cannot reach either through the checksums.
+Also a blocker: on any error `seal` left the shared compressor's stream active, and a parallel
+encoder flushes what it had dispatched on the next `Reset` — over whatever extent it was then
+pointed at; the stream is now abandoned on every failure while the destination is still the
+extent the transaction is giving back. The rest: `Compact` released the lock and the path claim
+before the rename (now the OS lock goes before the rename and the in-process claim after, so no
+second writer opens the original in the window) and leaked the encoders; `Hash` accepted a short
+read and hashed stale buffer bytes; `Archive.Close` did not end open Readers (it does, with
+`ErrClosed`); `ExtractTo`'s existence check was a TOCTOU because the final rename replaced
+(exclusive placement now, `MoveFileEx` without replace on Windows, link-and-unlink elsewhere);
+`Open` sorted the caller's key slice; `ID`/`KID` raced `RotateKey`; an unchanged transaction
+committed without truncating a tail a failed store had appended (a failed store now gives its
+reservation back at once); and the test that was to prove the quarantine could not fail, and the
+crash test's fallback case did not depend on it — both rewritten, and a test now aborts an
+in-flight transaction over a freed extent and proves the fallback state still extracts. The
+race detector needs cgo and this machine has no C compiler, so the concurrency test is run
+repeatedly instead; it must run under `-race` on a machine that has one before 1.0.
+
+**Not built, on purpose.** No idle timeout inside the archive (the app owns timers and closes
+the handle; DESIGN §10's per-archive timeout is enforced there). No streaming Add of unknown
+size: the caller spools, on an encrypted volume, and says so to the user (trap 6). No dictionary
+retraining that rewrites existing files. No cross-process advisory beyond the lock: a folder a
+sync client rewrites is out of scope for in-place transactions.

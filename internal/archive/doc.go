@@ -1,0 +1,92 @@
+// Package archive is the archive file of docs/FORMAT.md Part II: a plaintext
+// envelope, two alternating superblocks, an encrypted file index, a
+// plaintext free-space map, and a data region of per-file STREAM blobs.
+//
+// It sits on internal/format (the codecs), internal/kdf (the archive key's
+// two subordinate keys and the DEK wraps), internal/stream (the per-file
+// AEAD) and internal/compress (zstd and the sampling probe). It does not
+// know about the keystore: the archive key is a parameter, and the caller
+// looks it up in the registry by the envelope's archive_id and kid.
+//
+// # Transactions
+//
+// Every change to an archive is a transaction ending in one superblock flip.
+// Begin opens one; Add, Replace, Delete, Rename and SetDictionary record
+// changes on it; Commit writes them. The single-operation methods on Archive
+// are one-transaction conveniences. Within a transaction data is written into
+// extents that no superblock references — free space, or past the end of the
+// file — so a crash before the flip leaves the previous state intact, and the
+// flip itself is one 4 KiB write with a checksum.
+//
+// The free-space map has two faces. The published map, written with each
+// commit and hashed into the superblock (§13), lists every extent the new
+// state does not use. The allocation pool is smaller: it excludes extents
+// freed by the current transaction and by the previous one — so the losing
+// superblock copy, which still references what the previous commit freed,
+// stays fully valid until the commit after next overwrites it, and an archive
+// whose live copy is torn opens one commit behind — and it excludes extents
+// an open Reader still holds. The map itself is always appended at the end
+// of the file, which is what lets its own extent be known before it is
+// encoded; the index goes first-fit into the pool or is appended. Nothing is
+// truncated except a reservation this transaction made at the end of the
+// file and did not fill. Space freed at the tail is reclaimed by Compact.
+//
+// A failure at or after the superblock write leaves the outcome unknown; the
+// Archive then refuses every operation (ErrIndeterminate, Broken) and the
+// caller reopens the file to see which state won. A failure before it
+// abandons the transaction with the in-memory pool restored.
+//
+// # Allocation for compressed files
+//
+// The size of a compressed file is known only when it has been compressed.
+// A file up to Options.InMemoryBelow is compressed and sealed into memory,
+// so its exact stored size can be placed first-fit; a larger one is written
+// straight into a reservation at the end of the file sized by
+// compress.Writer.MaxEncodedSize — an upper bound — and the unused tail is
+// truncated off. Raw files, whose stored size is exact (R26), go first-fit.
+// Reserving the bound inside a hole would leave a hole no file could reuse.
+//
+// # Reading
+//
+// OpenReader returns an independent Reader per call, so the loopback preview
+// server can serve every request from its own Reader (internal/stream
+// documents why http.ServeContent's multi-range path must not share one).
+// While a Reader is open, its extent is held: a Replace or Delete of the same
+// file commits normally and the Reader keeps reading the content it opened —
+// the extent is not reused or truncated until the Reader closes. A Reader on
+// a compressed file seeks by restarting the decompression, which is enough
+// for ServeContent and for scrubbing at a cost proportional to the offset.
+//
+// An error from a Reader means the file is unreadable, and whatever was
+// produced before it is to be discarded (DESIGN.md §11 trap 17). ExtractTo
+// builds into a temporary beside the target and renames it into place only
+// after a clean end and a matching content hash; Extract streams into a
+// caller's writer and leaves that discipline to the caller.
+//
+// # Keys
+//
+// Open takes candidates — kid and archive key pairs — and reports which one
+// opened the index. That is what makes archive-key rotation (§7.3) safe: the
+// caller records the new version in the registry, retiring the old, and only
+// then calls RotateKey; a crash between the two leaves an archive under one
+// of two keys the registry knows. The reverse order would leave, on a crash,
+// an archive under a key that exists nowhere. Open never writes: an envelope
+// whose kid is not the one that opened the index is reported (EnvelopeStale)
+// and repaired only by RepairEnvelope.
+//
+// # Single writer
+//
+// A writable Archive holds an exclusive lock on the file for its life, and the
+// package refuses a second writable handle on the same path within the
+// process. In-place transactions on a folder a sync client rewrites are not
+// supported; there, Compact into a fresh file is the safe pattern.
+//
+// # Secrets
+//
+// The archive key is used to derive the index key and the wrap key and then
+// dropped; Close zeroes both derived keys. Each Reader holds the AEAD of its
+// file's DEK for its life, inside crypto/cipher where it cannot be wiped, as
+// internal/stream documents. The decoded index — names above all — lives in
+// memory while the Archive is open; DESIGN.md §10 forbids handing the whole
+// list to the WebView, so Files is documented accordingly.
+package archive

@@ -433,6 +433,38 @@ credential — token and password — which is checked against the record's exis
 previous VMK, which is what a stale slot still holds) before the current VMK is wrapped in. A
 refused re-wrap leaves the record byte for byte as it was.
 
+**R31 — A writer keeps the losing superblock's state intact for one more commit.** The two
+superblock copies are only a fallback if what the losing copy references still exists. So a
+transaction never writes into an extent the live superblock references, nor into one the
+previous commit freed — the previous index and free-map extents, and the data of files it
+replaced or deleted — nor into one an open reader still holds; those extents are published as
+free in the map the commit writes, but allocated only from the commit after next. A reader that
+finds the live copy damaged therefore opens the archive exactly one commit behind, with every
+file of that state readable. A writer also never truncates anything but a reservation it made
+itself at the end of the file; space freed at the tail waits for compaction. Open reclaims as
+free whatever no superblock references (the tail an interrupted transaction appended), and
+never writes: a stale envelope after an interrupted key rotation is reported, not repaired.
+
+**R32 — A tombstone keeps its identity and its merge fields and nothing else.** Deleting a file
+sets `state = 2` and advances `revision`, `last_writer` and `modified_at`; it keeps `file_id`,
+`name` and `dek_epoch` (monotone per file, never reused); it zeroes `orig_size`, `stored_size`,
+`data_off`, `content_hash`, `dek_nonce`, `wrapped_dek` and `dek_created_at`; and it sets
+`storage` to raw so that no tombstone references the dictionary, which may then be replaced or
+cleared once no live record uses it. Deletion is cryptographic erasure: the ciphertext stays in
+the freed extent until it is reused or compacted away, unreadable because its wrapped DEK is gone.
+
+**R33 — Compaction and key rotation, what they keep.** Compaction writes a fresh file with the
+same `archive_id` and `kid`, every record — live and tombstone, unchanged apart from a live
+record's `data_off` — and the dictionary; live extents are copied verbatim, since every chunk
+AAD and every wrapped DEK binds `archive_id` and `file_id` and would fail under any other. Key
+rotation re-wraps every live DEK under the new archive key's wrap key with a fresh nonce and the
+same `dek_epoch` (the DEK AAD does not include the kid), re-seals the index with the new kid in
+its AAD, and rewrites the envelope last. **The registry is written first**: the new version is
+recorded as current and the old retired before the archive is touched, so a crash anywhere
+leaves an archive under one of two keys the registry holds — the reverse order would leave, on
+a crash, an archive under a key that exists nowhere. A reader opening an archive therefore tries
+the envelope's kid first and the archive's other known kids after it.
+
 ---
 
 # Part I — Keystore file
@@ -690,7 +722,8 @@ index. No file data is re-encrypted.** The cost is proportional to the file coun
 size — the same trick as VMK rotation, one level down.
 
 The motivating case is the low-trust-PC mode: **that PC received the archive key.** Rotating it
-afterwards is how access is withdrawn. As everywhere else in this design, it withdraws future
+afterwards is how access is withdrawn. R33 fixes the order: the registry records the new version
+before the archive is re-keyed, never after. As everywhere else in this design, it withdraws future
 access — the copy that machine may have kept remains readable under the old key, and no
 construction can change that.
 
@@ -954,7 +987,8 @@ existing data.
 
 Compaction is an explicit offline operation. It is the only operation that moves file data without
 changing a DEK, which is permissible because ciphertext bytes are copied verbatim rather than
-re-encrypted.
+re-encrypted. What it must keep is pinned in R33; what a writer must leave alone between commits,
+in R31.
 
 ---
 

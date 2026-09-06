@@ -23,6 +23,12 @@ type KeystoreSuperblock struct {
 	RegistryTag     [TagSize]byte
 	VMKGeneration   uint64
 	RotationPending uint8
+	// ModifiedAt is the wall-clock time (Unix seconds) of the commit that
+	// sealed the registry this superblock points at; never decreases
+	// across commits; an export's is the time of the export. Readable
+	// before any unlock, so two copies of a keystore can be told apart;
+	// authenticated through the registry AAD (R35).
+	ModifiedAt int64
 }
 
 func (s *KeystoreSuperblock) validate() error {
@@ -34,6 +40,9 @@ func (s *KeystoreSuperblock) validate() error {
 	}
 	if s.RegistryOff < RegistryMinOff {
 		return invalidf("keystore superblock: registry_off 0x%x is inside the fixed regions", s.RegistryOff)
+	}
+	if s.ModifiedAt < 0 {
+		return invalidf("keystore superblock: modified_at %d is negative", s.ModifiedAt)
 	}
 	if s.RegistryLen > MaxRegistryLen {
 		return invalidf("keystore superblock: registry_len %d exceeds %d", s.RegistryLen, MaxRegistryLen)
@@ -79,6 +88,7 @@ func (s *KeystoreSuperblock) Encode() ([]byte, error) {
 	w.fixed(s.RegistryTag[:])
 	w.u64(s.VMKGeneration)
 	w.u8(s.RotationPending)
+	w.i64(s.ModifiedAt)
 	w.zeros(checksumOffset - len(w.b)) // reserved1
 	sum := sha256.Sum256(w.b)
 	w.fixed(sum[:])
@@ -113,6 +123,7 @@ func DecodeKeystoreSuperblock(b []byte) (*KeystoreSuperblock, error) {
 	r.fixed(s.RegistryTag[:])
 	s.VMKGeneration = r.u64()
 	s.RotationPending = r.u8()
+	s.ModifiedAt = r.i64()
 	if r.err != nil { // cannot happen with a fixed-size input, kept for symmetry
 		return nil, r.err
 	}
@@ -124,15 +135,16 @@ func DecodeKeystoreSuperblock(b []byte) (*KeystoreSuperblock, error) {
 }
 
 // RegistryAAD is the AAD for the registry ciphertext (§7):
-// vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_version.
-// A pure byte construction over the superblock as given.
+// vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_version ‖
+// modified_at. A pure byte construction over the superblock as given.
 func (s *KeystoreSuperblock) RegistryAAD() []byte {
-	w := &writer{b: make([]byte, 0, 16+8+8+NonceSize+2)}
+	w := &writer{b: make([]byte, 0, 16+8+8+NonceSize+2+8)}
 	w.fixed(s.VaultID[:])
 	w.u64(s.RegistryOff)
 	w.u64(s.RegistryLen)
 	w.fixed(s.RegistryNonce[:])
 	w.u16(FormatVersion)
+	w.i64(s.ModifiedAt)
 	return w.b
 }
 

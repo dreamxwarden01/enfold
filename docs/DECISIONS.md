@@ -1923,3 +1923,47 @@ unlock. The `SCOPE.md` bullet is closed; the invariant in it stands.
 
 **Restated the same day:** closing to the tray destroys the window; it switches to hide only if
 the real UI shows delay, stutter or state loss on reopening (the 2026-09-04 ruling, unchanged).
+
+---
+
+## 2026-09-05 — Decided: the keystore is dated, the export rule stands, no token fields, one YubiKey
+
+The user's rulings on the questions the token layer left, plus one addition.
+
+**The keystore export keeps its rule** (2026-09-01, R28: registry plus the recovery slots,
+nothing else) — the question had been misread as one about the keystore, and the reasoning
+stands unchanged. **But a keystore must carry its own last-modified time**, independent of
+filesystem metadata, so that two copies can be told apart: R35, `modified_at` in the
+superblock, written on every commit, never decreasing, an export dated by its own creation, and
+bound into the registry's AAD so that a doctored date fails to open. It is plaintext on
+purpose — the question "which backup is newer" is asked before the recovery key comes out —
+and the registry's own timestamp, already there, now carries the same value.
+
+**The recovery record is on by default for volume exports, at 3%**, changeable in settings
+(the RAR default; `SCOPE.md` 1.1).
+
+**No `piv_slot` field.** The slot is scanned: 9d first, then the retired slots 82–95, by public
+key from metadata with no PIN and no touch, and a token that holds none of the keystore's keys
+is reported — which is what `internal/piv` already does (`Find`, `AllSlots`). Nothing is
+hard-wired, so a key moved with a newer firmware's MOVE KEY is still found.
+
+**No `token_serial` field, and one YubiKey at a time.** Before the token is inserted the product
+cannot know which of several enrolled tokens is coming, so a serial would only help choose
+among readers — and Windows and the FIDO stack already refuse to operate with two YubiKeys
+inserted, so the UI does the same: with more than one, ask for all but one to be removed. The
+lock screen shows the slot's `label`; that was judged enough. The 2026-09-04 proposal is closed,
+its registry-side parenthetical included: no serial anywhere in the keystore, registry included;
+`piv.Card.Serial` stays a runtime value for the UI.
+
+**Review.** Two Opus reviewers (the design's claims / Go and tests), 8 findings, 4 verified: 2
+confirmed, 2 refuted, 4 nits judged by hand. Both lenses found the same latent trap: `commit`
+advanced `modified_at` on every transaction but re-sealed the registry only when one was passed,
+so a registry-less commit — a shape no caller uses but the code accepted — would have flipped
+the superblock onto a ciphertext that no longer authenticates, and no credential would have
+opened the file again. Every commit now requires a registry, refused before anything is
+written, and a test drives both registry-less shapes. Refuted, with the rule restated: an export
+is dated by its own creation and does not inherit the source's monotonic floor (R28, R35 — a
+clock set back can date a newer export older, and the registry's own timestamp is there for
+the tie); a negative date is refused at decode as any other malformed field. The nits were
+wording: "volume exports" in SCOPE, the R35 sentence that claimed a doctored copy cannot lie
+when it can only fail to unlock, and this paragraph's own predecessor about the serial.

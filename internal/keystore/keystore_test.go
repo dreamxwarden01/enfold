@@ -237,6 +237,100 @@ func TestFixedClockAndKeystoreAccessors(t *testing.T) {
 	s.Lock()
 }
 
+// TestCommitNeedsRegistry: with modified_at in the registry AAD, a commit
+// that re-seals nothing would leave a file no credential opens; commit
+// refuses the shape before writing anything.
+func TestCommitNeedsRegistry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v.eks")
+	u := mustCreate(t, path, PasswordSlot{Password: "p", Argon2: fast}, RecoverySlot{Key: recoveryKey(t)})
+	before := u.Keystore().ModifiedAt()
+	if err := u.k.commit(txn{gen: u.gen}); !errors.Is(err, ErrParams) {
+		t.Fatalf("registry-less commit: %v", err)
+	}
+	if err := u.k.commit(txn{slots: cloneSlots(u.k.slots), gen: u.gen}); !errors.Is(err, ErrParams) {
+		t.Fatalf("slots without a registry: %v", err)
+	}
+	if u.Keystore().ModifiedAt() != before || u.Keystore().Broken() != nil {
+		t.Fatal("a refused commit changed state")
+	}
+}
+
+// TestModifiedAt: R35. The superblock dates every commit, never goes
+// backwards, dates an export by its creation, and is authenticated by the
+// registry, so an edited date fails to open.
+func TestModifiedAt(t *testing.T) {
+	saved := now
+	clock := int64(1_700_000_000)
+	now = func() int64 { return clock }
+	defer func() { now = saved }()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "v.eks")
+	rk := recoveryKey(t)
+	u := mustCreate(t, path, PasswordSlot{Password: "p", Argon2: fast}, RecoverySlot{Key: rk})
+	if got := u.Keystore().ModifiedAt(); got != clock || u.Registry().ModifiedAt != clock {
+		t.Fatalf("create: superblock %d registry %d", got, u.Registry().ModifiedAt)
+	}
+	// The clock goes backwards: the stamp still advances by one.
+	clock = 1_600_000_000
+	if err := u.UpdateRegistry(func(g *format.Registry) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Keystore().ModifiedAt(); got != 1_700_000_001 || u.Registry().ModifiedAt != got {
+		t.Fatalf("clock back: superblock %d registry %d", got, u.Registry().ModifiedAt)
+	}
+	// The clock moves on: the stamp follows it.
+	clock = 1_700_000_500
+	if err := u.AddSlot(RecoverySlot{Key: recoveryKey(t), Label: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Keystore().ModifiedAt(); got != 1_700_000_500 {
+		t.Fatalf("clock on: %d", got)
+	}
+	// An export is dated by its creation.
+	clock = 1_700_000_900
+	export := filepath.Join(dir, "backup.eks")
+	if err := u.Export(export); err != nil {
+		t.Fatal(err)
+	}
+	e := mustOpen(t, export)
+	if e.ModifiedAt() != 1_700_000_900 {
+		t.Fatalf("export dated %d", e.ModifiedAt())
+	}
+	e.Close()
+	// It is readable before an unlock, from the file alone.
+	u.Close()
+	u.k.Close()
+	k := mustOpen(t, path)
+	if k.ModifiedAt() != 1_700_000_500 {
+		t.Fatalf("reopened: %d", k.ModifiedAt())
+	}
+	k.Close()
+	// A doctored date: both superblock copies re-dated with valid checksums.
+	// The file opens, but the registry no longer authenticates.
+	data := snapshot(t, path)
+	for _, c := range []format.Copy{format.CopyA, format.CopyB} {
+		off := c.KeystoreSuperblockOff()
+		sb, err := format.DecodeKeystoreSuperblock(data[off : off+format.SuperblockSize])
+		if err != nil {
+			continue
+		}
+		sb.ModifiedAt = 1_800_000_000
+		enc, err := sb.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		copy(data[off:], enc)
+	}
+	restore(t, path, data)
+	d := mustOpen(t, path)
+	if d.ModifiedAt() != 1_800_000_000 {
+		t.Fatalf("doctored date not read: %d", d.ModifiedAt())
+	}
+	if _, err := d.Unlock(PasswordCredential{Password: "p"}); !errors.Is(err, format.ErrInvalid) {
+		t.Fatalf("doctored date opened: %v", err)
+	}
+}
+
 func TestInvariant(t *testing.T) {
 	dir := t.TempDir()
 	rk := recoveryKey(t)

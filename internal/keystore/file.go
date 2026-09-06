@@ -16,6 +16,16 @@ import (
 // now is the clock every timestamp comes from; tests replace it.
 var now = func() int64 { return time.Now().Unix() }
 
+// stamp is the modified_at of a commit: the clock, but never less than one
+// past the previous value, so that a clock set back cannot make a later
+// state look older than an earlier one (R35).
+func stamp(prev int64) int64 {
+	if t := now(); t > prev {
+		return t
+	}
+	return prev + 1
+}
+
 // Keystore is an open keystore file in its locked state: the live
 // superblock, the live slot region, and the registry ciphertext. Nothing in
 // it is secret.
@@ -130,6 +140,13 @@ func (k *Keystore) Generation() uint64 { return k.sb.VMKGeneration }
 // must keep surfacing it.
 func (k *Keystore) RotationPending() bool { return k.sb.RotationPending != 0 }
 
+// ModifiedAt is when the keystore was last committed (Unix seconds, R35):
+// the wall clock of the last change, never decreasing, and for an export
+// the time it was made. Readable before an unlock, so a backup can be
+// dated when the user picks it; authenticated by the registry once
+// unlocked.
+func (k *Keystore) ModifiedAt() int64 { return k.sb.ModifiedAt }
+
 // Slots describes the active slots without revealing anything secret.
 func (k *Keystore) Slots() []SlotInfo {
 	var out []SlotInfo
@@ -172,7 +189,7 @@ func (k *Keystore) openRegistry(meta []byte) (*format.Registry, error) {
 // txn is one commit: what changes, all of it landing in one superblock flip.
 type txn struct {
 	slots   []format.SlotRecord // the new slot region; nil leaves it as it is
-	reg     *format.Registry    // the new registry; nil leaves it as it is
+	reg     *format.Registry    // the registry to seal; every commit carries one (R25, R35)
 	meta    []byte              // Metadata key, required when reg is set
 	gen     uint64              // the new VMK generation
 	pending bool                // rotation_pending after the commit
@@ -187,6 +204,15 @@ func (k *Keystore) commit(tx txn) error {
 	if err := k.usable(); err != nil {
 		return err
 	}
+	// Every commit re-seals the registry. It carries the slot region's hash,
+	// which is what authenticates a region nobody else vouches for (R25),
+	// and its AAD binds modified_at (R35), which every commit advances — a
+	// commit that sealed nothing would leave a superblock whose date no
+	// longer matches the ciphertext it points at, and the file would never
+	// unlock again.
+	if tx.reg == nil {
+		return fmt.Errorf("%w: commit without a registry", ErrParams)
+	}
 	next := *k.sb
 	next.Seq++
 	next.VMKGeneration = tx.gen
@@ -194,6 +220,7 @@ func (k *Keystore) commit(tx txn) error {
 	if tx.pending {
 		next.RotationPending = 1
 	}
+	next.ModifiedAt = stamp(k.sb.ModifiedAt)
 
 	region, slots := k.region, k.slots
 	if tx.slots != nil {
@@ -210,11 +237,11 @@ func (k *Keystore) commit(tx txn) error {
 		region, slots = encoded, tx.slots
 	}
 
-	ct := k.ct
-	if tx.reg != nil {
-		if tx.meta == nil {
-			return fmt.Errorf("%w: registry without a Metadata key", ErrParams)
-		}
+	if tx.meta == nil {
+		return fmt.Errorf("%w: registry without a Metadata key", ErrParams)
+	}
+	var ct []byte
+	{
 		if tx.slots != nil {
 			tx.reg.SlotRegionHash = format.SlotRegionHash(region)
 		}
@@ -223,7 +250,7 @@ func (k *Keystore) commit(tx txn) error {
 		// blesses a region nobody wrote (R25) — with a tampered region on
 		// disk, the mismatch survives the write and is reported again at the
 		// next unlock.
-		tx.reg.ModifiedAt = now()
+		tx.reg.ModifiedAt = next.ModifiedAt
 		plain, err := tx.reg.Encode()
 		if err != nil {
 			return err
@@ -247,10 +274,6 @@ func (k *Keystore) commit(tx txn) error {
 			return err
 		}
 		ct = sealed
-	} else if tx.slots != nil {
-		// A new slot region always comes with a re-encrypted registry, whose
-		// hash is what authenticates it (R25).
-		return fmt.Errorf("%w: slot region without a registry", ErrParams)
 	}
 
 	if err := k.f.Sync(); err != nil {
@@ -311,7 +334,7 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 		return nil, err
 	}
 	reg.SlotRegionHash = format.SlotRegionHash(region)
-	reg.ModifiedAt = now()
+	reg.ModifiedAt = stamp(0)
 	plain, err := reg.Encode()
 	if err != nil {
 		return nil, err
@@ -325,6 +348,7 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 		RegistryOff:   format.RegistryMinOff,
 		RegistryLen:   uint64(len(plain)),
 		VMKGeneration: gen,
+		ModifiedAt:    reg.ModifiedAt,
 	}
 	if _, err := rand.Read(sb.RegistryNonce[:]); err != nil {
 		return nil, err

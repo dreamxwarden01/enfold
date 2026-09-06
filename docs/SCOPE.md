@@ -106,8 +106,9 @@ where damage actually happens. Overhead equals the chosen parity fraction (RAR's
 it repairs up to that fraction of the archive in any distribution, and nothing beyond it — a
 truncated download is not what it is for. Damage location is already free: every 64 KiB chunk
 carries a GCM tag, so the damaged blocks are known exactly, which is the case Reed–Solomon
-erasure decoding is best at. Whether it is on by default for exports is undecided. It is cheap insurance, not a
-commitment — with no users yet, a v1 → v2 format bump would be nearly free anyway.
+erasure decoding is best at. **On by default for volume exports at 3%, changeable in settings** (the
+user's ruling, 2026-09-05). It is cheap insurance, not a commitment — with no users yet, a
+v1 → v2 format bump would be nearly free anyway.
 
 ## Before the format is frozen
 

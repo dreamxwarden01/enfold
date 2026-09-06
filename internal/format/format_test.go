@@ -83,7 +83,7 @@ func TestErrorsAreInvalid(t *testing.T) {
 
 func TestKeystoreSuperblockRoundTripAndLayout(t *testing.T) {
 	s := &KeystoreSuperblock{Seq: 7, VaultID: fill16(0x55), SlotRegionOff: SlotRegionBOff, SlotRegionLen: 7000,
-		RegistryOff: RegistryMinOff, RegistryLen: 1234, VMKGeneration: 3, RotationPending: 1}
+		RegistryOff: RegistryMinOff, RegistryLen: 1234, VMKGeneration: 3, RotationPending: 1, ModifiedAt: 0x0102030405060708}
 	copy(s.RegistryNonce[:], seq(1, 12))
 	copy(s.RegistryTag[:], seq(0x20, 16))
 	b, err := s.Encode()
@@ -101,6 +101,9 @@ func TestKeystoreSuperblockRoundTripAndLayout(t *testing.T) {
 	if b[8+2+2+8+16+8+8+8+8+12+16+8] != 1 { // rotation_pending sits at 104
 		t.Fatal("rotation_pending not at offset 104")
 	}
+	if hex.EncodeToString(b[105:113]) != "0807060504030201" { // modified_at, i64 LE, at 105
+		t.Fatalf("modified_at at 105: %x", b[105:113])
+	}
 	d, err := DecodeKeystoreSuperblock(b)
 	if err != nil {
 		t.Fatal(err)
@@ -117,10 +120,16 @@ func TestKeystoreSuperblockRoundTripAndLayout(t *testing.T) {
 	if _, err := DecodeKeystoreSuperblock(b2); err == nil {
 		t.Fatal("checksum did not cover reserved bytes")
 	}
-	// AAD layout: 16 + 8 + 8 + 12 + 2.
+	// AAD layout: 16 + 8 + 8 + 12 + 2 + 8 (R35: modified_at is authenticated).
 	aad := s.RegistryAAD()
-	if len(aad) != 46 || !bytes.Equal(aad[:16], s.VaultID[:]) || aad[16] != 0x00 || aad[17] != 0x20 || aad[18] != 0x04 || aad[44] != 1 || aad[45] != 0 {
+	if len(aad) != 54 || !bytes.Equal(aad[:16], s.VaultID[:]) || aad[16] != 0x00 || aad[17] != 0x20 || aad[18] != 0x04 || aad[44] != 1 || aad[45] != 0 ||
+		hex.EncodeToString(aad[46:54]) != "0807060504030201" {
 		t.Fatalf("registry AAD %x", aad)
+	}
+	neg := *s
+	neg.ModifiedAt = -1
+	if _, err := neg.Encode(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("negative modified_at accepted: %v", err)
 	}
 	// Bounds and extents.
 	big := *s

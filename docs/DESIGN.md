@@ -597,6 +597,14 @@ then at its maximum, since a correct PIN restores it). A prompt in that state �
 *always* on a card verified moments ago — says the count is not readable, never "0 left", and
 a blocked PIN is never prompted for at all (`internal/piv`, `PINStatus`).
 
+**One YubiKey at a time.** With more than one YubiKey inserted the UI asks for all but one to be
+removed before anything is tried — the behaviour Windows and the FIDO stack already train users
+in — rather than guessing among readers. Which slot on the token holds the key is not stored
+anywhere: the unlock scans 9d first, then the retired slots 82–95, by public key from metadata
+(no PIN, no touch), and reports a token that holds none of the keystore's keys. What the lock
+screen shows the user is the slot's `label`, typed at enrollment; no serial number travels in
+the keystore (the user's ruling, 2026-09-05).
+
 ### The WebView boundary
 
 The UI is a WebView2 (Wails v3, §14). **Keys never cross into the WebView.** Anything handed to

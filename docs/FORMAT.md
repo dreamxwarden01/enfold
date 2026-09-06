@@ -407,9 +407,10 @@ not recorded, so the 512 MiB ceiling is part of the format: a writer that wants 
 
 **R28 — An export is a keystore file.** The backup of §15 is a keystore file of this same format,
 with the same `vault_id`, `vmk_generation` and registry, whose slot region holds only the active
-recovery slots — never a stale one — and whose superblocks start again at `seq` 1. The recovery
-key opens it like any keystore, which is how an export is verified before it is needed and how
-it is restored: open it, unlock with the recovery key, enrol new slots. Nothing else travels.
+recovery slots — never a stale one — and whose superblocks start again at `seq` 1 with
+`modified_at` set to the time of the export (R35). The recovery key opens it like any keystore,
+which is how an export is verified before it is needed and how it is restored: open it, unlock
+with the recovery key, enrol new slots. Nothing else travels.
 
 **R29 — `rewrap_stale` is the one bit outside the slot AAD.** A rotation marks a slot it could not
 re-wrap by setting `rewrap_stale` while leaving `wrapped_vmk` "exactly as it is" (§8) — but
@@ -474,6 +475,16 @@ checksummed — a file spliced to name one token in 32 slots would put 32 touch 
 of the user before the registry's authenticated hash (R25) could say the region was altered.
 Touch is the one barrier a hardware slot keeps against software on the machine, and a user
 trained to touch through a run of prompts has lost it.
+
+**R35 — `modified_at` dates a keystore, and the registry vouches for it.** Every commit writes
+the wall clock (Unix seconds) into the superblock's `modified_at`, never less than one past the
+previous value, so a clock set back cannot make a later state look older; an export, being a
+fresh file, carries the time it was made. The field is plaintext so that a copy can be dated
+before anything is unlocked — which backup is the newer one is a question the user asks with
+the recovery key still in the drawer — and it is in the registry's AAD, so an edited date
+cannot be acted on: the copy still shows the false date, but it fails to unlock. The registry's
+own `modified_at` inside the ciphertext is the same value. Filesystem timestamps are not consulted for anything: copying,
+syncing and restoring rewrite them.
 
 ---
 
@@ -546,13 +557,14 @@ Fixed 4096 bytes. Everything before `checksum` is covered by it.
 | `registry_tag` | `u8[16]` | |
 | `vmk_generation` | `u64` | Incremented on each VMK rotation |
 | `rotation_pending` | `u8` | Non-zero while a rotation has been deferred or is incomplete (§8) |
+| `modified_at` | `i64` | Unix seconds of the commit that sealed this registry; never decreases; an export's is the time of the export (R35) |
 | `reserved1` | `u8[…]` | Zero-filled to 4064 |
 | `checksum` | `u8[32]` | SHA-256 over bytes `[0, 4064)` |
 
 **Checksummed, not authenticated.** It must be readable before unlocking, so no key exists to MAC
 it. Integrity of what matters comes from the registry AEAD instead: `registry_off`,
-`registry_len`, `registry_nonce` and `vault_id` are all in the registry's AAD, so editing them
-causes an authentication failure rather than a silent misread.
+`registry_len`, `registry_nonce`, `vault_id` and `modified_at` are all in the registry's AAD, so
+editing them causes an authentication failure rather than a silent misread.
 
 ## 6. Slot region
 
@@ -645,7 +657,7 @@ A predicate over the whole set, not a per-record check.
 One AES-256-GCM ciphertext under the Metadata key.
 
 ```
-AAD = vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_version
+AAD = vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_version ‖ modified_at
 ```
 
 Plaintext:

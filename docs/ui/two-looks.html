@@ -1,0 +1,2264 @@
+<!DOCTYPE html>
+<html lang="en" data-skin="native">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enfold — one skeleton, two looks</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans+Condensed:wght@600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   ENFOLD — one set of markup, two selectable looks.
+
+   The root carries data-skin="native" (default) or
+   data-skin="workbench". Every visible difference is CSS keyed
+   on that attribute; the DOM is identical under both.
+
+   ------------------------------------------------------------
+   WHAT DIFFERS STRUCTURALLY BETWEEN THE SKINS
+
+   Every [data-skin=...] rule outside the token blocks is
+   listed here — seven items, twenty-five selectors, and nothing
+   else in the sheet is keyed on the skin. Each is a layout mode,
+   a visibility, or a shape that exists in one look only; a value
+   that merely differs (density, radius, weight, colour) is a
+   token instead, at the end of each token block.
+
+   1. .frame axis — Native lays the frame out as a grid with a
+      212px first column so .places becomes the labelled rail;
+      Workbench lays it out as a column so the same .places
+      element becomes a narrow strip under the menu bar.
+      Two different layouts of one element cannot be a token.
+
+   2. .places item direction — the rail stacks its items and
+      pushes Settings to the bottom (.place-gap grows and draws a
+      divider); the strip runs them horizontally and pushes
+      Settings to the right. Same reason. (The item's own height,
+      padding, gap and radius are tokens: --place-h and friends.)
+
+   3. Chrome visibility — .titlebar, .menubar, .split, .grip,
+      .filler and kbd exist in the DOM and are display:none under
+      Native; .brand (rail wordmark) is display:none under
+      Workbench because the title bar already carries the name.
+      These are chrome, never content.
+
+   4. .layer edges — under Native the content layer is an
+      elevated surface: hairline top and left border and a
+      rounded top-left corner. Under Workbench it is flush with
+      the window ground and draws no edge of its own.
+      (The status strip's matching inset is a token pair,
+      --status-inset / --status-bl; #unlock zeroes them because
+      that screen has no rail.)
+
+   5. Current-place marker — the rail marks the current
+      destination with an accent bar in the gutter left of the
+      item (::before); the strip marks it as a tinted tab with an
+      inset underline. Two different affordances, not one value.
+
+   6. .two-line direction — Native stacks name over note as an
+      Explorer two-line item; Workbench sets them on one line,
+      the note dimmed after the name. One cell, two readings.
+
+   7. .storyboard / .cols track lists — the splitters are real
+      grid items under Workbench, so those containers need a
+      different number of tracks per skin (and the storyboard's
+      gutters travel with its track list).
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   TOKENS — native light (bare :root, so an unstamped root
+   renders Native), native dark, workbench light, workbench dark.
+   ------------------------------------------------------------ */
+:root{
+  color-scheme: light;
+
+  --page:#E6E6EB;
+  --ground:#F1F1F4;
+  --screen-tint:#E3EEEB;
+  --screen-stroke:transparent;
+  --layer:#FBFBFD;
+  --panel:#F4F4F7;
+  --surface:#FFFFFF;
+  --surface-alt:#F4F4F7;
+  --hover:#F3F3F6;
+  --zebra:transparent;
+
+  --stroke:#E2E2E7;
+  --stroke-soft:#EBEBEF;
+  --stroke-strong:#C9C9D0;
+  --col-rule:transparent;
+
+  --ink:#191A1D;
+  --ink-2:#55565D;
+  --ink-3:#83848C;
+  --ink-4:#83848C;
+
+  --accent:#0E6F63;
+  --accent-hover:#0B5A50;
+  --accent-ink:#0A5349;
+  --accent-on:#FFFFFF;
+  --accent-wash:#E6F1EF;
+  --accent-line:#B7D8D2;
+  --accent-under:rgba(0,0,0,.20);
+  --sel:#E6F1EF;
+
+  --attention:#8A5300;
+  --attention-line:#E7D1A6;
+  --attention-wash:#FBF1DF;
+
+  --stop:#8A5300;
+  --stop-line:#E7D1A6;
+  --stop-wash:#FBF1DF;
+
+  --ctl:#FFFFFF;
+  --ctl-hover:#F3F3F6;
+  --ctl-press:#EBEBEF;
+  --ctl-stroke:#D7D7DE;
+  --ctl-bottom:#B7B7C1;
+
+  --cmd-bg:var(--ctl);
+  --cmd-stroke:var(--ctl-stroke);
+  --cmd-bottom:var(--ctl-bottom);
+  --cmd-pri-bg:var(--accent);
+  --cmd-pri-ink:var(--accent-on);
+  --cmd-pri-stroke:transparent;
+  --cmd-pri-weight:600;
+
+  --touch-bg:#0E6F63;
+  --touch-bg2:#095047;
+  --touch-ink:#FFFFFF;
+  --touch-soft:rgba(255,255,255,.74);
+  --touch-ring:rgba(255,255,255,.30);
+  --touch-ring-2:rgba(255,255,255,.14);
+  --touch-core:rgba(255,255,255,.30);
+  --touch-head-bg:transparent;
+  --touch-head-ink:rgba(255,255,255,.74);
+  --touch-head-line:rgba(255,255,255,.30);
+  --touch-stroke:transparent;
+
+  --focus-outer:#141416;
+  --focus-inner:#FFFFFF;
+
+  --shadow-card:0 1px 2px rgba(16,17,20,.06), 0 2px 8px rgba(16,17,20,.05);
+  --shadow-pop:0 8px 24px rgba(16,17,20,.13);
+  --shadow-window:0 12px 40px rgba(16,17,20,.16), 0 2px 6px rgba(16,17,20,.10);
+
+  /* geometry */
+  --r-window:8px;
+  --r-card:8px;
+  --r-ctl:4px;
+  --r-sm:3px;
+  --nav-w:212px;
+  --gap:12px;
+  --pad-x:24px;
+  --pad-b:14px;
+  --bleed:0px;
+  --cmd-pad:0px;
+  --split-w:16px;
+  --head-pad:18px 24px 10px;
+  --head-h:auto;
+  --head-bg:transparent;
+  --head-bw:0;
+  --pane-bg:var(--surface);
+  --pane-body-bg:var(--surface);
+  --pane-head-bg:var(--surface-alt);
+  --pane-head-h:34px;
+  --pane-pad:14px 16px;
+  --status-h:34px;
+  --status-inset:var(--nav-w);
+  --status-bl:1px solid var(--stroke);
+  --status-cell-rule:transparent;
+  --status-pad:0 24px;
+  --status-gap:0px;
+  --bar-bw:1px;
+  --bar-h:auto;
+  --bar-pad:10px 12px;
+  --sel-bar:3px;
+  --i-stroke:1.5;
+
+  /* density */
+  --row-h:34px;
+  --row-h-lg:47px;
+  --th-h:32px;
+  --ctl-h:32px;
+  --ctl-h-sm:28px;
+
+  /* type */
+  --font-display:"Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI Semibold","Segoe UI",system-ui,"Segoe UI Symbol",sans-serif;
+  --font-text:"Segoe UI Variable Text","Segoe UI Variable Small","Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+  --font-cond:"Segoe UI Variable Small","Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","Cascadia Code",Consolas,"SF Mono",ui-monospace,monospace;
+  --font-num:var(--font-text);
+
+  --fs-ui:13px;
+  --fs-data:12px;
+  --fs-sm:12.5px;
+  --fs-xs:11.5px;
+  --fs-title:20px;
+  --fs-lead:19px;
+  --fs-touch:25px;
+  --fs-section:15px;
+  --ls-title:-.01em;
+  --w-title:600;
+
+  --eyebrow-font:var(--font-text);
+  --eyebrow-fs:11.5px;
+  --eyebrow-ls:.03em;
+
+  --th-font:var(--font-text);
+  --th-fs:11.5px;
+  --th-ls:.02em;
+  --th-transform:none;
+  --th-bg:var(--surface-alt);
+
+  --num-align:left;
+  --num-fs:12px;
+
+  --status-font:var(--font-text);
+  --status-fs:11.5px;
+
+  /* component values that differ per skin (never layout, only value) */
+  --sep-h:20px;
+  --sep-mx:3px;
+  --r-bar:var(--r-card);
+  --place-h:36px;
+  --place-pad:0 10px;
+  --place-gap:10px;
+  --place-r:var(--r-ctl);
+  --crumb-ink:var(--ink-2);
+  --crumb-fw:400;
+  --cmd-h:auto;
+  --cmd-gap:4px;
+  --cmd-band:transparent;
+  --cmd-bw:0;
+  --cmd-btn-h:var(--ctl-h);
+  --cmd-hover-bg:var(--ctl-hover);
+  --cmd-pri-hover-bg:var(--accent-hover);
+  --row-rule-w:1px;
+  --fs-note:11px;
+  --status-bg:var(--ground);
+  --status-cell-pad:0 10px 0 0;
+  --status-icon-ink:var(--accent-ink);
+  --u-head-pad:20px 30px 12px;
+  --state-pad:18px;
+  --note-style:solid;
+  --ring-w:1px;
+  --ring-core-stroke:var(--touch-soft);
+  --touch-mark-ink:var(--touch-ink);
+  --blocked-margin:16px 30px 18px;
+  --kcol-gap:var(--gap);
+}
+
+:root[data-skin="native"]{
+  color-scheme: light;
+
+  --page:#E6E6EB;
+  --ground:#F1F1F4;
+  --screen-tint:#E3EEEB;
+  --screen-stroke:transparent;
+  --layer:#FBFBFD;
+  --panel:#F4F4F7;
+  --surface:#FFFFFF;
+  --surface-alt:#F4F4F7;
+  --hover:#F3F3F6;
+  --zebra:transparent;
+
+  --stroke:#E2E2E7;
+  --stroke-soft:#EBEBEF;
+  --stroke-strong:#C9C9D0;
+  --col-rule:transparent;
+
+  --ink:#191A1D;
+  --ink-2:#55565D;
+  --ink-3:#83848C;
+  --ink-4:#83848C;
+
+  --accent:#0E6F63;
+  --accent-hover:#0B5A50;
+  --accent-ink:#0A5349;
+  --accent-on:#FFFFFF;
+  --accent-wash:#E6F1EF;
+  --accent-line:#B7D8D2;
+  --accent-under:rgba(0,0,0,.20);
+  --sel:#E6F1EF;
+
+  --attention:#8A5300;
+  --attention-line:#E7D1A6;
+  --attention-wash:#FBF1DF;
+
+  --stop:#8A5300;
+  --stop-line:#E7D1A6;
+  --stop-wash:#FBF1DF;
+
+  --ctl:#FFFFFF;
+  --ctl-hover:#F3F3F6;
+  --ctl-press:#EBEBEF;
+  --ctl-stroke:#D7D7DE;
+  --ctl-bottom:#B7B7C1;
+
+  --cmd-bg:var(--ctl);
+  --cmd-stroke:var(--ctl-stroke);
+  --cmd-bottom:var(--ctl-bottom);
+  --cmd-pri-bg:var(--accent);
+  --cmd-pri-ink:var(--accent-on);
+  --cmd-pri-stroke:transparent;
+  --cmd-pri-weight:600;
+
+  --touch-bg:#0E6F63;
+  --touch-bg2:#095047;
+  --touch-ink:#FFFFFF;
+  --touch-soft:rgba(255,255,255,.74);
+  --touch-ring:rgba(255,255,255,.30);
+  --touch-ring-2:rgba(255,255,255,.14);
+  --touch-core:rgba(255,255,255,.30);
+  --touch-head-bg:transparent;
+  --touch-head-ink:rgba(255,255,255,.74);
+  --touch-head-line:rgba(255,255,255,.30);
+  --touch-stroke:transparent;
+
+  --focus-outer:#141416;
+  --focus-inner:#FFFFFF;
+
+  --shadow-card:0 1px 2px rgba(16,17,20,.06), 0 2px 8px rgba(16,17,20,.05);
+  --shadow-pop:0 8px 24px rgba(16,17,20,.13);
+  --shadow-window:0 12px 40px rgba(16,17,20,.16), 0 2px 6px rgba(16,17,20,.10);
+
+  --r-window:8px;
+  --r-card:8px;
+  --r-ctl:4px;
+  --r-sm:3px;
+  --nav-w:212px;
+  --gap:12px;
+  --pad-x:24px;
+  --pad-b:14px;
+  --bleed:0px;
+  --cmd-pad:0px;
+  --split-w:16px;
+  --head-pad:18px 24px 10px;
+  --head-h:auto;
+  --head-bg:transparent;
+  --head-bw:0;
+  --pane-bg:var(--surface);
+  --pane-body-bg:var(--surface);
+  --pane-head-bg:var(--surface-alt);
+  --pane-head-h:34px;
+  --pane-pad:14px 16px;
+  --status-h:34px;
+  --status-inset:var(--nav-w);
+  --status-bl:1px solid var(--stroke);
+  --status-cell-rule:transparent;
+  --status-pad:0 24px;
+  --status-gap:0px;
+  --bar-bw:1px;
+  --bar-h:auto;
+  --bar-pad:10px 12px;
+  --sel-bar:3px;
+  --i-stroke:1.5;
+
+  --row-h:34px;
+  --row-h-lg:47px;
+  --th-h:32px;
+  --ctl-h:32px;
+  --ctl-h-sm:28px;
+
+  --font-display:"Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI Semibold","Segoe UI",system-ui,"Segoe UI Symbol",sans-serif;
+  --font-text:"Segoe UI Variable Text","Segoe UI Variable Small","Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+  --font-cond:"Segoe UI Variable Small","Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","Cascadia Code",Consolas,"SF Mono",ui-monospace,monospace;
+  --font-num:var(--font-text);
+
+  --fs-ui:13px;
+  --fs-data:12px;
+  --fs-sm:12.5px;
+  --fs-xs:11.5px;
+  --fs-title:20px;
+  --fs-lead:19px;
+  --fs-touch:25px;
+  --fs-section:15px;
+  --ls-title:-.01em;
+  --w-title:600;
+
+  --eyebrow-font:var(--font-text);
+  --eyebrow-fs:11.5px;
+  --eyebrow-ls:.03em;
+
+  --th-font:var(--font-text);
+  --th-fs:11.5px;
+  --th-ls:.02em;
+  --th-transform:none;
+  --th-bg:var(--surface-alt);
+
+  --num-align:left;
+  --num-fs:12px;
+
+  --status-font:var(--font-text);
+  --status-fs:11.5px;
+
+  /* component values that differ per skin (never layout, only value) */
+  --sep-h:20px;
+  --sep-mx:3px;
+  --r-bar:var(--r-card);
+  --place-h:36px;
+  --place-pad:0 10px;
+  --place-gap:10px;
+  --place-r:var(--r-ctl);
+  --crumb-ink:var(--ink-2);
+  --crumb-fw:400;
+  --cmd-h:auto;
+  --cmd-gap:4px;
+  --cmd-band:transparent;
+  --cmd-bw:0;
+  --cmd-btn-h:var(--ctl-h);
+  --cmd-hover-bg:var(--ctl-hover);
+  --cmd-pri-hover-bg:var(--accent-hover);
+  --row-rule-w:1px;
+  --fs-note:11px;
+  --status-bg:var(--ground);
+  --status-cell-pad:0 10px 0 0;
+  --status-icon-ink:var(--accent-ink);
+  --u-head-pad:20px 30px 12px;
+  --state-pad:18px;
+  --note-style:solid;
+  --ring-w:1px;
+  --ring-core-stroke:var(--touch-soft);
+  --touch-mark-ink:var(--touch-ink);
+  --blocked-margin:16px 30px 18px;
+  --kcol-gap:var(--gap);
+}
+
+@media (prefers-color-scheme: dark){
+  :root[data-skin="native"]:not([data-theme="light"]),
+  :root:not([data-skin]):not([data-theme="light"]){
+    color-scheme: dark;
+
+    --page:#101012;
+    --ground:#1C1C20;
+    --screen-tint:#20302D;
+    --layer:#252529;
+    --panel:#33333A;
+    --surface:#2C2C31;
+    --surface-alt:#33333A;
+    --hover:#3A3A41;
+
+    --stroke:#37373D;
+    --stroke-soft:#2E2E34;
+    --stroke-strong:#4A4A52;
+
+    --ink:#F3F3F6;
+    --ink-2:#B5B6BE;
+    --ink-3:#898A93;
+    --ink-4:#898A93;
+
+    --accent:#54D2B9;
+    --accent-hover:#6ADCC5;
+    --accent-ink:#7BE0CB;
+    --accent-on:#04231F;
+    --accent-wash:#173430;
+    --accent-line:#2C544D;
+    --accent-under:rgba(0,0,0,.28);
+    --sel:#173430;
+
+    --attention:#EFC079;
+    --attention-line:#4E3F26;
+    --attention-wash:#33291A;
+
+    --stop:#EFC079;
+    --stop-line:#4E3F26;
+    --stop-wash:#33291A;
+
+    --ctl:#323238;
+    --ctl-hover:#3A3A41;
+    --ctl-press:#2E2E34;
+    --ctl-stroke:#45454D;
+    --ctl-bottom:#55555F;
+
+    --touch-bg:#0C5048;
+    --touch-bg2:#073630;
+    --touch-ink:#EAFBF6;
+    --touch-soft:rgba(234,251,246,.72);
+    --touch-ring:rgba(84,210,185,.34);
+    --touch-ring-2:rgba(84,210,185,.14);
+    --touch-core:rgba(84,210,185,.34);
+    --touch-head-ink:rgba(234,251,246,.72);
+    --touch-head-line:rgba(84,210,185,.34);
+
+    --focus-outer:#FFFFFF;
+    --focus-inner:#1C1C20;
+
+    --shadow-card:0 1px 2px rgba(0,0,0,.34), 0 2px 10px rgba(0,0,0,.26);
+    --shadow-pop:0 10px 28px rgba(0,0,0,.48);
+    --shadow-window:0 14px 44px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
+  }
+}
+
+:root[data-skin="native"][data-theme="dark"],
+:root:not([data-skin])[data-theme="dark"]{
+  color-scheme: dark;
+
+  --page:#101012;
+  --ground:#1C1C20;
+  --screen-tint:#20302D;
+  --layer:#252529;
+  --panel:#33333A;
+  --surface:#2C2C31;
+  --surface-alt:#33333A;
+  --hover:#3A3A41;
+
+  --stroke:#37373D;
+  --stroke-soft:#2E2E34;
+  --stroke-strong:#4A4A52;
+
+  --ink:#F3F3F6;
+  --ink-2:#B5B6BE;
+  --ink-3:#898A93;
+  --ink-4:#898A93;
+
+  --accent:#54D2B9;
+  --accent-hover:#6ADCC5;
+  --accent-ink:#7BE0CB;
+  --accent-on:#04231F;
+  --accent-wash:#173430;
+  --accent-line:#2C544D;
+  --accent-under:rgba(0,0,0,.28);
+  --sel:#173430;
+
+  --attention:#EFC079;
+  --attention-line:#4E3F26;
+  --attention-wash:#33291A;
+
+  --stop:#EFC079;
+  --stop-line:#4E3F26;
+  --stop-wash:#33291A;
+
+  --ctl:#323238;
+  --ctl-hover:#3A3A41;
+  --ctl-press:#2E2E34;
+  --ctl-stroke:#45454D;
+  --ctl-bottom:#55555F;
+
+  --touch-bg:#0C5048;
+  --touch-bg2:#073630;
+  --touch-ink:#EAFBF6;
+  --touch-soft:rgba(234,251,246,.72);
+  --touch-ring:rgba(84,210,185,.34);
+  --touch-ring-2:rgba(84,210,185,.14);
+  --touch-core:rgba(84,210,185,.34);
+  --touch-head-ink:rgba(234,251,246,.72);
+  --touch-head-line:rgba(84,210,185,.34);
+
+  --focus-outer:#FFFFFF;
+  --focus-inner:#1C1C20;
+
+  --shadow-card:0 1px 2px rgba(0,0,0,.34), 0 2px 10px rgba(0,0,0,.26);
+  --shadow-pop:0 10px 28px rgba(0,0,0,.48);
+  --shadow-window:0 14px 44px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
+}
+
+/* ---------- workbench: iron ramp, light ---------- */
+:root[data-skin="workbench"]{
+  color-scheme: light;
+
+  --page:#c9ccc6;
+  --ground:#dedfda;
+  --screen-tint:transparent;
+  --screen-stroke:#bdc0b9;
+  --layer:#dedfda;
+  --panel:#ebece7;
+  --surface:#fafaf7;
+  --surface-alt:#f1f2ee;
+  --hover:#e6e8e2;
+  --zebra:#f1f2ee;
+
+  --stroke:#bdc0b9;
+  --stroke-soft:#d7d9d2;
+  --stroke-strong:#9aa09b;
+  --col-rule:#d7d9d2;
+
+  --ink:#1b1e1d;
+  --ink-2:#4d534f;
+  --ink-3:#767c78;
+  --ink-4:#9aa09b;
+
+  --accent:#0f6154;
+  --accent-hover:#2c8271;
+  --accent-ink:#0f6154;
+  --accent-on:#f6faf8;
+  --accent-wash:#dcebe6;
+  --accent-line:#2c8271;
+  --accent-under:#2c8271;
+  --sel:#d3e6e0;
+
+  --attention:#85570a;
+  --attention-line:#c39232;
+  --attention-wash:#f4e8cd;
+
+  --stop:#973122;
+  --stop-line:#c05f4c;
+  --stop-wash:#f3ddd7;
+
+  --ctl:#ebece7;
+  --ctl-hover:#e6e8e2;
+  --ctl-press:#dedfda;
+  --ctl-stroke:#bdc0b9;
+  --ctl-bottom:#bdc0b9;
+
+  --cmd-bg:transparent;
+  --cmd-stroke:transparent;
+  --cmd-bottom:transparent;
+  --cmd-pri-bg:transparent;
+  --cmd-pri-ink:var(--ink);
+  --cmd-pri-stroke:transparent;
+  --cmd-pri-weight:500;
+
+  --touch-bg:#dcebe6;
+  --touch-bg2:#dcebe6;
+  --touch-ink:#1b1e1d;
+  --touch-soft:#4d534f;
+  --touch-ring:#2c8271;
+  --touch-ring-2:#2c8271;
+  --touch-core:transparent;
+  --touch-head-bg:#0f6154;
+  --touch-head-ink:#f6faf8;
+  --touch-head-line:#2c8271;
+  --touch-stroke:#2c8271;
+
+  --focus-outer:#0f6154;
+  --focus-inner:transparent;
+
+  --shadow-card:none;
+  --shadow-pop:none;
+  --shadow-window:0 14px 34px -18px rgba(24,28,26,.18);
+
+  --r-window:0px;
+  --r-card:2px;
+  --r-ctl:3px;
+  --r-sm:2px;
+  --nav-w:100%;
+  --gap:0px;
+  --pad-x:8px;
+  --pad-b:8px;
+  --bleed:-8px;
+  --cmd-pad:6px;
+  --split-w:5px;
+  --head-pad:0 10px;
+  --head-h:27px;
+  --head-bg:var(--panel);
+  --head-bw:0 0 1px;
+  --pane-bg:var(--panel);
+  --pane-body-bg:var(--panel);
+  --pane-head-bg:var(--ground);
+  --pane-head-h:23px;
+  --pane-pad:10px 12px;
+  --status-h:24px;
+  --status-inset:0px;
+  --status-bl:0 none;
+  --status-cell-rule:var(--stroke-soft);
+  --status-pad:0;
+  --status-gap:0px;
+  --bar-bw:0 0 1px;
+  --bar-h:30px;
+  --bar-pad:0 10px;
+  --sel-bar:2px;
+  --i-stroke:1.25;
+
+  --row-h:28px;
+  --row-h-lg:28px;
+  --th-h:24px;
+  --ctl-h:25px;
+  --ctl-h-sm:22px;
+
+  --font-display:"IBM Plex Sans","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --font-text:"IBM Plex Sans","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --font-cond:"IBM Plex Sans Condensed","IBM Plex Sans","Segoe UI",sans-serif;
+  --font-mono:"IBM Plex Mono","Cascadia Mono",Consolas,"Courier New",monospace;
+  --font-num:var(--font-mono);
+
+  --fs-ui:12px;
+  --fs-data:12px;
+  --fs-sm:12px;
+  --fs-xs:11.5px;
+  --fs-title:13px;
+  --fs-lead:17px;
+  --fs-touch:21px;
+  --fs-section:12.5px;
+  --ls-title:0;
+  --w-title:600;
+
+  --eyebrow-font:var(--font-cond);
+  --eyebrow-fs:10.5px;
+  --eyebrow-ls:.09em;
+
+  --th-font:var(--font-cond);
+  --th-fs:10.5px;
+  --th-ls:.08em;
+  --th-transform:uppercase;
+  --th-bg:var(--ground);
+
+  --num-align:right;
+  --num-fs:11.5px;
+
+  --status-font:var(--font-mono);
+  --status-fs:11px;
+
+  /* component values that differ per skin (never layout, only value) */
+  --sep-h:18px;
+  --sep-mx:5px;
+  --r-bar:0px;
+  --place-h:100%;
+  --place-pad:0 12px;
+  --place-gap:7px;
+  --place-r:0px;
+  --crumb-ink:var(--ink);
+  --crumb-fw:600;
+  --cmd-h:40px;
+  --cmd-gap:2px;
+  --cmd-band:var(--ground);
+  --cmd-bw:1px;
+  --cmd-btn-h:28px;
+  --cmd-hover-bg:var(--panel);
+  --cmd-pri-hover-bg:var(--panel);
+  --row-rule-w:0;
+  --fs-note:var(--fs-xs);
+  --status-bg:var(--panel);
+  --status-cell-pad:0 10px;
+  --status-icon-ink:var(--ink-3);
+  --u-head-pad:var(--head-pad);
+  --state-pad:16px;
+  --note-style:dashed;
+  --ring-w:1.5px;
+  --ring-core-stroke:var(--touch-ring);
+  --touch-mark-ink:var(--accent);
+  --blocked-margin:10px;
+  --kcol-gap:5px;
+}
+
+@media (prefers-color-scheme: dark){
+  :root[data-skin="workbench"]:not([data-theme="light"]){
+    color-scheme: dark;
+
+    --page:#0d0f10;
+    --ground:#16191b;
+    --screen-stroke:#363d41;
+    --layer:#16191b;
+    --panel:#1c2023;
+    --surface:#22272a;
+    --surface-alt:#262c2f;
+    --hover:#2c3336;
+    --zebra:#262c2f;
+
+    --stroke:#363d41;
+    --stroke-soft:#272e31;
+    --stroke-strong:#5f6a68;
+    --col-rule:#272e31;
+
+    --ink:#dee4e1;
+    --ink-2:#a5aead;
+    --ink-3:#7d8785;
+    --ink-4:#5f6a68;
+
+    --accent:#54b7a2;
+    --accent-hover:#3d8f7e;
+    --accent-ink:#54b7a2;
+    --accent-on:#08211c;
+    --accent-wash:#16332f;
+    --accent-line:#3d8f7e;
+    --accent-under:#3d8f7e;
+    --sel:#1e3b36;
+
+    --attention:#d5a44c;
+    --attention-line:#8a6a2a;
+    --attention-wash:#332a17;
+
+    --stop:#dd7a66;
+    --stop-line:#8c4536;
+    --stop-wash:#37211d;
+
+    --ctl:#1c2023;
+    --ctl-hover:#2c3336;
+    --ctl-press:#16191b;
+    --ctl-stroke:#363d41;
+    --ctl-bottom:#363d41;
+
+    --touch-bg:#16332f;
+    --touch-bg2:#16332f;
+    --touch-ink:#dee4e1;
+    --touch-soft:#a5aead;
+    --touch-ring:#3d8f7e;
+    --touch-ring-2:#3d8f7e;
+    --touch-head-bg:#54b7a2;
+    --touch-head-ink:#08211c;
+    --touch-head-line:#3d8f7e;
+    --touch-stroke:#3d8f7e;
+
+    --focus-outer:#54b7a2;
+
+    --shadow-window:0 14px 34px -18px rgba(0,0,0,.55);
+  }
+}
+
+:root[data-skin="workbench"][data-theme="dark"]{
+  color-scheme: dark;
+
+  --page:#0d0f10;
+  --ground:#16191b;
+  --screen-stroke:#363d41;
+  --layer:#16191b;
+  --panel:#1c2023;
+  --surface:#22272a;
+  --surface-alt:#262c2f;
+  --hover:#2c3336;
+  --zebra:#262c2f;
+
+  --stroke:#363d41;
+  --stroke-soft:#272e31;
+  --stroke-strong:#5f6a68;
+  --col-rule:#272e31;
+
+  --ink:#dee4e1;
+  --ink-2:#a5aead;
+  --ink-3:#7d8785;
+  --ink-4:#5f6a68;
+
+  --accent:#54b7a2;
+  --accent-hover:#3d8f7e;
+  --accent-ink:#54b7a2;
+  --accent-on:#08211c;
+  --accent-wash:#16332f;
+  --accent-line:#3d8f7e;
+  --accent-under:#3d8f7e;
+  --sel:#1e3b36;
+
+  --attention:#d5a44c;
+  --attention-line:#8a6a2a;
+  --attention-wash:#332a17;
+
+  --stop:#dd7a66;
+  --stop-line:#8c4536;
+  --stop-wash:#37211d;
+
+  --ctl:#1c2023;
+  --ctl-hover:#2c3336;
+  --ctl-press:#16191b;
+  --ctl-stroke:#363d41;
+  --ctl-bottom:#363d41;
+
+  --touch-bg:#16332f;
+  --touch-bg2:#16332f;
+  --touch-ink:#dee4e1;
+  --touch-soft:#a5aead;
+  --touch-ring:#3d8f7e;
+  --touch-ring-2:#3d8f7e;
+  --touch-head-bg:#54b7a2;
+  --touch-head-ink:#08211c;
+  --touch-head-line:#3d8f7e;
+  --touch-stroke:#3d8f7e;
+
+  --focus-outer:#54b7a2;
+
+  --shadow-window:0 14px 34px -18px rgba(0,0,0,.55);
+}
+
+/* ------------------------------------------------------------
+   page
+   ------------------------------------------------------------ */
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--page);
+  color:var(--ink);
+  font-family:var(--font-text);
+  font-size:var(--fs-ui);
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+main{display:flex;flex-direction:column;align-items:center;gap:48px;padding:48px 24px}
+.screen{
+  width:1100px;height:700px;overflow:hidden;position:relative;box-sizing:border-box;
+  flex:none;
+  border:1px solid var(--screen-stroke);
+  border-radius:var(--r-window);
+  background:
+    radial-gradient(140% 100% at 8% -10%, var(--screen-tint) 0%, transparent 58%),
+    var(--ground);
+  box-shadow:var(--shadow-window);
+  color:var(--ink);
+}
+
+/* ------------------------------------------------------------
+   primitives
+   ------------------------------------------------------------ */
+svg{display:block}
+.i{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;
+   stroke-width:var(--i-stroke);stroke-linecap:round;stroke-linejoin:round}
+.i-16{width:16px;height:16px}
+.i-12{width:12px;height:12px}
+.num{font-family:var(--font-num);font-size:var(--num-fs);font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;margin:0;cursor:default}
+h1,h2,h3,p,dl,dd,ol,ul{margin:0}
+ol,ul{list-style:none;padding:0}
+
+:focus-visible{
+  outline:2px solid var(--focus-outer);
+  outline-offset:2px;
+  box-shadow:0 0 0 2px var(--focus-inner);
+  border-radius:var(--r-ctl);
+}
+
+.eyebrow{
+  font-family:var(--eyebrow-font);font-size:var(--eyebrow-fs);
+  letter-spacing:var(--eyebrow-ls);text-transform:uppercase;font-weight:600;
+  color:var(--ink-3);
+}
+
+/* buttons */
+.btn{
+  display:inline-flex;align-items:center;gap:8px;
+  height:var(--ctl-h);padding:0 10px;
+  border:1px solid var(--ctl-stroke);
+  border-bottom-color:var(--ctl-bottom);
+  border-radius:var(--r-ctl);
+  background:var(--ctl);
+  color:var(--ink);
+  font-family:var(--font-text);
+  font-size:var(--fs-sm);
+  font-weight:500;
+  white-space:nowrap;
+  transition:background .12s ease, border-color .12s ease;
+}
+.btn:hover{background:var(--ctl-hover);border-color:var(--accent-line)}
+.btn.pri{
+  background:var(--accent);color:var(--accent-on);
+  border-color:var(--accent-line);border-bottom-color:var(--accent-under);
+  font-weight:600;
+}
+.btn.pri:hover{background:var(--accent-hover)}
+.btn.pri kbd{background:var(--accent-line);border-color:var(--accent-line);color:var(--accent-on)}
+.btn.quiet{
+  background:none;border-color:transparent;color:var(--accent-ink);
+  text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px;
+  padding:0 6px;
+}
+.btn.quiet:hover{background:var(--accent-wash);border-color:transparent}
+.btn.sm{height:var(--ctl-h-sm);padding:0 9px;font-size:var(--fs-xs)}
+.btn.wide{width:100%;justify-content:center}
+.btn.spread{width:100%;justify-content:space-between}
+
+kbd{
+  font-family:var(--font-mono);font-size:10px;line-height:1;
+  color:var(--ink-3);background:var(--panel);
+  border:1px solid var(--stroke-soft);border-bottom-width:2px;border-radius:3px;
+  padding:2px 4px;letter-spacing:.02em;white-space:nowrap;
+}
+[data-skin="native"] kbd{display:none}          /* structural rule 3 */
+
+.sep{width:1px;height:var(--sep-h);background:var(--stroke);flex:none;margin:0 var(--sep-mx)}
+
+.chip{
+  display:inline-flex;align-items:center;gap:6px;
+  height:20px;padding:0 8px;border-radius:var(--r-card);
+  background:var(--surface-alt);border:1px solid var(--stroke);
+  font-size:var(--fs-xs);color:var(--ink-2);
+}
+.tag{
+  display:inline-flex;align-items:center;height:18px;padding:0 6px;
+  border-radius:var(--r-sm);border:1px solid var(--stroke);
+  background:var(--panel);color:var(--ink-2);
+  font-family:var(--font-num);font-size:10.5px;font-variant-numeric:tabular-nums;
+}
+.tag.acc{color:var(--accent-ink);border-color:var(--accent-line);background:var(--accent-wash)}
+.dot{width:5px;height:5px;border-radius:50%;flex:none;background:var(--ink-4)}
+.dot.a{background:var(--attention-line)}
+.dot.g{background:var(--accent)}
+
+.lnk{color:var(--accent-ink);text-decoration:underline;text-underline-offset:2px;
+     font-size:var(--fs-xs);background:none;border:none;padding:0;white-space:nowrap}
+
+/* strips / bars */
+.bar{
+  display:flex;align-items:center;gap:9px;flex:none;
+  border-style:solid;border-width:var(--bar-bw);border-color:var(--stroke);
+  border-radius:var(--r-bar);
+  background:var(--surface-alt);
+  color:var(--ink-2);
+  font-size:var(--fs-data);
+  min-height:var(--bar-h);
+  padding:var(--bar-pad);
+  margin:0 var(--bleed);
+}
+.bar .i{color:var(--ink-3)}
+.bar .push{margin-left:auto;display:flex;align-items:center;gap:8px}
+.bar.attention{background:var(--attention-wash);border-color:var(--attention-line);color:var(--attention)}
+.bar.attention .i{color:var(--attention)}
+.bar.attention .lnk{color:var(--attention)}
+.bar.accent{background:var(--accent-wash);border-color:var(--accent-line);color:var(--ink)}
+.bar.accent .i{color:var(--accent-ink)}
+.bar b{font-weight:600;color:var(--ink)}
+
+/* ------------------------------------------------------------
+   window chrome
+   ------------------------------------------------------------ */
+.win{display:flex;flex-direction:column;height:100%}
+
+.titlebar{
+  display:flex;align-items:center;gap:8px;padding-left:9px;flex:none;height:32px;
+  background:var(--panel);border-bottom:1px solid var(--stroke-soft);
+}
+.titlebar .wmark{width:15px;height:15px;flex:none;color:var(--accent)}
+.titlebar .wtitle{font-family:var(--font-text);font-size:12px;font-weight:600;letter-spacing:.01em}
+.titlebar .wtitle span{color:var(--ink-3);font-weight:400}
+.wbtns{margin-left:auto;display:flex;height:100%}
+.wbtn{width:44px;display:grid;place-items:center;color:var(--ink-2)}
+.wbtn svg{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:1.1}
+.wbtn:hover{background:var(--hover)}
+.wbtn.x:hover{background:var(--stop);color:var(--accent-on)}
+
+.menubar{
+  display:flex;align-items:stretch;flex:none;height:25px;
+  background:var(--panel);border-bottom:1px solid var(--stroke);
+}
+.menubar b{
+  font-family:var(--font-text);font-size:12px;font-weight:400;line-height:1;
+  display:flex;align-items:center;padding:0 9px;color:var(--ink-2);
+}
+.menubar b u{text-underline-offset:2px}
+.menubar b:hover{background:var(--hover);color:var(--ink)}
+
+[data-skin="native"] .titlebar,
+[data-skin="native"] .menubar{display:none}      /* structural rule 3 */
+
+/* splitters + resize grip + striped filler: workbench chrome */
+.split{background:var(--ground);display:grid;place-items:center;gap:3px;flex:none}
+.split.v{width:var(--split-w);cursor:col-resize;grid-auto-flow:row}
+.split.h{height:var(--split-w);cursor:row-resize;grid-auto-flow:column}
+.split i{display:block;background:var(--ink-4);border-radius:1px}
+.split.v i{width:1px;height:3px}
+.split.h i{width:3px;height:1px}
+.split:hover i{background:var(--accent)}
+.grip{display:grid;grid-template-columns:repeat(3,2px);gap:2px;padding:0 6px;align-self:center}
+.grip i{width:2px;height:2px;background:var(--ink-4);display:block}
+.filler{flex:1;min-height:0;
+  background:repeating-linear-gradient(var(--zebra) 0 var(--row-h), var(--surface) var(--row-h), var(--surface) calc(var(--row-h)*2))}
+.filler.odd{background:repeating-linear-gradient(var(--surface) 0 var(--row-h), var(--zebra) var(--row-h), var(--zebra) calc(var(--row-h)*2))}
+[data-skin="native"] .split,
+[data-skin="native"] .grip,
+[data-skin="native"] .filler{display:none}       /* structural rule 3 */
+
+/* ------------------------------------------------------------
+   frame: places + layer
+   ------------------------------------------------------------ */
+.frame{flex:1;min-height:0}
+[data-skin="native"] .frame{display:grid;grid-template-columns:var(--nav-w) 1fr}  /* rule 1 */
+[data-skin="workbench"] .frame{display:flex;flex-direction:column}                /* rule 1 */
+
+.places{display:flex;min-width:0}
+[data-skin="native"] .places{flex-direction:column;gap:2px;padding:12px 8px 12px 10px}   /* rule 2 */
+[data-skin="workbench"] .places{                                                          /* rule 2 */
+  flex-direction:row;align-items:stretch;height:26px;flex:none;
+  background:var(--panel);border-bottom:1px solid var(--stroke);padding:0 4px;
+}
+.brand{
+  display:flex;align-items:center;gap:9px;
+  padding:6px 8px 14px 10px;
+  font-family:var(--font-display);font-size:14px;font-weight:600;letter-spacing:.01em;
+}
+.brand .mark{width:20px;height:20px;flex:none}
+[data-skin="workbench"] .brand{display:none}     /* structural rule 3 */
+
+.place{
+  display:flex;align-items:center;gap:var(--place-gap);
+  border:1px solid transparent;background:none;
+  color:var(--ink-2);position:relative;text-align:left;
+  font-family:var(--font-text);font-size:var(--fs-ui);
+  height:var(--place-h);padding:var(--place-pad);border-radius:var(--place-r);
+}
+.place:hover{background:var(--surface-alt);color:var(--ink)}
+.place[aria-current="page"]{
+  background:var(--surface);border-color:var(--stroke);color:var(--ink);
+  font-weight:600;box-shadow:var(--shadow-card);
+}
+.place[aria-current="page"] .i{color:var(--accent-ink)}
+[data-skin="native"] .place[aria-current="page"]::before{   /* rule 5 */
+  content:"";position:absolute;left:-4px;top:9px;
+  width:3px;height:18px;border-radius:2px;background:var(--accent);
+}
+[data-skin="workbench"] .place[aria-current="page"]{        /* rule 5 */
+  background:var(--sel);border-color:transparent;box-shadow:inset 0 -2px 0 var(--accent);
+  font-weight:500;
+}
+.place-gap{flex:1}
+[data-skin="native"] .place-gap{                            /* rule 2 */
+  border-bottom:1px solid var(--stroke);margin:0 4px 8px;
+}
+
+.layer{
+  background:var(--layer);
+  display:flex;flex-direction:column;min-width:0;overflow:hidden;
+  flex:1;min-height:0;
+}
+[data-skin="native"] .layer{                       /* structural rule 4 */
+  border-top:1px solid var(--stroke);
+  border-left:1px solid var(--stroke);
+  border-top-left-radius:var(--r-card);
+}
+
+.layer-head{
+  display:flex;align-items:center;gap:10px;flex:none;
+  padding:var(--head-pad);height:var(--head-h);
+  background:var(--head-bg);
+  border-style:solid;border-width:var(--head-bw);border-color:var(--stroke);
+}
+.layer-head h1{
+  font-family:var(--font-display);font-size:var(--fs-title);font-weight:var(--w-title);
+  letter-spacing:var(--ls-title);
+}
+.layer-head .push{margin-left:auto;color:var(--ink-3);font-family:var(--font-num);
+  font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
+.layer-body{
+  flex:1;min-height:0;display:flex;flex-direction:column;
+  padding:0 var(--pad-x) var(--pad-b);gap:var(--gap);
+}
+
+/* breadcrumb */
+.crumbs{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-ui);color:var(--ink-3)}
+.crumbs .c{padding:2px 5px;border-radius:var(--r-sm);color:var(--crumb-ink);font-weight:var(--crumb-fw)}
+.crumbs .c:hover{background:var(--surface-alt)}
+.crumbs .s{color:var(--ink-4)}
+.crumbs .c.here{color:var(--ink);font-weight:600}
+
+/* command bar / toolbar */
+.commands{
+  display:flex;align-items:center;gap:var(--cmd-gap);flex:none;
+  height:var(--cmd-h);
+  margin:0 var(--bleed);padding:0 var(--cmd-pad);
+  background:var(--cmd-band);
+  border-bottom:var(--cmd-bw) solid var(--stroke);
+}
+.commands .btn{
+  background:var(--cmd-bg);border-color:var(--cmd-stroke);border-bottom-color:var(--cmd-bottom);
+  height:var(--cmd-btn-h);
+}
+.commands .btn:hover{background:var(--cmd-hover-bg);border-color:var(--stroke)}
+.commands .btn.pri{
+  background:var(--cmd-pri-bg);color:var(--cmd-pri-ink);
+  border-color:var(--cmd-pri-stroke);border-bottom-color:var(--cmd-pri-stroke);
+  font-weight:var(--cmd-pri-weight);
+}
+.commands .btn.pri:hover{background:var(--cmd-pri-hover-bg)}
+.commands .off{color:var(--ink-4)}
+.commands .push{margin-left:auto}
+.search{
+  display:flex;align-items:center;gap:8px;
+  width:190px;height:var(--ctl-h-sm);padding:0 10px;
+  border:1px solid var(--ctl-stroke);border-bottom-color:var(--ctl-bottom);
+  border-radius:var(--r-ctl);background:var(--ctl);color:var(--ink-3);font-size:var(--fs-data);
+}
+
+/* ------------------------------------------------------------
+   panes
+   ------------------------------------------------------------ */
+.pane{
+  display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;
+  background:var(--pane-bg);
+  border:1px solid var(--stroke);
+  border-radius:var(--r-card);
+  box-shadow:var(--shadow-card);
+}
+.pane > .ph{
+  display:flex;align-items:center;gap:8px;flex:none;
+  height:var(--pane-head-h);padding:0 10px;
+  background:var(--pane-head-bg);border-bottom:1px solid var(--stroke);
+  font-family:var(--eyebrow-font);font-size:var(--eyebrow-fs);font-weight:600;
+  letter-spacing:var(--eyebrow-ls);text-transform:uppercase;color:var(--ink-3);
+}
+.pane > .ph .n{
+  margin-left:auto;font-family:var(--font-num);font-size:10.5px;letter-spacing:0;
+  color:var(--ink-4);text-transform:none;font-variant-numeric:tabular-nums;
+}
+.pane > .pb{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--pane-body-bg);overflow:hidden}
+.pane.flush{border-radius:var(--r-card)}
+.pane.stop{border-color:var(--stop-line)}
+.pane.stop > .ph{background:var(--stop-wash);color:var(--stop);border-bottom-color:var(--stop-line)}
+.pane-body{padding:var(--pane-pad);display:flex;flex-direction:column;gap:9px;min-height:0;overflow:hidden}
+
+/* ------------------------------------------------------------
+   tables
+   ------------------------------------------------------------ */
+.tablepane{background:var(--surface)}
+.tablepane > .pb{background:var(--surface)}
+table{width:100%;flex:none;border-collapse:collapse;table-layout:fixed;background:var(--surface)}
+thead th{
+  text-align:left;font-family:var(--th-font);font-size:var(--th-fs);font-weight:600;
+  letter-spacing:var(--th-ls);text-transform:var(--th-transform);color:var(--ink-3);
+  padding:0 10px;height:var(--th-h);white-space:nowrap;
+  background:var(--th-bg);
+  border-bottom:1px solid var(--stroke);
+  border-right:1px solid var(--col-rule);
+}
+thead th:last-child{border-right:none}
+thead th.r{text-align:var(--num-align)}
+tbody td{
+  padding:0 10px;height:var(--row-h);
+  border-bottom:var(--row-rule-w) solid var(--stroke-soft);
+  color:var(--ink-2);vertical-align:middle;font-size:var(--fs-data);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+tbody tr:nth-child(even) td{background:var(--zebra)}
+tbody tr:hover td{background:var(--hover)}
+tbody tr[aria-selected="true"] td,
+tbody tr[aria-selected="true"]:hover td{background:var(--sel);color:var(--ink)}
+tbody tr[aria-selected="true"] td:first-child{box-shadow:inset var(--sel-bar) 0 0 var(--accent)}
+td.num{font-family:var(--font-num);font-size:var(--num-fs);font-variant-numeric:tabular-nums;text-align:var(--num-align)}
+td.date{font-family:var(--font-num);font-size:var(--num-fs);font-variant-numeric:tabular-nums}
+td.nm{color:var(--ink);font-weight:500}
+tbody tr[aria-selected="true"] td.nm{font-weight:600}
+.cell{display:flex;align-items:center;gap:8px;min-width:0}
+.cell > span{overflow:hidden;text-overflow:ellipsis}
+.cell .i{color:var(--ink-3)}
+tbody tr[aria-selected="true"] .cell .i{color:var(--accent)}
+
+.two-line{display:flex;min-width:0;flex:1}
+[data-skin="native"] .two-line{flex-direction:column;gap:1px}        /* structural rule 6 */
+[data-skin="workbench"] .two-line{flex-direction:row;align-items:baseline;gap:10px}
+.two-line b{font-weight:inherit;color:var(--ink);font-size:var(--fs-sm);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.two-line small{color:var(--ink-3);font-size:var(--fs-note);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+tbody tr.warnrow td,
+tbody tr.warnrow:hover td{
+  background:var(--attention-wash);color:var(--attention);
+  height:24px;font-size:var(--fs-xs);
+}
+.warnrow .in{display:flex;align-items:center;gap:7px;padding-left:22px}
+.warnrow .i{color:var(--attention)}
+
+/* ------------------------------------------------------------
+   status strip / status bar
+   ------------------------------------------------------------ */
+.statusbar{
+  display:flex;align-items:center;flex:none;
+  height:var(--status-h);
+  margin-left:var(--status-inset);                 /* token pair, see rule 4 */
+  border-left:var(--status-bl);
+  border-top:1px solid var(--stroke);
+  background:var(--status-bg);
+  color:var(--ink-3);
+  font-family:var(--status-font);font-size:var(--status-fs);
+  font-variant-numeric:tabular-nums;
+  padding:var(--status-pad);
+}
+.statusbar .s{
+  display:flex;align-items:center;gap:6px;height:100%;
+  border-right:1px solid var(--status-cell-rule);
+  padding:var(--status-cell-pad);
+}
+.statusbar .s.end{margin-left:auto;border-right:none;
+  border-left:1px solid var(--status-cell-rule)}
+.statusbar .s.plain{border-right:none}
+.statusbar .em{color:var(--ink-2)}
+.statusbar .i{width:12px;height:12px;color:var(--status-icon-ink)}
+#unlock .statusbar{--status-inset:0px;--status-bl:0 none}
+
+/* ------------------------------------------------------------
+   1 — UNLOCK
+   ------------------------------------------------------------ */
+.u-head{
+  display:flex;align-items:center;gap:12px;flex:none;
+  padding:var(--u-head-pad);height:var(--head-h);
+  background:var(--head-bg);
+  border-style:solid;border-width:var(--head-bw);border-color:var(--stroke);
+}
+.u-head .caption{color:var(--ink-3);font-size:var(--fs-xs);line-height:1.4}
+.u-head .caption b{color:var(--ink-2);font-weight:600}
+.u-head .lockstate{
+  margin-left:auto;display:inline-flex;align-items:center;gap:7px;flex:none;
+  color:var(--ink-2);font-family:var(--font-num);font-size:var(--fs-xs);
+}
+.u-head .lockstate .i{color:var(--ink-3)}
+
+.storyboard{
+  display:grid;flex:1;min-height:0;
+  padding:0 var(--pad-x);
+}
+[data-skin="native"] .storyboard{grid-template-columns:repeat(3,1fr);gap:16px;padding:0 30px}  /* rule 7 */
+[data-skin="workbench"] .storyboard{grid-template-columns:1fr 5px 1fr 5px 1fr;padding:10px 10px 0}
+
+.steps{
+  display:flex;align-items:center;gap:8px;flex:none;
+  padding:10px 14px 8px;
+  font-family:var(--eyebrow-font);font-size:var(--eyebrow-fs);
+  letter-spacing:var(--eyebrow-ls);text-transform:uppercase;font-weight:600;
+  color:var(--ink-4);
+  border-bottom:1px solid var(--stroke-soft);
+}
+.steps li{display:flex;align-items:center;gap:6px}
+.steps li::after{content:"";width:14px;height:1px;background:var(--stroke);margin-left:2px}
+.steps li:last-child::after{display:none}
+.steps li i{
+  display:inline-flex;align-items:center;justify-content:center;font-style:normal;
+  width:16px;height:16px;border-radius:50%;
+  border:1px solid var(--stroke);background:var(--panel);
+  color:var(--ink-4);font-family:var(--font-num);font-size:10px;font-weight:700;
+}
+.steps li.on{color:var(--accent-ink)}
+.steps li.on i{background:var(--accent-wash);border-color:var(--accent-line);color:var(--accent-ink)}
+
+.state{
+  flex:1;min-height:0;display:flex;flex-direction:column;gap:10px;
+  padding:var(--state-pad);
+}
+.state .lead{
+  font-family:var(--font-display);font-size:var(--fs-lead);font-weight:600;
+  letter-spacing:var(--ls-title);line-height:1.25;
+}
+.state .sub{color:var(--ink-2);font-size:var(--fs-sm)}
+.state .meta{font-family:var(--font-num);font-size:var(--fs-xs);color:var(--ink-3);
+  font-variant-numeric:tabular-nums}
+.state .spacer{flex:1;min-height:0}
+.keyart{display:flex;justify-content:center;padding:2px 0 6px}
+.quiet-links{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.note{
+  display:flex;gap:8px;align-items:flex-start;padding:8px 9px;
+  border:1px var(--note-style) var(--attention-line);border-radius:var(--r-sm);
+  background:var(--attention-wash);color:var(--attention);
+  font-size:var(--fs-xs);line-height:1.4;
+}
+.note .dot{margin-top:5px}
+
+.slotline{
+  display:inline-flex;align-items:center;gap:8px;align-self:flex-start;
+  padding:5px 9px;border-radius:var(--r-card);
+  background:var(--accent-wash);border:1px solid var(--accent-line);
+  color:var(--accent-ink);font-size:var(--fs-sm);font-weight:600;
+}
+.slotline .i{color:var(--accent)}
+.fieldhead{display:flex;align-items:baseline;gap:8px}
+.fieldhead .att{margin-left:auto;font-family:var(--font-num);font-size:var(--fs-xs);
+  color:var(--attention);font-variant-numeric:tabular-nums}
+.pinbox{
+  height:36px;background:var(--ctl);border:1px solid var(--ctl-stroke);
+  border-bottom:2px solid var(--accent);border-radius:var(--r-ctl);
+  display:flex;align-items:center;gap:2px;padding:0 11px;
+}
+.pinbox .dots{font-family:var(--font-mono);font-size:15px;letter-spacing:.34em;
+  color:var(--ink);line-height:1}
+.pinbox .caret{width:1px;height:16px;background:var(--accent);margin-left:2px}
+.pinbox .hint{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--ink-4)}
+@media (prefers-reduced-motion: no-preference){
+  .pinbox .caret{animation:blink 1.1s steps(1,end) infinite}
+}
+@keyframes blink{50%{opacity:0}}
+.pin-note{color:var(--ink-3);font-size:var(--fs-xs)}
+.rowend{display:flex;align-items:center;gap:8px}
+.rowend .push{margin-left:auto}
+
+/* the touch moment */
+.pane.touch{
+  border-color:var(--touch-stroke);
+  background:linear-gradient(160deg,var(--touch-bg) 0%,var(--touch-bg2) 100%);
+  color:var(--touch-ink);box-shadow:var(--shadow-pop);
+}
+.pane.touch > .ph{
+  background:var(--touch-head-bg);color:var(--touch-head-ink);
+  border-bottom-color:var(--touch-head-line);
+}
+.pane.touch > .ph .n{color:var(--touch-head-ink)}
+.pane.touch > .pb{background:transparent}
+.pane.touch .steps{color:var(--touch-soft);border-bottom-color:var(--touch-head-line)}
+.pane.touch .steps li::after{background:var(--touch-head-line)}
+.pane.touch .steps li i{background:transparent;border-color:var(--touch-head-line);color:var(--touch-soft)}
+.pane.touch .steps li.on{color:var(--touch-ink)}
+.pane.touch .steps li.on i{background:var(--touch-core);border-color:var(--touch-ring);color:var(--touch-ink)}
+.state.touch{align-items:center;text-align:center;justify-content:center}
+.state.touch .lead{font-size:var(--fs-touch);color:var(--touch-ink)}
+.state.touch .sub{color:var(--touch-soft);font-size:var(--fs-sm)}
+.state.touch .meta{color:var(--touch-soft)}
+.state.touch .meta .i{color:var(--touch-soft)}
+.rings{position:relative;width:126px;height:126px;flex:none;margin:6px 0 14px}
+.rings span{position:absolute;inset:0;border-radius:50%;border:var(--ring-w) solid var(--touch-ring)}
+.rings span:nth-child(2){inset:15px;border-color:var(--touch-ring-2)}
+.rings span:nth-child(3){inset:30px;border-color:var(--touch-ring)}
+.rings .core{
+  position:absolute;inset:42px;border-radius:50%;
+  background:var(--touch-core);border:var(--ring-w) solid var(--ring-core-stroke);
+  display:flex;align-items:center;justify-content:center;
+}
+.rings .core svg{width:24px;height:24px;stroke:var(--touch-mark-ink);fill:none;
+  stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+@media (prefers-reduced-motion: no-preference){
+  .rings span:nth-child(1){animation:pulse 2.4s ease-out infinite}
+  .rings span:nth-child(3){animation:pulse 2.4s ease-out infinite .8s}
+}
+@keyframes pulse{
+  0%{transform:scale(.86);opacity:.15}
+  40%{opacity:.9}
+  100%{transform:scale(1.04);opacity:0}
+}
+
+/* blocked variant */
+.blocked-strip{flex:none;margin:var(--blocked-margin)}
+.blocked{
+  display:flex;align-items:center;gap:14px;padding:12px 16px;
+  background:var(--stop-wash);
+}
+.blocked .mark-stop{width:28px;height:28px;flex:none;color:var(--stop);
+  fill:none;stroke:currentColor;stroke-width:1.3}
+.blocked .txt b{display:block;font-size:var(--fs-ui);font-weight:600;color:var(--stop)}
+.blocked .txt span{font-size:var(--fs-xs);color:var(--ink-2)}
+.blocked .push{margin-left:auto}
+
+/* ------------------------------------------------------------
+   2 — ARCHIVES  /  3 — ARCHIVE
+   ------------------------------------------------------------ */
+.cols{display:grid;flex:1;min-height:0}
+[data-skin="native"] #archives .cols{grid-template-columns:1fr 252px;gap:16px}   /* rule 7 */
+[data-skin="workbench"] #archives .cols{grid-template-columns:1fr 5px 300px}
+[data-skin="native"] #archive .cols{grid-template-columns:1fr 264px;gap:16px}
+[data-skin="workbench"] #archive .cols{grid-template-columns:1fr 5px 306px}
+[data-skin="native"] #keystore .cols{grid-template-columns:1fr 320px;gap:18px}
+[data-skin="workbench"] #keystore .cols{grid-template-columns:1fr 5px 380px}
+
+#archives tbody td{height:var(--row-h-lg)}
+
+.side{display:flex;flex-direction:column;gap:0}
+.facts{display:flex;flex-direction:column;padding:0}
+.fact{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  height:26px;font-size:var(--fs-sm)}
+.fact dt{color:var(--ink-3);font-family:var(--eyebrow-font);font-size:var(--eyebrow-fs);
+  letter-spacing:var(--eyebrow-ls);text-transform:uppercase;font-weight:600}
+.fact dd{color:var(--ink);font-family:var(--font-num);font-size:var(--num-fs);
+  font-variant-numeric:tabular-nums}
+.side h3{
+  font-family:var(--font-display);font-size:var(--fs-section);font-weight:600;
+  display:flex;align-items:center;gap:8px;color:var(--ink);
+}
+.side h3 .i{color:var(--accent)}
+.side-actions{margin-top:auto;padding:10px 12px;border-top:1px solid var(--stroke);
+  display:flex;flex-direction:column;gap:6px}
+.side-actions .row2{display:flex;gap:6px}
+.side-actions .row2 .btn{flex:1;justify-content:center}
+
+/* preview */
+.canvas{
+  margin:0;height:170px;flex:none;position:relative;overflow:hidden;
+  border:1px solid var(--stroke);border-radius:var(--r-sm);background:var(--surface-alt);
+}
+.canvas svg{position:absolute;inset:0;width:100%;height:100%}
+.canvas .cap{
+  position:absolute;left:0;right:0;bottom:0;padding:4px 7px;
+  font-family:var(--font-mono);font-size:10px;color:var(--ink-3);
+  background:var(--panel);border-top:1px solid var(--stroke-soft);letter-spacing:.02em;
+}
+.fn{font-family:var(--font-mono);font-size:12.5px;font-weight:600;color:var(--ink);
+  word-break:break-all}
+.verified{
+  display:flex;align-items:center;gap:7px;
+  border:1px solid var(--accent-line);background:var(--accent-wash);
+  border-radius:var(--r-ctl);padding:6px 9px;
+  color:var(--accent-ink);font-size:var(--fs-data);font-weight:600;
+}
+.verified .i{color:var(--accent-ink);stroke-width:1.7}
+
+/* ------------------------------------------------------------
+   4 — KEYSTORE
+   ------------------------------------------------------------ */
+.kcol{display:flex;flex-direction:column;gap:var(--kcol-gap);min-height:0;min-width:0}
+.rule-line{
+  display:flex;align-items:center;gap:8px;padding:6px 9px;
+  background:var(--accent-wash);border-left:2px solid var(--accent);
+  font-size:var(--fs-xs);color:var(--ink-2);
+}
+.rule-line .i{color:var(--accent-ink)}
+.actbar{display:flex;align-items:center;gap:6px}
+.actbar .push{margin-left:auto}
+.tablefoot{
+  padding:9px 10px;border-top:1px solid var(--stroke);background:var(--pane-bg);
+  display:flex;flex-direction:column;gap:9px;flex:none;margin-top:auto;
+}
+.bk{
+  display:grid;grid-template-columns:34px 1fr;gap:10px;align-items:start;
+  border:1px solid var(--stroke);border-radius:var(--r-sm);
+  background:var(--surface);padding:10px;
+}
+.bk .ic{width:34px;height:34px;display:grid;place-items:center;
+  border:1px solid var(--stroke-soft);border-radius:var(--r-sm);
+  background:var(--panel);color:var(--ink-2)}
+.bk .ln{font-size:var(--fs-xs);color:var(--ink-2)}
+.bk .warn{display:flex;align-items:center;gap:7px;font-size:var(--fs-xs);
+  color:var(--attention);margin-top:3px}
+
+.setrow{display:flex;align-items:center;gap:10px;min-height:26px}
+.setrow .lab{display:flex;flex-direction:column;gap:1px;min-width:0}
+.setrow .lab b{font-size:var(--fs-sm);font-weight:600;color:var(--ink)}
+.setrow .lab span{color:var(--ink-3);font-size:var(--fs-xs)}
+.setrow .push{margin-left:auto;display:flex;align-items:center;gap:6px}
+.setblock{display:flex;flex-direction:column;gap:6px}
+.stepper{
+  display:inline-flex;align-items:stretch;border:1px solid var(--ctl-stroke);
+  border-radius:var(--r-ctl);background:var(--ctl);overflow:hidden;
+}
+.stepper .v{
+  min-width:86px;padding:0 9px;display:flex;align-items:center;justify-content:flex-end;
+  height:var(--ctl-h-sm);font-family:var(--font-num);font-size:var(--fs-data);
+  color:var(--ink);font-variant-numeric:tabular-nums;
+}
+.stepper .v.wide{min-width:106px;white-space:nowrap}
+.stepper button{
+  width:22px;border:none;border-left:1px solid var(--ctl-stroke);
+  background:var(--panel);color:var(--ink-2);display:grid;place-items:center;
+}
+.stepper button:hover{background:var(--hover);color:var(--accent-ink)}
+.stepper svg{width:9px;height:9px;fill:none;stroke:currentColor;stroke-width:1.6}
+
+.choice{display:flex;flex-direction:column;gap:4px}
+.choice.row{flex-direction:row;flex-wrap:wrap}
+.opt{
+  display:flex;align-items:center;gap:8px;padding:5px 9px;
+  border:1px solid var(--stroke-soft);border-radius:var(--r-ctl);
+  background:var(--surface);color:var(--ink-2);font-size:var(--fs-data);
+}
+.opt:hover{background:var(--hover)}
+.opt.on{border-color:var(--accent-line);background:var(--accent-wash);color:var(--ink);font-weight:500}
+.rad{width:12px;height:12px;border-radius:50%;border:1px solid var(--stroke-strong);
+  flex:none;display:grid;place-items:center;background:var(--ctl)}
+.opt.on .rad{border-color:var(--accent)}
+.opt.on .rad::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.hintline{font-size:var(--fs-xs);color:var(--ink-3);line-height:1.45}
+.seclabel{color:var(--ink-2);font-size:var(--fs-sm)}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-archives" viewBox="0 0 20 20"><path d="M3 6.5h14v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5Z"/><path d="M2.5 3.5h15v3h-15z"/><path d="M8 10h4"/></symbol>
+    <symbol id="i-keystore" viewBox="0 0 20 20"><circle cx="7" cy="8.5" r="3.5"/><path d="M9.6 10.9 16 17.3"/><path d="M14.4 15.7 16 14.1"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 20 20"><path d="M3 6h9"/><path d="M15.5 6H17"/><circle cx="13.7" cy="6" r="1.8"/><path d="M3 14h1.6"/><path d="M8.1 14H17"/><circle cx="6.4" cy="14" r="1.8"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 20 20"><rect x="4.5" y="8.5" width="11" height="7.5" rx="1.5"/><path d="M7 8.5V6.6a3 3 0 0 1 6 0v1.9"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 6.4V10l2.6 1.8"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 20 20"><path d="m8 5 5 5-5 5"/></symbol>
+    <symbol id="i-chevdown" viewBox="0 0 20 20"><path d="m5 8 5 5 5-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><path d="m4 10.4 4 4 8-8.6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.2"/><path d="M10 9v4.4"/><path d="M10 6.6h.01"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 20 20"><path d="M10 3.4 17.6 16.4H2.4L10 3.4Z"/><path d="M10 8.2v3.6"/><path d="M10 14h.01"/></symbol>
+    <symbol id="i-yubi" viewBox="0 0 20 20"><rect x="2.6" y="6" width="14.8" height="8" rx="2.4"/><circle cx="13.4" cy="10" r="2"/><path d="M5.4 8.6v2.8"/></symbol>
+    <symbol id="i-touchdot" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2.6v1.8"/><path d="M10 15.6v1.8"/><path d="M2.6 10h1.8"/><path d="M15.6 10h1.8"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4.5v11"/><path d="M4.5 10h11"/></symbol>
+    <symbol id="i-open" viewBox="0 0 20 20"><path d="M4 7V4.6h11.4V16H4v-2.4"/><path d="M10.4 10H2.8"/><path d="m5.8 7 3 3-3 3"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 20 20"><path d="M2.6 5.4h5.1l1.5 2h8.2V15a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V5.4Z"/><path d="M13 10.4v3.2"/><path d="M11.4 12h3.2"/></symbol>
+    <symbol id="i-extract" viewBox="0 0 20 20"><path d="M10 3.4v8.4"/><path d="m6.6 8.6 3.4 3.4 3.4-3.4"/><path d="M3.6 13.4v2.2h12.8v-2.2"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 20 20"><path d="M3.8 5.6h12.4"/><path d="M8.2 5.6V4h3.6v1.6"/><path d="M5.4 5.6 6.2 16h7.6l.8-10.4"/></symbol>
+    <symbol id="i-file" viewBox="0 0 20 20"><path d="M11.2 2.8H5.6v14.4h8.8V6l-3.2-3.2Z"/><path d="M11.2 2.8V6h3.2"/></symbol>
+    <symbol id="i-image" viewBox="0 0 20 20"><rect x="2.8" y="4.4" width="14.4" height="11.2" rx="1.6"/><circle cx="7.2" cy="8.4" r="1.2"/><path d="m3.6 14 4-4 3.4 3.4 2.2-2 3.2 3"/></symbol>
+    <symbol id="i-video" viewBox="0 0 20 20"><rect x="2.6" y="5" width="10.6" height="10" rx="1.6"/><path d="m13.2 10.6 4.2 2.6V6.8l-4.2 2.6z"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 20 20"><path d="M11.2 2.8H5.6v14.4h8.8V6l-3.2-3.2Z"/><path d="M7.8 9.6h4.4"/><path d="M7.8 12.4h4.4"/></symbol>
+    <symbol id="i-box" viewBox="0 0 20 20"><path d="m10 2.8 6.6 3.4v7.6L10 17.2 3.4 13.8V6.2L10 2.8Z"/><path d="M3.4 6.2 10 9.6l6.6-3.4"/><path d="M10 9.6v7.6"/></symbol>
+    <symbol id="i-recovery" viewBox="0 0 20 20"><rect x="2.6" y="4.6" width="14.8" height="10.8" rx="1.8"/><path d="M5.6 9h3"/><path d="M5.6 11.8h6"/><path d="M13.4 8.2h1.2"/></symbol>
+    <symbol id="i-backup" viewBox="0 0 20 20"><path d="M11.2 2.8H5.6v14.4h8.8V6l-3.2-3.2Z"/><path d="M11.2 2.8V6h3.2"/><path d="M10 9.4v4"/><path d="m8.2 11.6 1.8 1.8 1.8-1.8"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 20 20"><path d="M10 2.8 16 5v5.2c0 3.4-2.4 6-6 7-3.6-1-6-3.6-6-7V5l6-2.2Z"/><path d="M7.6 9.8h4.8v3.4H7.6z"/><path d="M9 9.8V8.6a1 1 0 0 1 2 0v1.2"/></symbol>
+    <symbol id="i-search" viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.2"/><path d="m12.8 12.8 4 4"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 20 20"><path d="M16.2 10a6.2 6.2 0 1 1-1.9-4.5"/><path d="M16.4 3.4v3.4H13"/></symbol>
+    <symbol id="i-save" viewBox="0 0 20 20"><path d="M4.4 3.6h9l3 3v9.8H4.4V3.6Z"/><path d="M7 3.6v4h5v-4"/><path d="M7 16.4v-4.6h6v4.6"/></symbol>
+    <symbol id="i-compact" viewBox="0 0 20 20"><path d="M10 2.4v5.2"/><path d="m7.6 5.2 2.4 2.4 2.4-2.4"/><path d="M10 17.6v-5.2"/><path d="m7.6 14.8 2.4-2.4 2.4 2.4"/><path d="M3 10h14"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 26 26"><circle cx="13" cy="13" r="10"/><path d="M13 8v6.6"/><path d="M13 17.8v.2"/></symbol>
+    <symbol id="i-mark" viewBox="0 0 20 20">
+      <path d="M3.2 6.4 10 2.6l6.8 3.8v7.2L10 17.4 3.2 13.6V6.4Z" style="fill:var(--accent-wash);stroke:var(--accent)"/>
+      <path d="M10 2.6v7.1l6.8 3.9" style="stroke:var(--accent)"/>
+      <path d="M3.2 6.4 10 9.7" style="stroke:var(--accent)"/>
+    </symbol>
+    <symbol id="i-wmark" viewBox="0 0 16 16">
+      <path d="M2 4.5h4.2l1.4 2H14v7H2z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+      <path d="M6.6 10.4V9.2a1.4 1.4 0 0 1 2.8 0v1.2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <rect x="6" y="10.4" width="4" height="2.6" rx=".5" fill="currentColor"/>
+    </symbol>
+  </defs>
+</svg>
+
+<main>
+
+<!-- ============================================================
+     1 — UNLOCK
+     ============================================================ -->
+<section class="screen" id="unlock" aria-label="Enfold — keystore locked">
+  <div class="win">
+
+    <div class="titlebar">
+      <svg class="wmark" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-wmark"></use></svg>
+      <div class="wtitle">Enfold <span>— Personal vault</span></div>
+      <div class="wbtns">
+        <div class="wbtn"><svg viewBox="0 0 10 10"><path d="M1 5h8"/></svg></div>
+        <div class="wbtn"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></div>
+        <div class="wbtn x"><svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8"/></svg></div>
+      </div>
+    </div>
+
+    <div class="menubar">
+      <b><u>F</u>ile</b><b><u>E</u>dit</b><b><u>A</u>rchive</b><b><u>K</u>ey</b><b><u>V</u>iew</b><b><u>H</u>elp</b>
+    </div>
+
+    <div class="u-head">
+      <div class="brand"><svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-mark"></use></svg>Enfold</div>
+      <p class="caption"><b>One panel, three moments</b> — the app shows one at a time; the panel changes in place.</p>
+      <span class="lockstate"><svg class="i i-12"><use href="#i-lock"></use></svg>Keystore locked</span>
+    </div>
+
+    <div class="storyboard">
+
+      <!-- moment 1 -->
+      <article class="pane">
+        <div class="ph">Waiting for the key <span class="n">moment 1</span></div>
+        <div class="pb">
+          <ol class="steps">
+            <li class="on"><i>1</i>Insert</li><li><i>2</i>PIN</li><li><i>3</i>Touch</li>
+          </ol>
+          <div class="state">
+            <div class="keyart">
+              <svg width="146" height="64" viewBox="0 0 146 64" fill="none" aria-hidden="true">
+                <rect x="1" y="14" width="48" height="34" rx="4" style="fill:var(--surface-alt);stroke:var(--stroke-strong)" stroke-width="1.4"/>
+                <rect x="9" y="22" width="32" height="18" rx="2" style="fill:var(--ground);stroke:var(--stroke-strong)" stroke-width="1.4"/>
+                <path d="M49 25h9M49 37h9" style="stroke:var(--stroke-strong)" stroke-width="1.4" stroke-dasharray="3 4"/>
+                <rect x="66" y="18" width="70" height="26" rx="8" style="fill:var(--surface);stroke:var(--ink-3)" stroke-width="1.4"/>
+                <rect x="58" y="24" width="10" height="14" rx="2" style="fill:var(--surface-alt);stroke:var(--ink-3)" stroke-width="1.4"/>
+                <circle cx="120" cy="31" r="7.5" style="fill:var(--accent-wash);stroke:var(--accent)" stroke-width="1.4"/>
+                <circle cx="120" cy="31" r="2.6" style="fill:var(--accent)"/>
+                <path d="M76 25v12M84 25v12" style="stroke:var(--ink-3)" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div>
+              <div class="lead">Insert your YubiKey</div>
+              <div class="sub" style="margin-top:5px">Personal vault</div>
+              <div class="meta">Last unlocked yesterday, 21:14</div>
+            </div>
+            <div class="spacer"></div>
+            <div class="quiet-links">
+              <button type="button" class="btn quiet">Use recovery key <kbd>Ctrl+R</kbd></button>
+              <button type="button" class="btn quiet">Open a backup <kbd>Ctrl+B</kbd></button>
+            </div>
+            <div class="note">
+              <span class="dot a"></span>
+              <span>Two YubiKeys are inserted — remove one to continue.</span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="split v"><i></i><i></i><i></i></div>
+
+      <!-- moment 2 -->
+      <article class="pane">
+        <div class="ph">PIN <span class="n">moment 2</span></div>
+        <div class="pb">
+          <ol class="steps">
+            <li><i>1</i>Insert</li><li class="on"><i>2</i>PIN</li><li><i>3</i>Touch</li>
+          </ol>
+          <div class="state">
+            <span class="slotline"><svg class="i"><use href="#i-yubi"></use></svg>YubiKey 5C — desk</span>
+            <div class="sub">The key matched a slot in this keystore.</div>
+            <div class="spacer"></div>
+            <div class="fieldhead">
+              <span class="eyebrow">PIN</span>
+              <span class="att">3 attempts left</span>
+            </div>
+            <div class="pinbox">
+              <span class="dots">••••••</span><span class="caret"></span>
+              <span class="hint">masked</span>
+            </div>
+            <div class="pin-note">Six digits. The key counts wrong tries, not Enfold.</div>
+            <div class="rowend">
+              <button type="button" class="btn quiet">Use recovery key</button>
+              <span class="push"></span>
+              <button type="button" class="btn pri">Unlock <kbd>Enter</kbd></button>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="split v"><i></i><i></i><i></i></div>
+
+      <!-- moment 3 — the touch moment -->
+      <article class="pane touch">
+        <div class="ph">Touch <span class="n">moment 3</span></div>
+        <div class="pb">
+          <ol class="steps">
+            <li><i>1</i>Insert</li><li><i>2</i>PIN</li><li class="on"><i>3</i>Touch</li>
+          </ol>
+          <div class="state touch">
+            <div class="rings" aria-hidden="true">
+              <span></span><span></span><span></span>
+              <div class="core"><svg viewBox="0 0 20 20"><use href="#i-touchdot"></use></svg></div>
+            </div>
+            <div class="lead">Touch your YubiKey now</div>
+            <div class="sub" style="margin-top:6px">The key will blink until you touch it.</div>
+            <div class="spacer"></div>
+            <div class="meta">PIN accepted · YubiKey 5C — desk</div>
+          </div>
+        </div>
+      </article>
+    </div>
+
+    <div class="blocked-strip">
+      <div class="pane stop">
+        <div class="ph">Blocked <span class="n">variant</span></div>
+        <div class="pb">
+          <div class="blocked">
+            <svg class="mark-stop" viewBox="0 0 26 26" aria-hidden="true"><use href="#i-stop"></use></svg>
+            <div class="txt">
+              <b>PIN is blocked. Use your recovery key.</b>
+              <span>The key stays inserted; the keystore stays locked until a recovery key is used.</span>
+            </div>
+            <span class="push"></span>
+            <button type="button" class="btn">Use recovery key <kbd>Ctrl+R</kbd></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span class="s"><svg class="i"><use href="#i-lock"></use></svg><span class="em">Keystore locked</span></span>
+      <span class="s">Personal vault</span>
+      <span class="s plain">Waiting for a hardware key</span>
+      <span class="s end">Enfold 1.1</span>
+      <span class="grip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     2 — ARCHIVES
+     ============================================================ -->
+<section class="screen" id="archives" aria-label="Personal vault — archives">
+  <div class="win">
+
+    <div class="titlebar">
+      <svg class="wmark" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-wmark"></use></svg>
+      <div class="wtitle">Enfold <span>— Personal vault</span></div>
+      <div class="wbtns">
+        <div class="wbtn"><svg viewBox="0 0 10 10"><path d="M1 5h8"/></svg></div>
+        <div class="wbtn"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></div>
+        <div class="wbtn x"><svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8"/></svg></div>
+      </div>
+    </div>
+
+    <div class="menubar">
+      <b><u>F</u>ile</b><b><u>E</u>dit</b><b><u>A</u>rchive</b><b><u>K</u>ey</b><b><u>V</u>iew</b><b><u>H</u>elp</b>
+    </div>
+
+    <div class="frame">
+      <nav class="places" aria-label="Places">
+        <div class="brand"><svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-mark"></use></svg>Enfold</div>
+        <button type="button" class="place" aria-current="page"><svg class="i i-16"><use href="#i-archives"></use></svg><span>Archives</span></button>
+        <button type="button" class="place"><svg class="i i-16"><use href="#i-keystore"></use></svg><span>Keys &amp; backups</span></button>
+        <span class="place-gap"></span>
+        <button type="button" class="place"><svg class="i i-16"><use href="#i-settings"></use></svg><span>Settings</span></button>
+      </nav>
+
+      <div class="layer">
+        <div class="layer-head">
+          <h1>Personal vault</h1>
+          <span class="push">5 archives · 260.4 GB</span>
+        </div>
+
+        <div class="layer-body">
+          <div class="commands">
+            <button type="button" class="btn pri"><svg class="i"><use href="#i-open"></use></svg>Open <kbd>Enter</kbd></button>
+            <button type="button" class="btn"><svg class="i"><use href="#i-plus"></use></svg>New archive <kbd>Ctrl+N</kbd></button>
+            <span class="sep"></span>
+            <button type="button" class="btn"><svg class="i"><use href="#i-extract"></use></svg>Export volumes… <kbd>Ctrl+Shift+E</kbd></button>
+            <button type="button" class="btn"><svg class="i"><use href="#i-compact"></use></svg>Compact <kbd>Ctrl+K</kbd></button>
+            <button type="button" class="btn"><svg class="i"><use href="#i-rotate"></use></svg>Rotate key</button>
+            <span class="push"></span>
+            <span class="search"><svg class="i"><use href="#i-search"></use></svg>Search archives</span>
+          </div>
+
+          <div class="bar attention">
+            <svg class="i"><use href="#i-warn"></use></svg>
+            <span>Key rotation deferred for ‘YubiKey 5 NFC — travel’ — it has not been seen since 2026-09-01.</span>
+            <span class="push"><button type="button" class="lnk">Details</button></span>
+          </div>
+
+          <div class="cols">
+            <div class="pane tablepane">
+              <div class="pb">
+                <table>
+                  <colgroup>
+                    <col><col style="width:80px"><col style="width:68px"><col style="width:126px"><col style="width:52px">
+                  </colgroup>
+                  <thead>
+                    <tr><th scope="col">Name</th><th scope="col" class="r">Size</th><th scope="col" class="r">Files</th><th scope="col">Last modified</th><th scope="col">Key</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr aria-selected="true">
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-box"></use></svg><span class="two-line"><b>Photos 2024</b><small>6% free space — compact when convenient</small></span></span></td>
+                      <td class="num">48.2 GB</td><td class="num">12,406</td><td class="date">2026-09-05 21:14</td>
+                      <td><span class="tag acc">v3</span></td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-box"></use></svg><span class="two-line"><b>Family videos</b><small>stored raw (already compressed)</small></span></span></td>
+                      <td class="num">212 GB</td><td class="num">96</td><td class="date">2026-08-30 19:02</td>
+                      <td><span class="tag">v1</span></td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-box"></use></svg><span class="two-line"><b>Tax returns</b><small>—</small></span></span></td>
+                      <td class="num">184 MB</td><td class="num">231</td><td class="date">2026-08-14 10:37</td>
+                      <td><span class="tag">v2</span></td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-box"></use></svg><span class="two-line"><b>Project Enfold — notes</b><small>dictionary on</small></span></span></td>
+                      <td class="num">22 MB</td><td class="num">1,180</td><td class="date">2026-09-05 23:02</td>
+                      <td><span class="tag acc">v3</span></td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-box"></use></svg><span class="two-line"><b>Passport scans</b><small>—</small></span></span></td>
+                      <td class="num">9.8 MB</td><td class="num">14</td><td class="date">2026-07-02 08:15</td>
+                      <td><span class="tag">v2</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="filler"></div>
+              </div>
+            </div>
+
+            <div class="split v"><i></i><i></i><i></i></div>
+
+            <aside class="pane" aria-label="Selected archive">
+              <div class="ph">Selected archive <span class="n">1 of 5</span></div>
+              <div class="pb">
+                <div class="pane-body side">
+                  <h3><svg class="i i-16"><use href="#i-box"></use></svg>Photos 2024</h3>
+                  <dl class="facts">
+                    <div class="fact"><dt>Size</dt><dd>48.2 GB</dd></div>
+                    <div class="fact"><dt>Files</dt><dd>12,406</dd></div>
+                    <div class="fact"><dt>Modified</dt><dd>2026-09-05 21:14</dd></div>
+                    <div class="fact"><dt>Key</dt><dd>v3</dd></div>
+                  </dl>
+                  <div class="note">
+                    <span class="dot a"></span>
+                    <span>6% free space — compact when convenient</span>
+                  </div>
+                </div>
+                <div class="side-actions">
+                  <button type="button" class="btn pri wide"><svg class="i"><use href="#i-open"></use></svg>Open <kbd>Enter</kbd></button>
+                  <button type="button" class="btn spread">Export volumes… <kbd>Ctrl+Shift+E</kbd></button>
+                  <div class="row2">
+                    <button type="button" class="btn">Compact</button>
+                    <button type="button" class="btn">Rotate key</button>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span class="s"><span class="em">Personal vault</span></span>
+      <span class="s">5 archives · 260.4 GB</span>
+      <span class="s plain">Selected: Photos 2024</span>
+      <span class="s end"><svg class="i"><use href="#i-lock"></use></svg>Locks in 9:41</span>
+      <span class="s">Enfold 1.1</span>
+      <span class="grip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     3 — ARCHIVE
+     ============================================================ -->
+<section class="screen" id="archive" aria-label="Inside Photos 2024">
+  <div class="win">
+
+    <div class="titlebar">
+      <svg class="wmark" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-wmark"></use></svg>
+      <div class="wtitle">Enfold <span>— Photos 2024</span></div>
+      <div class="wbtns">
+        <div class="wbtn"><svg viewBox="0 0 10 10"><path d="M1 5h8"/></svg></div>
+        <div class="wbtn"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></div>
+        <div class="wbtn x"><svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8"/></svg></div>
+      </div>
+    </div>
+
+    <div class="menubar">
+      <b><u>F</u>ile</b><b><u>E</u>dit</b><b><u>A</u>rchive</b><b><u>K</u>ey</b><b><u>V</u>iew</b><b><u>H</u>elp</b>
+    </div>
+
+    <div class="frame">
+      <nav class="places" aria-label="Places">
+        <div class="brand"><svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-mark"></use></svg>Enfold</div>
+        <button type="button" class="place" aria-current="page"><svg class="i i-16"><use href="#i-archives"></use></svg><span>Archives</span></button>
+        <button type="button" class="place"><svg class="i i-16"><use href="#i-keystore"></use></svg><span>Keys &amp; backups</span></button>
+        <span class="place-gap"></span>
+        <button type="button" class="place"><svg class="i i-16"><use href="#i-settings"></use></svg><span>Settings</span></button>
+      </nav>
+
+      <div class="layer">
+        <div class="layer-head">
+          <nav class="crumbs" aria-label="Breadcrumb">
+            <svg class="i" style="color:var(--accent)"><use href="#i-box"></use></svg>
+            <span class="c">Photos 2024</span><span class="s">›</span>
+            <span class="c">2024</span><span class="s">›</span>
+            <span class="c here">07 Iceland</span>
+          </nav>
+          <span class="push">7 items · 826.3 MB</span>
+        </div>
+
+        <div class="layer-body">
+          <div class="commands">
+            <button type="button" class="btn"><svg class="i"><use href="#i-plus"></use></svg>Add files <kbd>Ins</kbd></button>
+            <button type="button" class="btn"><svg class="i"><use href="#i-folder"></use></svg>Add folder <kbd>Ctrl+Ins</kbd></button>
+            <span class="sep"></span>
+            <button type="button" class="btn"><svg class="i"><use href="#i-extract"></use></svg>Extract <kbd>F5</kbd></button>
+            <button type="button" class="btn"><svg class="i"><use href="#i-trash"></use></svg>Delete <kbd>Del</kbd></button>
+            <span class="push"></span>
+            <span class="search"><svg class="i"><use href="#i-search"></use></svg>Search this archive</span>
+          </div>
+
+          <div class="bar accent">
+            <svg class="i"><use href="#i-save"></use></svg>
+            <span><b>3 changes not yet saved</b> — staged in this window; the archive on disk is untouched until you save.</span>
+            <span class="push">
+              <button type="button" class="btn pri sm">Save changes <kbd>Ctrl+S</kbd></button>
+              <button type="button" class="btn sm">Discard</button>
+            </span>
+          </div>
+
+          <div class="cols">
+            <div class="pane tablepane">
+              <div class="pb">
+                <table>
+                  <colgroup>
+                    <col><col style="width:78px"><col style="width:198px"><col style="width:128px">
+                  </colgroup>
+                  <thead>
+                    <tr><th scope="col">Name</th><th scope="col" class="r">Size</th><th scope="col">Stored as</th><th scope="col">Modified</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-image"></use></svg><span>IMG_7201.HEIC</span></span></td>
+                      <td class="num">4.1 MB</td><td>raw</td><td class="date">2024-07-12 14:02</td>
+                    </tr>
+                    <tr aria-selected="true">
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-image"></use></svg><span>IMG_7202.HEIC</span></span></td>
+                      <td class="num">3.9 MB</td><td>raw</td><td class="date">2024-07-12 14:03</td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-image"></use></svg><span>IMG_7203.HEIC</span></span></td>
+                      <td class="num">4.4 MB</td><td>raw</td><td class="date">2024-07-12 14:03</td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-video"></use></svg><span>DJI_0042.MP4</span></span></td>
+                      <td class="num">812 MB</td><td>raw</td><td class="date">2024-07-12 16:40</td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-doc"></use></svg><span>trip-notes.md</span></span></td>
+                      <td class="num">12 KB</td>
+                      <td><span class="cell"><span class="dot g"></span><span>zstd + dictionary, 71% smaller</span></span></td>
+                      <td class="date">2024-07-14 22:10</td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-file"></use></svg><span>itinerary.pdf</span></span></td>
+                      <td class="num">1.2 MB</td>
+                      <td><span class="cell"><span class="dot g"></span><span>zstd, 18% smaller</span></span></td>
+                      <td class="date">2024-07-01 09:20</td>
+                    </tr>
+                    <tr>
+                      <td class="nm"><span class="cell"><svg class="i"><use href="#i-doc"></use></svg><span>receipts.csv</span></span></td>
+                      <td class="num">48 KB</td>
+                      <td><span class="cell"><span class="dot g"></span><span>zstd + dictionary, 84% smaller</span></span></td>
+                      <td class="date">2024-07-15 08:05</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="filler odd"></div>
+              </div>
+            </div>
+
+            <div class="split v"><i></i><i></i><i></i></div>
+
+            <aside class="pane" aria-label="Preview">
+              <div class="ph">Preview <span class="n">1 selected</span></div>
+              <div class="pb">
+                <div class="pane-body side">
+                  <div class="canvas">
+                    <svg viewBox="0 0 282 170" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                      <defs>
+                        <linearGradient id="pv1" x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0" style="stop-color:var(--accent)" stop-opacity=".85"></stop>
+                          <stop offset="1" style="stop-color:var(--accent-line)" stop-opacity=".25"></stop>
+                        </linearGradient>
+                        <linearGradient id="pv2" x1="0" y1="1" x2="1" y2="0">
+                          <stop offset="0" style="stop-color:var(--attention-line)" stop-opacity=".55"></stop>
+                          <stop offset="1" style="stop-color:var(--attention-line)" stop-opacity=".12"></stop>
+                        </linearGradient>
+                        <pattern id="pvgrid" width="14" height="14" patternUnits="userSpaceOnUse">
+                          <path d="M14 0H0v14" fill="none" style="stroke:var(--stroke-soft)" stroke-width="1"></path>
+                        </pattern>
+                      </defs>
+                      <rect width="282" height="170" style="fill:var(--surface)"></rect>
+                      <rect width="282" height="170" fill="url(#pvgrid)"></rect>
+                      <rect x="18" y="26" width="118" height="118" fill="url(#pv1)"></rect>
+                      <rect x="96" y="62" width="118" height="82" fill="url(#pv2)"></rect>
+                      <circle cx="206" cy="52" r="34" fill="none" style="stroke:var(--accent)" stroke-width="1.4" opacity=".8"></circle>
+                      <path d="M18 144h246" style="stroke:var(--stroke)" stroke-width="1"></path>
+                      <path d="M136 26v118M96 62h118" style="stroke:var(--panel)" stroke-width="1" opacity=".7"></path>
+                    </svg>
+                    <div class="cap">stand-in composition — file contents are not rendered</div>
+                  </div>
+                  <div class="fn">IMG_7202.HEIC</div>
+                  <dl class="facts">
+                    <div class="fact"><dt>Pixels</dt><dd>4,032 × 3,024</dd></div>
+                    <div class="fact"><dt>Size</dt><dd>3.9 MB</dd></div>
+                    <div class="fact"><dt>Stored</dt><dd>raw</dd></div>
+                  </dl>
+                  <div class="verified"><svg class="i"><use href="#i-check"></use></svg>Content verified</div>
+                </div>
+                <div class="side-actions">
+                  <div class="row2">
+                    <button type="button" class="btn pri">Extract… <kbd>F5</kbd></button>
+                    <button type="button" class="btn">Open with…</button>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span class="s"><span class="em">12,406 files · 48.2 GB · key v3 · last saved 2026-09-05 21:14</span></span>
+      <span class="s plain">3 changes staged</span>
+      <span class="s end"><svg class="i"><use href="#i-lock"></use></svg>Locks in 9:41</span>
+      <span class="s">Enfold 1.1</span>
+      <span class="grip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     4 — KEYSTORE
+     ============================================================ -->
+<section class="screen" id="keystore" aria-label="Keystore">
+  <div class="win">
+
+    <div class="titlebar">
+      <svg class="wmark" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-wmark"></use></svg>
+      <div class="wtitle">Enfold <span>— Keystore</span></div>
+      <div class="wbtns">
+        <div class="wbtn"><svg viewBox="0 0 10 10"><path d="M1 5h8"/></svg></div>
+        <div class="wbtn"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></div>
+        <div class="wbtn x"><svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8"/></svg></div>
+      </div>
+    </div>
+
+    <div class="menubar">
+      <b><u>F</u>ile</b><b><u>E</u>dit</b><b><u>A</u>rchive</b><b><u>K</u>ey</b><b><u>V</u>iew</b><b><u>H</u>elp</b>
+    </div>
+
+    <div class="frame">
+      <nav class="places" aria-label="Places">
+        <div class="brand"><svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-mark"></use></svg>Enfold</div>
+        <button type="button" class="place"><svg class="i i-16"><use href="#i-archives"></use></svg><span>Archives</span></button>
+        <button type="button" class="place" aria-current="page"><svg class="i i-16"><use href="#i-keystore"></use></svg><span>Keys &amp; backups</span></button>
+        <span class="place-gap"></span>
+        <button type="button" class="place"><svg class="i i-16"><use href="#i-settings"></use></svg><span>Settings</span></button>
+      </nav>
+
+      <div class="layer">
+        <div class="layer-head">
+          <h1>Keystore</h1>
+          <span class="push">3 ways to unlock · 1 backup</span>
+        </div>
+
+        <div class="layer-body">
+          <div class="cols">
+
+            <!-- left column -->
+            <div class="kcol">
+              <div class="pane tablepane" style="flex:1">
+                <div class="ph">Ways to unlock <span class="n">3</span></div>
+                <div class="pb">
+                  <table>
+                    <colgroup><col><col style="width:104px"></colgroup>
+                    <thead>
+                      <tr><th scope="col">Slot</th><th scope="col">Added</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr aria-selected="true">
+                        <td class="nm"><span class="cell"><svg class="i"><use href="#i-yubi"></use></svg><span class="two-line"><b>YubiKey 5C — desk</b><small>hardware key · PIN + touch</small></span></span></td>
+                        <td class="date">2026-08-30</td>
+                      </tr>
+                      <tr>
+                        <td class="nm"><span class="cell"><svg class="i"><use href="#i-yubi"></use></svg><span class="two-line"><b>YubiKey 5 NFC — travel</b><small>hardware key + password · PIN + touch, then a password</small></span></span></td>
+                        <td class="date">2026-08-31</td>
+                      </tr>
+                      <tr class="warnrow">
+                        <td colspan="2"><span class="in"><svg class="i i-12"><use href="#i-warn"></use></svg>Not seen since 2026-09-01 — rotation deferred</span></td>
+                      </tr>
+                      <tr>
+                        <td class="nm"><span class="cell"><svg class="i"><use href="#i-recovery"></use></svg><span class="two-line"><b>Recovery key — printed, in the safe</b><small>recovery key · 48 digits</small></span></span></td>
+                        <td class="date">2026-08-30</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div class="filler odd"></div>
+                  <div class="tablefoot">
+                    <div class="rule-line">
+                      <svg class="i"><use href="#i-lock"></use></svg>
+                      At least two independent ways in are always kept.
+                    </div>
+                    <div class="actbar">
+                      <button type="button" class="btn"><svg class="i"><use href="#i-plus"></use></svg>Add a key <kbd>Ctrl+N</kbd></button>
+                      <button type="button" class="btn">Remove <kbd>Del</kbd></button>
+                      <span class="push"></span>
+                      <button type="button" class="btn pri"><svg class="i"><use href="#i-rotate"></use></svg>Rotate now</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="split h"><i></i><i></i><i></i></div>
+
+              <div class="pane">
+                <div class="ph">Backups <span class="n">1 file</span></div>
+                <div class="pb">
+                  <div class="pane-body">
+                    <div class="bk">
+                      <span class="ic"><svg class="i i-16"><use href="#i-backup"></use></svg></span>
+                      <div>
+                        <div class="fn">backup-2026-09-05.eks</div>
+                        <div class="ln">saved 2026-09-05 22:41</div>
+                        <div class="warn">
+                          <svg class="i i-12"><use href="#i-warn"></use></svg>
+                          older than this vault (changed 2026-09-06 00:12) — the file carries its own date, so Enfold can tell
+                        </div>
+                      </div>
+                    </div>
+                    <div class="actbar">
+                      <button type="button" class="btn">Export backup</button>
+                      <button type="button" class="btn">Verify backup</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="split v"><i></i><i></i><i></i></div>
+
+            <!-- right column -->
+            <div class="kcol">
+              <div class="pane">
+                <div class="ph">Session</div>
+                <div class="pb">
+                  <div class="pane-body">
+                    <div class="setrow">
+                      <span class="lab"><b>Idle lock</b><span>No mouse or keyboard</span></span>
+                      <span class="push"><span class="stepper">
+                        <span class="v">10 minutes</span>
+                        <button type="button" aria-label="Fewer minutes"><svg viewBox="0 0 9 9"><path d="M1.5 4.5h6"/></svg></button>
+                        <button type="button" aria-label="More minutes"><svg viewBox="0 0 9 9"><path d="M4.5 1.5v6M1.5 4.5h6"/></svg></button>
+                      </span></span>
+                    </div>
+                    <div class="setrow">
+                      <span class="lab"><b>Absolute lock</b><span>Time since unlocking</span></span>
+                      <span class="push"><span class="stepper">
+                        <span class="v">1 hour</span>
+                        <button type="button" aria-label="Shorter"><svg viewBox="0 0 9 9"><path d="M1.5 4.5h6"/></svg></button>
+                        <button type="button" aria-label="Longer"><svg viewBox="0 0 9 9"><path d="M4.5 1.5v6M1.5 4.5h6"/></svg></button>
+                      </span></span>
+                    </div>
+                    <div class="setblock">
+                      <span class="seclabel">When the window closes to the tray</span>
+                      <div class="choice">
+                        <span class="opt on"><span class="rad"></span>Lock and free memory</span>
+                        <span class="opt"><span class="rad"></span>Keep window in memory</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="split h"><i></i><i></i><i></i></div>
+
+              <div class="pane">
+                <div class="ph">Appearance</div>
+                <div class="pb">
+                  <div class="pane-body">
+                    <div class="setblock">
+                      <div class="setrow">
+                        <span class="lab"><b>Look</b><span>Changing the look restarts the window</span></span>
+                      </div>
+                      <div class="choice row">
+                        <span class="opt on"><span class="rad"></span>Native (default)</span>
+                        <span class="opt"><span class="rad"></span>Workbench</span>
+                      </div>
+                    </div>
+                    <div class="setblock">
+                      <div class="setrow">
+                        <span class="lab"><b>Theme</b><span>Follows Windows unless set</span></span>
+                      </div>
+                      <div class="choice row">
+                        <span class="opt on"><span class="rad"></span>System</span>
+                        <span class="opt"><span class="rad"></span>Light</span>
+                        <span class="opt"><span class="rad"></span>Dark</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="split h"><i></i><i></i><i></i></div>
+
+              <div class="pane">
+                <div class="ph">Exports</div>
+                <div class="pb">
+                  <div class="pane-body">
+                    <div class="setrow">
+                      <span class="lab"><b>Recovery record</b><span>Repairs an archive damaged in storage</span></span>
+                      <span class="push"><span class="stepper">
+                        <span class="v wide">3% (default)</span>
+                        <button type="button" aria-label="Less"><svg viewBox="0 0 9 9"><path d="M1.5 4.5h6"/></svg></button>
+                        <button type="button" aria-label="More"><svg viewBox="0 0 9 9"><path d="M4.5 1.5v6M1.5 4.5h6"/></svg></button>
+                      </span></span>
+                    </div>
+                    <div class="hintline">Parity written beside every export, so a damaged volume can still be read.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span class="s"><span class="em">Personal vault</span></span>
+      <span class="s">Keystore · 3 ways to unlock</span>
+      <span class="s plain">1 slot needs rotation</span>
+      <span class="s end"><svg class="i"><use href="#i-lock"></use></svg>Locks in 9:41</span>
+      <span class="s">Enfold 1.1</span>
+      <span class="grip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script>
+/* S toggles the look, T cycles the theme. Nothing else needs script:
+   the page is complete at rest under either attribute. */
+document.addEventListener("keydown", function(e){
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  var r = document.documentElement, k = e.key.toLowerCase();
+  if (k === "s"){
+    r.setAttribute("data-skin", r.getAttribute("data-skin") === "workbench" ? "native" : "workbench");
+  } else if (k === "t"){
+    var order = ["light", "dark", null];
+    var next = order[(order.indexOf(r.getAttribute("data-theme")) + 1) % 3];
+    if (next) { r.setAttribute("data-theme", next); } else { r.removeAttribute("data-theme"); }
+  }
+});
+</script>
+</body>
+</html>

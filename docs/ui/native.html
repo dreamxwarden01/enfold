@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enfold — Native direction</title>
+<style>
+/* ============================================================
+   ENFOLD — direction "Native"
+   Layered Windows 11 surfaces: mica ground, elevated layer,
+   navigation rail, verdigris accent (deliberately not the
+   default Windows blue).
+   ============================================================ */
+
+:root{
+  color-scheme: light;
+
+  /* --- the six named colours ------------------------------ */
+  --ground:#F1F1F4;          /* mica window ground            */
+  --layer:#FBFBFD;           /* elevated content layer        */
+  --ink:#191A1D;             /* primary text                  */
+  --accent:#0E6F63;          /* verdigris                     */
+  --stroke:#E2E2E7;          /* hairline                      */
+  --attention:#8A5300;       /* amber, for things to look at  */
+
+  /* --- derived ------------------------------------------- */
+  --page:#E6E6EB;
+  --ground-tint:#E3EEEB;
+  --surface:#FFFFFF;
+  --surface-alt:#F4F4F7;
+  --stroke-strong:#C9C9D0;
+  --ink-2:#55565D;
+  --ink-3:#83848C;
+  --accent-hover:#0B5A50;
+  --accent-ink:#0A5349;
+  --accent-on:#FFFFFF;
+  --accent-wash:#E6F1EF;
+  --accent-line:#B7D8D2;
+  --accent-under:rgba(0,0,0,.20);
+  --attention-wash:#FBF1DF;
+  --attention-line:#E7D1A6;
+
+  --ctl:#FFFFFF;
+  --ctl-hover:#F3F3F6;
+  --ctl-press:#EBEBEF;
+  --ctl-stroke:#D7D7DE;
+  --ctl-bottom:#B7B7C1;
+
+  --touch-bg:#0E6F63;
+  --touch-bg-2:#095047;
+  --touch-ink:#FFFFFF;
+  --touch-soft:rgba(255,255,255,.74);
+  --touch-ring:rgba(255,255,255,.30);
+  --touch-ring-2:rgba(255,255,255,.14);
+
+  --focus-outer:#141416;
+  --focus-inner:#FFFFFF;
+
+  --shadow-card:0 1px 2px rgba(16,17,20,.06), 0 2px 8px rgba(16,17,20,.05);
+  --shadow-pop:0 8px 24px rgba(16,17,20,.13);
+  --shadow-window:0 12px 40px rgba(16,17,20,.16), 0 2px 6px rgba(16,17,20,.10);
+
+  /* --- geometry & type ----------------------------------- */
+  --r-window:8px;
+  --r-card:8px;
+  --r-ctl:4px;
+  --r-sm:3px;
+
+  --font-display:"Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI Semibold","Segoe UI",system-ui,"Segoe UI Symbol",sans-serif;
+  --font-text:"Segoe UI Variable Text","Segoe UI Variable Small","Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:"Cascadia Mono","Cascadia Code",Consolas,"SF Mono",ui-monospace,monospace;
+}
+
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+
+    --ground:#1C1C20;
+    --layer:#252529;
+    --ink:#F3F3F6;
+    --accent:#54D2B9;
+    --stroke:#37373D;
+    --attention:#EFC079;
+
+    --page:#101012;
+    --ground-tint:#20302D;
+    --surface:#2C2C31;
+    --surface-alt:#33333A;
+    --stroke-strong:#4A4A52;
+    --ink-2:#B5B6BE;
+    --ink-3:#898A93;
+    --accent-hover:#6ADCC5;
+    --accent-ink:#7BE0CB;
+    --accent-on:#04231F;
+    --accent-wash:#173430;
+    --accent-line:#2C544D;
+    --accent-under:rgba(0,0,0,.28);
+    --attention-wash:#33291A;
+    --attention-line:#4E3F26;
+
+    --ctl:#323238;
+    --ctl-hover:#3A3A41;
+    --ctl-press:#2E2E34;
+    --ctl-stroke:#45454D;
+    --ctl-bottom:#55555F;
+
+    --touch-bg:#0C5048;
+    --touch-bg-2:#073630;
+    --touch-ink:#EAFBF6;
+    --touch-soft:rgba(234,251,246,.72);
+    --touch-ring:rgba(84,210,185,.34);
+    --touch-ring-2:rgba(84,210,185,.14);
+
+    --focus-outer:#FFFFFF;
+    --focus-inner:#1C1C20;
+
+    --shadow-card:0 1px 2px rgba(0,0,0,.34), 0 2px 10px rgba(0,0,0,.26);
+    --shadow-pop:0 10px 28px rgba(0,0,0,.48);
+    --shadow-window:0 14px 44px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
+  }
+}
+
+:root[data-theme="dark"]{
+  color-scheme: dark;
+
+  --ground:#1C1C20;
+  --layer:#252529;
+  --ink:#F3F3F6;
+  --accent:#54D2B9;
+  --stroke:#37373D;
+  --attention:#EFC079;
+
+  --page:#101012;
+  --ground-tint:#20302D;
+  --surface:#2C2C31;
+  --surface-alt:#33333A;
+  --stroke-strong:#4A4A52;
+  --ink-2:#B5B6BE;
+  --ink-3:#898A93;
+  --accent-hover:#6ADCC5;
+  --accent-ink:#7BE0CB;
+  --accent-on:#04231F;
+  --accent-wash:#173430;
+  --accent-line:#2C544D;
+  --accent-under:rgba(0,0,0,.28);
+  --attention-wash:#33291A;
+  --attention-line:#4E3F26;
+
+  --ctl:#323238;
+  --ctl-hover:#3A3A41;
+  --ctl-press:#2E2E34;
+  --ctl-stroke:#45454D;
+  --ctl-bottom:#55555F;
+
+  --touch-bg:#0C5048;
+  --touch-bg-2:#073630;
+  --touch-ink:#EAFBF6;
+  --touch-soft:rgba(234,251,246,.72);
+  --touch-ring:rgba(84,210,185,.34);
+  --touch-ring-2:rgba(84,210,185,.14);
+
+  --focus-outer:#FFFFFF;
+  --focus-inner:#1C1C20;
+
+  --shadow-card:0 1px 2px rgba(0,0,0,.34), 0 2px 10px rgba(0,0,0,.26);
+  --shadow-pop:0 10px 28px rgba(0,0,0,.48);
+  --shadow-window:0 14px 44px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
+}
+
+/* ---------- page ---------------------------------------- */
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--page);
+  color:var(--ink);
+  font-family:var(--font-text);
+  font-size:13px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+main{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:48px;
+  padding:48px 24px;
+}
+.screen{
+  width:1100px;
+  height:700px;
+  overflow:hidden;
+  position:relative;
+  box-sizing:border-box;
+  flex:none;
+  border-radius:var(--r-window);
+  background:
+    radial-gradient(140% 100% at 8% -10%, var(--ground-tint) 0%, transparent 58%),
+    var(--ground);
+  box-shadow:var(--shadow-window);
+  color:var(--ink);
+}
+
+/* ---------- primitives ---------------------------------- */
+svg{display:block}
+.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.i-20{width:20px;height:20px}
+.i-14{width:14px;height:14px}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+button{font:inherit;color:inherit;margin:0}
+:focus-visible{                       /* Windows dual ring: light inside, dark outside */
+  outline:2px solid var(--focus-outer);
+  outline-offset:2px;
+  box-shadow:0 0 0 2px var(--focus-inner);
+  border-radius:var(--r-ctl);
+}
+
+/* Windows-style buttons */
+.btn{
+  display:inline-flex;align-items:center;gap:8px;
+  height:32px;padding:0 12px;
+  border:1px solid var(--ctl-stroke);
+  border-bottom-color:var(--ctl-bottom);
+  border-radius:var(--r-ctl);
+  background:var(--ctl);
+  color:var(--ink);
+  font-size:13px;
+  cursor:default;
+  white-space:nowrap;
+  transition:background .12s ease, border-color .12s ease;
+}
+.btn:hover{background:var(--ctl-hover)}
+.btn:active{background:var(--ctl-press);border-bottom-color:var(--ctl-stroke)}
+.btn.accent{
+  background:var(--accent);color:var(--accent-on);
+  border-color:transparent;border-bottom-color:var(--accent-under);
+  font-weight:600;
+}
+.btn.accent:hover{background:var(--accent-hover)}
+.btn.subtle{background:transparent;border-color:transparent}
+.btn.subtle:hover{background:var(--surface-alt);border-color:transparent}
+.btn.link{
+  background:none;border:none;padding:0;height:auto;
+  color:var(--accent-ink);text-decoration:underline;
+  text-underline-offset:2px;text-decoration-thickness:1px;
+  font-size:12.5px;
+}
+.btn.link:hover{color:var(--accent-hover)}
+.btn.wide{width:100%;justify-content:center}
+.btn.sm{height:28px;padding:0 10px;font-size:12.5px}
+
+.sep{width:1px;height:20px;background:var(--stroke);flex:none}
+
+/* cards / surfaces */
+.card{
+  background:var(--surface);
+  border:1px solid var(--stroke);
+  border-radius:var(--r-card);
+  box-shadow:var(--shadow-card);
+}
+
+/* info strips (Windows InfoBar) */
+.bar{
+  display:flex;align-items:flex-start;gap:10px;
+  padding:10px 12px;
+  border:1px solid var(--stroke);
+  border-radius:var(--r-card);
+  background:var(--surface-alt);
+  color:var(--ink-2);
+  font-size:12.5px;
+}
+.bar .i{margin-top:1px;color:var(--ink-3)}
+.bar.attention{background:var(--attention-wash);border-color:var(--attention-line);color:var(--ink)}
+.bar.attention .i{color:var(--attention)}
+.bar.accent{background:var(--accent-wash);border-color:var(--accent-line);color:var(--ink)}
+.bar.accent .i{color:var(--accent-ink)}
+.bar strong{font-weight:600;color:var(--ink)}
+
+/* chips */
+.chip{
+  display:inline-flex;align-items:center;gap:6px;
+  height:22px;padding:0 8px;border-radius:11px;
+  background:var(--surface-alt);border:1px solid var(--stroke);
+  font-size:11.5px;color:var(--ink-2);
+}
+.chip.key{font-variant-numeric:tabular-nums;padding:0 7px;border-radius:var(--r-sm);height:19px}
+.chip.warn{background:var(--attention-wash);border-color:var(--attention-line);color:var(--attention)}
+
+/* type roles */
+.t-title{font-family:var(--font-display);font-size:20px;font-weight:600;letter-spacing:-.01em;margin:0}
+.t-section{font-family:var(--font-display);font-size:15px;font-weight:600;margin:0}
+.t-sub{color:var(--ink-2)}
+.t-quiet{color:var(--ink-3);font-size:11.5px}
+
+/* ============================================================
+   Application shell: rail + layer
+   ============================================================ */
+.shell{display:grid;grid-template-columns:212px 1fr;height:100%}
+
+.rail{
+  display:flex;flex-direction:column;
+  padding:12px 8px 12px 10px;
+  gap:2px;
+  min-width:0;
+}
+.brand{
+  display:flex;align-items:center;gap:9px;
+  padding:6px 8px 14px 10px;
+  font-family:var(--font-display);font-size:14px;font-weight:600;letter-spacing:.01em;
+}
+.brand .mark{width:20px;height:20px;flex:none}
+.rail-item{
+  display:flex;align-items:center;gap:11px;
+  height:36px;padding:0 10px;border-radius:var(--r-ctl);
+  color:var(--ink-2);position:relative;
+  border:1px solid transparent;background:none;
+  width:100%;text-align:left;cursor:default;font-size:13px;
+}
+.rail-item:hover{background:var(--surface-alt);color:var(--ink)}
+.rail-item[aria-current="page"]{background:var(--surface);border-color:var(--stroke);color:var(--ink);font-weight:600;box-shadow:var(--shadow-card)}
+.rail-item[aria-current="page"]::before{
+  content:"";position:absolute;left:-4px;top:9px;
+  width:3px;height:18px;border-radius:2px;background:var(--accent);
+}
+.rail-item[aria-current="page"] .i{color:var(--accent-ink)}
+.rail-gap{flex:1}
+.rail-foot{padding:10px 10px 2px;border-top:1px solid var(--stroke);margin-top:8px}
+
+.layer{
+  background:var(--layer);
+  border-top:1px solid var(--stroke);
+  border-left:1px solid var(--stroke);
+  border-top-left-radius:var(--r-card);
+  display:flex;flex-direction:column;
+  min-width:0;overflow:hidden;
+}
+.layer-head{
+  display:flex;align-items:center;gap:12px;
+  padding:18px 24px 12px;
+}
+.layer-body{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 24px 0;gap:12px}
+.layer-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  height:34px;flex:none;padding:0 24px;
+  border-top:1px solid var(--stroke);
+  background:var(--ground);
+  color:var(--ink-3);font-size:11.5px;
+}
+
+.cmdbar{display:flex;align-items:center;gap:6px;flex:none}
+.cmdbar .grow{flex:1}
+.search{
+  display:flex;align-items:center;gap:8px;
+  width:200px;height:30px;padding:0 10px;
+  border:1px solid var(--ctl-stroke);border-bottom-color:var(--ctl-bottom);
+  border-radius:var(--r-ctl);background:var(--ctl);color:var(--ink-3);font-size:12.5px;
+}
+
+/* ============================================================
+   Tables
+   ============================================================ */
+.tablewrap{
+  background:var(--surface);
+  border:1px solid var(--stroke);
+  border-radius:var(--r-card);
+  overflow:hidden;
+}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+thead th{
+  text-align:left;font-weight:600;color:var(--ink-2);
+  font-size:11.5px;letter-spacing:.02em;
+  padding:0 12px;height:32px;
+  border-bottom:1px solid var(--stroke);
+  background:var(--surface-alt);
+  white-space:nowrap;
+}
+tbody td{
+  padding:0 12px;border-bottom:1px solid var(--stroke);
+  color:var(--ink-2);vertical-align:middle;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--surface-alt)}
+tbody tr[aria-selected="true"] td,
+tbody tr[aria-selected="true"]:hover td{background:var(--accent-wash)}
+tbody tr[aria-selected="true"] .fname{color:var(--ink);font-weight:600}
+.fname{color:var(--ink);display:flex;align-items:center;gap:9px;min-width:0}
+.fname .i{color:var(--ink-3);flex:none}
+.fname span{overflow:hidden;text-overflow:ellipsis}
+.sel-mark{position:relative}
+tbody tr[aria-selected="true"] .sel-mark::before{
+  content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:18px;border-radius:2px;background:var(--accent);
+}
+.two-line{display:flex;flex-direction:column;gap:1px;min-width:0}
+.two-line b{font-weight:400;color:var(--ink);font-size:12.5px;overflow:hidden;text-overflow:ellipsis}
+tbody tr[aria-selected="true"] .two-line b{font-weight:600}
+.two-line small{color:var(--ink-3);font-size:11px;overflow:hidden;text-overflow:ellipsis}
+
+/* ============================================================
+   1. UNLOCK
+   ============================================================ */
+#unlock{display:flex;flex-direction:column;padding:26px 30px 28px}
+.u-head{display:flex;align-items:center;gap:10px;flex:none;padding:0 2px 16px}
+.u-head .brand{padding:0}
+.u-head .state{
+  margin-left:auto;display:inline-flex;align-items:center;gap:7px;
+  color:var(--ink-2);font-size:12px;
+}
+.u-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;flex:1;min-height:0}
+
+.step{
+  display:flex;flex-direction:column;
+  border:1px solid var(--stroke);border-radius:var(--r-card);
+  background:var(--surface);box-shadow:var(--shadow-card);
+  overflow:hidden;position:relative;
+}
+.step-label{
+  display:flex;align-items:center;gap:9px;flex:none;
+  height:34px;padding:0 12px;
+  border-bottom:1px solid var(--stroke);
+  background:var(--surface-alt);
+  font-size:11.5px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-2);
+}
+.step-label b{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:50%;
+  background:var(--accent-wash);border:1px solid var(--accent-line);
+  color:var(--accent-ink);font-size:11px;font-weight:700;
+  font-variant-numeric:tabular-nums;
+}
+.step-body{flex:1;display:flex;flex-direction:column;padding:20px 20px 18px;min-height:0}
+
+/* step 1 */
+.keyart{display:flex;justify-content:center;padding:14px 0 18px}
+.u-lead{font-family:var(--font-display);font-size:19px;font-weight:600;margin:0 0 8px;letter-spacing:-.01em}
+.u-meta{color:var(--ink-2);font-size:12.5px}
+.u-meta .q{color:var(--ink-3);font-size:12px}
+.u-links{display:flex;flex-direction:column;align-items:flex-start;gap:9px;margin-top:16px}
+.u-foot{margin-top:auto;padding-top:14px}
+
+/* step 2 */
+.slotchip{
+  display:inline-flex;align-items:center;gap:8px;align-self:flex-start;
+  height:26px;padding:0 10px;border-radius:13px;
+  background:var(--accent-wash);border:1px solid var(--accent-line);
+  color:var(--accent-ink);font-size:12px;font-weight:600;
+}
+.field{margin-top:22px}
+.field-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.field-top label{font-size:12.5px;font-weight:600;color:var(--ink)}
+.field-top .hint{color:var(--ink-2);font-size:12px}
+.pinbox{
+  display:flex;align-items:center;
+  height:36px;padding:0 12px;
+  background:var(--ctl);
+  border:1px solid var(--ctl-stroke);
+  border-bottom:2px solid var(--accent);
+  border-radius:var(--r-ctl);
+}
+.pin-dots{
+  font-family:var(--font-mono);font-size:16px;letter-spacing:.34em;color:var(--ink);
+  line-height:1;
+}
+.caret{width:1px;height:17px;background:var(--ink);margin-left:2px}
+@media (prefers-reduced-motion: no-preference){
+  .caret{animation:blink 1.1s steps(1,end) infinite}
+}
+@keyframes blink{50%{opacity:0}}
+.pin-note{margin-top:10px;color:var(--ink-3);font-size:11.5px}
+
+/* step 3 — the takeover */
+.step.touch{border-color:transparent;background:linear-gradient(160deg,var(--touch-bg) 0%,var(--touch-bg-2) 100%);color:var(--touch-ink);box-shadow:var(--shadow-pop)}
+.step.touch .step-label{
+  background:transparent;border-bottom-color:var(--touch-ring);color:var(--touch-soft);
+}
+.step.touch .step-label b{background:var(--touch-ring);border-color:transparent;color:var(--touch-ink)}
+.touch-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 22px 26px;text-align:center}
+.rings{position:relative;width:132px;height:132px;flex:none;margin-bottom:24px}
+.rings span{
+  position:absolute;inset:0;border-radius:50%;
+  border:1px solid var(--touch-ring);
+}
+.rings span:nth-child(2){inset:16px;border-color:var(--touch-ring-2)}
+.rings span:nth-child(3){inset:32px;border-color:var(--touch-ring)}
+.rings .core{
+  position:absolute;inset:44px;border-radius:50%;
+  background:var(--touch-ring);border:1px solid var(--touch-soft);
+  display:flex;align-items:center;justify-content:center;
+}
+.rings .core svg{width:26px;height:26px;stroke:var(--touch-ink);fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+@media (prefers-reduced-motion: no-preference){
+  .rings span:nth-child(1){animation:pulse 2.4s ease-out infinite}
+  .rings span:nth-child(3){animation:pulse 2.4s ease-out infinite .8s}
+}
+@keyframes pulse{
+  0%{transform:scale(.86);opacity:.15}
+  40%{opacity:.9}
+  100%{transform:scale(1.04);opacity:0}
+}
+.touch-lead{font-family:var(--font-display);font-size:25px;font-weight:600;letter-spacing:-.015em;margin:0 0 10px;line-height:1.2}
+.touch-sub{color:var(--touch-soft);font-size:13px;margin:0}
+.touch-slot{
+  margin-top:auto;padding-top:20px;color:var(--touch-soft);font-size:11.5px;
+  display:flex;align-items:center;gap:7px;justify-content:center;
+}
+
+/* step 4 — blocked */
+.blocked{
+  flex:none;margin-top:16px;
+  display:flex;align-items:center;gap:14px;
+  padding:14px 18px;
+  border:1px solid var(--attention-line);border-radius:var(--r-card);
+  background:var(--attention-wash);
+}
+.blocked .tile{
+  width:34px;height:34px;flex:none;border-radius:var(--r-ctl);
+  background:var(--surface);border:1px solid var(--attention-line);
+  display:flex;align-items:center;justify-content:center;color:var(--attention);
+}
+.blocked .txt{display:flex;flex-direction:column;gap:1px}
+.blocked .txt b{font-size:13px;font-weight:600}
+.blocked .txt span{color:var(--ink-2);font-size:12.5px}
+.blocked .tag{margin-left:auto;display:flex;align-items:center;gap:12px}
+.blocked .step-no{
+  display:inline-flex;align-items:center;gap:9px;flex:none;
+  font-size:11.5px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-2);
+}
+.blocked .step-no b{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:50%;
+  background:var(--surface);border:1px solid var(--attention-line);
+  color:var(--attention);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+}
+
+/* ============================================================
+   2. ARCHIVES
+   ============================================================ */
+.arch-split{display:grid;grid-template-columns:1fr 252px;gap:16px;flex:1;min-height:0;padding-bottom:14px}
+#archives tbody td{height:47px}
+.arch-list{display:flex;flex-direction:column;gap:12px;min-width:0}
+.details{
+  display:flex;flex-direction:column;gap:0;
+  background:var(--surface);border:1px solid var(--stroke);border-radius:var(--r-card);
+  box-shadow:var(--shadow-card);overflow:hidden;
+}
+.details-head{padding:16px 16px 12px;border-bottom:1px solid var(--stroke)}
+.details-head .eyebrow{color:var(--ink-3);font-size:11px;letter-spacing:.05em;text-transform:uppercase}
+.details-head h3{font-family:var(--font-display);font-size:16px;font-weight:600;margin:4px 0 0}
+.facts{display:flex;flex-direction:column;padding:6px 16px 12px}
+.fact{display:flex;align-items:center;justify-content:space-between;gap:12px;height:28px;font-size:12.5px}
+.fact dt{color:var(--ink-2)}
+.fact dd{margin:0;color:var(--ink);font-variant-numeric:tabular-nums}
+.details-actions{padding:12px 16px 16px;display:flex;flex-direction:column;gap:8px;margin-top:auto;border-top:1px solid var(--stroke)}
+.details-actions .row2{display:flex;gap:8px}
+.details-actions .row2 .btn{flex:1;justify-content:center}
+.lockchip{
+  display:inline-flex;align-items:center;gap:7px;
+  color:var(--ink-2);font-size:11.5px;font-variant-numeric:tabular-nums;
+}
+.lockchip .i{color:var(--accent-ink)}
+
+/* ============================================================
+   3. ARCHIVE
+   ============================================================ */
+.crumbs{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2);min-width:0}
+.crumbs .c{padding:3px 6px;border-radius:var(--r-sm)}
+.crumbs .c:hover{background:var(--surface-alt);color:var(--ink)}
+.crumbs .c.here{color:var(--ink);font-weight:600}
+.crumbs .i{width:12px;height:12px;color:var(--ink-3)}
+.file-split{display:grid;grid-template-columns:1fr 264px;gap:16px;flex:1;min-height:0;padding-bottom:14px}
+#archive tbody td{height:34px}
+#archive tbody td:nth-child(3){font-size:11.5px}
+.preview{
+  display:flex;flex-direction:column;
+  background:var(--surface);border:1px solid var(--stroke);border-radius:var(--r-card);
+  box-shadow:var(--shadow-card);overflow:hidden;
+}
+.preview .art{
+  height:186px;flex:none;border-bottom:1px solid var(--stroke);
+  background:var(--surface-alt);position:relative;
+}
+.preview .art svg{width:100%;height:100%}
+.preview .pname{
+  padding:12px 16px 2px;font-size:13px;font-weight:600;
+  display:flex;align-items:center;gap:8px;
+}
+.preview .pname .i{color:var(--ink-3)}
+.verified{
+  display:inline-flex;align-items:center;gap:7px;
+  margin:10px 16px 0;padding:6px 10px;
+  border:1px solid var(--accent-line);background:var(--accent-wash);
+  border-radius:var(--r-ctl);color:var(--accent-ink);font-size:12px;font-weight:600;
+}
+.preview .facts{padding:6px 16px 10px}
+.preview-actions{margin-top:auto;padding:12px 16px 16px;border-top:1px solid var(--stroke);display:flex;gap:8px}
+.preview-actions .btn{flex:1;justify-content:center}
+.pending{
+  display:flex;align-items:center;gap:12px;flex:none;
+  padding:9px 10px 9px 12px;
+  border:1px solid var(--accent-line);border-radius:var(--r-card);
+  background:var(--accent-wash);
+}
+.pending .i{color:var(--accent-ink)}
+.pending .txt{font-size:12.5px}
+.pending .txt b{font-weight:600}
+.pending .acts{margin-left:auto;display:flex;gap:8px}
+
+/* ============================================================
+   4. KEYSTORE
+   ============================================================ */
+.ks-cols{display:grid;grid-template-columns:1fr 316px;gap:20px;flex:1;min-height:0;padding-bottom:16px}
+.ks-col{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ks-head{display:flex;align-items:baseline;gap:10px}
+.ks-head .t-quiet{margin-left:auto}
+.slot{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:12px 14px;
+  background:var(--surface);border:1px solid var(--stroke);border-radius:var(--r-card);
+  box-shadow:var(--shadow-card);
+}
+.slot .tile{
+  width:32px;height:32px;flex:none;border-radius:var(--r-ctl);
+  background:var(--accent-wash);border:1px solid var(--accent-line);
+  color:var(--accent-ink);display:flex;align-items:center;justify-content:center;
+}
+.slot .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.slot .body b{font-size:13px;font-weight:600}
+.slot .body .meta{color:var(--ink-2);font-size:12px;font-variant-numeric:tabular-nums}
+.slot[data-selected="true"]{border-color:var(--accent-line);background:var(--accent-wash)}
+.slot .warnline{
+  display:flex;align-items:center;gap:8px;margin-top:6px;
+  padding:6px 9px;border-radius:var(--r-ctl);
+  background:var(--attention-wash);border:1px solid var(--attention-line);
+  color:var(--ink);font-size:11.5px;
+}
+.slot .warnline .i{color:var(--attention)}
+.rule{
+  display:flex;align-items:center;gap:9px;
+  color:var(--ink-2);font-size:12px;padding:2px 2px;
+}
+.rule .i{color:var(--ink-3)}
+.ks-actions{display:flex;gap:8px;padding-top:2px}
+
+.backup{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.backup .top{display:flex;align-items:center;gap:11px}
+.backup .top .tile{
+  width:32px;height:32px;flex:none;border-radius:var(--r-ctl);
+  background:var(--surface-alt);border:1px solid var(--stroke);
+  color:var(--ink-2);display:flex;align-items:center;justify-content:center;
+}
+.backup .fname2{font-family:var(--font-mono);font-size:12.5px;color:var(--ink)}
+.backup .acts{display:flex;gap:8px}
+
+.setcard{padding:4px 16px;display:flex;flex-direction:column}
+.setrow{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 0;border-bottom:1px solid var(--stroke);
+}
+.setrow:last-child{border-bottom:none}
+.setrow .lab{display:flex;flex-direction:column;gap:1px;min-width:0}
+.setrow .lab b{font-size:12.5px;font-weight:600}
+.setrow .lab span{color:var(--ink-3);font-size:11.5px}
+.setrow .ctl{margin-left:auto}
+.combo{
+  display:inline-flex;align-items:center;gap:10px;
+  height:30px;padding:0 8px 0 11px;
+  border:1px solid var(--ctl-stroke);border-bottom-color:var(--ctl-bottom);
+  border-radius:var(--r-ctl);background:var(--ctl);
+  font-size:12.5px;font-variant-numeric:tabular-nums;
+}
+.combo .i{width:12px;height:12px;color:var(--ink-2)}
+.radios{display:flex;flex-direction:column;gap:9px;padding:4px 0 2px}
+.radio{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-2)}
+.radio .dot{
+  width:18px;height:18px;flex:none;border-radius:50%;
+  border:1px solid var(--stroke-strong);background:var(--ctl);
+  display:flex;align-items:center;justify-content:center;
+}
+.radio[data-checked="true"]{color:var(--ink)}
+.radio[data-checked="true"] .dot{border:5px solid var(--accent);background:var(--surface)}
+.slider{display:flex;align-items:center;gap:12px;padding:8px 0 2px}
+.track{
+  position:relative;flex:1;height:4px;border-radius:2px;background:var(--stroke-strong);
+}
+.track .fill{position:absolute;left:0;top:0;bottom:0;width:26%;border-radius:2px;background:var(--accent)}
+.track .thumb{
+  position:absolute;left:26%;top:50%;transform:translate(-50%,-50%);
+  width:18px;height:18px;border-radius:50%;background:var(--surface);
+  border:1px solid var(--stroke-strong);box-shadow:var(--shadow-card);
+  display:flex;align-items:center;justify-content:center;
+}
+.track .thumb::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--accent)}
+.slider .val{font-size:12.5px;font-variant-numeric:tabular-nums;min-width:88px;text-align:right;color:var(--ink)}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-archives" viewBox="0 0 20 20">
+      <path d="M3 6.5h14v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5Z"/>
+      <path d="M2.5 3.5h15v3h-15z"/><path d="M8 10h4"/>
+    </symbol>
+    <symbol id="i-keystore" viewBox="0 0 20 20">
+      <circle cx="7" cy="8.5" r="3.5"/><path d="M9.6 10.9 16 17.3"/><path d="M14.4 15.7 16 14.1"/>
+    </symbol>
+    <symbol id="i-settings" viewBox="0 0 20 20">
+      <path d="M3 6h9"/><path d="M15.5 6H17"/><circle cx="13.7" cy="6" r="1.8"/>
+      <path d="M3 14h1.6"/><path d="M8.1 14H17"/><circle cx="6.4" cy="14" r="1.8"/>
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 20 20">
+      <rect x="4.5" y="8.5" width="11" height="7.5" rx="1.5"/>
+      <path d="M7 8.5V6.6a3 3 0 0 1 6 0v1.9"/>
+    </symbol>
+    <symbol id="i-chevron" viewBox="0 0 20 20"><path d="m8 5 5 5-5 5"/></symbol>
+    <symbol id="i-chevdown" viewBox="0 0 20 20"><path d="m5 8 5 5 5-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.2"/><path d="m6.8 10.2 2.2 2.2 4.3-4.6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.2"/><path d="M10 9v4.4"/><path d="M10 6.6h.01"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 20 20"><path d="M10 3.4 17.6 16.4H2.4L10 3.4Z"/><path d="M10 8.2v3.6"/><path d="M10 14h.01"/></symbol>
+    <symbol id="i-yubi" viewBox="0 0 20 20">
+      <rect x="2.6" y="6" width="14.8" height="8" rx="2.4"/><circle cx="13.4" cy="10" r="2"/><path d="M5.4 8.6v2.8"/>
+    </symbol>
+    <symbol id="i-touchdot" viewBox="0 0 20 20">
+      <circle cx="10" cy="10" r="3"/><path d="M10 2.6v1.8"/><path d="M10 15.6v1.8"/><path d="M2.6 10h1.8"/><path d="M15.6 10h1.8"/>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4.5v11"/><path d="M4.5 10h11"/></symbol>
+    <symbol id="i-open" viewBox="0 0 20 20"><path d="M4 7V4.6h11.4V16H4v-2.4"/><path d="M10.4 10H2.8"/><path d="m5.8 7 3 3-3 3"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 20 20"><path d="M2.6 5.4h5.1l1.5 2h8.2V15a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V5.4Z"/><path d="M13 10.4v3.2"/><path d="M11.4 12h3.2"/></symbol>
+    <symbol id="i-extract" viewBox="0 0 20 20"><path d="M10 3.4v8.4"/><path d="m6.6 8.6 3.4 3.4 3.4-3.4"/><path d="M3.6 13.4v2.2h12.8v-2.2"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 20 20"><path d="M3.8 5.6h12.4"/><path d="M8.2 5.6V4h3.6v1.6"/><path d="M5.4 5.6 6.2 16h7.6l.8-10.4"/></symbol>
+    <symbol id="i-file" viewBox="0 0 20 20"><path d="M11.2 2.8H5.6v14.4h8.8V6l-3.2-3.2Z"/><path d="M11.2 2.8V6h3.2"/></symbol>
+    <symbol id="i-image" viewBox="0 0 20 20"><rect x="2.8" y="4.4" width="14.4" height="11.2" rx="1.6"/><circle cx="7.2" cy="8.4" r="1.2"/><path d="m3.6 14 4-4 3.4 3.4 2.2-2 3.2 3"/></symbol>
+    <symbol id="i-video" viewBox="0 0 20 20"><rect x="2.6" y="5" width="10.6" height="10" rx="1.6"/><path d="m13.2 10.6 4.2 2.6V6.8l-4.2 2.6z"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 20 20"><path d="M11.2 2.8H5.6v14.4h8.8V6l-3.2-3.2Z"/><path d="M7.8 9.6h4.4"/><path d="M7.8 12.4h4.4"/></symbol>
+    <symbol id="i-box" viewBox="0 0 20 20"><path d="m10 2.8 6.6 3.4v7.6L10 17.2 3.4 13.8V6.2L10 2.8Z"/><path d="M3.4 6.2 10 9.6l6.6-3.4"/><path d="M10 9.6v7.6"/></symbol>
+    <symbol id="i-recovery" viewBox="0 0 20 20"><rect x="2.6" y="4.6" width="14.8" height="10.8" rx="1.8"/><path d="M5.6 9h3"/><path d="M5.6 11.8h6"/><path d="M13.4 8.2h1.2"/></symbol>
+    <symbol id="i-backup" viewBox="0 0 20 20"><path d="M11.2 2.8H5.6v14.4h8.8V6l-3.2-3.2Z"/><path d="M11.2 2.8V6h3.2"/><path d="M10 9.4v4"/><path d="m8.2 11.6 1.8 1.8 1.8-1.8"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 20 20"><path d="M10 2.8 16 5v5.2c0 3.4-2.4 6-6 7-3.6-1-6-3.6-6-7V5l6-2.2Z"/><path d="M7.6 9.8h4.8v3.4H7.6z"/><path d="M9 9.8V8.6a1 1 0 0 1 2 0v1.2"/></symbol>
+    <symbol id="i-search" viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.2"/><path d="m12.8 12.8 4 4"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 20 20"><path d="M16.2 10a6.2 6.2 0 1 1-1.9-4.5"/><path d="M16.4 3.4v3.4H13"/></symbol>
+    <symbol id="i-save" viewBox="0 0 20 20"><path d="M4.4 3.6h9l3 3v9.8H4.4V3.6Z"/><path d="M7 3.6v4h5v-4"/><path d="M7 16.4v-4.6h6v4.6"/></symbol>
+    <symbol id="i-mark" viewBox="0 0 20 20">
+      <path d="M3.2 6.4 10 2.6l6.8 3.8v7.2L10 17.4 3.2 13.6V6.4Z" style="fill:var(--accent-wash);stroke:var(--accent)"/>
+      <path d="M10 2.6v7.1l6.8 3.9" style="stroke:var(--accent)"/>
+      <path d="M3.2 6.4 10 9.7" style="stroke:var(--accent)"/>
+    </symbol>
+  </defs>
+</svg>
+
+<main>
+
+<!-- ============================================================
+     1. UNLOCK
+     ============================================================ -->
+<section class="screen" id="unlock" aria-label="Enfold — keystore locked">
+  <div class="u-head">
+    <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark"></use></svg>Enfold</div>
+    <div class="state"><svg class="i i-14"><use href="#i-lock"></use></svg>Keystore locked</div>
+  </div>
+
+  <div class="u-strip">
+
+    <!-- state 1 -->
+    <article class="step">
+      <div class="step-label"><b>1</b>Waiting for the key</div>
+      <div class="step-body">
+        <div class="keyart">
+          <svg width="150" height="72" viewBox="0 0 150 72" fill="none" aria-hidden="true">
+            <rect x="1" y="18" width="52" height="36" rx="4" style="fill:var(--surface-alt);stroke:var(--stroke-strong)" stroke-width="1.5"/>
+            <rect x="9" y="26" width="36" height="20" rx="2" style="fill:var(--ground);stroke:var(--stroke-strong)" stroke-width="1.5"/>
+            <path d="M53 30h10M53 42h10" style="stroke:var(--stroke-strong)" stroke-width="1.5" stroke-dasharray="3 4"/>
+            <rect x="70" y="22" width="72" height="28" rx="8" style="fill:var(--surface);stroke:var(--ink-3)" stroke-width="1.5"/>
+            <rect x="62" y="29" width="10" height="14" rx="2" style="fill:var(--surface-alt);stroke:var(--ink-3)" stroke-width="1.5"/>
+            <circle cx="126" cy="36" r="7.5" style="fill:var(--accent-wash);stroke:var(--accent)" stroke-width="1.5"/>
+            <circle cx="126" cy="36" r="2.6" style="fill:var(--accent)"/>
+            <path d="M80 30v12M88 30v12" style="stroke:var(--ink-3)" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h2 class="u-lead">Insert your YubiKey</h2>
+        <div class="u-meta">Personal vault</div>
+        <div class="u-meta q">Last unlocked yesterday, 21:14</div>
+        <div class="u-links">
+          <button type="button" class="btn sm">Use recovery key</button>
+          <button type="button" class="btn link">Open a backup</button>
+        </div>
+        <div class="u-foot">
+          <div class="bar">
+            <svg class="i i-14"><use href="#i-info"></use></svg>
+            <span>Two YubiKeys are inserted — remove one to continue.</span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- state 2 -->
+    <article class="step">
+      <div class="step-label"><b>2</b>PIN</div>
+      <div class="step-body">
+        <span class="slotchip"><svg class="i i-14"><use href="#i-yubi"></use></svg>YubiKey 5C — desk</span>
+        <div class="u-meta q" style="margin-top:10px">Matched a slot in this keystore.</div>
+
+        <div class="field">
+          <div class="field-top">
+            <label>PIN</label>
+            <span class="hint num">3 attempts left</span>
+          </div>
+          <div class="pinbox" id="pin">
+            <span class="pin-dots">••••••</span><span class="caret"></span>
+          </div>
+          <div class="pin-note">Six digits. The key counts wrong tries, not Enfold.</div>
+        </div>
+
+        <div style="margin-top:18px">
+          <button type="button" class="btn accent wide">Unlock</button>
+        </div>
+
+        <div class="u-foot">
+          <div class="u-links" style="margin-top:0">
+            <button type="button" class="btn link">Use recovery key</button>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- state 3 — full-surface takeover -->
+    <article class="step touch">
+      <div class="step-label"><b>3</b>Touch</div>
+      <div class="touch-body">
+        <div class="rings" aria-hidden="true">
+          <span></span><span></span><span></span>
+          <div class="core"><svg viewBox="0 0 20 20"><use href="#i-touchdot"></use></svg></div>
+        </div>
+        <h2 class="touch-lead">Touch your YubiKey now</h2>
+        <p class="touch-sub">The key will blink until you touch it.</p>
+        <div class="touch-slot">
+          <svg class="i i-14" style="stroke:var(--touch-soft)"><use href="#i-yubi"></use></svg>
+          PIN accepted · YubiKey 5C — desk
+        </div>
+      </div>
+    </article>
+
+  </div>
+
+  <!-- state 4 -->
+  <div class="blocked">
+    <span class="step-no"><b>4</b>Blocked</span>
+    <div class="tile"><svg class="i"><use href="#i-shield"></use></svg></div>
+    <div class="txt">
+      <b>PIN is blocked. Use your recovery key.</b>
+      <span>This key will not accept a PIN again until it is reset.</span>
+    </div>
+    <div class="tag">
+      <button type="button" class="btn">Use recovery key</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     2. ARCHIVES
+     ============================================================ -->
+<section class="screen" id="archives" aria-label="Personal vault — archives">
+  <div class="shell">
+
+    <nav class="rail" aria-label="Main">
+      <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark"></use></svg>Enfold</div>
+      <button type="button" class="rail-item" aria-current="page"><svg class="i"><use href="#i-archives"></use></svg>Archives</button>
+      <button type="button" class="rail-item"><svg class="i"><use href="#i-keystore"></use></svg>Keystore</button>
+      <div class="rail-gap"></div>
+      <div class="rail-foot">
+        <button type="button" class="rail-item"><svg class="i"><use href="#i-settings"></use></svg>Settings</button>
+      </div>
+    </nav>
+
+    <div class="layer">
+      <div class="layer-head">
+        <h1 class="t-title">Personal vault</h1>
+        <span class="chip num" style="margin-left:2px">5 archives</span>
+      </div>
+
+      <div class="layer-body">
+        <div class="cmdbar">
+          <button type="button" class="btn accent"><svg class="i i-14"><use href="#i-open"></use></svg>Open</button>
+          <button type="button" class="btn"><svg class="i i-14"><use href="#i-plus"></use></svg>New archive</button>
+          <div class="sep"></div>
+          <button type="button" class="btn subtle"><svg class="i i-14"><use href="#i-rotate"></use></svg>Rotate key</button>
+          <div class="grow"></div>
+          <div class="search"><svg class="i i-14"><use href="#i-search"></use></svg>Search archives</div>
+        </div>
+
+        <div class="bar attention">
+          <svg class="i i-14"><use href="#i-warn"></use></svg>
+          <span>Key rotation deferred for ‘YubiKey 5 NFC — travel’ — it has not been seen since <span class="num">2026-09-01</span>.</span>
+          <button type="button" class="btn link" style="margin-left:auto;flex:none">Details</button>
+        </div>
+
+        <div class="arch-split">
+          <div class="arch-list">
+            <div class="tablewrap">
+              <table>
+                <colgroup>
+                  <col style="width:auto"><col style="width:78px"><col style="width:62px">
+                  <col style="width:124px"><col style="width:54px">
+                </colgroup>
+                <thead>
+                  <tr><th scope="col">Name</th><th scope="col">Size</th><th scope="col">Files</th><th scope="col">Last modified</th><th scope="col">Key</th></tr>
+                </thead>
+                <tbody>
+                  <tr aria-selected="true">
+                    <td class="sel-mark">
+                      <div class="fname">
+                        <svg class="i i-14"><use href="#i-box"></use></svg>
+                        <div class="two-line"><b>Photos 2024</b><small>6% free space — compact when convenient</small></div>
+                      </div>
+                    </td>
+                    <td class="num">48.2 GB</td><td class="num">12,406</td><td class="num">2026-09-05 21:14</td>
+                    <td><span class="chip key">v3</span></td>
+                  </tr>
+                  <tr>
+                    <td class="sel-mark">
+                      <div class="fname">
+                        <svg class="i i-14"><use href="#i-box"></use></svg>
+                        <div class="two-line"><b>Family videos</b><small>stored raw (already compressed)</small></div>
+                      </div>
+                    </td>
+                    <td class="num">212 GB</td><td class="num">96</td><td class="num">2026-08-30 19:02</td>
+                    <td><span class="chip key">v1</span></td>
+                  </tr>
+                  <tr>
+                    <td class="sel-mark">
+                      <div class="fname">
+                        <svg class="i i-14"><use href="#i-box"></use></svg>
+                        <div class="two-line"><b>Tax returns</b><small>—</small></div>
+                      </div>
+                    </td>
+                    <td class="num">184 MB</td><td class="num">231</td><td class="num">2026-08-14 10:37</td>
+                    <td><span class="chip key">v2</span></td>
+                  </tr>
+                  <tr>
+                    <td class="sel-mark">
+                      <div class="fname">
+                        <svg class="i i-14"><use href="#i-box"></use></svg>
+                        <div class="two-line"><b>Project Enfold — notes</b><small>dictionary on</small></div>
+                      </div>
+                    </td>
+                    <td class="num">22 MB</td><td class="num">1,180</td><td class="num">2026-09-05 23:02</td>
+                    <td><span class="chip key">v3</span></td>
+                  </tr>
+                  <tr>
+                    <td class="sel-mark">
+                      <div class="fname">
+                        <svg class="i i-14"><use href="#i-box"></use></svg>
+                        <div class="two-line"><b>Passport scans</b><small>—</small></div>
+                      </div>
+                    </td>
+                    <td class="num">9.8 MB</td><td class="num">14</td><td class="num">2026-07-02 08:15</td>
+                    <td><span class="chip key">v2</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside class="details" aria-label="Selected archive">
+            <div class="details-head">
+              <div class="eyebrow">Selected</div>
+              <h3>Photos 2024</h3>
+            </div>
+            <dl class="facts">
+              <div class="fact"><dt>Size</dt><dd>48.2 GB</dd></div>
+              <div class="fact"><dt>Files</dt><dd>12,406</dd></div>
+              <div class="fact"><dt>Last modified</dt><dd>2026-09-05 21:14</dd></div>
+              <div class="fact"><dt>Key version</dt><dd>v3</dd></div>
+            </dl>
+            <div style="padding:0 16px 14px">
+              <div class="bar">
+                <svg class="i i-14"><use href="#i-info"></use></svg>
+                <span>6% free space — compact when convenient</span>
+              </div>
+            </div>
+            <div class="details-actions">
+              <button type="button" class="btn accent wide"><svg class="i i-14"><use href="#i-open"></use></svg>Open</button>
+              <button type="button" class="btn wide">Export volumes…</button>
+              <div class="row2">
+                <button type="button" class="btn">Compact</button>
+                <button type="button" class="btn">Rotate key</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="layer-foot">
+        <span>Photos 2024 selected</span>
+        <span class="lockchip"><svg class="i i-14"><use href="#i-lock"></use></svg>Locks in 9:41</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     3. ARCHIVE
+     ============================================================ -->
+<section class="screen" id="archive" aria-label="Inside Photos 2024">
+  <div class="shell">
+
+    <nav class="rail" aria-label="Main">
+      <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark"></use></svg>Enfold</div>
+      <button type="button" class="rail-item" aria-current="page"><svg class="i"><use href="#i-archives"></use></svg>Archives</button>
+      <button type="button" class="rail-item"><svg class="i"><use href="#i-keystore"></use></svg>Keystore</button>
+      <div class="rail-gap"></div>
+      <div class="rail-foot">
+        <button type="button" class="rail-item"><svg class="i"><use href="#i-settings"></use></svg>Settings</button>
+      </div>
+    </nav>
+
+    <div class="layer">
+      <div class="layer-head">
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <span class="c">Photos 2024</span>
+          <svg class="i"><use href="#i-chevron"></use></svg>
+          <span class="c num">2024</span>
+          <svg class="i"><use href="#i-chevron"></use></svg>
+          <span class="c here num">07 Iceland</span>
+        </nav>
+      </div>
+
+      <div class="layer-body">
+        <div class="cmdbar">
+          <button type="button" class="btn subtle"><svg class="i i-14"><use href="#i-plus"></use></svg>Add files</button>
+          <button type="button" class="btn subtle"><svg class="i i-14"><use href="#i-folder"></use></svg>Add folder</button>
+          <button type="button" class="btn subtle"><svg class="i i-14"><use href="#i-extract"></use></svg>Extract</button>
+          <button type="button" class="btn subtle"><svg class="i i-14"><use href="#i-trash"></use></svg>Delete</button>
+        </div>
+
+        <div class="pending">
+          <svg class="i i-14"><use href="#i-save"></use></svg>
+          <div class="txt"><b class="num">3 changes not yet saved</b> — they are written as one step, or not at all.</div>
+          <div class="acts">
+            <button type="button" class="btn accent sm">Save changes</button>
+            <button type="button" class="btn sm">Discard</button>
+          </div>
+        </div>
+
+        <div class="file-split">
+          <div class="tablewrap" style="align-self:start;width:100%">
+            <table>
+              <colgroup>
+                <col style="width:auto"><col style="width:72px"><col style="width:204px"><col style="width:128px">
+              </colgroup>
+              <thead>
+                <tr><th scope="col">Name</th><th scope="col">Size</th><th scope="col">Stored as</th><th scope="col">Modified</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="sel-mark" style="height:34px"><div class="fname"><svg class="i i-14"><use href="#i-image"></use></svg><span>IMG_7201.HEIC</span></div></td>
+                  <td class="num">4.1 MB</td><td>raw</td><td class="num">2024-07-12 14:02</td>
+                </tr>
+                <tr aria-selected="true">
+                  <td class="sel-mark" style="height:34px"><div class="fname"><svg class="i i-14"><use href="#i-image"></use></svg><span>IMG_7202.HEIC</span></div></td>
+                  <td class="num">3.9 MB</td><td>raw</td><td class="num">2024-07-12 14:03</td>
+                </tr>
+                <tr>
+                  <td class="sel-mark" style="height:34px"><div class="fname"><svg class="i i-14"><use href="#i-image"></use></svg><span>IMG_7203.HEIC</span></div></td>
+                  <td class="num">4.4 MB</td><td>raw</td><td class="num">2024-07-12 14:03</td>
+                </tr>
+                <tr>
+                  <td class="sel-mark" style="height:34px"><div class="fname"><svg class="i i-14"><use href="#i-video"></use></svg><span>DJI_0042.MP4</span></div></td>
+                  <td class="num">812 MB</td><td>raw</td><td class="num">2024-07-12 16:40</td>
+                </tr>
+                <tr>
+                  <td class="sel-mark" style="height:34px"><div class="fname"><svg class="i i-14"><use href="#i-doc"></use></svg><span>trip-notes.md</span></div></td>
+                  <td class="num">12 KB</td><td>zstd + dictionary, <span class="num">71%</span> smaller</td><td class="num">2024-07-14 22:10</td>
+                </tr>
+                <tr>
+                  <td class="sel-mark" style="height:34px"><div class="fname"><svg class="i i-14"><use href="#i-file"></use></svg><span>itinerary.pdf</span></div></td>
+                  <td class="num">1.2 MB</td><td>zstd, <span class="num">18%</span> smaller</td><td class="num">2024-07-01 09:20</td>
+                </tr>
+                <tr>
+                  <td class="sel-mark" style="height:34px"><div class="fname"><svg class="i i-14"><use href="#i-doc"></use></svg><span>receipts.csv</span></div></td>
+                  <td class="num">48 KB</td><td>zstd + dictionary, <span class="num">84%</span> smaller</td><td class="num">2024-07-15 08:05</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <aside class="preview" aria-label="Preview">
+            <div class="art">
+              <svg viewBox="0 0 290 186" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                <defs>
+                  <linearGradient id="pv-sky" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" style="stop-color:var(--accent);stop-opacity:.55"></stop>
+                    <stop offset="1" style="stop-color:var(--accent);stop-opacity:.10"></stop>
+                  </linearGradient>
+                  <linearGradient id="pv-land" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" style="stop-color:var(--ink);stop-opacity:.55"></stop>
+                    <stop offset="1" style="stop-color:var(--ink);stop-opacity:.24"></stop>
+                  </linearGradient>
+                </defs>
+                <rect width="290" height="186" style="fill:var(--surface)"></rect>
+                <rect width="290" height="186" fill="url(#pv-sky)"></rect>
+                <circle cx="212" cy="52" r="26" style="fill:var(--surface);opacity:.7"></circle>
+                <path d="M0 132 62 78l44 40 38-30 60 44h86v54H0z" fill="url(#pv-land)"></path>
+                <path d="M0 150 54 116l40 26 46-18 62 30 88-14v52H0z" style="fill:var(--ink);opacity:.18"></path>
+                <path d="M0 156h290" style="stroke:var(--accent);opacity:.5" stroke-width="1"></path>
+                <g style="stroke:var(--surface);opacity:.35" stroke-width="1">
+                  <path d="M18 168h44M74 168h30M116 168h62"></path>
+                </g>
+              </svg>
+            </div>
+            <div class="pname"><svg class="i i-14"><use href="#i-image"></use></svg>IMG_7202.HEIC</div>
+            <dl class="facts">
+              <div class="fact"><dt>Dimensions</dt><dd>4,032 × 3,024</dd></div>
+              <div class="fact"><dt>Size</dt><dd>3.9 MB</dd></div>
+              <div class="fact"><dt>Stored as</dt><dd>raw</dd></div>
+            </dl>
+            <div class="verified"><svg class="i i-14"><use href="#i-check"></use></svg>Content verified</div>
+            <div class="preview-actions">
+              <button type="button" class="btn accent">Extract…</button>
+              <button type="button" class="btn">Open with…</button>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="layer-foot">
+        <span class="num">12,406 files · 48.2 GB · key v3 · last saved 2026-09-05 21:14</span>
+        <span class="lockchip"><svg class="i i-14"><use href="#i-lock"></use></svg>Locks in 9:41</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     4. KEYSTORE
+     ============================================================ -->
+<section class="screen" id="keystore" aria-label="Keystore">
+  <div class="shell">
+
+    <nav class="rail" aria-label="Main">
+      <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark"></use></svg>Enfold</div>
+      <button type="button" class="rail-item"><svg class="i"><use href="#i-archives"></use></svg>Archives</button>
+      <button type="button" class="rail-item" aria-current="page"><svg class="i"><use href="#i-keystore"></use></svg>Keystore</button>
+      <div class="rail-gap"></div>
+      <div class="rail-foot">
+        <button type="button" class="rail-item"><svg class="i"><use href="#i-settings"></use></svg>Settings</button>
+      </div>
+    </nav>
+
+    <div class="layer">
+      <div class="layer-head">
+        <h1 class="t-title">Keystore</h1>
+      </div>
+
+      <div class="layer-body">
+        <div class="ks-cols">
+
+          <!-- left column -->
+          <div class="ks-col">
+            <div class="ks-head">
+              <h2 class="t-section">Ways to unlock</h2>
+              <span class="t-quiet">3 slots</span>
+            </div>
+
+            <div class="slot" data-selected="true">
+              <div class="tile"><svg class="i"><use href="#i-yubi"></use></svg></div>
+              <div class="body">
+                <b>YubiKey 5C — desk</b>
+                <span class="meta">hardware key · PIN + touch · added 2026-08-30</span>
+              </div>
+            </div>
+
+            <div class="slot">
+              <div class="tile"><svg class="i"><use href="#i-yubi"></use></svg></div>
+              <div class="body">
+                <b>YubiKey 5 NFC — travel</b>
+                <span class="meta">hardware key + password · PIN + touch, then a password · added 2026-08-31</span>
+                <div class="warnline">
+                  <svg class="i i-14"><use href="#i-warn"></use></svg>
+                  <span class="num">Not seen since 2026-09-01 — rotation deferred</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="slot">
+              <div class="tile"><svg class="i"><use href="#i-recovery"></use></svg></div>
+              <div class="body">
+                <b>Recovery key — printed, in the safe</b>
+                <span class="meta">recovery key · 48 digits · added 2026-08-30</span>
+              </div>
+            </div>
+
+            <div class="rule">
+              <svg class="i i-14"><use href="#i-info"></use></svg>
+              At least two independent ways in are always kept.
+            </div>
+
+            <div class="ks-actions">
+              <button type="button" class="btn accent"><svg class="i i-14"><use href="#i-plus"></use></svg>Add a key</button>
+              <button type="button" class="btn">Remove</button>
+              <button type="button" class="btn"><svg class="i i-14"><use href="#i-rotate"></use></svg>Rotate now</button>
+            </div>
+
+            <div class="ks-head" style="margin-top:12px">
+              <h2 class="t-section">Backups</h2>
+            </div>
+
+            <div class="card backup">
+              <div class="top">
+                <div class="tile"><svg class="i"><use href="#i-backup"></use></svg></div>
+                <div class="body" style="flex:1;min-width:0">
+                  <div class="fname2">backup-2026-09-05.eks</div>
+                  <div class="t-quiet num">saved 2026-09-05 22:41</div>
+                </div>
+                <div class="acts">
+                  <button type="button" class="btn sm">Export backup</button>
+                  <button type="button" class="btn sm">Verify backup</button>
+                </div>
+              </div>
+              <div class="bar attention">
+                <svg class="i i-14"><use href="#i-warn"></use></svg>
+                <span>Older than this vault <span class="num">(changed 2026-09-06 00:12)</span>. The file carries its own date, so Enfold can tell.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- right column -->
+          <div class="ks-col">
+            <div class="ks-head"><h2 class="t-section">Session</h2></div>
+            <div class="card setcard">
+              <div class="setrow">
+                <div class="lab"><b>Idle lock</b><span>No mouse or keyboard</span></div>
+                <div class="ctl"><span class="combo">10 minutes<svg class="i"><use href="#i-chevdown"></use></svg></span></div>
+              </div>
+              <div class="setrow">
+                <div class="lab"><b>Absolute lock</b><span>Time since unlocking</span></div>
+                <div class="ctl"><span class="combo">1 hour<svg class="i"><use href="#i-chevdown"></use></svg></span></div>
+              </div>
+              <div class="setrow" style="display:block">
+                <div class="lab" style="margin-bottom:6px"><b>When the window closes to the tray</b></div>
+                <div class="radios">
+                  <span class="radio" data-checked="true"><span class="dot"></span>Lock and free memory</span>
+                  <span class="radio"><span class="dot"></span>Keep window in memory</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="ks-head" style="margin-top:12px"><h2 class="t-section">Exports</h2></div>
+            <div class="card setcard">
+              <div class="setrow" style="display:block">
+                <div class="lab"><b>Recovery record</b><span>Repairs an archive damaged in storage</span></div>
+                <div class="slider">
+                  <span class="track"><span class="fill"></span><span class="thumb"></span></span>
+                  <span class="val">3% (default)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="layer-foot">
+        <span>Personal vault · keystore unlocked</span>
+        <span class="lockchip"><svg class="i i-14"><use href="#i-lock"></use></svg>Locks in 9:41</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+</body>
+</html>

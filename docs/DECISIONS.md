@@ -1967,3 +1967,30 @@ clock set back can date a newer export older, and the registry's own timestamp i
 the tie); a negative date is refused at decode as any other malformed field. The nits were
 wording: "volume exports" in SCOPE, the R35 sentence that claimed a doctored copy cannot lie
 when it can only fail to unlock, and this paragraph's own predecessor about the serial.
+
+---
+
+## 2026-09-06 — Decided: the Native look for 1.0; a second look deferred; the UI is a client of the core
+
+**How the direction was chosen.** With no visual direction in hand, four independent mockups of
+the same four screens with the same content were built from one brief (`docs/ui/brief.md`):
+Native (a first-party Windows 11 application), Instrument (a dark security instrument),
+Ledger (a typographic keeper's book) and Workbench (the dense manager in 7-Zip's lineage). The
+user liked Native and Workbench and asked whether both could ship as two selectable looks of one
+interface. A prototype answered that (`docs/ui/two-looks.html`): one DOM, two token sets, and
+seven structural CSS rules — feasible, and cheap to keep. The user then chose to ship **Native
+alone in 1.0** as the modern face of the product, and to consider Workbench later as a second
+look, on the condition that adding a look does not touch the business logic.
+
+**Why the condition holds, and is now a rule** (DESIGN §14). The core is Go and owns every
+decision — sessions and timers, the ceremony's steps, staged changes and their commit, the slot
+invariant — behind one service API that Wails binds into the WebView; the frontend renders and
+reports. `piv.Prompter` already shows the shape: the UI implements an interface the core calls.
+So a second look is a second frontend or a second skin, and the core does not know which is
+running.
+
+**Also settled by the mockups.** The ceremony is one panel changing in place — waiting, PIN,
+touch — with a small three-step line above it so the user knows a touch follows the PIN; the
+mockups' three side-by-side panels are three moments of that one panel. The touch moment is a
+full-surface takeover. Settings carry Appearance (Look, Theme). `docs/ui/native.html` is the
+reference the app is measured against; the three rejected directions are not kept.

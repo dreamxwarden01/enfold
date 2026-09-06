@@ -55,6 +55,10 @@ consequences worth stating up front:
   shows no noticeable delay, stutter or state loss; otherwise the window is hidden and ~130 MB
   resident is accepted (see "Deliberately unresolved")
 - Unlocked-state banner with countdown, and a tray icon that changes when unlocked
+- **Look: the Native direction** (`docs/ui/native.html`) — a first-party Windows 11 feel, light
+  and dark. One look in 1.0; the interface is a frontend over the Go core's service API, so a
+  second look (a denser "Workbench" one was prototyped) is a later frontend or skin, never a
+  change to the core
 - Loopback HTTP streaming with Range support, for media preview — every response `no-store`,
   and the WebView2 profile with caching disabled, so the browser engine never writes decrypted
   content to disk (`DESIGN.md` trap #13)

@@ -871,6 +871,17 @@ to updating Edge and WebView2 on Windows 10 22H2 until at least October 2028.
 Installed on the development machine: the `wails3` CLI (v3.0.0-beta.16), Node 24 and npm 11 for
 the frontend build.
 
+**The frontend is a client of the core, never part of it.** Everything the product decides lives
+in Go — the session state machine and its timers, the unlock ceremony's steps, staged changes
+and their commit, the slot invariant, what a key may be used for — behind one application
+service API (methods and events) that Wails binds into the WebView. The frontend renders what
+the core reports and sends back what the user did; it holds no rule of its own beyond
+presentation (how a retry count is worded, which surface takes over for the touch), and it never
+sees a key. The layers below already have this shape: `piv.Prompter` is an interface the UI
+implements, and the keystore and archive know nothing of any UI. The consequence, and the
+reason for the rule: a second look — or a second frontend entirely — is a frontend-only change.
+The 1.0 look is the Native direction in `docs/ui/native.html`.
+
 ### Why Go, given the memory-hygiene argument
 
 The gap between Go and Rust here is **not a capability gap**, and it is narrower than the

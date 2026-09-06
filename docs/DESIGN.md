@@ -566,7 +566,10 @@ In rough order of how often they actually fire:
    `WM_WTSSESSION_CHANGE`). Most frequent and most reliable. Do not omit this one.
 2. Manual lock from the UI
 3. Idle timeout, absolute timeout
-4. Sleep / hibernate / S0 standby (`WM_POWERBROADCAST`) — best effort, see §2
+4. Display off (`GUID_SESSION_DISPLAY_STATUS` → monitor off, the trigger that actually fires
+   on Modern Standby machines, where `PBT_APMSUSPEND` never does) and classic suspend /
+   hibernate (`PBT_APMSUSPEND`) — the second is best effort, see §2; the handler zeroes the
+   keys synchronously, since the process may be frozen ~2 s later
 5. Application exit
 
 On vault close, also destroy the decrypted index and the Metadata key.
@@ -576,13 +579,18 @@ On vault close, also destroy the decrypted index and the Metadata key.
 Auto-lock destroys the KWK and the VMK and blocks opening anything new. Archives already open
 stay usable until closed, so a running stream or an in-progress edit is not killed mid-flight.
 Open archives carry their **own idle timeout**; otherwise "keep it open" becomes a way to
-bypass the session timeout entirely.
+bypass the session timeout entirely. A dirty archive — staged changes not yet saved — is never
+closed silently and never unbounded: its idle expiry prompts (Save / Discard / Keep open, with
+at most two extensions) and a per-archive absolute cap from the first staged change, running
+across a lock, aborts and closes it (`APP.md` §2.3).
 
 ### Making the unlocked state visible
 
 - A banner with a countdown while the vault is unlocked, with a one-click **Lock now**.
 - **The tray icon must change** when unlocked. When the window is minimised the banner is
-  invisible, and a reminder nobody can see is not a reminder.
+  invisible, and a reminder nobody can see is not a reminder. It has three states, not two:
+  locked, locked with archives still open (their listings and previews still serve plaintext),
+  unlocked — each with a light and a dark icon set together.
 
 ### The token ceremony, in the order the user experiences it
 
@@ -608,7 +616,11 @@ the keystore (the user's ruling, 2026-09-05).
 ### The WebView boundary
 
 The UI is a WebView2 (Wails v3, §14). **Keys never cross into the WebView.** Anything handed to
-the renderer lives in a JS heap that cannot be zeroed. Send the index one screenful at a time
+the renderer lives in a JS heap that cannot be zeroed. One scoped exception: the recovery key
+crosses exactly twice — shown once at generation, typed once at entry — because there is no
+other channel to a human; no other key ever does, and the four typed secrets (PIN, password,
+recovery digits, management key) travel on the raw message channel, never as bound-method
+arguments, which Wails stringifies and can log (`APP.md` §1). Send the index one screenful at a time
 rather than handing over the whole decrypted file list. The WebView2 also has a disk cache of
 its own — trap #13 in §11: nothing decrypted is served to it without `no-store`. Destroying the
 window on close-to-tray (provisional, §14) additionally discards the renderer's copy of whatever
@@ -657,10 +669,15 @@ Correct in this document, and easy to lose during implementation.
     (`FORMAT.md` §16).
 13. **The WebView2 disk cache.** The browser engine caches what it fetches in its user-data
     folder. Every loopback response that carries decrypted content — the media-preview stream
-    above all — must be `Cache-Control: no-store`, and the WebView2 profile runs with caching
-    disabled or in-private where the framework exposes it. Verify by inspecting the profile
-    directory after a preview. Otherwise decrypted content is written to disk by a component
-    that is not this program.
+    above all — must be `Cache-Control: no-store`. That header is the whole defence: Wails v3
+    beta.16 exposes no cache-disable or in-private option (the WebView2 APIs for them sit in its
+    `internal/` packages), and Chromium flags are unsupported in production per Microsoft. The
+    profile lives in a directory the app owns (`%LOCALAPPDATA%\Enfold\WebView2`), swept at
+    startup and deleted best-effort at exit; nothing clears it at lock. Inspecting that
+    directory after a preview is a release gate, re-run whenever the pinned beta moves.
+    Otherwise decrypted content is written to disk by a component that is not this program.
+    The same rule forbids any preview surface that offers a browser-provided save or print:
+    the native context menu is disabled and the Edge PDF viewer is not used (`APP.md` §4).
 14. **The token's PIN-once state outlives our connection.** Measured 2026-09-04 on a YubiKey
     5.7.4 (`DECISIONS.md`): after a VERIFY the card stays verified until Windows powers it down,
     which happens **10 s after the last application disconnects** — piv-go disconnects with
@@ -805,6 +822,9 @@ Correct in this document, and easy to lose during implementation.
 - **Seekable zstd**, if seeking inside large compressed files ever matters (§9).
 
 ## 13. Document map and remaining gaps
+
+`APP.md` is the application layer: the core's state machines, the services the frontend
+binds, the preview server, the lock triggers, the shell and the frontend.
 
 | Document | Covers |
 | --- | --- |

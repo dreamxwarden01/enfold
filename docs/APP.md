@@ -1,0 +1,430 @@
+# Enfold — the application layer
+
+The layer that turns the four libraries — `internal/keystore`, `internal/archive`, `internal/piv`
+and `internal/format` — into a Windows program: the Go core (`internal/app`), the Wails v3 shell
+(`cmd/enfold`, `main.go` at the repository root as Wails requires) and the frontend
+(`frontend/`, Svelte 5 + TypeScript, the Native look of `docs/ui/native.html`). It is the
+implementation of `DESIGN.md` §10 (session model) and §14 (toolchain) and of the Application
+bullets of `SCOPE.md`. Where this document and the code disagree, this document is wrong until
+it is corrected, and the correction goes through `DECISIONS.md`.
+
+The design was critiqued before any code was written (three lenses, 48 confirmed findings;
+`DECISIONS.md` 2026-09-06). The rules below that begin with a bold phrase are the ones that came
+out of that critique; the reasoning is in the DECISIONS entry, not repeated here.
+
+## 1. Shape and the one boundary
+
+One process. The **core** owns every decision and every secret: the keystore handle, the session
+(`keystore.Session` — the KWK, DB and Metadata keys of DESIGN §10), the timers and lock
+triggers, the unlock ceremony, open archives with their staged changes, the preview server, the
+settings, the registry. It exposes **services** — methods on view structs, returning coded
+errors — and emits **events**. It has no notion of a window; it runs with zero windows in the
+tray. The **shell** is the Wails wiring: services registered, tray, the one window created and
+destroyed on demand, file drops forwarded, the hidden Win32 window that receives lock triggers,
+the shutdown hook. The **frontend** renders what the core reports and reports what the user did;
+it holds no rule beyond presentation, and it can be destroyed and recreated at any moment — on
+creation it subscribes to events first, then asks for the full state.
+
+**The API the frontend can call is the exported method set of each registered service type as
+reflection sees it, promoted methods included, reachable by name whether or not TypeScript
+bindings were generated.** So: every type passed to `application.NewService` lives in
+`internal/app/api`, is a struct with only unexported fields, embeds nothing, and holds the core
+behind an unexported pointer; nothing from `keystore`, `archive`, `format` or `piv` appears in
+any bound signature — services return view structs built by the core. A test enumerates the
+exported methods of every registered service (skipping Wails' own `ServiceName`, `ServiceStartup`,
+`ServiceShutdown`, `ServeHTTP`) against an allowlist of names *and* signatures, and the generated
+TypeScript bindings are committed so that a new method or a new field on a view struct shows up
+as a diff.
+
+What crosses the boundary: the vault's state and display name, archive summaries, one page of a
+file listing, slot descriptions, operation progress, coded errors. Keys, the whole decrypted
+index, the registry as a whole, wrapped keys, file offsets and generations never cross. The
+recovery key is the one exception, twice: shown once at generation and typed once at entry, because
+there is no other channel to a human (DESIGN §10 records the exception).
+
+**Secrets across the bridge.** Four secrets cross from the frontend: the PIN, the entangled or
+standalone password, the recovery key's digits, and the PIV management key typed as hex. None of
+them is a bound-method argument: bound calls are marshalled and stringified by Wails before any
+log-level check, and would be logged at debug level. They go through the raw message channel
+(`Options.RawMessageHandler`), which Wails does not log, as `secret <promptID> <value>` messages
+the core parses and hands to the waiting prompt. Even so a JS string cannot be zeroed and the Go
+side keeps at least the copies the transport makes; the frontend clears its input on submit and
+the ceremony dialogs are unmounted when they finish, and the design claims nothing more. The
+shell ships with `-tags production`, never sets `Options.Logger`, leaves `LogLevel` at its
+default, and a test fails if the shell mentions `slog.LevelDebug` or `application.DefaultLogger`.
+`wails3 dev` builds have debug logging, DevTools and the native context menu forced on, so a dev
+build may only ever be pointed at a throwaway vault.
+
+## 2. The core's state
+
+### 2.1 Session
+
+```
+Locked ──BeginUnlock──▶ Unlocking ──VMK derived──▶ Unlocked ──lock trigger──▶ Locked
+   ▲  ▲                    │ cancel / failure / lock trigger      │
+   │  └────── Releasing ◀──┘                                      │ ErrIndeterminate
+   └─────────────────────────────────────────────── Broken ◀───────┘
+```
+
+**Locked.** No keystore keys in memory and no decrypted registry: the lock path is (a) cancel
+or await any in-flight VMK mutation and `Unlocked.Close()`, (b) `Session.Lock()`, (c)
+`Keystore.Close()` — the only call that ends the decrypted registry's life, (d) then the event
+and the tray. The four plaintext facts the lock screen needs — `VaultID`, `ModifiedAt`,
+`RotationPending`, `Slots()` — are cached at lock and refreshed by a fresh `keystore.Open` on
+demand; a reopened file whose `VaultID` differs from the cached one is refused. The keystore
+file is held open only while Unlocked.
+
+**Unlocking.** One ceremony at a time (§2.2), on its own goroutine with a top-level `recover`
+that routes to "lock and report". `BeginUnlock` while Unlocking or Releasing returns
+`ceremony.in_progress` / `ceremony.releasing`, and never reaches `piv.Open`.
+
+**Unlocked.** Holds `*keystore.Unlocked` only for the duration of a mutation that needs the VMK
+(enroll, remove, rotate, rewrap, export, backup restore) and otherwise only `*keystore.Session`;
+the `Unlocked` is closed — VMK destroyed — the moment the Session exists (DESIGN §10). Slot
+mutations therefore re-run the ceremony; the one exception is vault creation, whose `Unlocked`
+enrolls the first slots. **Rotation re-derives the Session:** `Rotate` is the one call that
+advances the generation, so after it the core derives the next Session from the rotating
+`Unlocked`, installs it, locks the old one, then closes the `Unlocked`; the core's Session
+accessor returns an error rather than a Session whose `Live()` fails, and an `ErrStale`
+reaching a service is an internal invariant violation that forces Locked.
+
+**Timers.** Idle (default 10 min) and absolute (default 60 min from unlock). **The idle timer
+is reset only by corroborated user input:** `Activity()` from the frontend is a *request*,
+granted only when `GetLastInputInfo` reports session input newer than the last granted reset
+(32-bit tick arithmetic, a backwards step counts as no input); core operations do **not** reset
+it — background work keeps its archive alive, never the session. The absolute cap applies
+regardless of activity. Both values come from the registry (§3 Settings) and are clamped in the
+core before the timers are armed (idle ≤ 30 min, absolute ≤ 8 h; absent, zero, unparsable or
+out of range → the default, never "off"), with a warning code when a stored value was replaced.
+
+**Lock triggers** (DESIGN §10) are one input, `lockTrigger{reason}`, accepted in every state:
+workstation lock / session change (`WM_WTSSESSION_CHANGE`: lock, logoff, console and remote
+disconnect, remote control), display off (`GUID_SESSION_DISPLAY_STATUS` → `PowerMonitorOff`,
+the primary sleep trigger on Modern Standby machines), classic suspend (Wails'
+`events.Windows.APMSuspend` for `PBT_APMSUSPEND`), user inactivity (`GUID_SESSION_USER_PRESENCE`
+→ `PowerUserInactive`, optional, one direction only), idle, absolute, manual (tray and
+`Vault.Lock()`), exit (§5). In Unlocked the trigger locks; in Unlocking it cancels the ceremony
+and sets a latch the ceremony checks at its publish point, so a ceremony that completes after
+the trigger does not publish; in Locked it is a no-op. **Zeroing is synchronous on the message
+thread:** the trigger handler calls the core's `lockNow`, which takes a short mutex that no
+long operation ever holds, zeroes the keys (`Session.Lock()`), and hands everything unbounded —
+the keystore close, the event, the tray, disk writes — to a goroutine. A logoff or shutdown
+trigger runs `resolveForShutdown` (§5) instead of a bare lock.
+
+**Broken.** Any `ErrIndeterminate` from the keystore — a slot mutation, or the registry write
+that is the second half of every Save — locks the keys, stops the timers, leaves open archives
+open, and shows no vault facts; the one action is `Reopen`, which closes and reopens the file
+(the A/B superblocks make that succeed almost always) and lands in Locked. `Stale` on a reopened
+file is a transient warning — the next commit repairs the damaged copy — not a verdict.
+
+**Two processes.** The shell uses Wails' single-instance guard (`UniqueID`, second launch shows
+the window and exits; the callback only enqueues "show window", acts on no path, unlocks
+nothing). The guard is per logon session, so the keystore also takes an exclusive OS lock on
+open (`keystore.ErrBusy`, shown as "this vault is open in another Enfold"), and `keystore.commit`
+re-reads the live superblock's `seq` before writing and refuses when it moved. Nothing in the
+core opens the keystore or starts a goroutine before `application.New` returns.
+
+### 2.2 Ceremony
+
+```
+WaitingForKey ──1 reader──▶ Probing ──match, password slot──▶ Password ──▶ PIN ──accepted──▶ Touch ──▶ Deriving ──▶ Unlocked
+      │ >1 readers               │ match, no password ─────────────────────▶ PIN               │ 6982 touch      │ ErrAuth (password)
+      ▼                          │ no enrolled key      wrong PIN ◀───────────┘                 └──▶ Touch again  └──▶ Password
+   TwoKeys                       ▼                      blocked ──▶ Blocked                ErrTooManyOperations ──▶ WaitingForKey
+   (remove one)              NoMatch                    ErrBusy at Open ──▶ Busy (terminal until the user acts)
+   any exit ──▶ Releasing (Card.Close in the ceremony goroutine) ──▶ Locked
+```
+
+- The driver polls `Readers()` every 500 ms while waiting; one reader → `Open`; more → `TwoKeys`.
+  A failed `Open` is never fed back into the poll (DESIGN trap 24): `ErrBusy` parks the ceremony
+  in `Busy` until the user cancels or retries.
+- Probing: `Card.Keys()` (no PIN, no touch) matched by public key against the keystore's
+  hardware slots; R34 makes the match unique. No match → `NoMatch`. The matched slot's
+  `EntangledPassword` decides whether `Password` comes first — the credential is assembled before
+  any prompt, because `keystore.Unlock` takes it whole and the PIN prompt fires inside `ECDH`.
+- Prompts (PIN, password, recovery digits, management key) are **mailboxes with an identity**:
+  each `Prompter.PIN`/password call mints a `PromptID`, carried on `vault.ceremony`; a
+  submission names the id, is accepted once under a mutex (a duplicate gets
+  `ceremony.stale_prompt`), and never blocks a bound method; the prompt clears its slot on return.
+  Cancellation is a per-ceremony `context.CancelFunc` (idempotent), never a channel close; the
+  prompter selects on the context and returns an error, which `piv` turns into `ErrCancelled`
+  at no cost in retries. The deadline is on the *prompt wait* and on `WaitingForKey` — the
+  session's absolute default — never on the card call itself, which cannot be interrupted.
+- Touch: `Prompter.Touch` fires `vault.ceremony {Step: touch, N}`; the panel takes over.
+- Wrong password (`ErrAuth` from Deriving) returns to `Password` with the Card kept open, so the
+  retry costs a touch but no PIN on a PIN-once key; the copy says so. `MaxOperations` exhausted →
+  "remove and reinsert the key" (WaitingForKey).
+- Deriving: `keystore.Unlock(HardwareCredential{Token, Password})` → `Unlocked` → `Session()` →
+  `Unlocked.Close()`. Then the ceremony goroutine's deferred `Card.Close()` runs (Releasing);
+  `ErrResetFailed` is a warning event, never a failure. The publish point checks the lock latch.
+- Recovery key and standalone password skip the token states. `Vault.SubmitPassword` serves
+  both the standalone slot and the entangled password; there is one submit per secret kind.
+- The rewrap loop after a deferred rotation holds one `Unlocked` across all stale slots (a stale
+  slot cannot unlock itself) and adds a `SwapKey` step — "remove *A*, insert *B*" — between
+  tokens, one YubiKey at a time; `ErrStale` at the lock screen is reported as "this key is
+  behind; unlock with another way in first", never as corruption.
+
+### 2.3 Archive
+
+```
+Closed ──Open──▶ Open ──first staged change──▶ Dirty ──Save──▶ Open    Open ──Compact──▶ Compacting ──▶ Closed → reopen
+   ▲               │ idle (no readers, no ops)     │ Discard                 Open ──RotateKey──▶ Rotating ──▶ Open
+   └───────────────┘                               │ per-archive cap        any ErrIndeterminate ──▶ NeedsReopen
+```
+
+- **Open**: keys for every version of the registry record unwrapped through
+  `Session.UnwrapArchiveKey`, handed to `archive.Open` as candidates, zeroed after. The core keeps
+  per archive: the committed **snapshot** (`Files()` taken once per open and re-taken after every
+  index-republishing operation), the **overlay** of staged changes keyed by file id
+  (added / replaced / renamed / deleted, with the new name or `FileInfo`), a **folder projection**
+  over the merged view, a preview **token** (32 random bytes, minted at Open, forgotten at
+  Close), a reader count and a last-served time, and two clocks.
+- **Dirty**: the first change calls `Begin()`; `Tx.Add` writes at once, so "3 changes not yet
+  saved" means three recorded changes whose data is in the file but not published. Save =
+  `Commit` → receipt → one `Session.UpdateRegistry` (`LastStoredSize`, `LastWrittenAt`,
+  `LastSeq`, `Revision`); Discard = `Abort`. Closing the window keeps the transaction; a lock
+  keeps it. **Save and Compact are gated on `Session.Live()`** before they start
+  (`NeedsUnlock`: the staged changes are kept and finish after the next unlock); one core mutex
+  spans Commit → UpdateRegistry so a software lock cannot land between them, and a hardware
+  trigger that does (the ~2 s suspend budget) leaves a **receipt owed**, held in memory, applied
+  at the next unlock before any archive is opened (dropped if the record's kid moved), shown as
+  "saved; vault record pending". On reopen a file whose size or `last_seq` disagrees with the
+  record is reported, never adopted silently.
+- **Two clocks per archive** (DESIGN §10's own idle timeout): idleness — no running op, no open
+  reader, no request — closes a clean archive; a dirty one gets `archive.expiring` and a visible
+  prompt (Save / Discard / Keep open, at most two bounded extensions), and a per-archive
+  absolute cap from `dirtySince` that runs across a lock: on expiry `Abort` then `Close`, with a
+  warning naming what was discarded. A preview range request resets the archive's clock, never
+  the session's.
+- **What stays usable after a lock** (DESIGN §10): `Page`, `Stat`, `PreviewText`, `Extract`,
+  `PreviewURL`, in-flight readers, `AddFiles`/`Delete`/`Rename` into the staged transaction;
+  Save, Compact, RotateKey, Open and Create need the session. The frontend keeps an open
+  archive's view mounted across a lock (a locked banner; nothing new can be opened).
+- **Compacting**: refused unless Open and clean; previews for the archive are quiesced by
+  draining (stop minting URLs, refuse new requests, wait for in-flight handlers, with a timeout
+  that aborts the compaction); every core entry point answers `archive.compacting` from core
+  state without touching the handle; progress is coalesced to ~10 Hz; any return from `Compact`
+  means the handle is finished: `Close`, reopen the path, decide from the file (the new hash and
+  size go to the registry with `HashAtSeq = LastSeq`). Compact is refused when the estimate
+  (live bytes over measured throughput) does not fit before the absolute cap.
+- **RotateKey** is registry-first (FORMAT R33, DESIGN trap 21): gate (open, writable, clean,
+  readers drained); new key and kid; registry write #1 — append the current version, retire the
+  old with `RetiredAt`, move `CurrentKID`, in one update; `archive.RotateKey`; registry write #2
+  — the receipt, performed even when the rotation returns a receipt with `EnvelopeStale`, which
+  is then reported with `RepairEnvelope` offered. Rule A: content and layout publish to the file
+  first and the registry records the receipt after. Rule B: key changes publish to the registry
+  first and the archive adopts them after.
+- **NeedsReopen**: `ErrIndeterminate` from any commit closes the archive and says what happened;
+  Reopen shows which state won. **Verify** is an explicit op that re-hashes the file and refreshes
+  `LastCiphertextHash` with `HashAtSeq`; Save never hashes.
+
+### 2.4 Window and tray
+
+`None ⇄ Open`. The window is destroyed on close (the provisional default,
+`DisableQuitOnLastWindowClosed`) and recreated from the tray or a second launch through one
+`ensureWindow()` in the shell (`app.Window.GetByName` then `NewWithOptions`); the tray's
+`AttachWindow`/`ShowWindow`/`ToggleWindow` helpers are not used — they assume a window that
+exists at tray creation and that close only hides. Tray: three states — Locked, Locked with
+archives open, Unlocked — each with a light and a dark icon set together; tooltip with the
+countdown and the open-archive count; menu Open / Lock now / Close all archives / Quit.
+
+**Boot order in the frontend:** subscribe to every event at module scope, before the first
+`await`; then `Vault.Status()`. `VaultStatus` and every `vault.*` payload carry one `Seq`
+incremented under the state mutex; the frontend applies a payload only when its `Seq` is
+greater than the last applied. `archive.changed {ID, Seq}` and the per-archive `Page`/`Stat`
+replies carry a per-archive seq the same way. `Status()` includes `Ops []OpView` so a window
+recreated mid-operation recovers progress; operation events are deltas over that snapshot.
+
+## 3. Services
+
+Methods are synchronous from the frontend's side and return quickly; long work runs in the core
+under an operation id and reports through events. Ids are hex strings; times are Unix seconds;
+sizes are `uint64`. **Every service method returns `*app.Error`** — `{Code, Retries?, Slot?}`
+whose `Error()` is the code and nothing else, produced by one `classify(err)` over every
+sentinel of every package with a catch-all `internal` — and services are registered with a
+`MarshalError` that emits only that shape; the original error goes to the core-side log.
+`CeremonyState.Error` and `op.done.Error` use the same codes.
+
+**Vault**
+- `Status() VaultStatus{Seq, State, Path, DisplayName, LastUnlockedAt, LocksAt, AbsoluteAt,
+  RotationPending, Tampered, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
+  OpenArchives int}`; `Readers() []Reader{Name}`.
+- `BeginUnlock()`, `CancelUnlock()`, `Lock()`, `Reopen()`, `Activity()`. Secret submissions
+  arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`.
+- `CreateVault(path, displayName)` (recovery key shown once; then the first slot's ceremony from
+  the `Unlocked` that Create returned), `OpenVaultFile(path)`.
+- Events: `vault.state` (the whole status), `vault.ceremony {Seq, Step, PromptID, SlotLabel,
+  Retries, RetriesKnown, ReaderCount, N, Error}`, `vault.warning`.
+
+**Archives**
+- `List() []ArchiveSummary{ID, Name, Path, StoredSize, LastWrittenAt, KeyVersion, Open, Dirty,
+  ReceiptOwed, NoCompression, Note Code}` — hidden records are filtered; `ShowHidden` flag
+  lists them. `Open(id)`, `Close(id)`, `Create(path, name, noCompression)`, `Hide(id)`, `Unhide(id)`,
+  `Locate(id, newPath)`, `Compact(id) opID`, `RotateKey(id) opID`, `Verify(id) opID`,
+  `CloseAll()`. **There is no Forget in 1.0**: the registry record holds the only copy of the
+  archive keys, so dropping it destroys the archive; the destructive form, if ever wanted, is a
+  separately confirmed `ForgetKey` that names that consequence.
+- Events: `archives.changed`, `op.progress {OpID, Done, Total, Phase}`, `op.done {OpID, Error,
+  Results []FileOutcome}`.
+
+**Archive** (an open one)
+- `Page(id, folder, sort, offset, limit) Page{Seq, Rows []FileRow{FileID, Path, Name, Size,
+  Storage, SavedPercent, ModifiedAt, Pending}, Total, Folders}` over the merged view; `Name` is
+  the leaf within `folder`, `Path` the full stored name. A name that is both a file and a prefix
+  (`a` and `a/b`) shows as both. `Stat(id) ArchiveStat`.
+- `AddFiles(id, folder, paths, policy) opID`, `AddFolder(id, folder, path, policy) opID` —
+  composed names validated with `format.ValidateFileName` and checked against the merged view
+  **before** the first `Tx.Add`; `policy` is `skip | replace | keep-both`; `CheckNames(id, folder,
+  names) []Collision` lets the UI ask once. `Replace(id, fileID, path) opID` is the in-place
+  edit (never Delete + Add). `Delete(id, fileIDs)`, `Rename(id, fileID, newLeaf)` (a `/` in the
+  leaf is refused; folder rename is one rename per record under the prefix, pre-flighted),
+  `Extract(id, fileIDs, dir, policy) opID` (target `filepath.Join(dir, FromSlash(name))` with a
+  containment assertion, `MkdirAll` per parent, `skip | rename` on `os.ErrExist` — never
+  pre-`Lstat`, never overwrite by unlinking; case-folded destinations de-duplicated by the
+  planner before the first file; each file all-or-nothing, the batch not), `Save(id) opID`,
+  `Discard(id)`, `PreviewURL(id, fileID)` (only for committed rows; staged adds and replaces are
+  not previewable until Save), `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
+  `OpenReader` + `LimitReader`; no cross-origin fetch exists).
+- Events: `archive.changed {ID, Seq}`, `archive.expiring {ID, ClosesAt}`, progress as above.
+
+**Keys**
+- `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Entangled, Stale}`.
+- `BeginEnroll(kind, label, entangle bool)` runs the ceremony for the VMK, then for a YubiKey the
+  token flow: `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
+  (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` → `AddSlot`.
+  Sub-states mirror §2.2 plus `ManagementKey`. `AddRecoverySlot` shows the digits once.
+- `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`, `RewrapStale()`
+  (the loop of §2.2), `Export(path)`, `BackupInfo(path) {ModifiedAt, VaultMatches, SlotCount}`,
+  `VerifyBackup(path)`, `RestoreArchiveRecord(path, archiveID)` (re-wrap under the current KWK).
+- **Tampered is a state, not a banner**: every mutating call and Export is disabled with the
+  reason; the one action is "open a backup"; it is never cleared silently (R25).
+
+**Settings** — `Get()`, `Set()`. Machine-local, in `%LOCALAPPDATA%\Enfold\settings.json`
+(temp-then-rename): vault path and display name, close-to-tray behaviour, theme, look, recovery
+record percentage, dictionary threshold. **Security-relevant values live in the authenticated
+registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
+`AbsoluteMinutes`, zero = default) and the per-archive compression choice
+(`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
+
+**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile`, `Quit` (asks
+about dirty archives and owed receipts, then `resolveForShutdown`, then `app.Quit()`). File
+drop: the window is created with `EnableFileDrop`; the shell re-emits the dropped paths and the
+drop target's `data-archive-id` / `data-folder` to the frontend, which calls `AddFiles`; the
+core validates that the archive is open and the folder exists in the projection, and refuses
+loudly. Dropped paths carry no authority beyond what a file dialog would.
+
+## 4. The preview server
+
+A loopback `net/http` server on `127.0.0.1:<port>`, **bound once for the process lifetime**
+(the CSP names the port and is fixed at document load), serving
+`GET /p/<archive-token>/<fileID>` with `http.ServeContent` over one `archive.Reader` per request,
+`Cache-Control: no-store`, `Content-Type` from the name, multi-range refused (single range or
+none, so the handler may `Close` its Reader on return). **The preview transport outlives the
+session; it dies with the last open archive, and a live reader is archive activity.** The token
+is per archive (an unknown token is a 404 with no archive id in the URL); closing the archive
+drops the token and `Archive.Close` fails every in-flight body. A lock changes nothing here.
+Justification: it serves only archives whose keys are in this process's memory, which a
+same-user process reads regardless (DESIGN §2); the unguessable path is the access control.
+
+**The page's CSP is a response header from the asset middleware** (production only; in
+`wails3 dev` Vite's HMR needs its own origin):
+`default-src 'self'; img-src 'self' http://127.0.0.1:<port>; media-src 'self'
+http://127.0.0.1:<port>; connect-src 'self'; script-src 'self'; style-src 'self'; object-src
+'none'; base-uri 'none'; form-action 'none'; frame-src 'none'`, plus
+`Permissions-Policy` denying camera, microphone, geolocation, sensors, display-capture,
+clipboard, midi, local-fonts, window-management. **No preview surface may expose a
+browser-provided save or print affordance**: the window is created with
+`DefaultContextMenuDisabled`, every WebView2 permission kind is set to Deny
+(`WindowsWindow.Permissions`, autoplay excepted if it breaks click-to-play), and the `<iframe>`
+PDF viewer is not used (its toolbar cannot be hidden in beta.16 and there is no download hook):
+PDFs offer Extract only in 1.0; pdf.js rendered to canvas is the later option.
+
+**WebView2 disk cache (DESIGN trap 13), honestly:** beta.16 exposes no cache-disable or
+in-private option, and Chromium flags are not supported in production, so `no-store` on every
+preview response is the whole defence. The user-data folder is `%LOCALAPPDATA%\Enfold\WebView2`,
+swept and recreated at startup before the first window and deleted best-effort at exit;
+nothing clears it at lock. Inspecting that directory after a preview is a release gate.
+
+## 5. Lock triggers on a zero-window process
+
+The shell creates one **message-only** window of its own on an OS-thread-locked goroutine with
+its own message loop (`golang.org/x/sys/windows` + `syscall.NewCallback`, with a top-level
+`recover`): `WTSRegisterSessionNotification(NOTIFY_FOR_THIS_SESSION)` — checked; on failure a
+bounded backoff retry, a warning code "workstation-lock detection unavailable", and a ~5 s poll
+of `WTSQuerySessionInformation(WTSSessionInfoEx).SessionFlags` as the substitute —
+`RegisterPowerSettingNotification` for `GUID_SESSION_DISPLAY_STATUS` and
+`GUID_SESSION_USER_PRESENCE` (unregistered at shutdown), `WM_WTSSESSION_CHANGE` handled for
+lock, logoff, console/remote disconnect and remote control; `PBT_APMSUSPEND` comes from Wails'
+own application event. Every handler posts a `lockTrigger` and calls `lockNow` synchronously.
+
+**Shutdown.** `Options.ShouldQuit` never shows UI. `Options.OnShutdown` runs
+`resolveForShutdown()`: for each dirty archive `Commit` under a fresh ~2 s context, write each
+receipt, close the archives, then lock — bounded to ~3 s in all; on timeout the transaction stays
+unpublished, which the format tolerates. The tray's Quit asks the user first and then runs the
+same function; `WTS_SESSION_LOGOFF` runs it without asking.
+
+## 6. Screens (the Native look)
+
+Lock screen (one panel, three-step line, the states of §2.2 including TwoKeys, NoMatch, Busy,
+Blocked, SwapKey; secondary: recovery key, password, open a backup, create a vault; the
+"workstation-lock detection unavailable" and BitLocker warnings). Archives (list with details
+pane, commands Open / New archive / Compact / Rotate key / Verify / Hide, the deferred-rotation
+banner, the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
+projection, paged table with pending markers, preview pane — image, video, audio through the
+loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
+drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
+Remove, Rotate now, Rewrap, backups with the R35 date, session and appearance settings). First
+run (create or open). Dialogs: new archive (path, name, compression), enrollment, recovery key
+display, remove slot, rotate, progress, extract destination and policy, collisions, errors.
+
+## 7. Frontend
+
+Svelte 5 + TypeScript on the Wails template, Vite; `@wailsio/runtime` pinned to the exact Wails
+version, `package-lock.json` committed, `npm ci` in the Taskfile; the template's font and
+background assets removed; no remote resource; Segoe UI Variable from the system. Bindings are
+generated (`wails3 generate bindings`) and committed. Strings in one table.
+
+## 8. Memory hygiene
+
+The session's keys live in `keystore.Session` as Go slices zeroed on lock; memguard enclaves
+for them are a keystore change proposed as a follow-up, not part of this layer. Crash dumps:
+`SetErrorMode(SEM_NOGPFAULTERRORBOX)`; WER's LocalDumps policy is outside a user-mode process's
+control and is documented as the limit. Destroying the window on close destroys the renderer's
+copy of what was on screen.
+
+## 9. BitLocker
+
+Two checks — the system volume and the vault's volume — each tri-state (Protected /
+Unprotected / Unknown); only Unprotected warns (`system-volume-unprotected`,
+`vault-volume-unprotected`); Unknown is a quiet line. The predicate is *protection status*
+(suspended BitLocker counts as unprotected). **The unelevated mechanism is unverified**: the WMI
+`Win32_EncryptableVolume` class is documented admin-only, and the least-privilege ruling forbids
+elevation. The candidate is the shell property `System.Volume.BitLockerProtection`; it is
+measured before the feature is promised (`SCOPE.md` keeps the bullet provisionally).
+
+## 10. Testing
+
+The core is tested without Wails: it takes app-side interfaces `Cards` (`Readers`, `Open`) and
+`Card` (`Keys`, `PINState`, `Inspect`, `FirstEmptySlot`, `ProtectedManagementKey`, `Generate`,
+`Token` returning `keystore.Token`, `Serial`, `Close`) with app-side `Prompter`/`PINStatus`/
+`KeyInfo` types, so the ceremony and enrollment drivers run against a fake that covers every
+`piv` error the states depend on; one windows-tagged adapter is the only importer of
+`internal/piv`. Lock triggers are an interface the shell implements and the tests drive. Keystore
+and archive are the real packages over temp files; timers take a clock. The shell is exercised
+by hand in `wails3 dev` against a throwaway vault. Frontend tests cover the copy mapping of
+ceremony states and the "never 0 attempts" rule.
+
+## 11. Format changes this layer needs (FORMAT.md §7)
+
+- `ArchiveRecord.policy` bits: bit1 `hidden`, bit2 `no_compression`.
+- `ArchiveRecord.last_seq u64` (the archive superblock `seq` of the last commit the registry
+  recorded; identity without a key) and `hash_at_seq u64` (the `last_seq` at which
+  `last_ciphertext_hash` was computed; equal means fresh).
+- `Registry.idle_minutes u16`, `absolute_minutes u16` (zero = default).
+
+## 12. Deferred, and open for the user
+
+pdf.js preview; `ForgetKey`; memguard for the session keys; folder move as one operation;
+`overwrite` on extraction (an archive-layer change); an unelevated BitLocker check (measure
+first — if none exists, the SCOPE bullet or the least-privilege ruling has to move); the
+permitted range of the timeouts beyond the clamps.

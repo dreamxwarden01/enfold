@@ -1994,3 +1994,95 @@ touch — with a small three-step line above it so the user knows a touch follow
 mockups' three side-by-side panels are three moments of that one panel. The touch moment is a
 full-surface takeover. Settings carry Appearance (Look, Theme). `docs/ui/native.html` is the
 reference the app is measured against; the three rejected directions are not kept.
+
+---
+
+## 2026-09-06 — The application layer designed and critiqued; what the critique changed
+
+`APP.md` is the result: the Go core (`internal/app`), the Wails v3 shell and the Svelte 5 +
+TypeScript frontend (the user's choice, 2026-09-06). The draft was critiqued before any code by
+three Opus critics — security and the session model / Wails v3 beta.16, WebView2 and Win32
+realities / architecture, API fit with the built layers and testability — 55 findings, 54
+verified adversarially: 48 confirmed, 6 refuted, 1 nit. The confirmed ones rewrote the design in
+these places.
+
+**The preview transport outlives the session.** The draft stopped the loopback server at lock,
+which killed the in-flight stream DESIGN §10 promises survives a lock, and its per-session
+token would have broken every seek. The server now binds once per process (the CSP names its
+port), the token is per open archive, and it dies with the last open archive; a live reader is
+archive activity, never session activity. The Wails asset server was measured and rejected for
+this: on Windows it buffers the entire response before handing it to WebView2 — an 800 MB
+preview would be 800 MB of plaintext in the Go heap.
+
+**What a lock does, precisely.** The draft's "registry copy dropped" had no mechanism: the
+decrypted registry lives on the keystore handle, so the lock path is now cancel the mutation,
+`Session.Lock()`, `Keystore.Close()`, with the lock screen's four plaintext facts cached. A lock
+trigger is a state-machine input accepted in every state — in the draft a workstation lock
+during a ceremony did nothing, and the vault would have unlocked behind a locked screen; now the
+ceremony is cancelled and latched at its publish point. Zeroing is synchronous on the message
+thread because Modern Standby freezes desktop processes about two seconds after the display-off
+notification, and `PBT_APMSUSPEND` — the draft's only sleep trigger — never fires on those
+machines; display-off is the primary trigger now. `WTSRegisterSessionNotification` can fail and
+was unchecked; it is checked, retried, substituted by a poll, and surfaced as a warning.
+
+**Save after a lock.** `Tx.Commit` does not consult the keystore, so a Save on an archive that
+outlived a lock would have advanced the file and lost the registry receipt. Save and Compact
+are gated on `Session.Live()` (a new keystore method), one mutex spans commit → receipt, and a
+receipt a hardware trigger still manages to strand is owed in memory and applied at the next
+unlock. Every Save also re-hashed the whole file for `last_ciphertext_hash` — 48 GB of reading
+for three renames; the registry gains `last_seq` as the keyless identity and `hash_at_seq`, and
+the hash is refreshed only by Compact and an explicit Verify.
+
+**Rotation and the Session.** `Unlocked.Rotate` advances the generation and makes every existing
+Session refuse with `ErrStale`; the draft never re-derived it, so removing a slot would have left
+the vault dead behind a running countdown. The core now derives the next Session from the
+rotating `Unlocked` and locks the old one in one critical section. And "registry after the
+archive's commit, never before" was stated as a blanket rule, which inverts trap 21 for key
+rotation: two rules now, content after, keys before.
+
+**Forget was data loss.** The registry record holds the only wrapped copy of an archive's keys.
+"Forget" is gone from 1.0; `Hide` sets a policy bit; the destructive form, if ever wanted, is a
+`ForgetKey` that names what it destroys. `RestoreArchiveRecord` from a backup exists instead.
+
+**Two processes.** No single-instance guard and no keystore lock meant two Enfolds would have
+clobbered each other's superblock commits: Wails' single-instance guard in the shell (per logon
+session), an exclusive OS lock on the keystore (`keystore.ErrBusy`), and an optimistic `seq`
+check at the keystore's commit point.
+
+**Secrets and the bridge.** Wails reflects over every exported method of a registered service,
+promoted methods included — an embedded `Session` would have put `DBKey()` on the WebView's API.
+Bound service types are now structs with unexported fields in their own package, guarded by a
+test over their reflected method sets and by committed bindings. Every bound argument is
+marshalled and stringified before any log-level check, so the PIN, the passwords, the recovery
+digits and the management key travel on the raw message channel; the frontend's "cleared on
+submit" claim is replaced by the honest one. Typed errors would have reached the frontend as
+`{}`: one `app.Error{Code}` whose `Error()` is the code alone, one `classify`, one
+`MarshalError`. WebView2's defaults were wrong for a renderer that is the untrusted side:
+context menu on (right-click "Save image as" writes plaintext to Downloads), every permission
+granted when no map is set, the Edge PDF viewer's toolbar with Save and Print that cannot be
+hidden — context menu off, every permission denied, no PDF viewer in 1.0 (Extract only), a CSP
+and a Permissions-Policy header from the asset middleware. And the draft's "the profile runs
+with the cache disabled where Wails exposes the option" resolved to nowhere: `no-store` is the
+whole defence and trap 13 now says so; inspecting the profile directory is a release gate.
+
+**The rest, briefly.** Settings move to `%LOCALAPPDATA%` and the timeouts into the authenticated
+registry with clamps and no way to express "off"; the activity heartbeat is a request the core
+grants only when `GetLastInputInfo` agrees; the entangled password is asked before the PIN, not
+after the touch, because the credential is assembled before any prompt; prompts have identities
+so a double-click cannot spend two retries; `Compact`, `RotateKey`, extraction, adding, folder
+projection, renames and drops each got the preconditions and collision rules the built layers
+actually impose; the tray has three states; a dirty archive is never silently closed and never
+unbounded; the shutdown hook commits dirty archives inside Windows' budget instead of asking;
+events are subscribed before the first fetch and carry sequence numbers; the frontend's
+dependencies are pinned with a lockfile. Six findings were refuted with reasons recorded in the
+run: the session-token blast radius (file ids are random), the "more than a page crosses"
+reading of §1, `Options.MarshalError` as the error fix, `x/sys/windows` being unable to build a
+message window, wall-clock deadlines (Go's timers already include suspend on Windows), and a
+double `PBT_APMSUSPEND`.
+
+**Rulings taken here, for the record.** The VMK lives only for a mutation and slot changes re-run
+the ceremony (a grace window would defeat the reason §10 destroys it). The registry gains
+`last_seq`, `hash_at_seq`, `idle_minutes`, `absolute_minutes` and two policy bits (`hidden`,
+`no_compression`); it does not gain file counts. Svelte 5 + TypeScript. **Open for the user:**
+an unelevated BitLocker check — the documented mechanism is admin-only, so either a measured
+alternative exists or the SCOPE bullet moves.

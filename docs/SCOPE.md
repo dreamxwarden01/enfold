@@ -63,7 +63,10 @@ consequences worth stating up front:
   and the WebView2 profile with caching disabled, so the browser engine never writes decrypted
   content to disk (`DESIGN.md` trap #13)
 - Secrets in `memguard`; `VirtualLock`; crash dumps suppressed
-- BitLocker detection with a warning when the system volume is unprotected
+- BitLocker detection with a warning when the system volume or the vault's volume is
+  unprotected (suspended counts as unprotected; an unreadable state warns nobody) —
+  **provisional until an unelevated mechanism is measured**: the WMI class is admin-only and the
+  product never asks for elevation (`APP.md` §9)
 
 ## v1 does not ship
 

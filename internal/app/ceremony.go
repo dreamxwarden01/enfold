@@ -373,8 +373,11 @@ func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, c
 		return v, nil
 	case err := <-p.gone:
 		clear()
-		// An answer that landed in the same instant is not dropped after
-		// it was accepted: it is used, and the operation meets the key.
+		// An answer that landed with the gone signal is used rather than
+		// dropped, and the operation meets the absent key. (A submit that
+		// took the prompt but has not yet sent is still lost — harmless:
+		// the flow re-prompts with a fresh id, as it would have after the
+		// operation failed.)
 		select {
 		case v := <-p.ch:
 			return v, nil
@@ -589,6 +592,7 @@ func (cer *ceremony) holdsKey(reader string, pub []byte) (bool, error) {
 		return false, err
 	}
 	keys, err := card.Keys()
+	cer.unhold(card)
 	card.Close()
 	if err != nil {
 		return false, err
@@ -977,6 +981,11 @@ const awayRetryMax = 2 * time.Second
 // reset under a probe that could not heal it, is waited for again (APP.md
 // §2.2), after a pause.
 func (cer *ceremony) tokenCredential(slots []keystore.SlotInfo) (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
+	// One deadline for the whole wait: the per-call one inside
+	// waitForOneReader would be re-armed by every attempt at a reader
+	// whose card never answers.
+	deadline := cer.c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("wait_deadline") })
+	defer deadline.Stop()
 	delay := readerPoll
 	for {
 		h, card, slot, err := cer.tokenCredentialFor(slots)

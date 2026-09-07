@@ -682,8 +682,12 @@ func (c *Card) Generate(mgmtKey []byte, o GenerateOptions) (KeyInfo, error) {
 		// The slot's key is this call's own only when it is not the one
 		// that was there: with Overwrite that one reads as usable too, and
 		// a GENERATE the reset swallowed left it in place.
-		if info, ierr := c.inspect(o.Slot); ierr == nil && info.Usable() && !bytes.Equal(info.PublicKey, existing.PublicKey) {
+		info, ierr := c.inspect(o.Slot)
+		switch {
+		case ierr == nil && info.Usable() && !bytes.Equal(info.PublicKey, existing.PublicKey):
 			return info, nil
+		case ierr != nil && isTransport(ierr):
+			return KeyInfo{}, ierr // the card went again: not a reason to generate twice
 		}
 		if err := generate(); err != nil {
 			return KeyInfo{}, err

@@ -100,7 +100,7 @@ func (t *Token) ECDH(epk []byte) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
 		h, err := t.ecdhOnce(peer, &pin)
 		if errors.Is(err, ErrCardReset) && attempt == 0 {
-			release, aerr := t.c.acquire()
+			release, aerr := t.c.acquireWait() // a probe may hold the lock, as at the resume
 			if aerr != nil {
 				return nil, aerr
 			}

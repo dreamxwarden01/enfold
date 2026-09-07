@@ -424,6 +424,10 @@ func (f *fakeCard) Close() error {
 	defer f.mu.Unlock()
 	f.closed = true
 	f.closes++
+	if f.removed && f.closeErr == nil {
+		// The real Close cannot reset a card that is gone, and says so.
+		return ErrTokenResetFailed
+	}
 	return f.closeErr
 }
 

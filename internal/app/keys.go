@@ -296,6 +296,8 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 		}
 		cer.set(func(s *CeremonyState) { s.Step, s.RemoveLabel = StepSwapKey, "" })
 	}
+	deadline := cer.c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("wait_deadline") })
+	defer deadline.Stop()
 	delay := readerPoll
 	for {
 		pub, err := cer.enrollOnce()

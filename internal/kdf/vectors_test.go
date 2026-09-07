@@ -110,6 +110,7 @@ type vectorsJSON struct {
 		DB          string `json:"db_key"`
 		KWK         string `json:"KWK"`
 		KWKIdentity string `json:"KWK_identity"`
+		KWKRecovery string `json:"KWK_recovery"`
 	} `json:"vmk_keys"`
 	ArchiveKeys struct {
 		Index string `json:"index_key"`
@@ -337,6 +338,7 @@ func TestVectors(t *testing.T) {
 	expect(t, "db_key", DBKey(vmk, vault), v.VMKKeys.DB)
 	expect(t, "KWK", KWK(vmk, vault), v.VMKKeys.KWK)
 	expect(t, "KWK_identity", KWKIdentity(vmk, vault), v.VMKKeys.KWKIdentity)
+	expect(t, "KWK_recovery", KWKRecovery(vmk, vault), v.VMKKeys.KWKRecovery)
 	archiveID := id16(t, v.Inputs.ArchiveID)
 	archiveKey := key32(t, v.Inputs.ArchiveKey)
 	expect(t, "index_key", ArchiveIndexKey(archiveKey, archiveID), v.ArchiveKeys.Index)

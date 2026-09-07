@@ -37,8 +37,12 @@
   // that minted it (create, or enrol) may have switched the view meanwhile.
   const reveal = $derived.by(() => {
     const c = store.ceremony;
-    if (c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel && store.revealPending(c.slotLabel)) return c.slotLabel;
-    return "";
+    if (!c || c.step !== CeremonyStep.StepRecovery || c.promptId || !c.slotLabel || !store.revealPending(c.slotLabel)) return "";
+    // A create's key is shown on a vault that ended Locked; any other
+    // showing is on an unlocked vault, and closes when it locks (the core
+    // drops the held key on a lock trigger).
+    if (c.kind !== "create" && store.status?.state !== VaultState.StateUnlocked) return "";
+    return c.slotLabel;
   });
 
   // A dirty archive about to close asks wherever the user is.
@@ -96,7 +100,7 @@
 
 {#if reveal}
   {#key reveal}
-    <RecoveryReveal url={reveal} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
+    <RecoveryReveal url={reveal} kind={store.ceremony?.kind ?? ""} vaultName={store.status?.displayName ?? ""} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
   {/key}
 {/if}
 

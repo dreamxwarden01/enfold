@@ -59,6 +59,14 @@ var (
 	ErrIndeterminate = errors.New("keystore: commit outcome unknown")
 	// ErrNotFound: no slot has this recipient ID.
 	ErrNotFound = errors.New("keystore: no such slot")
+	// ErrNoEscrow: the recovery slot has no escrow record (R38) — it was
+	// made before recovery keys were kept once more — so its key cannot be
+	// shown again, only replaced.
+	ErrNoEscrow = errors.New("keystore: this recovery key is not kept in the vault")
+	// ErrEscrowMismatch: the escrow record opened, but the key it holds does
+	// not derive the slot's public key (§6.3): it is not this slot's key,
+	// and is never shown.
+	ErrEscrowMismatch = errors.New("keystore: the kept recovery key does not match its slot")
 	// ErrParams: an argument the package refuses.
 	ErrParams = errors.New("keystore: invalid parameters")
 )

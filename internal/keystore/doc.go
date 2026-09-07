@@ -33,6 +33,12 @@
 // region holds only the recovery slots: the recovery key opens it like any
 // keystore, which is also how it is verified.
 //
+// The registry also keeps every recovery key once more (R38): wrapped under
+// KWK_recovery, a key derived from the VMK, in a record written and removed
+// with the slot and re-wrapped by rotation. Only an Unlocked — which holds
+// the VMK — opens it (RecoveryKey), so that a human can be shown the key
+// again; a Session cannot.
+//
 // Retired slots (slot_state 2) are read and preserved but never opened,
 // counted or re-wrapped: nothing in v1 produces one.
 package keystore

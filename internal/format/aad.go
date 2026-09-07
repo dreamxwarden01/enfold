@@ -1,9 +1,10 @@
 package format
 
-// AADs for the three 32-byte key wraps (docs/FORMAT.md R22). Each binds a
-// wrapped key to the record that carries it, with an ASCII prefix for domain
-// separation, so that a wrapped key moved between records inside an otherwise
-// authenticated structure fails to open.
+// AADs for the key wraps of docs/FORMAT.md R22 — the three 32-byte ones and
+// the escrowed recovery key. Each binds a wrapped key to the record that
+// carries it, with an ASCII prefix for domain separation, so that a wrapped
+// key moved between records inside an otherwise authenticated structure
+// fails to open.
 
 // ArchiveKeyAAD is the AAD for a version record's wrapped_archive_key (§7.2):
 // "Enfold/v1/aad/archive-key" ‖ archive_id ‖ kid.
@@ -33,5 +34,17 @@ func IdentityKeyAAD(vaultID, deviceID [16]byte) []byte {
 	w.fixed([]byte("Enfold/v1/aad/identity"))
 	w.fixed(vaultID[:])
 	w.fixed(deviceID[:])
+	return w.b
+}
+
+// RecoveryEscrowAAD is the AAD for a recovery-key escrow record's
+// wrapped_recovery_key (§7.6, R38): "Enfold/v1/aad/recovery-escrow" ‖
+// vault_id ‖ recipient_id — the record opens for this vault and this slot
+// only.
+func RecoveryEscrowAAD(vaultID, recipientID [16]byte) []byte {
+	w := &writer{b: make([]byte, 0, 29+32)}
+	w.fixed([]byte("Enfold/v1/aad/recovery-escrow"))
+	w.fixed(vaultID[:])
+	w.fixed(recipientID[:])
 	return w.b
 }

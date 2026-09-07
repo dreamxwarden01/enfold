@@ -71,7 +71,8 @@ VMK  (random 256-bit, memory only, never persisted)
  ├─ HKDF(info = "Enfold/v1/metadata" ‖ vault_id) → Metadata key    encrypts the registry
  ├─ HKDF(info = "Enfold/v1/db"       ‖ vault_id) → DB key          local caches
  ├─ HKDF(info = "Enfold/v1/wrap/archive"  ‖ vault_id) → KWK        wraps archive keys
- └─ HKDF(info = "Enfold/v1/wrap/identity" ‖ vault_id) → KWK_identity
+ ├─ HKDF(info = "Enfold/v1/wrap/identity" ‖ vault_id) → KWK_identity
+ └─ HKDF(info = "Enfold/v1/wrap/recovery" ‖ vault_id) → KWK_recovery   wraps the escrowed recovery keys (R38)
 
 archive key   (random 256-bit, one per archive VERSION, named by KID, stored wrapped in the keystore)
  ├─ HKDF(info = "Enfold/v1/archive/index" ‖ archive_id) → archive index key   encrypts the file list
@@ -107,7 +108,9 @@ creation, from the 128-bit recovery key R:
   seed_k = HKDF(R, salt = slot_salt, info = "Enfold/v1/recovery/mlkem"  ‖ vault_id ‖ recipient_id) → 64 B
   (sk_x, pk_x) = X25519 from seed_x
   (dk,   ek)   = ML-KEM-1024 from seed_k
-  store pk_x and ek; destroy R, both seeds, sk_x and dk immediately
+  store pk_x and ek; destroy both seeds, sk_x and dk immediately. R itself is kept once
+  more — wrapped under KWK_recovery in the registry (R38), so that whoever holds the VMK
+  can be shown it again — and nowhere else
 
 wrapping — offline, the recovery key need NOT be present:
   (e, E)    = fresh X25519 pair;  H_x = ECDH(e, pk_x);  destroy e
@@ -183,6 +186,7 @@ padding. `info = "Enfold/v1/IK" ‖ vault_id ‖ recipient_id` is exactly 12 + 1
 | DB key | `Enfold/v1/db` ‖ vault_id | VMK | ∅ | 32 |
 | `KWK` | `Enfold/v1/wrap/archive` ‖ vault_id | VMK | ∅ | 32 |
 | `KWK_identity` | `Enfold/v1/wrap/identity` ‖ vault_id | VMK | ∅ | 32 |
+| `KWK_recovery` | `Enfold/v1/wrap/recovery` ‖ vault_id | VMK | ∅ | 32 |
 | archive index key | `Enfold/v1/archive/index` ‖ archive_id | archive key | ∅ | 32 |
 | archive wrap key | `Enfold/v1/archive/wrap` ‖ archive_id | archive key | ∅ | 32 |
 
@@ -307,8 +311,11 @@ records of a region; a duplicate is invalid. The point of all three is that deco
 canonical — every accepted byte is represented — so that re-encoding a decoded record
 reproduces the bytes read, which is what an AAD computed from the struct relies on. The fuzz
 targets assert byte-exact round trips for slot records, the registry and the free-space map.
+A version-1 registry (R38) is the one accepted encoding that is not canonical: it re-encodes
+as version 2 with `escrow_count` 0 and is otherwise byte for byte the same, which the fuzz
+target asserts.
 
-**R22 — AADs for the three 32-byte key wraps.** §7.2 and §11 name the wrapped keys and their
+**R22 — AADs for the key wraps.** §7.2 and §11 name the wrapped keys and their
 nonces but not their AADs. Each binds the wrapped key to the record that carries it, with an
 ASCII prefix for domain separation, so a wrapped key moved between records inside an otherwise
 authenticated structure fails to open:
@@ -318,8 +325,10 @@ authenticated structure fails to open:
 | `wrapped_archive_key` (§7.2) | `KWK` | `"Enfold/v1/aad/archive-key"` ‖ archive_id ‖ kid |
 | `wrapped_dek` (§11) | archive wrap key | `"Enfold/v1/aad/dek"` ‖ archive_id ‖ file_id ‖ u32 dek_epoch |
 | `wrapped_identity_key` (§7) | `KWK_identity` | `"Enfold/v1/aad/identity"` ‖ vault_id ‖ device_id |
+| `wrapped_recovery_key` (§7.6, R38) | `KWK_recovery` | `"Enfold/v1/aad/recovery-escrow"` ‖ vault_id ‖ recipient_id |
 
-All three are AES-256-GCM, 32 bytes in, 48 out, fresh 96-bit random nonce per wrap. `wrapped_vmk`
+The first three are AES-256-GCM, 32 bytes in, 48 out; the fourth is the same cipher over the
+16-byte recovery key, 32 out; every wrap draws a fresh 96-bit random nonce. `wrapped_vmk`
 keeps its own AAD (R14).
 
 **R23 — Recovery-key input.** Whitespace is ignored and the groups may be typed with `-`, with
@@ -410,7 +419,13 @@ with the same `vault_id`, `vmk_generation` and registry, whose slot region holds
 recovery slots — never a stale one — and whose superblocks start again at `seq` 1 with
 `modified_at` set to the time of the export (R35). The recovery key opens it like any keystore,
 which is how an export is verified before it is needed and how it is restored: open it, unlock
-with the recovery key, enrol new slots. Nothing else travels.
+with the recovery key, enrol new slots. The escrow records of R38 travel with the registry —
+every one of them, so that the reveal works once the export is adopted (§15) — which means
+that whoever opens an export with one of its recovery keys can read every recovery key the
+vault had when the export was made. With one recovery slot that is nothing new; with more than
+one, all recovery keys share a fate: an export or a copy that may have leaked is answered by
+replacing every recovery slot of its date, then rotating (§15, `DESIGN.md` §5). Nothing else
+travels.
 
 **R29 — `rewrap_stale` is the one bit outside the slot AAD.** A rotation marks a slot it could not
 re-wrap by setting `rewrap_stale` while leaving `wrapped_vmk` "exactly as it is" (§8) — but
@@ -501,6 +516,30 @@ settings file is never consulted for them. Zero means the reader's default (10 a
 clamps what it finds (idle at most 30 minutes, absolute at most 8 hours) and treats absent,
 zero or out-of-range values as the default, never as "no timeout"; there is no value that
 means off.
+
+**R38 — The recovery key is kept once more, under the VMK.** A recovery key is shown to a human
+once, when it is made, and humans lose paper. So the registry keeps, for every active recovery
+slot, an *escrow record* (§7.6): the 16-byte `R` under AES-256-GCM with `KWK_recovery` (R3) and
+the AAD of R22, keyed by the slot's `recipient_id`. The record's life is the slot's: written by
+the commit that creates the slot (creation, `AddSlot`), removed by the commit that removes it,
+re-wrapped under `KWK_recovery'` by a rotation (§8 step 3). Only a key derived from the VMK
+opens it; the cached keys of a session (`DESIGN.md` §10: KWK, Metadata, DB) cannot, so showing
+a recovery key again is a ceremony that recovers the VMK through a protector first (`APP.md` §3
+Keys). Escrow adds no new principal — whoever can open a record already holds the VMK — but it
+makes a VMK exposure a recovery-key exposure: the digits a VMK holder reads outlive every
+rotation, since rotation re-wraps the recovery slot from its public keys, and the answer to a
+suspected VMK exposure is replacing every recovery slot, then rotating (`DESIGN.md` §5). Before
+a showing, the reader derives the slot's X25519 key from `R` (§3.1) and checks it against
+`slot_pubkey` (§6.3); a record that does not match its slot is refused, never shown. The section
+is what `registry_version` 2 adds. A version-1 registry is accepted, carries no escrow records,
+and is written back as version 2 at its next commit; a recovery slot without a record — made
+before this rule — cannot be shown again until an unlock through it hands the keystore `R`,
+which writes the record then (`Unlocked.EscrowOpenedKey`), or the slot is replaced. Orphans are
+the keystore layer's concern, since the format layer never sees the slot region: every write of
+the slot region — creation, `AddSlot`, `RemoveSlot`, `RewrapStale`, `Rotate`, an export — writes
+the registry with only the records of the recovery slots active in the region it writes; a
+record that does not unwrap fails the rotation (§1, fail closed), and two records with the same
+`recipient_id` are invalid.
 
 ---
 
@@ -679,7 +718,7 @@ AAD = vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_v
 Plaintext:
 
 ```
-u32    registry_version        1
+u32    registry_version        2 — a 1 is read too: it ends after the peer pin records
 u8[16] device_id               this replica's stable identity (SYNC.md)
 i64    modified_at
 u8[48] wrapped_identity_key    device identity X25519 private key, under KWK_identity
@@ -691,6 +730,8 @@ u32    archive_count
        … archive records
 u32    peer_count
        … peer pin records
+u32    escrow_count            version 2 and later
+       … recovery-key escrow records (§7.6, R38)
 ```
 
 ### 7.1 Archive record
@@ -805,15 +846,26 @@ u32     capabilities            bit0 open_archive · bit1 append_dek · bit2 ful
 u8      device_class            1 ephemeral-session · 2 enrolled-personal
 ```
 
+### 7.6 Recovery-key escrow record
+
+One per active recovery slot (R38); `recipient_id` is the slot record's.
+
+```
+u8[16] recipient_id            the recovery slot this key belongs to
+u8[12] wrap_nonce
+u8[32] wrapped_recovery_key    AES-256-GCM(KWK_recovery, R) with the AAD of R22: 16 bytes + tag
+```
+
 ## 8. VMK rotation
 
 **Offered on every slot removal and credential change, with rotation pre-selected.** `DESIGN.md`
 §5 covers why the default sits there rather than on "skip". The mechanics:
 
-1. Generate `VMK'`, increment `vmk_generation`, derive the four subordinate keys.
+1. Generate `VMK'`, increment `vmk_generation`, derive the five subordinate keys.
 2. Unwrap every archive key with `KWK`, re-wrap with `KWK'`. **No archive file is touched** — the
    archive keys themselves are unchanged, only their wrappers.
-3. Re-wrap the identity private key under `KWK_identity'`.
+3. Re-wrap the identity private key under `KWK_identity'`, and every escrowed recovery key
+   (§7.6) under `KWK_recovery'`.
 4. Re-wrap `VMK' ‖ vmk_generation` into every surviving slot with a fresh `epk` — and, for hybrid
    software slots, a fresh ML-KEM encapsulation, so `mlkem_ct` is replaced too.
 5. Write the slot region, then the registry, then flip the superblock.
@@ -1059,7 +1111,12 @@ what makes the backend choice reversible rather than architectural.
 
 The recovery key does not help: it unlocks *a* keystore, it does not reconstruct one. These two
 are extremely easy to confuse and the confusion only surfaces at the worst possible moment, so the
-UI must state it plainly.
+UI must state it plainly. The escrow of R38 changes none of this: it keeps the recovery key
+*inside* the keystore, to show it again; a keystore that is gone takes it along. What R38 does
+change is what a copy carries: every export, every retired or damaged copy holds, under its own
+VMK, every recovery key of its date. A copy that may have leaked is therefore answered by
+replacing every recovery slot that was active when it was made — not only the one it was opened
+with — and then rotating.
 
 **Keystore backup is a separate concern from the recovery key**, and its design is **deferred**.
 An earlier draft called automatic backup a mandatory feature; that was premature. Automatic backup

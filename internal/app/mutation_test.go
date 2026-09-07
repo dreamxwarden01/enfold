@@ -198,27 +198,21 @@ func TestMutationGuards(t *testing.T) {
 	h.rec.waitOp(t, opID)
 	h.c.CancelUnlock()
 
-	// CreateVault to a bad path fails without touching the vault's facts.
+	// With a vault kept, a create — anywhere — is refused outright (APP.md
+	// §2.1); the vault's facts stand.
 	h.c.Lock()
 	h.rec.waitState(t, StateLocked)
 	h.rec.reset()
 	bad := filepath.Join(h.dir, "no-such-dir", "v.eks")
-	// An open archive refuses a new vault, whose registry its saves would
-	// miss; closed, the create to a bad path fails without touching the
-	// vault's facts.
-	if e := h.c.CreateVault(bad, "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); !isCode(e, CodeArchivesOpen) {
-		t.Fatalf("create with an archive open: %v", e)
+	if e := h.c.CreateVault(bad, "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); !isCode(e, CodeVaultKept) {
+		t.Fatalf("create with a vault kept: %v", e)
 	}
 	h.c.CloseArchive(id)
-	if e := h.c.CreateVault(bad, "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); e != nil {
-		t.Fatal(e)
+	if e := h.c.CreateVault(bad, "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, true); !isCode(e, CodeVaultKept) {
+		t.Fatalf("create with a vault kept, replace: %v", e)
 	}
-	p := h.rec.waitCeremony(t, StepPassword, true)
-	h.c.SubmitSecret("password", p.PromptID, "whatever")
-	h.rec.waitCeremony(t, StepFailed, false)
-	h.rec.waitState(t, StateLocked)
 	if st := h.status(); st.Path != h.vault || st.DisplayName != "Test vault" {
-		t.Fatalf("vault facts replaced by a failed create: %+v", st)
+		t.Fatalf("vault facts touched by a refused create: %+v", st)
 	}
 	h.unlockWithPassword()
 }

@@ -2526,3 +2526,50 @@ verifies after the idle (it failed before the change). `pivtool selftest -defaul
 -rounds 2`, run by the user with the touches: the PIN answered after eight idle seconds,
 reconnect, VERIFY, touch, ECDH matching the software computation, twice — the exact sequence
 every create and unlock had lost.
+
+---
+
+## 2026-09-07 — One vault means one: rebuild only on damage; the recovery key kept once more, and every showing saved, printed, or confirmed
+
+Three rulings from the aftermath of the second hardware test, one of them a format change.
+
+**No second vault from inside.** With one vault per user (2026-09-06), "Create a new vault…" on
+the lock screen invited exactly the mistake that ruling forecloses. Create is a first-run action.
+What a vault that exists can be is *rebuilt*, and only when its file cannot be opened — present,
+and refused by `keystore.Open` — never when it opens, since a rebuild loses the keys the file
+holds. The damaged file is retired beside the new vault as `vault-damaged-<unix>-<n>.eks`, a copy
+the app names and never reads again; integrity checks and repair are for later, and that copy is
+what they will work on. Absent is not damaged (import or create, as before) and tampered is not
+damaged (the file opens; the cure is importing a copy).
+
+**Saved, printed, or written down and confirmed.** The reveal offered one button, "I have written
+it down", and took the user's word. Now a text file the core writes — after the user is told what
+place to choose (safe, secret, reachable when needed; not the vault's folder, not a synced one),
+through the native Save dialog and a bound call that carries a handle and a path, never the
+digits; a print through `window.print()` and a stylesheet that prints the digits, the vault's
+name and the date and nothing else — the one browser output the page invokes (previews stay
+without one, DESIGN trap 13: they are decrypted content, and a recovery key is meant to leave the
+machine); and "written down" with a second confirmation, because the first click is a reflex.
+
+**Kept once more, under the VMK.** A recovery key shown once is a recovery key on paper, and the
+one-vault ruling makes losing it costlier: there is no second vault to fall back on. So the
+registry keeps every recovery key wrapped under `KWK_recovery`, a fifth child of the VMK (FORMAT
+R3, R38, §7.6; `registry_version` 2, version 1 read and rewritten). The user's reasoning is the
+design: *the session's cached keys cannot open it, so a protector must recover the VMK to
+authorise a showing* — `RevealRecoveryKey` is a ceremony like a slot change, YubiKey or password,
+never the recovery key. It adds no new principal (whoever opens the record holds the VMK), it
+changes nothing about losing the keystore (§15), and the record's life is the slot's. The
+design critique named the consequence the first draft glossed over: a VMK exposure — a memory
+read, a leaked copy plus one of its ways in — is now a recovery-key exposure that no rotation
+revokes, since rotation re-wraps a recovery slot from its public keys; the answer is replacing
+every recovery slot, then rotating, and DESIGN §5, trap 11, FORMAT R28 and §15 say so now. A
+slot made before the rule has no record and cannot be shown again until an unlock through it
+hands the keystore the key (which writes the record) or the slot is replaced; the Keys page
+says which. Two more things the critique fixed: the reveal holds the handle like a slot change
+while the VMK is recovered (`keystore.Unlock` writes the handle's registry pointer; a save
+racing it could lose its receipt), and the core — not the page — refuses a create while a vault
+is kept (`vault.kept`), so the one-vault rule lives where every rule lives.
+
+**Not done here.** Integrity checks on a damaged copy; an entropy estimate for a chosen
+password; a "replace this recovery key" action in one step (add, show, remove, rotate
+offered); a Rotate dialog that offers to replace the recovery keys on the removal path.

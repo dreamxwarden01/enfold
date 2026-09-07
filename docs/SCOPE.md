@@ -33,7 +33,10 @@ consequences worth stating up front:
 - Slot types: **hardware (YubiKey PIV 9d, P-256 ECDH)**, **standalone password**, **recovery**
 - Software slots are hybrid X25519 + ML-KEM-1024 (`FORMAT.md` §3.1)
 - Optional entangled password, off by default, with an entropy estimate shown
-- Recovery key: 48 digits, BitLocker encoding with its checksum
+- Recovery key: 48 digits, BitLocker encoding with its checksum; kept once more under the VMK
+  (`FORMAT.md` R38) so it can be shown again after a YubiKey or password unlock; every showing
+  offers save as a text file, print, or written down with a second confirmation (ruling
+  2026-09-07)
 - The slot invariant enforced as a predicate on every mutation
 - VMK rotation, pre-selected on removals and password changes
 - Manual keystore export: registry + recovery slot only
@@ -41,7 +44,9 @@ consequences worth stating up front:
   elsewhere is *imported* — copied in and proved with one of its own ways in before the file it
   replaces is retired as a dated copy — and a backup (recovery slot only) is adopted by finishing
   setup with the recovery key; a backup is verifiable without touching anything; a vault kept
-  elsewhere is an explicit advanced choice (`APP.md` §2.1, ruling 2026-09-06)
+  elsewhere is an explicit advanced choice (`APP.md` §2.1, ruling 2026-09-06); a vault that
+  exists is never joined by a second one from inside — only a file that cannot be opened may be
+  rebuilt, the damaged file kept beside the new vault (ruling 2026-09-07)
 
 **Archives**
 

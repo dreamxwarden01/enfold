@@ -310,6 +310,27 @@ Wrapping:  identical to a YubiKey slot -- fresh epk, ECDH(esk, pk_rec)
 Recovery:  user types the 48 digits -> re-derive sk_rec -> ECDH(sk_rec, epk) -> IK
 ```
 
+(The hybrid X25519 + ML-KEM construction of `FORMAT.md` §3.1 supersedes this sketch; what
+matters is the shape: a seed for a keypair.)
+
+#### Kept once more, under the VMK
+
+A recovery key is shown to a human once and then lives on paper, and paper is lost — and with
+one vault per user (`APP.md` §2.1) there is no second vault to fall back on. So the keystore
+keeps a second copy of `R`: wrapped under a key derived from the VMK (`KWK_recovery`, `FORMAT.md`
+R3, R38) in the authenticated registry, one record per recovery slot, removed with the slot,
+re-wrapped by rotation. It adds no new principal — only a key derived from the VMK opens the
+record, and the session's cached keys cannot — but it makes a VMK exposure a recovery-key
+exposure, and one that rotation does not cure (§5 Revocation, trap 11). What it adds is a
+*second showing*, from the Keys page, after a ceremony that recovers the VMK through a YubiKey
+or a password — never through the recovery key itself (the ruling: a protector authorises the
+showing), and never through the session's cached keys, which do not include the VMK (the user's
+ruling, 2026-09-07: "the KWK cannot open it, so a protector must open the VMK to authorise a
+showing"). Every showing — the first one included — offers the same three ways out: the digits
+saved as a text file that the core writes (the page passes a place, never the digits), printed,
+or written down; the last two are confirmed a second time, since the page cannot tell a print
+from a cancelled one and the first click is a reflex.
+
 **X25519 here, not P-256.** An X25519 private key is any 32 bytes after clamping, so
 deterministic derivation from a seed is trivial. P-256 requires rejection sampling into
 `[1, n-1]`, which is fiddly and easy to get subtly wrong. The recovery slot never touches
@@ -341,6 +362,7 @@ thousand archives rotates in well under a second — and **no file data is re-en
 | Delete the slot record only | ~1 KB | Essentially nothing |
 | **+ rotate the VMK** | ~60 B per archive | **All future access.** The removed credential now yields only the old VMK, which opens nothing in the current keystore |
 | + rotate archive keys | index rewrite per archive | Withdraws access to archives whose keys were released to a low-trust machine |
+| + replace every recovery slot | a new key to write down, per slot | What the escrow of `FORMAT.md` R38 exposed: a holder of the VMK — or of any copy of the keystore and one of its ways in — read every recovery key of that date, and those digits survive every rotation |
 
 **Rotation is offered on every slot removal and credential change, pre-selected.**
 
@@ -547,8 +569,11 @@ above. It remains available if the trade is ever revisited.
 
 Destroying the VMK while keeping the KWK is not cosmetic. An attacker who dumps memory holding
 only the KWK gets a one-time snapshot of the contents. An attacker who gets the VMK can **add
-their own YubiKey as a legitimate slot** and retain silent, permanent access. Least privilege
-applies to key caching.
+their own YubiKey as a legitimate slot** and retain silent, permanent access — and, since
+`FORMAT.md` R38, read every recovery key, which no rotation revokes: a suspected VMK exposure is
+answered by replacing every recovery slot, then rotating (§5). Least privilege applies to key
+caching, and the reveal ceremony is the one place besides a slot change where the VMK is
+recovered at all.
 
 ### Timeouts
 
@@ -617,8 +642,11 @@ the keystore (the user's ruling, 2026-09-05).
 
 The UI is a WebView2 (Wails v3, §14). **Keys never cross into the WebView.** Anything handed to
 the renderer lives in a JS heap that cannot be zeroed. One scoped exception: the recovery key
-crosses exactly twice — shown once at generation, typed once at entry — because there is no
-other channel to a human; no other key ever does, and the four typed secrets (PIN, password,
+crosses at a human's request only — shown at generation, shown again when a ceremony has
+recovered the VMK through a protector (the escrow of `FORMAT.md` R38), typed at entry — because
+there is no other channel to a human; a copy saved to a file is written by the core, addressed
+by a handle, so the digits never ride a bound call; no other key ever does, and the four typed
+secrets (PIN, password,
 recovery digits, management key) travel on the raw message channel, never as bound-method
 arguments, which Wails stringifies and can log (`APP.md` §1). Send the index one screenful at a time
 rather than handing over the whole decrypted file list. The WebView2 also has a disk cache of
@@ -663,6 +691,8 @@ Correct in this document, and easy to lose during implementation.
     those of archives created afterwards — and with write access they can splice the old slot
     region back outright, and such copies are likely to exist. Rotation is pre-selected on every
     removal and every password change; a deferred one must stay visible (§5, Revocation).
+    Since `FORMAT.md` R38 a VMK that leaked read every recovery key too, and rotation does not
+    revoke those: replacing every recovery slot does.
 12. **The keystore must never go to public cloud storage**, and the storage layer should be
     BitLocker-encrypted. This is the only mitigation for the post-quantum exposure in §2, and
     BitLocker is volume-level — it does nothing for a file uploaded off that volume
@@ -677,7 +707,10 @@ Correct in this document, and easy to lose during implementation.
     directory after a preview is a release gate, re-run whenever the pinned beta moves.
     Otherwise decrypted content is written to disk by a component that is not this program.
     The same rule forbids any preview surface that offers a browser-provided save or print:
-    the native context menu is disabled and the Edge PDF viewer is not used (`APP.md` §4).
+    the native context menu is disabled and the Edge PDF viewer is not used (`APP.md` §4). The
+    recovery key's dialog is the one page surface with a browser output — `window.print()` over
+    a stylesheet that prints the digits and nothing else (`APP.md` §3 Keys): a recovery key is
+    meant to leave the machine; a preview never is.
 14. **The token's PIN-once state outlives our connection.** Measured 2026-09-04 on a YubiKey
     5.7.4 (`DECISIONS.md`): after a VERIFY the card stays verified until Windows powers it down,
     which happens **10 s after the last application disconnects** — piv-go disconnects with

@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
 	"github.com/dreamxwarden01/enfold/internal/kdf"
@@ -22,9 +24,30 @@ func (c *Core) Slots() []SlotView {
 	defer c.mu.Unlock()
 	out := make([]SlotView, 0, len(c.vault.slots))
 	for _, s := range c.vault.slots {
-		out = append(out, slotView(s))
+		v := slotView(s)
+		v.Escrowed = c.vault.escrowed[s.RecipientID]
+		out = append(out, v)
 	}
 	return out
+}
+
+// refreshEscrowedLocked reads which recovery slots have an escrow record
+// (FORMAT R38) from the session's registry: after an unlock and after a
+// slot change, never during one. Caller holds the state mutex.
+func (c *Core) refreshEscrowedLocked() {
+	v := &c.vault
+	v.escrowed = nil
+	if v.sess == nil {
+		return
+	}
+	reg := v.sess.Registry()
+	if reg == nil {
+		return
+	}
+	v.escrowed = make(map[[16]byte]bool, len(reg.Escrows))
+	for _, e := range reg.Escrows {
+		v.escrowed[e.RecipientID] = true
+	}
 }
 
 // EnrollKind is which kind of slot an enrollment adds.
@@ -43,16 +66,25 @@ type EnrollOptions struct {
 	Entangle bool // token slot with an entangled password
 }
 
-// mutation is a slot change that needs the VMK: the ceremony re-runs to
+// beginMutation is a slot change that needs the VMK: the ceremony re-runs to
 // obtain an Unlocked on the open handle, fn uses it, and it is closed.
 func (c *Core) beginMutation(kind string, fn func(cer *ceremony, unl *keystore.Unlocked) error) *Error {
+	return c.beginWithVMK(kind, false, fn)
+}
+
+// beginWithVMK runs fn with an Unlocked recovered through a protector. It
+// holds the handle like a slot change whether or not fn writes the file:
+// keystore.Unlock is not a read of the shared handle, so a registry write
+// waits for it and it waits for one. The reveal of APP.md §3 Keys is the
+// reading that allowTampered admits.
+func (c *Core) beginWithVMK(kind string, allowTampered bool, fn func(cer *ceremony, unl *keystore.Unlocked) error) *Error {
 	c.mu.Lock()
 	v := &c.vault
 	if v.state != StateUnlocked {
 		c.mu.Unlock()
 		return coded(CodeNeedsUnlock)
 	}
-	if v.tampered != nil {
+	if !allowTampered && v.tampered != nil {
 		c.mu.Unlock()
 		return coded(CodeVaultTampered)
 	}
@@ -61,7 +93,7 @@ func (c *Core) beginMutation(kind string, fn func(cer *ceremony, unl *keystore.U
 		return coded(CodeCeremonyRunning)
 	}
 	// An operation about to write the registry would race the ceremony's
-	// own commits on the one handle: it goes first.
+	// own use of the one handle: it goes first.
 	for _, o := range c.ops {
 		if !o.finished && writesRegistry(o.kind) {
 			c.mu.Unlock()
@@ -176,6 +208,7 @@ func (c *Core) afterMutation() {
 	if c.vault.ks != nil {
 		c.cacheFactsLocked(c.vault.ks)
 	}
+	c.refreshEscrowedLocked()
 	c.mu.Unlock()
 	c.emitState()
 }
@@ -219,8 +252,8 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 			if err := unl.AddSlot(spec); err != nil {
 				return err
 			}
-			// Shown once, over the one-time channel.
-			url := c.preview.mintSecret(rk.Digits())
+			// Shown over the one-time channel; kept once more in the vault.
+			url := c.preview.mintSecret(rk.Digits(), o.Label)
 			cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
 			c.afterMutation()
 			return nil
@@ -401,6 +434,142 @@ func (cer *ceremony) enrollOn(card Card) ([]byte, error) {
 	return info.PublicKey, nil
 }
 
+// RevealRecoveryKey shows a recovery slot's key again (APP.md §3 Keys):
+// the VMK is recovered through a protector — never the recovery key —
+// and the slot's escrow record (FORMAT R38) opened and checked against
+// the slot; the digits go to the page over the one-time URL, as at
+// creation, and stay behind its handle for a save. What can be refused
+// before any prompt is: no such recovery slot, no record for it, no
+// protector to ask. It writes nothing, and runs on a tampered vault.
+func (c *Core) RevealRecoveryKey(recipientID string) *Error {
+	rid, ok := parseID(recipientID)
+	if !ok {
+		return coded(CodeParams)
+	}
+	c.mu.Lock()
+	v := &c.vault
+	if v.state != StateUnlocked {
+		c.mu.Unlock()
+		return coded(CodeNeedsUnlock)
+	}
+	var label string
+	found, protector := false, false
+	for _, s := range v.slots {
+		if s.RecipientID == rid && s.Type == format.SlotRecovery {
+			found, label = true, s.Label
+		}
+		if (s.PublicKey != nil && !s.Stale) || s.Type == format.SlotStandalonePassword {
+			protector = true
+		}
+	}
+	escrowed := v.escrowed[rid]
+	c.mu.Unlock()
+	switch {
+	case !found:
+		return coded(CodeSlotNotFound)
+	case !escrowed:
+		return coded(CodeNoEscrow)
+	case !protector:
+		return coded(CodeSetupNeeded)
+	}
+	return c.beginWithVMK("reveal", true, func(cer *ceremony, unl *keystore.Unlocked) error {
+		cer.releaseCard() // nothing further needs the key
+		if err := cer.check(); err != nil {
+			return err
+		}
+		rk, err := unl.RecoveryKey(rid)
+		if err != nil {
+			return err
+		}
+		url := c.preview.mintSecret(rk.Digits(), label)
+		kdf.Zero(rk[:])
+		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
+		return nil
+	})
+}
+
+// SaveRecoveryKey writes the recovery key behind handle — the token of the
+// one-time URL a reveal minted — to path, a text file the user chose, so
+// that the digits never ride a bound call (APP.md §1). Not into the data
+// folder or beneath it, not into the folder of a vault kept elsewhere, not
+// under a staging name (vault.recovery_place); a handle that is unknown,
+// dropped or expired is ceremony.stale_prompt. An existing regular file is
+// replaced — the Save dialog asked — and anything else at the path
+// refused; the file is synced before this returns. The folder the user
+// chose is the file's protection: the mode is asked for where it means
+// something.
+func (c *Core) SaveRecoveryKey(handle, path string) *Error {
+	if path == "" || !filepath.IsAbs(path) {
+		return coded(CodeParams)
+	}
+	c.mu.Lock()
+	name, vaultPath := c.vault.displayName, c.vault.path
+	c.mu.Unlock()
+	if reservedName(path) || insideDir(c.deps.DataDir, path) || (vaultPath != "" && samePath(filepath.Dir(path), filepath.Dir(vaultPath))) {
+		return coded(CodeRecoveryPlace)
+	}
+	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
+		return coded(CodeRecoveryPlace)
+	}
+	digits, label, ok := c.preview.secretValue(handle)
+	if !ok {
+		return coded(CodeStalePrompt)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return c.fail("save recovery key", err)
+	}
+	_, err = f.WriteString(recoveryKeyText(name, label, c.now(), digits))
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return c.fail("save recovery key", err)
+	}
+	c.log("recovery key saved to %s", path)
+	return nil
+}
+
+// insideDir reports whether path is dir or lies beneath it.
+func insideDir(dir, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || !(rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// DropRecoveryKey ends a reveal's handle: the dialog closed.
+func (c *Core) DropRecoveryKey(handle string) *Error {
+	c.preview.dropSecret(handle)
+	return nil
+}
+
+// recoveryKeyText is the saved file: the digits, what they are for, and
+// what they are not. Windows line endings, for Notepad.
+func recoveryKeyText(name, label string, at time.Time, digits string) string {
+	lines := []string{
+		"Enfold recovery key",
+		"Vault: " + name,
+		"Way in: " + label,
+		"Saved: " + at.Format("2006-01-02 15:04"),
+		"",
+		digits,
+		"",
+		"This key opens the vault without a YubiKey or a password: anyone who has it",
+		"can open every archive the vault holds the keys to. Keep it secret, and keep",
+		"it where you can reach it when you need it.",
+		"",
+		"It does not replace the vault file itself: without that file, no key opens",
+		"the archives. Keep a backup of the vault as well (Keys > Export a backup).",
+		"",
+	}
+	return strings.Join(lines, "\r\n")
+}
+
 // RemoveSlot removes a way in after a ceremony; the invariant may refuse.
 func (c *Core) RemoveSlot(recipientID string) *Error {
 	rid, ok := parseID(recipientID)
@@ -498,18 +667,22 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 		c.mu.Unlock()
 		return e
 	}
-	configured := c.vault.state != StateNone
-	replacing := configured && (samePath(path, c.defaultVaultPath()) || samePath(path, c.vault.path))
-	if configured && len(c.archives) > 0 {
+	// One vault (APP.md §2.1): with one kept, a second is never made; with
+	// one damaged, the rebuild is at its own place and nowhere else.
+	if c.vault.state != StateNone || (c.vault.missing != "" && c.vault.damaged && !samePath(path, c.vault.missing)) {
+		c.mu.Unlock()
+		return coded(CodeVaultKept)
+	}
+	if len(c.archives) > 0 {
 		// A save from an open archive would land in the wrong registry.
 		c.mu.Unlock()
 		return coded(CodeArchivesOpen)
 	}
 	c.mu.Unlock()
 	if !replace {
-		// Anything at the destination — a vault, a file, something that
-		// cannot even be looked at — is replaced only knowingly.
-		if _, err := os.Stat(path); replacing || !errors.Is(err, fs.ErrNotExist) {
+		// Anything at the destination — a damaged vault, a file, something
+		// that cannot even be looked at — is replaced only knowingly.
+		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
 			return coded(CodeVaultExists)
 		}
 	}
@@ -563,7 +736,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 		}
 		installed = true
 		// Installed: the key is shown whatever happens now.
-		url := c.preview.mintSecret(rk.Digits())
+		url := c.preview.mintSecret(rk.Digits(), "Recovery key")
 		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
 		return nil
 	})

@@ -1,0 +1,249 @@
+package app
+
+import (
+	"io"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/dreamxwarden01/enfold/internal/format"
+	"github.com/dreamxwarden01/enfold/internal/keystore"
+)
+
+// recoverySlotID finds the vault's recovery slot on the Keys view.
+func recoverySlotID(t *testing.T, h *harness) (recovery, other string) {
+	t.Helper()
+	for _, s := range h.c.Slots() {
+		if s.Type == "recovery" {
+			recovery = s.RecipientID
+		} else {
+			other = s.RecipientID
+		}
+	}
+	if recovery == "" || other == "" {
+		t.Fatalf("slots: %+v", h.c.Slots())
+	}
+	return recovery, other
+}
+
+// fetchSecret is the page's fetch of the one-time URL.
+func fetchSecret(t *testing.T, url string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Origin", "wails://wails")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode, string(body)
+}
+
+// reveal runs the reveal ceremony on a password vault to its final event.
+func reveal(t *testing.T, h *harness, rid string) CeremonyState {
+	t.Helper()
+	h.rec.reset()
+	if e := h.c.RevealRecoveryKey(rid); e != nil {
+		t.Fatal(e)
+	}
+	p := h.rec.waitCeremony(t, StepPassword, true)
+	if p.Kind != "reveal" || p.Choose {
+		t.Fatalf("the reveal's protector prompt: %+v", p)
+	}
+	h.c.SubmitSecret("password", p.PromptID, testPassword)
+	shown := h.rec.waitCeremony(t, StepRecovery, false)
+	if !strings.HasPrefix(shown.SlotLabel, "http://127.0.0.1:") || shown.PromptID != "" {
+		t.Fatalf("no one-time URL: %+v", shown)
+	}
+	return shown
+}
+
+// The recovery key is shown again after a protector unlock (APP.md §3
+// Keys): the digits over the one-time URL, saved by the core behind the
+// URL's handle, never over a bound call; the handle ends when dropped, on
+// a second fetch, and on a lock trigger.
+func TestRevealRecoveryKey(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.c.SetAppOrigin("wails://wails")
+	if e := h.c.RevealRecoveryKey("zz"); !isCode(e, CodeParams) {
+		t.Fatalf("bad id: %v", e)
+	}
+	h.unlockWithPassword()
+	rid, pwID := recoverySlotID(t, h)
+	// What is refused is refused before any prompt.
+	if e := h.c.RevealRecoveryKey(pwID); !isCode(e, CodeSlotNotFound) {
+		t.Fatalf("a password slot: %v", e)
+	}
+	for _, s := range h.c.Slots() {
+		if (s.Type == "recovery") != s.Escrowed {
+			t.Fatalf("escrowed on the view: %+v", s)
+		}
+	}
+	shown := reveal(t, h, rid)
+	if st := h.status(); st.State != StateUnlocked {
+		t.Fatalf("a reveal changes the state: %s", st.State)
+	}
+	code, body := fetchSecret(t, shown.SlotLabel)
+	if code != 200 || body != h.recovery {
+		t.Fatalf("digits: %d %q (want %q)", code, body, h.recovery)
+	}
+	// The value stays behind the handle for a save the core writes.
+	handle := path.Base(shown.SlotLabel)
+	out := filepath.Join(t.TempDir(), "recovery-key.txt") // away from the vault's own folder
+	if e := h.c.SaveRecoveryKey(handle, out); e != nil {
+		t.Fatalf("save: %v", e)
+	}
+	text, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{h.recovery, "Test vault", "Recovery key", "\r\n"} {
+		if !strings.Contains(string(text), want) {
+			t.Fatalf("saved file lacks %q: %q", want, text)
+		}
+	}
+	// Not into the data folder or beneath it, not beside a vault kept
+	// elsewhere, not under a staging name, not relative, not over a folder.
+	for _, bad := range []string{
+		filepath.Join(h.dir, "data", "key.txt"),
+		filepath.Join(h.dir, "data", "WebView2", "key.txt"),
+		filepath.Join(h.dir, "vault.incoming-key.txt"),
+		filepath.Join(filepath.Dir(h.vault), "key.txt"),
+		h.dir,
+	} {
+		if e := h.c.SaveRecoveryKey(handle, bad); !isCode(e, CodeRecoveryPlace) {
+			t.Fatalf("%s: %v", bad, e)
+		}
+	}
+	if e := h.c.SaveRecoveryKey(handle, "key.txt"); !isCode(e, CodeParams) {
+		t.Fatalf("relative: %v", e)
+	}
+	// A save replaces the file the dialog confirmed.
+	if e := h.c.SaveRecoveryKey(handle, out); e != nil {
+		t.Fatalf("save again: %v", e)
+	}
+	// A second fetch of the URL gets nothing, and ends the handle too:
+	// the page fetches once, so a second fetch is not the page's.
+	if code, _ := fetchSecret(t, shown.SlotLabel); code != 404 {
+		t.Fatalf("second fetch: %d", code)
+	}
+	if e := h.c.SaveRecoveryKey(handle, out); !isCode(e, CodeStalePrompt) {
+		t.Fatalf("after a second fetch: %v", e)
+	}
+	if e := h.c.SaveRecoveryKey("nonsense", out); !isCode(e, CodeStalePrompt) {
+		t.Fatalf("unknown handle: %v", e)
+	}
+	// Dropped: nothing to save; the digits are the page's problem now.
+	shown = reveal(t, h, rid)
+	handle = path.Base(shown.SlotLabel)
+	if e := h.c.DropRecoveryKey(handle); e != nil {
+		t.Fatal(e)
+	}
+	if e := h.c.SaveRecoveryKey(handle, out); !isCode(e, CodeStalePrompt) {
+		t.Fatalf("after the drop: %v", e)
+	}
+	if code, _ := fetchSecret(t, shown.SlotLabel); code != 404 {
+		t.Fatalf("fetch after the drop: %d", code)
+	}
+	// A lock trigger drops a held key: nothing decrypted outlives it.
+	shown = reveal(t, h, rid)
+	handle = path.Base(shown.SlotLabel)
+	h.c.LockNow(ReasonWorkstation)
+	h.rec.waitState(t, StateLocked)
+	if e := h.c.SaveRecoveryKey(handle, out); !isCode(e, CodeStalePrompt) {
+		t.Fatalf("after a lock: %v", e)
+	}
+	if code, _ := fetchSecret(t, shown.SlotLabel); code != 404 {
+		t.Fatalf("fetch after a lock: %d", code)
+	}
+	// Locked, the view does not claim to know.
+	for _, s := range h.c.Slots() {
+		if s.Escrowed {
+			t.Fatalf("escrowed while locked: %+v", s)
+		}
+	}
+}
+
+// A recovery slot made before escrow has no record: the reveal says so
+// before asking anything, the view says so, and an unlock through the
+// key hands it in, after which it can be shown.
+func TestRevealOfKeyKeptBeforeEscrow(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.c.SetAppOrigin("wails://wails")
+	// While the vault is locked no handle is open: strip the record.
+	ks, err := keystore.Open(h.vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unl, err := ks.Unlock(keystore.PasswordCredential{Password: testPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unl.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows = nil
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unl.Close()
+	ks.Close()
+
+	h.unlockWithPassword()
+	rid, _ := recoverySlotID(t, h)
+	for _, s := range h.c.Slots() {
+		if s.Escrowed {
+			t.Fatalf("escrowed without a record: %+v", s)
+		}
+	}
+	if e := h.c.RevealRecoveryKey(rid); !isCode(e, CodeNoEscrow) {
+		t.Fatalf("no escrow: %v", e)
+	}
+	// Typed once, the key is kept: an unlock through it writes the record.
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodRecovery); e != nil {
+		t.Fatal(e)
+	}
+	p := h.rec.waitCeremony(t, StepRecovery, true)
+	h.c.SubmitSecret("recovery", p.PromptID, h.recovery)
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+	escrowed := false
+	for _, s := range h.c.Slots() {
+		escrowed = escrowed || (s.RecipientID == rid && s.Escrowed)
+	}
+	if !escrowed {
+		t.Fatalf("the key that opened was not kept: %+v", h.c.Slots())
+	}
+	shown := reveal(t, h, rid)
+	if code, body := fetchSecret(t, shown.SlotLabel); code != 200 || body != h.recovery {
+		t.Fatalf("digits after handing in: %d %q", code, body)
+	}
+}
+
+// The reveal holds the handle while the VMK is recovered, like a slot
+// change: a registry write meanwhile owes its receipt.
+func TestRevealHoldsTheHandle(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.c.SetAppOrigin("wails://wails")
+	h.unlockWithPassword()
+	rid, _ := recoverySlotID(t, h)
+	h.rec.reset()
+	if e := h.c.RevealRecoveryKey(rid); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitCeremony(t, StepPassword, true)
+	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false); !isCode(e, CodeCeremonyRunning) {
+		t.Fatalf("a registry write during the reveal: %v", e)
+	}
+	h.c.CancelUnlock()
+	h.rec.waitCeremony(t, StepFailed, false)
+	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false); e != nil {
+		t.Fatalf("after the reveal: %v", e)
+	}
+}

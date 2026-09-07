@@ -122,6 +122,7 @@ func FuzzDecodeRegistry(f *testing.F) {
 	b, _ := sampleRegistry().Encode()
 	f.Add(b)
 	f.Add([]byte{1, 0, 0, 0})
+	f.Add([]byte{2, 0, 0, 0})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		d, err := DecodeRegistry(data)
 		if err != nil {
@@ -130,6 +131,18 @@ func FuzzDecodeRegistry(f *testing.F) {
 		b, err := d.Encode()
 		if err != nil {
 			t.Fatalf("re-encode: %v", err)
+		}
+		if len(data) >= 4 && data[0] == 1 {
+			// A version-1 registry is rewritten as version 2 (R38): the
+			// same registry, four bytes longer, canonical from then on.
+			if len(b) != len(data)+4 || !bytes.Equal(b[4:len(data)], data[4:]) {
+				t.Fatalf("version 1 is not rewritten as itself")
+			}
+			d2, err := DecodeRegistry(b)
+			if err != nil || !reflect.DeepEqual(d, d2) {
+				t.Fatalf("rewritten version 1 does not decode as itself: %v", err)
+			}
+			return
 		}
 		if !bytes.Equal(b, data) {
 			t.Fatalf("accepted registry is not canonical")

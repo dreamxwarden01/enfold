@@ -359,6 +359,7 @@ func main() {
 		"db_key":       hx(hkdfN(vmk, nil, infoVault("Enfold/v1/db"), 32)),
 		"KWK":          hx(hkdfN(vmk, nil, infoVault("Enfold/v1/wrap/archive"), 32)),
 		"KWK_identity": hx(hkdfN(vmk, nil, infoVault("Enfold/v1/wrap/identity"), 32)),
+		"KWK_recovery": hx(hkdfN(vmk, nil, infoVault("Enfold/v1/wrap/recovery"), 32)),
 	}
 	vec["archive_keys"] = H{
 		"index_key": hx(hkdfN(archiveKey, nil, infoArchive("Enfold/v1/archive/index"), 32)),

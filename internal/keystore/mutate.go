@@ -33,6 +33,7 @@ func Create(path string, opts CreateOptions) (*Unlocked, error) {
 	}
 	const gen = 1
 	slots := make([]format.SlotRecord, 0, len(opts.Slots))
+	var escrows []format.EscrowRecord
 	for _, spec := range opts.Slots {
 		s, err := newRecord(spec, vaultID, vmk, gen)
 		if err != nil {
@@ -40,13 +41,21 @@ func Create(path string, opts CreateOptions) (*Unlocked, error) {
 			return nil, err
 		}
 		slots = append(slots, s)
+		if rs, ok := spec.(RecoverySlot); ok {
+			e, err := escrowRecord(vmk, vaultID, s.RecipientID, rs.Key)
+			if err != nil {
+				kdf.Zero(vmk[:])
+				return nil, err
+			}
+			escrows = append(escrows, e)
+		}
 	}
 	if err := checkInvariant(slots); err != nil {
 		kdf.Zero(vmk[:])
 		return nil, err
 	}
 
-	reg := &format.Registry{DeviceID: opts.DeviceID}
+	reg := &format.Registry{DeviceID: opts.DeviceID, Escrows: escrows}
 	if reg.DeviceID == [16]byte{} {
 		if _, err := rand.Read(reg.DeviceID[:]); err != nil {
 			kdf.Zero(vmk[:])
@@ -123,7 +132,120 @@ func (u *Unlocked) AddSlot(spec SlotSpec) error {
 	if err := checkInvariant(slots); err != nil {
 		return err
 	}
-	return u.commitSlots(slots, u.k.sb.RotationPending != 0)
+	var escrow *format.EscrowRecord
+	if rs, ok := spec.(RecoverySlot); ok {
+		e, err := escrowRecord(u.vmk, u.k.sb.VaultID, s.RecipientID, rs.Key)
+		if err != nil {
+			return err
+		}
+		escrow = &e
+	}
+	return u.commitSlots(slots, u.k.sb.RotationPending != 0, func(reg *format.Registry) {
+		if escrow != nil {
+			reg.Escrows = append(reg.Escrows, *escrow)
+		}
+	})
+}
+
+// escrowRecord keeps a recovery key once more, under KWK_recovery (R38).
+func escrowRecord(vmk [32]byte, vaultID, recipientID [16]byte, r kdf.RecoveryKey) (format.EscrowRecord, error) {
+	kwkR := kdf.KWKRecovery(vmk, vaultID)
+	defer kdf.Zero(kwkR)
+	e := format.EscrowRecord{RecipientID: recipientID}
+	var err error
+	e.WrappedRecoveryKey, e.WrapNonce, err = kdf.WrapRecoveryKey(kwkR, r, format.RecoveryEscrowAAD(vaultID, recipientID))
+	return e, err
+}
+
+// RecoveryKey opens the escrow record of an active recovery slot (R38): the
+// recovery key kept once more under the VMK, which only this Unlocked
+// holds — a Session cannot. ErrNotFound when no active recovery slot has
+// this recipient ID; ErrNoEscrow when the slot predates escrow. It reads
+// only, so a tampered slot region does not refuse it.
+func (u *Unlocked) RecoveryKey(recipientID [16]byte) (kdf.RecoveryKey, error) {
+	if err := u.current(); err != nil {
+		return kdf.RecoveryKey{}, err
+	}
+	found := false
+	for i := range u.k.slots {
+		s := &u.k.slots[i]
+		if s.RecipientID == recipientID && s.State == format.SlotActive && s.Type == format.SlotRecovery {
+			found = true
+		}
+	}
+	if !found {
+		return kdf.RecoveryKey{}, ErrNotFound
+	}
+	e := u.k.reg.Escrow(recipientID)
+	if e == nil {
+		return kdf.RecoveryKey{}, ErrNoEscrow
+	}
+	vaultID := u.k.sb.VaultID
+	kwkR := kdf.KWKRecovery(u.vmk, vaultID)
+	defer kdf.Zero(kwkR)
+	r, err := kdf.UnwrapRecoveryKey(kwkR, e.WrappedRecoveryKey, e.WrapNonce, format.RecoveryEscrowAAD(vaultID, recipientID))
+	if err != nil {
+		return kdf.RecoveryKey{}, corrupt("recovery key escrow for slot %x does not unwrap under the current KWK_recovery", recipientID)
+	}
+	// The key shown must be the slot's: derived, it gives the slot's public
+	// key (§6.3), or it is not shown.
+	if !u.keyFitsSlot(recipientID, r) {
+		kdf.Zero(r[:])
+		return kdf.RecoveryKey{}, ErrEscrowMismatch
+	}
+	return r, nil
+}
+
+// keyFitsSlot reports whether r derives the active recovery slot's public
+// key (§6.3).
+func (u *Unlocked) keyFitsSlot(recipientID [16]byte, r kdf.RecoveryKey) bool {
+	for i := range u.k.slots {
+		s := u.k.slots[i]
+		if s.RecipientID != recipientID || s.State != format.SlotActive || s.Type != format.SlotRecovery {
+			continue
+		}
+		skX, _, err := recoveryKeys(&s, r, u.k.sb.VaultID)
+		return err == nil && kdf.VerifyX25519(skX, s.SlotPubkey)
+	}
+	return false
+}
+
+// EscrowOpenedKey keeps r once more (R38) when it is the key of the
+// active recovery slot recipientID and no record exists yet — a vault
+// from before escrow, unlocked through its recovery key. A registry-only
+// commit, so it works while the slot region is tampered; nothing when the
+// record is there already. ErrNotFound when no such slot is active;
+// ErrEscrowMismatch when r is not its key.
+func (u *Unlocked) EscrowOpenedKey(recipientID [16]byte, r kdf.RecoveryKey) error {
+	if err := u.current(); err != nil {
+		return err
+	}
+	if u.k.reg.Escrow(recipientID) != nil {
+		return nil
+	}
+	found := false
+	for i := range u.k.slots {
+		s := &u.k.slots[i]
+		if s.RecipientID == recipientID && s.State == format.SlotActive && s.Type == format.SlotRecovery {
+			found = true
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if !u.keyFitsSlot(recipientID, r) {
+		return ErrEscrowMismatch
+	}
+	e, err := escrowRecord(u.vmk, u.k.sb.VaultID, recipientID, r)
+	if err != nil {
+		return err
+	}
+	return u.UpdateRegistry(func(g *format.Registry) error {
+		if g.Escrow(recipientID) == nil {
+			g.Escrows = append(g.Escrows, e)
+		}
+		return nil
+	})
 }
 
 // RemoveSlot deletes the slot with this recipient ID and commits. Removal
@@ -151,7 +273,8 @@ func (u *Unlocked) RemoveSlot(recipientID [16]byte) error {
 	for i := range slots {
 		pending = pending || slots[i].Flags&format.FlagRewrapStale != 0
 	}
-	return u.commitSlots(slots, pending)
+	// The slot's escrow record goes with it (commitSlots prunes it).
+	return u.commitSlots(slots, pending, nil)
 }
 
 // RotateOptions configures Rotate.
@@ -223,6 +346,25 @@ func (u *Unlocked) Rotate(opts RotateOptions) ([]SlotInfo, error) {
 	kdf.Zero(identity[:])
 	if err != nil {
 		return nil, err
+	}
+	// The escrowed recovery keys under the new KWK_recovery (R38, §8 step 3);
+	// a record whose slot is gone is dropped first, never carried.
+	pruneEscrows(reg, u.k.slots)
+	kwkR, kwkRNew := kdf.KWKRecovery(u.vmk, vaultID), kdf.KWKRecovery(newVMK, vaultID)
+	defer kdf.Zero(kwkR)
+	defer kdf.Zero(kwkRNew)
+	for i := range reg.Escrows {
+		e := &reg.Escrows[i]
+		aad := format.RecoveryEscrowAAD(vaultID, e.RecipientID)
+		r, err := kdf.UnwrapRecoveryKey(kwkR, e.WrappedRecoveryKey, e.WrapNonce, aad)
+		if err != nil {
+			return nil, corrupt("recovery key escrow for slot %x does not unwrap under the current KWK_recovery", e.RecipientID)
+		}
+		e.WrappedRecoveryKey, e.WrapNonce, err = kdf.WrapRecoveryKey(kwkRNew, r, aad)
+		kdf.Zero(r[:])
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Slots: the new VMK into every active one, from stored public keys.
@@ -308,7 +450,7 @@ func (u *Unlocked) RewrapStale(c Credential) ([]SlotInfo, error) {
 	if !found {
 		return stale, ErrNoSlot
 	}
-	return stale, u.commitSlots(slots, len(stale) > 0)
+	return stale, u.commitSlots(slots, len(stale) > 0, nil)
 }
 
 // rewrap wraps vmk into an existing record from its stored public keys,
@@ -327,12 +469,18 @@ func rewrap(s *format.SlotRecord, pw []byte, vaultID [16]byte, vmk [32]byte, gen
 }
 
 // commitSlots writes a new slot region with the registry re-encrypted to
-// carry its hash.
-func (u *Unlocked) commitSlots(slots []format.SlotRecord, pending bool) error {
+// carry its hash; edit, when given, changes the registry copy first. An
+// escrow record whose recovery slot is not among the active ones is
+// dropped here (R38): the record's life is the slot's.
+func (u *Unlocked) commitSlots(slots []format.SlotRecord, pending bool, edit func(*format.Registry)) error {
 	reg, err := cloneRegistry(u.k.reg)
 	if err != nil {
 		return err
 	}
+	if edit != nil {
+		edit(reg)
+	}
+	pruneEscrows(reg, slots)
 	meta := kdf.MetadataKey(u.vmk, u.k.sb.VaultID)
 	defer kdf.Zero(meta)
 	return u.k.commit(txn{slots: slots, reg: reg, meta: meta, gen: u.gen, pending: pending})
@@ -373,6 +521,7 @@ func (u *Unlocked) Export(path string) error {
 	if err != nil {
 		return err
 	}
+	pruneEscrows(reg, slots) // the records of the slots the export carries
 	meta := kdf.MetadataKey(u.vmk, u.k.sb.VaultID)
 	defer kdf.Zero(meta)
 	k, err := create(path, u.k.sb.VaultID, slots, reg, meta, u.gen, u.k.sb.ModifiedAt)
@@ -392,4 +541,26 @@ func cloneSlots(slots []format.SlotRecord) []format.SlotRecord {
 		out[i].MLKEMCT = append([]byte(nil), slots[i].MLKEMCT...)
 	}
 	return out
+}
+
+// pruneEscrows keeps only the escrow records of the recovery slots active
+// in slots (R38): the record's life is the slot's, and every write of the
+// slot region carries only the records of the region it writes.
+func pruneEscrows(reg *format.Registry, slots []format.SlotRecord) {
+	live := make(map[[16]byte]bool, len(slots))
+	for i := range slots {
+		if slots[i].State == format.SlotActive && slots[i].Type == format.SlotRecovery {
+			live[slots[i].RecipientID] = true
+		}
+	}
+	kept := reg.Escrows[:0]
+	for _, e := range reg.Escrows {
+		if live[e.RecipientID] {
+			kept = append(kept, e)
+		}
+	}
+	reg.Escrows = kept
+	if len(reg.Escrows) == 0 {
+		reg.Escrows = nil
+	}
 }

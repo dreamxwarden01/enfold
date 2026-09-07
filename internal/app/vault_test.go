@@ -546,7 +546,10 @@ func TestVerifyBackup(t *testing.T) {
 
 // CreateVault over the vault kept here needs replace, builds the new
 // vault as the incoming file, retires the old one and ends locked.
-func TestCreateVaultReplaces(t *testing.T) {
+// With a vault kept, a second is never made from inside (APP.md §2.1): a
+// create over it, elsewhere, with or without replace, is refused by the
+// core; what replaces a vault is an import.
+func TestCreateWithVaultKeptIsRefused(t *testing.T) {
 	data := t.TempDir()
 	c, rec := freshCore(t, data)
 	c.SetAppOrigin("wails://wails")
@@ -560,43 +563,25 @@ func TestCreateVaultReplaces(t *testing.T) {
 	if st := c.Status(); st.Path != filepath.Join(data, "vault.eks") || st.KeptElsewhere {
 		t.Fatalf("created at %s: %+v", st.Path, st)
 	}
-	if e := c.CreateVault("", "Second", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); !isCode(e, CodeVaultExists) {
-		t.Fatalf("without replace: %v", e)
+	for _, replace := range []bool{false, true} {
+		if e := c.CreateVault("", "Second", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, replace); !isCode(e, CodeVaultKept) {
+			t.Fatalf("over the vault kept (replace=%v): %v", replace, e)
+		}
+		if e := c.CreateVault(filepath.Join(data, "..", "elsewhere.eks"), "Second", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, replace); !isCode(e, CodeVaultKept) {
+			t.Fatalf("elsewhere with a vault kept (replace=%v): %v", replace, e)
+		}
 	}
-	rec.reset()
-	if e := c.CreateVault("", "Second", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, true); e != nil {
-		t.Fatal(e)
+	if st := c.Status(); st.DisplayName != "First" || st.RetiredCopies != 0 || st.State != StateLocked {
+		t.Fatalf("after the refusals: %+v", st)
 	}
-	p = rec.waitCeremony(t, StepPassword, true)
-	c.SubmitSecret("password", p.PromptID, "second password")
-	final := rec.waitCeremony(t, StepRecovery, false)
-	if !strings.HasPrefix(final.SlotLabel, "http://127.0.0.1:") {
-		t.Fatalf("no one-time URL: %+v", final)
-	}
-	rec.waitState(t, StateLocked)
-	st := c.Status()
-	if st.DisplayName != "Second" || st.RetiredCopies != 1 || st.State != StateLocked {
-		t.Fatalf("after replacing: %+v", st)
-	}
-	if staged(data) {
-		t.Fatal("the incoming file was left behind")
-	}
-	// The retired copy is the first vault, and still opens with its password.
-	ks, err := keystore.Open(st.RetiredPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unl, err := ks.Unlock(keystore.PasswordCredential{Password: "first password"})
-	if err != nil {
-		t.Fatalf("the retired copy is not the first vault: %v", err)
-	}
-	unl.Close()
-	ks.Close()
 	rec.reset()
 	c.BeginUnlock(MethodPassword)
 	p = rec.waitCeremony(t, StepPassword, true)
-	c.SubmitSecret("password", p.PromptID, "second password")
+	c.SubmitSecret("password", p.PromptID, "first password")
 	rec.waitState(t, StateUnlocked)
+	if e := c.CreateVault("", "Second", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, true); !isCode(e, CodeVaultUnlocked) {
+		t.Fatalf("while unlocked: %v", e)
+	}
 }
 
 // A create cut short at any prompt leaves nothing: no vault, no incoming
@@ -648,13 +633,17 @@ func TestCreateOverUnreadableFile(t *testing.T) {
 	data := t.TempDir()
 	os.WriteFile(filepath.Join(data, "vault.eks"), []byte("not a keystore at all"), 0o600)
 	c, rec := freshCore(t, data)
-	if st := c.Status(); st.State != StateNone || st.MissingPath != filepath.Join(data, "vault.eks") {
+	if st := c.Status(); st.State != StateNone || st.MissingPath != filepath.Join(data, "vault.eks") || !st.Damaged {
 		t.Fatalf("an unreadable file at the place: %+v", st)
 	}
 	c.SetAppOrigin("wails://wails")
-	// The file there, unreadable or not, is replaced only knowingly.
+	// The file there, unreadable or not, is replaced only knowingly, and
+	// the rebuild happens at its place and nowhere else.
 	if e := c.CreateVault("", "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); !isCode(e, CodeVaultExists) {
 		t.Fatalf("over an unreadable file without replace: %v", e)
+	}
+	if e := c.CreateVault(filepath.Join(data, "..", "aside.eks"), "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, true); !isCode(e, CodeVaultKept) {
+		t.Fatalf("a rebuild elsewhere: %v", e)
 	}
 	if e := c.CreateVault("", "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, true); e != nil {
 		t.Fatal(e)
@@ -663,7 +652,7 @@ func TestCreateOverUnreadableFile(t *testing.T) {
 	c.SubmitSecret("password", p.PromptID, "a password")
 	rec.waitCeremony(t, StepRecovery, false)
 	rec.waitState(t, StateLocked)
-	if st := c.Status(); st.MissingPath != "" || !st.HasPasswordSlot {
+	if st := c.Status(); st.MissingPath != "" || st.Damaged || !st.HasPasswordSlot {
 		t.Fatalf("after creating over it: %+v", st)
 	}
 
@@ -688,17 +677,82 @@ func TestCreateOverUnreadableFile(t *testing.T) {
 	if e := h.c.OpenVaultFile(filepath.Join(h.dir, "data", "vault.incoming-abc.eks"), "x"); !isCode(e, CodeParams) {
 		t.Fatalf("a reserved name as the vault: %v", e)
 	}
-	// A garbage file that was at the vault's place is retired under a
-	// name that says so, and not counted as a vault.
+	// The vault's own file that would not open is kept as a damaged copy
+	// for salvage — named on the status, not counted as a vault.
 	entries, _ := os.ReadDir(data)
-	var others int
+	var damaged, others int
+	for _, e := range entries {
+		switch {
+		case strings.HasPrefix(e.Name(), "vault-damaged-") && strings.HasSuffix(e.Name(), ".eks"):
+			damaged++
+		case strings.HasPrefix(e.Name(), "file-replaced-"):
+			others++
+		}
+	}
+	if st := c.Status(); damaged != 1 || others != 0 || st.RetiredCopies != 0 || !strings.HasPrefix(filepath.Base(st.DamagedCopyPath), "vault-damaged-") {
+		t.Fatalf("the damaged vault was not kept as one: damaged=%d others=%d %+v", damaged, others, st)
+	}
+	// A file that is not at the vault's place is something else: a first
+	// create elsewhere, over junk, keeps it under a name that says so.
+	data2 := t.TempDir()
+	c2, rec2 := freshCore(t, data2)
+	c2.SetAppOrigin("wails://wails")
+	elsewhere := filepath.Join(data2, "..", "elsewhere.eks")
+	os.WriteFile(elsewhere, []byte("junk"), 0o600)
+	if e := c2.CreateVault(elsewhere, "Else", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, true); e != nil {
+		t.Fatal(e)
+	}
+	p = rec2.waitCeremony(t, StepPassword, true)
+	c2.SubmitSecret("password", p.PromptID, "a password")
+	rec2.waitCeremony(t, StepRecovery, false)
+	rec2.waitState(t, StateLocked)
+	entries, _ = os.ReadDir(data2)
+	others = 0
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "file-replaced-") {
 			others++
 		}
 	}
-	if st := c.Status(); others != 1 || st.RetiredCopies != 0 {
-		t.Fatalf("garbage retired as a vault: others=%d %+v", others, st)
+	if st := c2.Status(); others != 1 || st.DamagedCopyPath != "" {
+		t.Fatalf("junk elsewhere retired as: others=%d %+v", others, st)
+	}
+}
+
+// A configured vault whose file is absent is missing, not damaged: no
+// rebuild is offered, since there is nothing to keep.
+func TestAbsentVaultIsNotDamaged(t *testing.T) {
+	data := t.TempDir()
+	gone := filepath.Join(data, "..", "gone", "vault.eks")
+	if err := saveSettings(data, settingsFile{VaultPath: gone, DisplayName: "Gone"}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := freshCore(t, data)
+	st := c.Status()
+	if st.State != StateNone || st.MissingPath == "" || st.Damaged {
+		t.Fatalf("absent file: %+v", st)
+	}
+	// A file that cannot be read for another reason — here a folder at the
+	// vault's place — is not damage either: nothing is offered a rebuild
+	// that a copy could not keep.
+	data2 := t.TempDir()
+	os.Mkdir(filepath.Join(data2, "vault.eks"), 0o700)
+	c2, rec2 := freshCore(t, data2)
+	c2.SetAppOrigin("wails://wails")
+	if st := c2.Status(); st.State != StateNone || st.MissingPath == "" || st.Damaged {
+		t.Fatalf("a folder at the place: %+v", st)
+	}
+	// A create over it is not refused outright — the file is not a vault —
+	// but the install cannot keep a folder as a copy, and fails.
+	if e := c2.CreateVault("", "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, true); e != nil {
+		t.Fatal(e)
+	}
+	p := rec2.waitCeremony(t, StepPassword, true)
+	c2.SubmitSecret("password", p.PromptID, "a password")
+	if f := rec2.waitCeremony(t, StepFailed, false); f.Error != CodeVaultInvalid {
+		t.Fatalf("over a folder: %+v", f)
+	}
+	if st := c2.Status(); st.State != StateNone || st.MissingPath == "" {
+		t.Fatalf("after the failed create: %+v", st)
 	}
 }
 

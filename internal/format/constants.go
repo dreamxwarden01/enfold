@@ -30,6 +30,9 @@ const (
 	NonceSize      = 12
 	WrappedVMKSize = 56 // VMK ‖ u64 generation (40) + tag
 	WrappedKeySize = 48 // 32-byte key + tag
+	// WrappedRecoveryKeySize is an escrowed recovery key (R38, §7.6): the
+	// 16-byte key + tag.
+	WrappedRecoveryKeySize = 16 + TagSize
 
 	MLKEMEKSize   = 1568
 	MLKEMCTSize   = 1568

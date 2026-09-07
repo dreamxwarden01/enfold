@@ -42,7 +42,9 @@ type vaultState struct {
 
 	warnings map[Code]bool
 	broken   error
-	missing  string // a configured vault that could not be opened at start
+	missing  string            // a configured vault that could not be opened at start
+	damaged  bool              // the missing file is there and not a keystore: the rebuild of APP.md §2.1 applies
+	escrowed map[[16]byte]bool // the recovery slots that can be shown again (FORMAT R38); Unlocked only
 }
 
 // LockReason is why a lock trigger fired.
@@ -82,7 +84,7 @@ func (c *Core) openVaultFile(path, displayName string) error {
 		if errors.Is(err, keystore.ErrBusy) {
 			// Busy needs the path, so that "try again" can retry it; the
 			// facts are the file's, of which nothing is known yet.
-			c.vault.path, c.vault.displayName, c.vault.missing = path, displayName, ""
+			c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
 			c.vault.vaultID, c.vault.modifiedAt, c.vault.rotationPending, c.vault.slots, c.vault.stale = [16]byte{}, 0, false, nil, nil
 			delete(c.vault.warnings, CodeVaultStale)
 			delete(c.vault.warnings, CodeVaultTampered)
@@ -100,7 +102,7 @@ func (c *Core) openVaultFile(path, displayName string) error {
 		c.owed = map[[16]byte]owedReceipt{}
 		c.closeCleanArchivesLocked()
 	}
-	c.vault.path, c.vault.displayName, c.vault.missing = path, displayName, ""
+	c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
 	c.cacheFactsLocked(ks)
 	delete(c.vault.warnings, CodeVaultTampered) // known only after an unlock; a fresh file starts clean
 	ks.Close()
@@ -167,6 +169,11 @@ func (c *Core) OpenVaultFile(path, displayName string) *Error {
 			c.emitState()
 			return coded(CodeVaultBusy)
 		}
+		c.mu.Lock()
+		if c.vault.state == StateNone && samePath(path, c.vault.missing) {
+			c.noteMissingLocked(path, err) // "try again" judges damage afresh
+		}
+		c.mu.Unlock()
 		c.emitState()
 		switch {
 		case os.IsNotExist(err):
@@ -225,6 +232,10 @@ func (c *Core) statusLocked() VaultStatus {
 	st.RetiredCopies = len(c.retired)
 	if n := len(c.retired); n > 0 {
 		st.RetiredPath = c.retired[n-1]
+	}
+	st.Damaged = v.missing != "" && v.damaged
+	if n := len(c.damaged); n > 0 {
+		st.DamagedCopyPath = c.damaged[n-1]
 	}
 	if c.cer != nil {
 		cs := c.cer.state
@@ -350,6 +361,15 @@ func (c *Core) Reopen() *Error {
 		return coded(CodeNoVault)
 	}
 	err := c.openVaultFile(path, name) // waits for a pending lock's close
+	if err != nil && !errors.Is(err, keystore.ErrBusy) {
+		// The vault's file refuses to open: said so, as at start, so that
+		// the screen names it — and offers the rebuild when it is damaged
+		// rather than absent (APP.md §2.1).
+		c.mu.Lock()
+		c.dropFactsLocked(path, name)
+		c.noteMissingLocked(path, err)
+		c.mu.Unlock()
+	}
 	c.emitState()
 	if err != nil {
 		if errors.Is(err, keystore.ErrBusy) {
@@ -381,8 +401,14 @@ func (c *Core) LockNow(reason LockReason) {
 		}
 		cer.cancel()
 	}
+	// A recovery key held for a reveal (APP.md §3 Keys) is dropped in every
+	// state: nothing decrypted outlives a trigger.
+	preview := c.preview
 	if v.state != StateUnlocked {
 		c.mu.Unlock()
+		if preview != nil {
+			preview.dropAllSecrets()
+		}
 		return
 	}
 	c.stopTimersLocked()
@@ -392,10 +418,14 @@ func (c *Core) LockNow(reason LockReason) {
 	ks := v.ks
 	v.sess, v.ks = nil, nil
 	v.tampered = nil
+	v.escrowed = nil
 	v.state = StateLocked
 	c.bump()
 	c.lockWG.Add(1)
 	c.mu.Unlock()
+	if preview != nil {
+		preview.dropAllSecrets()
+	}
 	go c.afterLock(ks, cer, reason)
 }
 
@@ -560,6 +590,7 @@ func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlock
 	}
 	v.ks, v.sess = ks, sess
 	c.cacheFactsLocked(ks)
+	c.refreshEscrowedLocked()
 	now := c.now()
 	v.lastUnlockedAt = now
 	v.absoluteAt = time.Time{}

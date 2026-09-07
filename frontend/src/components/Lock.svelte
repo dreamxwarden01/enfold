@@ -8,6 +8,7 @@
   import { fade } from "svelte/transition";
   import { motion } from "../lib/motion";
   import { samePath } from "../lib/paths";
+  import { firstRunCard } from "../lib/firstrun";
   import SecretInput from "./SecretInput.svelte";
   import Dialog from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
@@ -69,10 +70,13 @@
   // (at its own file, or at the one place), or the file that could not
   // be opened. Anything else already at the place is retired unasked
   // beyond the save dialog's own question.
-  const dest = $derived(createPath || st?.defaultPath || "");
-  const replacesMissing = $derived(!!st?.missingPath && same(dest, st.missingPath));
-  const replacesVault = $derived(!firstRun && (same(dest, st?.path) || same(dest, st?.defaultPath)));
-  const createReplaces = $derived(replacesVault || replacesMissing);
+  // Which first-run card: a vault to make or import, a configured file
+  // that is absent, or one there and not a keystore — the rebuild (§2.1).
+  const card = $derived(firstRunCard(st));
+  const rebuild = $derived(card === "damaged");
+  // A rebuild is pinned to the damaged file's place: no other destination.
+  const dest = $derived(rebuild ? (st?.missingPath ?? "") : createPath || st?.defaultPath || "");
+  const createReplaces = $derived(rebuild && same(dest, st?.missingPath));
   const openArchives = $derived(st?.openArchives ?? 0);
 
   let importing = $state(false);
@@ -180,7 +184,7 @@
       // before the kind was switched; entangling is a token's option only.
       // Elsewhere, a file already at the chosen place is retired as a
       // dated copy — the save dialog asked about it; here, the tick.
-      await Vault.CreateVault(createPath, createName, createKind, createKind === "token" ? createLabel || "YubiKey" : "Password", createKind === "token" && createEntangle, createReplaces ? createConfirm : !!createPath);
+      await Vault.CreateVault(rebuild ? dest : createPath, createName, createKind, createKind === "token" ? createLabel || "YubiKey" : "Password", createKind === "token" && createEntangle, createReplaces ? createConfirm : !!createPath);
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }
@@ -194,7 +198,7 @@
     <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
     <div class="state">
       <svg class="i i-14"><use href="#i-lock" /></svg>
-      {#if running}{c?.kind === "import" ? "Importing" : c?.kind === "setup" ? "Setting up" : c?.kind === "verify" ? "Checking a backup" : "Unlocking"}{:else if firstRun && st?.missingPath}Vault not found{:else if firstRun}No vault yet{:else if busy}Vault open elsewhere{:else if broken}Needs attention{:else if setupNeeded}Needs setting up{:else}Keystore locked{/if}
+      {#if running}{c?.kind === "import" ? "Importing" : c?.kind === "setup" ? "Setting up" : c?.kind === "verify" ? "Checking a backup" : "Unlocking"}{:else if card === "damaged"}Vault damaged{:else if card === "absent"}Vault not found{:else if firstRun}No vault yet{:else if busy}Vault open elsewhere{:else if broken}Needs attention{:else if setupNeeded}Needs setting up{:else}Keystore locked{/if}
     </div>
   </div>
 
@@ -203,9 +207,18 @@
       <article class="step">
         <div class="step-label"><b>1</b>Start</div>
         <div class="step-body">
-          {#if st?.missingPath}
+          {#if card === "damaged" && st}
             <h2 class="u-lead">The vault could not be opened</h2>
-            <div class="u-meta">Enfold keeps your vault at <span class="mono">{st.missingPath}</span>, and that file is missing or unreadable.</div>
+            <div class="u-meta">Enfold keeps your vault at <span class="mono">{st.missingPath}</span>, and that file is no longer a readable vault.</div>
+            <div class="u-links">
+              <button type="button" class="btn accent" onclick={retryMissing}>Try again</button>
+              <button type="button" class="btn" onclick={() => openImport()}><svg class="i i-14"><use href="#i-open" /></svg>Import a vault or a backup…</button>
+              <button type="button" class="btn link" onclick={openCreate}>Rebuild the vault…</button>
+            </div>
+            <div class="u-meta q gap">A backup or a copy of this vault brings the archives' keys back. Rebuilding starts a new vault and keeps the damaged file beside it.</div>
+          {:else if card === "absent" && st}
+            <h2 class="u-lead">The vault could not be found</h2>
+            <div class="u-meta">Enfold keeps your vault at <span class="mono">{st.missingPath}</span>, and that file is missing.</div>
             <div class="u-links">
               <button type="button" class="btn accent" onclick={retryMissing}>Try again</button>
               <button type="button" class="btn" onclick={() => openImport()}><svg class="i i-14"><use href="#i-open" /></svg>Import a vault or a backup…</button>
@@ -338,7 +351,6 @@
               {#if !busy && !broken}
                 <button type="button" class="btn link" onclick={() => openImport()}>Import a backup or a copy of this vault…</button>
                 <button type="button" class="btn link" onclick={checkBackup}>Check that a backup opens…</button>
-                <button type="button" class="btn link" onclick={openCreate}>Create a new vault…</button>
               {/if}
             </div>
             <div class="u-foot">
@@ -430,33 +442,27 @@
 </section>
 
 {#if create}
-  <Dialog title="Create a vault" onclose={() => (create = false)}>
+  <Dialog title={rebuild ? "Rebuild the vault" : "Create a vault"} onclose={() => (create = false)}>
     <TextField id="cv-name" label="Name" bind:value={createName} bind:valid={createNameValid} attempt={createAttempt} />
     <div class="field">
-      <div class="field-top"><label for="cv-path">Kept in</label>{#if createPath}<button type="button" class="btn link" onclick={() => (createPath = "")}>Use the usual place</button>{:else}<button type="button" class="btn link" onclick={pickCreatePath}>Keep it elsewhere…</button>{/if}</div>
-      <div id="cv-path" class="path ellipsis" title={createPath || st?.defaultPath}>{createPath || st?.defaultPath}</div>
+      <div class="field-top"><label for="cv-path">Kept in</label>{#if rebuild}{:else if createPath}<button type="button" class="btn link" onclick={() => (createPath = "")}>Use the usual place</button>{:else}<button type="button" class="btn link" onclick={pickCreatePath}>Keep it elsewhere…</button>{/if}</div>
+      <div id="cv-path" class="path ellipsis" title={dest}>{dest}</div>
     </div>
     <FirstWayIn bind:kind={createKind} bind:label={createLabel} bind:entangle={createEntangle} idPrefix="cv" />
     {#if openArchives > 0}
       <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{openArchives} archive{openArchives === 1 ? " is" : "s are"} still open. Close them first: their saves would land in the wrong vault.</span></div>
-    {:else if replacesMissing && st}
+    {:else if rebuild && st}
       <div class="bar attention">
         <svg class="i i-14"><use href="#i-warn" /></svg>
-        <span>This replaces the file at <span class="mono">{st.missingPath}</span>, which could not be opened. It is kept as a dated copy in Enfold's folder, never deleted — if it was a vault, the archives it holds the keys to open only with it.</span>
+        <span>The file at <span class="mono">{st.missingPath}</span> is not a readable vault. It is kept beside the new vault as a dated copy in Enfold's folder, never deleted — the archives it held the keys to open only with it, if it can ever be repaired.</span>
       </div>
-      <label class="check"><input type="checkbox" bind:checked={createConfirm} />Replace the file that could not be opened</label>
-    {:else if replacesVault && st}
-      <div class="bar attention">
-        <svg class="i i-14"><use href="#i-warn" /></svg>
-        <span>This replaces the vault kept here — <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {same(dest, st.path) ? "It is kept as a dated copy in Enfold's folder, never deleted." : "It stays where it is, at " + st.path + "; Enfold switches to the new one, and a file already at " + dest + " is kept as a dated copy."} The archives it holds the keys to open only with it.</span>
-      </div>
-      <label class="check"><input type="checkbox" bind:checked={createConfirm} />Replace the vault kept here ({st.displayName})</label>
+      <label class="check"><input type="checkbox" bind:checked={createConfirm} />Keep a copy of the damaged file and start a new vault</label>
     {:else if createPath}
-      <p>{firstRun ? "" : "The vault kept here stays where it is; Enfold switches to the new one. "}A file already at the chosen place is kept as a dated copy in Enfold's folder.</p>
+      <p>A file already at the chosen place is kept as a dated copy in Enfold's folder.</p>
     {/if}
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (create = false)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={(createReplaces && !createConfirm) || openArchives > 0} onclick={doCreate}>Create</button>
+      <button type="button" class="btn accent" disabled={(createReplaces && !createConfirm) || openArchives > 0} onclick={doCreate}>{rebuild ? "Rebuild" : "Create"}</button>
     {/snippet}
   </Dialog>
 {/if}

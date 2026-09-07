@@ -39,8 +39,11 @@ as a diff.
 What crosses the boundary: the vault's state and display name, archive summaries, one page of a
 file listing, slot descriptions, operation progress, coded errors. Keys, the whole decrypted
 index, the registry as a whole, wrapped keys, file offsets and generations never cross. The
-recovery key is the one exception, twice: shown once at generation and typed once at entry, because
-there is no other channel to a human (DESIGN §10 records the exception).
+recovery key is the one exception, at a human's request only: shown at generation, shown again
+after a *reveal* ceremony that a YubiKey or a password authorised (§3 Keys; FORMAT R38), typed
+once at entry, because there is no other channel to a human (DESIGN §10 records the exception).
+A copy saved to a text file is written by the core, addressed by the reveal's handle, never
+carried by the page.
 
 **Secrets across the bridge.** Four secrets cross from the frontend: the PIN, the entangled or
 standalone password, the recovery key's digits, and the PIV management key typed as hex. None of
@@ -97,7 +100,9 @@ regardless of activity. Both values come from the registry (§3 Settings) and ar
 core before the timers are armed (idle ≤ 30 min, absolute ≤ 8 h; absent, zero, unparsable or
 out of range → the default, never "off"), with a warning code when a stored value was replaced.
 
-**Lock triggers** (DESIGN §10) are one input, `lockTrigger{reason}`, accepted in every state:
+**Lock triggers** (DESIGN §10) are one input, `lockTrigger{reason}`, accepted in every state —
+and in every state a trigger drops every recovery key held for a reveal (§3 Keys), so a save
+after it is refused and the page says the key can be shown again:
 workstation lock / session change (`WM_WTSSESSION_CHANGE`: lock, logoff, console and remote
 disconnect, remote control), display off (`GUID_SESSION_DISPLAY_STATUS` → `PowerMonitorOff`,
 the primary sleep trigger on Modern Standby machines), classic suspend (Wails'
@@ -132,6 +137,21 @@ empty override with a `vault.eks` present adopts that file, so a copy put there 
 (accepted, not recommended; an override set wins over such a file, which then lies shadowed). A
 configured vault that cannot be opened at start is `MissingPath` on the status and the first-run
 screen names it, never "no vault yet": nothing invites a second vault over a mislaid one.
+
+With a vault kept here there is no second one: *create* is a first-run action (ruling
+2026-09-07), and the core owns the rule — `CreateVault` with a vault configured is `vault.kept`,
+whatever the path and whatever `replace` says. What a vault that exists can be is **rebuilt**,
+and only when its file is present and refused as not a keystore — `keystore.Open` answering
+`format.ErrInvalid` or `ErrTruncated`, judged at start and on every open of the configured
+path (try again, `Reopen`) — which is `Damaged` on the status beside `MissingPath`; a
+permission or I/O failure is only "could not be opened, try again". The rebuild is `CreateVault`
+at the damaged file's own place with `replace` (any other path is `vault.kept` too): the install
+retires the file as `vault-damaged-<unix>-<n>.eks` in the data folder before the new vault takes
+its place, deleting nothing, so that whatever a later tool can salvage from it is still there
+(`DamagedCopyPath` names the newest; the Keys page shows it; the lock screen offers it for
+nothing, since it does not open). A file that is simply absent is not damage — the first-run
+card offers import and create as before — and neither is tampered: that file opens, its cure is
+importing a copy (§2.2), and a rebuild over a vault that opens would lose the keys it holds.
 
 Everything else arrives by **import**, and **nothing replaces the vault kept here until the
 incoming file has proved itself.** `Vault.InspectFile` reads a file's plaintext facts through a
@@ -174,7 +194,9 @@ a failure for a vault that is in place. A rename that fails (retried briefly: a 
 a fresh file) removes the copy just retired, so no phantom "replaced copy" is counted, and is
 reported as `vault.busy` when the file is in use; a file at the place that cannot even be looked
 at is never overwritten. What is retired is inspected: a keystore becomes
-`vault-replaced-…eks`, anything else `file-replaced-…bin`, which the status does not count.
+`vault-replaced-…eks`; a file at the vault's own place that does not open becomes
+`vault-damaged-…eks` (`DamagedPath`, offered for nothing); anything else `file-replaced-…bin`,
+which the status does not count.
 Import and create are *committing* ceremonies (`commits`): shutdown waits for them within its
 budget, as for a slot change, so an install is never half done; a quit that lands inside the
 install itself still completes it, and the recovery key of a create then goes to a page that may
@@ -358,12 +380,16 @@ sentinel of every package with a catch-all `internal` — and services are regis
 **Vault**
 - `Status() VaultStatus{Seq, State, Path, DisplayName, LastUnlockedAt, LocksAt, AbsoluteAt,
   RotationPending, Tampered, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
-  OpenArchives int}`; `Readers() []Reader{Name}`.
+  OpenArchives int}` plus the one-vault facts of §2.1 (`SetupNeeded`, `DefaultPath`,
+  `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`);
+  `Readers() []Reader{Name}`.
 - `BeginUnlock()`, `CancelUnlock()`, `Lock()`, `Reopen()`, `Activity()`. Secret submissions
   arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`.
 - `CreateVault(path, displayName, kind, label, entangle, replace)` (`path` empty = the one place,
   §2.1; the first way in's ceremony, then the keystore built as the incoming file and installed,
-  the recovery key shown once, ending Locked; over the vault kept here, `replace`),
+  the recovery key shown, ending Locked; with a vault kept, `vault.kept` — the one create with a
+  vault configured is the rebuild of §2.1, over the damaged file at its own place, with
+  `replace`; over any other file already at the chosen place, `replace` too),
   `InspectFile(path) FileInfo`, `ImportFile(path, displayName, method, kind, label, entangle,
   replace)` (`method` proves a vault; `kind`/`label`/`entangle` are the first way in of a backup),
   `FinishSetup(kind, label, entangle)`, `OpenVaultFile(path, displayName)` (the advanced "use it
@@ -412,7 +438,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - Events: `archive.changed {ID, Seq}`, `archive.expiring {ID, ClosesAt}`, progress as above.
 
 **Keys**
-- `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Entangled, Stale}`.
+- `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Entangled, Stale, Escrowed}` —
+  `Escrowed` says a recovery slot can be shown again (FORMAT R38), known while Unlocked.
 - `BeginEnroll(kind, label, entangle bool)` runs the ceremony for the VMK and releases the key
   that unlocked, then — when `entangle` — asks for the new password (`Choose`), and only then
   for a YubiKey the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
@@ -420,7 +447,48 @@ sentinel of every package with a catch-all `internal` — and services are regis
   swap may already have happened during the prompt and a swap in the same port shows the same
   reader name throughout — then for the key to enrol; `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
   (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` → `AddSlot`.
-  Sub-states mirror §2.2 plus `ManagementKey`. `AddRecoverySlot` shows the digits once.
+  Sub-states mirror §2.2 plus `ManagementKey`. `BeginEnroll(recovery, label)` adds a recovery
+  slot and shows its digits: the reveal, below.
+- **The reveal.** Every showing of a recovery key — after a create, after enrolling one, and
+  `RevealRecoveryKey(recipientID)` from the Keys page — ends its ceremony at `StepRecovery` with
+  the one-time URL in `SlotLabel` (§4) and the same dialog on the page, whichever view it is on.
+  `RevealRecoveryKey` is a ceremony (`kind: reveal`; the panel's title "Show the recovery key")
+  that recovers the VMK through a protector exactly as a slot change does — the YubiKey's PIN
+  and touch, or the password; never the recovery key (the ruling: a protector authorises the
+  showing) — then unwraps the slot's escrow record (FORMAT R38), checks it against the slot's
+  own public key, and mints the URL. What can be refused before any prompt is:
+  `vault.slot_not_found` (not an active recovery slot), `vault.no_escrow` (the slot predates
+  escrow; `SlotView.Escrowed` lets the page say so first), `vault.setup_needed` (a vault with
+  no protector — the reveal would have to ask the recovery key); after the unlock,
+  `vault.escrow_mismatch` (the kept key does not open its slot: refused, never shown). It writes
+  nothing, but it holds the handle while the VMK is recovered (`keystore.Unlock` is not a read of
+  the file's shared handle), so — as for a slot change — it waits for a running save, verify,
+  compact or rotation, and a registry write during it owes its receipt; unlike a slot change it
+  runs on a tampered vault (the record is in the authenticated registry, and the key it shows may
+  be the way out). The dialog offers three ways out, and the page holds the digits no longer than
+  the dialog: **save as a text file** — a warning first (a safe, secret place, reachable when it
+  is needed: not the vault's own folder, not somewhere that syncs to where it should not), then
+  the native Save dialog, then `SaveRecoveryKey(handle, path)`, and the core writes the file
+  itself: the vault's name, the way in's label, the date, the 48 digits, what the key is for and
+  what it is not; an existing regular file at the path is replaced — the Save dialog asked —
+  and anything else there refused; refused as a place are the data folder and everything beneath
+  it and, for a vault kept elsewhere, the vault's own folder (`vault.recovery_place`); the file
+  is synced before the call returns, and the folder the user chose is its protection (the mode
+  is asked for where it means something; Windows gives the folder's ACL); **print** —
+  `window.print()` over a print stylesheet that shows the digits, the vault's name and the date
+  and nothing else, the one browser-provided output the page invokes (§4: previews are
+  decrypted content and stay without one; a recovery key is meant to leave the machine) — the
+  page cannot tell a print from a cancelled one, so a second confirmation follows ("it printed,
+  and all 48 digits are legible"); **written down** — a second confirmation ("all 48 digits,
+  checked against the screen") before the dialog closes. After a save the core acknowledged the
+  dialog closes on *Done*. The handle is the URL's token: the one-time GET consumes the URL,
+  not the value, which the core keeps for the reveal's life — until `DropRecoveryKey(handle)`
+  when the dialog closes, ten minutes, or a lock trigger, which drops every held key (§2.1) — so
+  a save after the digits were shown does not need the ceremony again; a token in a bound call
+  is a capability to a value the page already fetched, not the value. An unlock, a proof or a
+  setup through a recovery key whose slot has no record writes the record then
+  (`EscrowOpenedKey`; FORMAT R38), so a vault from before escrow comes under it the first time
+  its key is typed.
 - `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`, `RewrapStale()`
   (the loop of §2.2), `Export(path)`, `VerifyBackup(path)` (§2.1: a staged copy opened with the
   recovery key, nothing kept). What a backup is and whether it is this vault is
@@ -433,7 +501,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
   state latches and cancels the ceremony, and the lock's close of the handle waits for it.
 - **Tampered is a state, not a banner**: every mutating call and Export is disabled with the
   reason; the one action is importing a copy of this vault (§2.1); it is never cleared silently
-  (R25).
+  (R25). The reveal stays: it changes nothing, and the way out of a tampered vault may be the
+  key it shows.
 
 **Settings** — `Get()`, `Set()`. Machine-local, in `%LOCALAPPDATA%\Enfold\settings.json`
 (temp-then-rename): the vault's path when kept elsewhere (empty: `vault.eks` in the data folder)
@@ -475,8 +544,14 @@ same-user process reads regardless (DESIGN §2); the unguessable path is the acc
 http://127.0.0.1:<port>; connect-src 'self' http://127.0.0.1:<port>; script-src 'self'; style-src 'self'; object-src
 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'`, — `connect-src` names the loopback because the recovery key's one-time URL (§1) is fetched from the page, and a CORS preflight on that URL must not consume the secret — plus
 `Permissions-Policy` denying camera, microphone, geolocation, sensors, display-capture,
-clipboard, midi, local-fonts, window-management. **No preview surface may expose a
-browser-provided save or print affordance**: the window is created with
+clipboard, midi, local-fonts, window-management. The secret route serves the reveal's handle
+too (§3 Keys): the URL and the value live ten minutes; the one GET consumes the URL, and the
+value stays behind it for `SaveRecoveryKey` until it is dropped, a lock trigger, or the ten
+minutes pass — a second, a foreign or a late fetch ends it as well, since the page fetches
+once. **No preview surface may expose a
+browser-provided save or print affordance** — the recovery key's dialog is not a preview surface,
+and its `window.print()` over a stylesheet that prints the digits and nothing else is the one
+browser output the page invokes (§3 Keys): the window is created with
 `DefaultContextMenuDisabled`, every WebView2 permission kind is set to Deny
 (`WindowsWindow.Permissions`, autoplay excepted if it breaks click-to-play), and the `<iframe>`
 PDF viewer is not used (its toolbar cannot be hidden in beta.16 and there is no download hook):
@@ -514,17 +589,19 @@ same function; `WTS_SESSION_LOGOFF` runs it without asking.
 ## 6. Screens (the Native look)
 
 Lock screen (one panel, three-step line, the states of §2.2 including TwoKeys, NoMatch, Busy,
-Blocked, SwapKey; secondary: recovery key, password, open a backup, create a vault; the
+Blocked, SwapKey; secondary: recovery key, password, open a backup — never a second vault; the
 "workstation-lock detection unavailable" and BitLocker warnings). Archives (list with details
 pane, commands Open / New archive / Compact / Rotate key / Verify / Hide, the deferred-rotation
 banner, the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
 projection, paged table with pending markers, preview pane — image, video, audio through the
 loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
 drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
-Remove, Rotate now, Rewrap, backups with the R35 date, session and appearance settings). First
-run (create, or import a vault or a backup; a file that is only a backup leads into *Finish
-setting up*, and so does a vault left half set up). Dialogs: new archive (path, name,
-compression), enrollment, recovery key display, remove slot, rotate, progress, extract
+Remove, Rotate now, Rewrap, *Show recovery key…* on a recovery slot, backups with the R35 date,
+the damaged copy when one is kept, session and appearance settings). First run (create, or
+import a vault or a backup; a file that is only a backup leads into *Finish setting up*, and so
+does a vault left half set up; a vault whose file is present and refused offers *try again*,
+import and *rebuild* — the create dialog in its rebuild form). Dialogs: new archive (path, name,
+compression), enrollment, the recovery key's (below), remove slot, rotate, progress, extract
 destination and policy, collisions, errors, import.
 
 **The import dialog** (lock screen and first run) picks the file, shows what it is — vault or
@@ -538,17 +615,40 @@ the button stays disabled until it is ticked. "Use the file where it is" is an a
 a vault, with the warning that removable media and network shares are outside Enfold's
 protection; choosing it turns the confirmation into "switch to this file — it stays where it is".
 With archives open, both dialogs say so and their buttons stay disabled. The create dialog shows
-where the vault will live, offers "keep it elsewhere" as a link, not a field, and over the vault
-kept here carries the same confirmation (naming where a vault kept elsewhere stays; the tick is
-cleared each time the dialog opens); a create ends with "Created. Unlock it with the way in you
-chose" beside the recovery key's reveal; a ceremony that fails without parking is shown on the
-first-run card as well. The first-run
+where the vault will live and offers "keep it elsewhere" as a link, not a field; in its rebuild
+form (§2.1) the place is pinned to the damaged file's — no link — and the tick "keep a copy of
+the damaged file and start a new vault" is the one consent (cleared each time the dialog opens);
+over a file that is simply absent it shows no replacement bar and no tick, since nothing is
+retired; over some other file already at a chosen place it names the dated copy that keeps it.
+A create ends with "Created. Unlock it with the way in you chose" beside the recovery key's
+reveal; a ceremony that fails without parking is shown on the first-run card as well. The
+first-run
 screen says to have the recovery key ready before importing a backup, because a backup opens
 with nothing else; when a configured vault could not be opened it names the file and offers
-"try again" and import before "create"; when a replaced copy exists and no vault is kept, it
-names the copy and offers to import it. A vault with only its recovery key shows *Finish setting
-up* as its one action, with "unlock with the recovery key only" beneath. Precedence on the lock
-screen: Busy, then Broken, then setup needed, then the ways in; Tampered is a banner over any.
+"try again" and import before "create" (the file is absent) or "rebuild" (the file is present
+and refused: the dialog is titled *Rebuild the vault*, says the file is kept beside the new
+vault as a dated damaged copy and that the archives it held the keys to open only with it, and
+its tick reads "keep a copy of the damaged file and start a new vault"); when a replaced copy
+exists and no vault is kept, it names the copy and offers to import it. With a vault kept here
+the lock screen offers import and a backup check, never a second vault. A vault with only its
+recovery key shows *Finish setting up* as its one action, with "unlock with the recovery key
+only" beneath. Precedence on the lock screen: Busy, then Broken, then setup needed, then the
+ways in; Tampered is a banner over any.
+
+**The recovery key's dialog** — after a create, after enrolling a recovery key, and after *Show
+recovery key…* on the Keys page — shows the eight groups and three ways out (§3 Keys): *Save as
+a text file…*, which first says what place to choose and then opens the native Save dialog;
+*Print…*; and *I have written it down*. The last two ask once more, in a second dialog over the
+first with a distinct button, never a tick beside the same one: "Did it print, with all 48
+digits legible?" / "Have you written down all 48 digits, checked against the screen?" — *Go
+back*, or *Yes, I have it*; after a save the core acknowledged the button is *Done*. It says the
+key can be shown again from the Keys page — unlock, then prove a YubiKey or a password once
+more — and, when the fetch of the one-time URL fails (a window recreated after the one fetch),
+that the key can be shown again from there, with *Done* as the one way out. It is not dismissed
+by Escape or the backdrop, and it closes when a lock trigger locks the vault it was shown on.
+On the Keys page a recovery slot without escrow (`Escrowed` false) has *Show recovery key…*
+disabled and the line "Made before Enfold kept recovery keys: it cannot be shown again. Add a
+new recovery key, then remove this one — or unlock with it once, which keeps it."
 
 **The create and enrol dialogs name the key, never the secret.** A token gets "Name this key"
 (the label shown in the list of ways in); a password way in has no name field — its slot is
@@ -627,6 +727,8 @@ ceremony states and the "never 0 attempts" rule.
   recorded; identity without a key) and `hash_at_seq u64` (the `last_seq` at which
   `last_ciphertext_hash` was computed; equal means fresh).
 - `Registry.idle_minutes u16`, `absolute_minutes u16` (zero = default).
+- `registry_version` 2: the recovery-key escrow records (R38, §7.6) under `KWK_recovery` (R3);
+  version 1 read and rewritten.
 
 ## 12. Deferred, and open for the user
 

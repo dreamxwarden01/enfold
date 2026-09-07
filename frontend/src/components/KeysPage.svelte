@@ -83,6 +83,7 @@
             <b>{s.label}</b>
             <span class="meta">{slotMeta(s)}</span>
             {#if s.stale}<div class="warnline"><svg class="i i-14"><use href="#i-warn" /></svg><span>Holds the previous key — rotation deferred until it is rewrapped</span></div>{/if}
+            {#if s.type === "recovery" && unlocked && !s.escrowed}<div class="warnline"><svg class="i i-14"><use href="#i-info" /></svg><span>Made before Enfold kept recovery keys: it cannot be shown again. Add a new recovery key, then remove this one — or unlock with it once, which keeps it.</span></div>{/if}
           </div>
         </button>
       {/each}
@@ -90,6 +91,7 @@
       <div class="ks-actions">
         <button type="button" class="btn accent" disabled={!unlocked || tampered} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Add a key</button>
         <button type="button" class="btn" disabled={!sel || !unlocked || tampered} onclick={() => (removing = true)}>Remove</button>
+        <button type="button" class="btn" disabled={!sel || sel.type !== "recovery" || !sel.escrowed || !unlocked} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>Show recovery key…</button>
         <button type="button" class="btn" disabled={!unlocked || tampered} onclick={() => (rotating = true)}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate now</button>
       </div>
 
@@ -127,6 +129,9 @@
         <div class="setrow"><div class="lab"><b>Rotation</b><span>{st?.rotationPending ? "deferred — a way in still holds the old key" : "complete"}</span></div></div>
         {#if (st?.retiredCopies ?? 0) > 0 && st?.retiredPath}
           <div class="setrow"><div class="lab"><b>Replaced copies</b><span>{st.retiredCopies} in Enfold's folder, kept when a vault was replaced; yours to delete.</span></div><div class="ctl"><button type="button" class="btn sm" onclick={() => void Shell.Reveal(st?.retiredPath ?? "")}>Show</button></div></div>
+        {/if}
+        {#if st?.damagedCopyPath}
+          <div class="setrow"><div class="lab"><b>Damaged copy</b><span>Kept in Enfold's folder when the vault was rebuilt, for whatever can be salvaged from it; yours to delete.</span></div><div class="ctl"><button type="button" class="btn sm" onclick={() => void Shell.Reveal(st?.damagedCopyPath ?? "")}>Show</button></div></div>
         {/if}
       </div>
     </div>
@@ -193,7 +198,7 @@
 {#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel}
   <!-- the recovery key is revealed by App, above every route -->
 {:else if c}
-  <Dialog title={c.kind === "enroll" ? "Add a key" : c.kind === "remove" ? "Remove a key" : c.kind === "rotate" ? "Rotate the vault key" : "Export a backup"} onclose={() => { if (store.ceremonyIsOver) store.dismissCeremony(); }}>
+  <Dialog title={c.kind === "enroll" ? "Add a key" : c.kind === "remove" ? "Remove a key" : c.kind === "rotate" ? "Rotate the vault key" : c.kind === "reveal" ? "Show the recovery key" : "Export a backup"} onclose={() => { if (store.ceremonyIsOver) store.dismissCeremony(); }}>
     <CeremonyPanel {c} onclose={() => { store.dismissCeremony(); void store.refreshSlots(); }} />
   </Dialog>
 {/if}

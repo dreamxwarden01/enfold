@@ -61,9 +61,12 @@ func TestBoundSurface(t *testing.T) {
 		},
 		"Keys": {
 			"BeginEnroll(string, string, bool) error",
+			"DropRecoveryKey(string) error",
 			"ExportBackup(string) error",
 			"RemoveSlot(string) error",
+			"RevealRecoveryKey(string) error",
 			"RotateNow() error",
+			"SaveRecoveryKey(string, string) error",
 			"Slots() []app.SlotView",
 			"VerifyBackup(string) error",
 		},

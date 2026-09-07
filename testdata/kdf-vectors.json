@@ -123,6 +123,7 @@
   "vmk_keys": {
     "KWK": "f6505747ab8b7d77f0e0af52c544bde7cd29aa250bc9407408ba4bd8eed3549c",
     "KWK_identity": "0618d03a39bed2ec258ead4da73458cfb287f7f4e0c8fe862782d6f7e0699915",
+    "KWK_recovery": "12ef9fdc58d6fdaf8d91ea125289b08ed628325b219ea8df77a97e18d6b9424c",
     "db_key": "6584e526033aeb714d7b8c01d6edd5fbfad83255300e93522486ce2b7729ec14",
     "metadata_key": "74e718c997e578aeb730daa4aec6ff44451addccb236ecc4fac327ebf3695ca7"
   },

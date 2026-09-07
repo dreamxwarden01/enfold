@@ -80,7 +80,7 @@ export interface CeremonyState {
     "seq": number;
 
     /**
-     * unlock | create | enroll | remove | rotate | export | import | setup | verify
+     * unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal
      */
     "kind": string;
     "step": CeremonyStep;
@@ -205,6 +205,26 @@ export enum Code {
     CodeDuplicateSlot = "vault.duplicate_slot",
     CodeNoRecoverySlot = "vault.no_recovery_slot",
     CodeSlotNotFound = "vault.slot_not_found",
+
+    /**
+     * the recovery slot predates escrow: its key cannot be shown again
+     */
+    CodeNoEscrow = "vault.no_escrow",
+
+    /**
+     * the kept recovery key does not open its slot: never shown
+     */
+    CodeEscrowMismatch = "vault.escrow_mismatch",
+
+    /**
+     * a recovery key is not saved into the data folder, the vault's folder or under a staging name
+     */
+    CodeRecoveryPlace = "vault.recovery_place",
+
+    /**
+     * a vault is kept: a second one is never made; only a damaged one is rebuilt
+     */
+    CodeVaultKept = "vault.kept",
     CodeConflict = "vault.conflict",
     CodeIndeterminate = "vault.indeterminate",
     CodeCeremonyRunning = "ceremony.in_progress",
@@ -448,6 +468,11 @@ export interface SlotView {
     "createdAt": number;
     "entangled": boolean;
     "stale": boolean;
+
+    /**
+     * a recovery slot whose key can be shown again (FORMAT R38); known while Unlocked
+     */
+    "escrowed": boolean;
 }
 
 /**
@@ -563,4 +588,14 @@ export interface VaultStatus {
      * the newest of them
      */
     "retiredPath": string;
+
+    /**
+     * MissingPath is there and not a keystore: the rebuild of APP.md §2.1 applies
+     */
+    "damaged": boolean;
+
+    /**
+     * the newest vault-damaged-*.eks kept for salvage
+     */
+    "damagedCopyPath": string;
 }

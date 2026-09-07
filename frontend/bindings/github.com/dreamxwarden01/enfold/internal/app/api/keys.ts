@@ -18,6 +18,13 @@ export function BeginEnroll(kind: string, label: string, entangle: boolean): $Ca
     return $Call.ByID(309727738, kind, label, entangle);
 }
 
+/**
+ * DropRecoveryKey ends a reveal's handle when its dialog closes.
+ */
+export function DropRecoveryKey(handle: string): $CancellablePromise<void> {
+    return $Call.ByID(3166408438, handle);
+}
+
 export function ExportBackup(path: string): $CancellablePromise<void> {
     return $Call.ByID(3159373965, path);
 }
@@ -26,8 +33,24 @@ export function RemoveSlot(recipientID: string): $CancellablePromise<void> {
     return $Call.ByID(1280438677, recipientID);
 }
 
+/**
+ * RevealRecoveryKey shows a recovery slot's key again, after a protector
+ * unlock; the digits arrive over the one-time URL, never here.
+ */
+export function RevealRecoveryKey(recipientID: string): $CancellablePromise<void> {
+    return $Call.ByID(207819850, recipientID);
+}
+
 export function RotateNow(): $CancellablePromise<void> {
     return $Call.ByID(332274822);
+}
+
+/**
+ * SaveRecoveryKey writes the key behind a reveal's handle to a path the
+ * user chose; the handle is the URL's token, not the digits.
+ */
+export function SaveRecoveryKey(handle: string, path: string): $CancellablePromise<void> {
+    return $Call.ByID(3463005426, handle, path);
 }
 
 export function Slots(): $CancellablePromise<app$0.SlotView[] | null> {

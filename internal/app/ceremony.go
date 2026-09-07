@@ -913,6 +913,7 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 			cer.closeCard(card)
 			return err
 		}
+		cer.escrowOpenedKey(unl, cred)
 		break
 	}
 	if card != nil {
@@ -1021,3 +1022,17 @@ func (cer *ceremony) unlockFile(ks *keystore.Keystore, cred keystore.Credential,
 }
 
 var _ = fmt.Sprintf
+
+// escrowOpenedKey keeps the recovery key that just opened the vault once
+// more when its slot has no record yet (FORMAT R38): a vault from before
+// escrow comes under it the first time its key is typed. Best effort — a
+// registry-only write; a failure is logged, never a failed unlock.
+func (cer *ceremony) escrowOpenedKey(unl *keystore.Unlocked, cred keystore.Credential) {
+	rc, ok := cred.(keystore.RecoveryCredential)
+	if !ok {
+		return
+	}
+	if err := unl.EscrowOpenedKey(unl.OpenedBy(), rc.Key); err != nil {
+		cer.c.log("ceremony %s: keeping the recovery key that opened: %v", cer.kind, err)
+	}
+}

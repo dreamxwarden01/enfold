@@ -22,6 +22,9 @@ const (
 	TagSize     = 16
 	VMKWrapSize = KeySize + 8 + TagSize // R12: VMK ‖ u64 generation, sealed
 	KeyWrapSize = KeySize + TagSize
+	// RecoveryWrapSize is a recovery key escrowed under KWK_recovery (R38):
+	// the 16-byte key, sealed.
+	RecoveryWrapSize = RecoveryKeySize + TagSize
 )
 
 // Salt is a slot record's `salt` field: the input to salt' for Argon2id in
@@ -48,6 +51,7 @@ const (
 	InfoDB           = "Enfold/v1/db"
 	InfoKWK          = "Enfold/v1/wrap/archive"
 	InfoKWKIdentity  = "Enfold/v1/wrap/identity"
+	InfoKWKRecovery  = "Enfold/v1/wrap/recovery"
 	InfoArchiveIndex = "Enfold/v1/archive/index"
 	InfoArchiveWrap  = "Enfold/v1/archive/wrap"
 )
@@ -149,6 +153,13 @@ func KWK(vmk [KeySize]byte, vaultID [IDSize]byte) []byte {
 // wrapping domain from KWK on purpose (§3.2).
 func KWKIdentity(vmk [KeySize]byte, vaultID [IDSize]byte) []byte {
 	return hkdfN(vmk[:], nil, Info(InfoKWKIdentity, vaultID), KeySize)
+}
+
+// KWKRecovery derives the key under which the registry keeps every recovery
+// key once more (R38): its own wrapping domain, and one a Session never
+// derives — only a holder of the VMK can open an escrowed recovery key.
+func KWKRecovery(vmk [KeySize]byte, vaultID [IDSize]byte) []byte {
+	return hkdfN(vmk[:], nil, Info(InfoKWKRecovery, vaultID), KeySize)
 }
 
 // Keys below an archive key (§3).

@@ -43,6 +43,10 @@ const (
 	CodeDuplicateSlot   Code = "vault.duplicate_slot"
 	CodeNoRecoverySlot  Code = "vault.no_recovery_slot"
 	CodeSlotNotFound    Code = "vault.slot_not_found"
+	CodeNoEscrow        Code = "vault.no_escrow"       // the recovery slot predates escrow: its key cannot be shown again
+	CodeEscrowMismatch  Code = "vault.escrow_mismatch" // the kept recovery key does not open its slot: never shown
+	CodeRecoveryPlace   Code = "vault.recovery_place"  // a recovery key is not saved into the data folder, the vault's folder or under a staging name
+	CodeVaultKept       Code = "vault.kept"            // a vault is kept: a second one is never made; only a damaged one is rebuilt
 	CodeConflict        Code = "vault.conflict"
 	CodeIndeterminate   Code = "vault.indeterminate"
 	CodeCeremonyRunning Code = "ceremony.in_progress"
@@ -188,6 +192,8 @@ var classifyTable = []struct {
 	{keystore.ErrDuplicate, CodeDuplicateSlot},
 	{keystore.ErrNoRecoverySlot, CodeNoRecoverySlot},
 	{keystore.ErrNotFound, CodeSlotNotFound},
+	{keystore.ErrNoEscrow, CodeNoEscrow},
+	{keystore.ErrEscrowMismatch, CodeEscrowMismatch},
 	{keystore.ErrClosed, CodeVaultLocked},
 	{keystore.ErrParams, CodeParams},
 

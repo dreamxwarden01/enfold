@@ -433,3 +433,16 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
 .toasts { position: fixed; right: 20px; bottom: 44px; display: flex; flex-direction: column; gap: 8px; z-index: 30; max-width: 420px; }
 .toast { padding: 10px 14px; border-radius: var(--r-card); background: var(--surface); border: 1px solid var(--stroke); box-shadow: var(--shadow-pop); font-size: 12.5px; color: var(--ink); }
 .toast.error { border-color: var(--danger-line); background: var(--danger-wash); }
+
+/* The recovery key's print sheet (APP.md §3 Keys): hidden on screen; the
+   one thing a print shows, so a print from any other view shows nothing. */
+.print-sheet { display: none; }
+@media print {
+  body * { visibility: hidden; }
+  .print-sheet, .print-sheet * { visibility: visible; }
+  .print-sheet { display: block; position: fixed; inset: 0; padding: 40px; color: #000; background: #fff; font-family: var(--font-sans, "Segoe UI", sans-serif); }
+  .print-sheet h1 { font-size: 20px; margin: 0 0 8px; }
+  .print-sheet p { font-size: 12px; margin: 0 0 6px; max-width: 60ch; }
+  .print-digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; max-width: 480px; }
+  .print-digits span { font-family: var(--font-mono, Consolas, monospace); font-size: 20px; letter-spacing: 0.08em; text-align: center; border: 1px solid #000; padding: 6px 0; }
+}

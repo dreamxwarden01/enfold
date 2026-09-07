@@ -1158,3 +1158,221 @@ func TestOpenRefusesDamage(t *testing.T) {
 	k.Close()
 	restore(t, path, good)
 }
+
+// The recovery key is kept once more under the VMK (R38): an Unlocked can
+// show it again; the record lives and dies with its slot, survives a
+// rotation and travels in an export; a slot without one says so.
+func TestRecoveryKeyEscrow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "v.eks")
+	rk := recoveryKey(t)
+	u := mustCreate(t, path, PasswordSlot{Password: "correct horse", Argon2: fast, Label: "pw"}, RecoverySlot{Key: rk, Label: "paper"})
+	var rid, pwID [16]byte
+	for _, s := range u.k.Slots() {
+		if s.Type == format.SlotRecovery {
+			rid = s.RecipientID
+		} else {
+			pwID = s.RecipientID
+		}
+	}
+	if got, err := u.RecoveryKey(rid); err != nil || got != rk {
+		t.Fatalf("recovery key from the escrow: %x %v", got, err)
+	}
+	if _, err := u.RecoveryKey(pwID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a password slot has no recovery key: %v", err)
+	}
+	if _, err := u.RecoveryKey([16]byte{9}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown slot: %v", err)
+	}
+	if len(u.Registry().Escrows) != 1 {
+		t.Fatalf("escrows after create: %d", len(u.Registry().Escrows))
+	}
+
+	// A second recovery slot gets its own record; a rotation re-wraps both.
+	rk2 := recoveryKey(t)
+	if err := u.AddSlot(RecoverySlot{Key: rk2, Label: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	var rid2 [16]byte
+	for _, s := range u.k.Slots() {
+		if s.Type == format.SlotRecovery && s.RecipientID != rid {
+			rid2 = s.RecipientID
+		}
+	}
+	if _, err := u.Rotate(RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := u.RecoveryKey(rid); err != nil || got != rk {
+		t.Fatalf("first key after a rotation: %x %v", got, err)
+	}
+	if got, err := u.RecoveryKey(rid2); err != nil || got != rk2 {
+		t.Fatalf("second key after a rotation: %x %v", got, err)
+	}
+
+	// Removing the slot removes the record; an orphan record left by a
+	// registry-only write is dropped by the next slot-region write.
+	if err := u.RemoveSlot(rid2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.RecoveryKey(rid2); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed slot: %v", err)
+	}
+	if len(u.Registry().Escrows) != 1 {
+		t.Fatalf("escrows after remove: %d", len(u.Registry().Escrows))
+	}
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows = append(g.Escrows, format.EscrowRecord{RecipientID: [16]byte{7}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.AddSlot(RecoverySlot{Key: recoveryKey(t), Label: "third"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range u.Registry().Escrows {
+		if e.RecipientID == ([16]byte{7}) {
+			t.Fatal("an orphan escrow record survived a slot-region write")
+		}
+	}
+	if len(u.Registry().Escrows) != 2 {
+		t.Fatalf("escrows after the orphan was dropped: %d", len(u.Registry().Escrows))
+	}
+
+	// A slot whose record is missing — made before escrow — cannot be
+	// shown again, until the key is handed in by an unlock through it.
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows = nil
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.RecoveryKey(rid); !errors.Is(err, ErrNoEscrow) {
+		t.Fatalf("slot without escrow: %v", err)
+	}
+	if err := u.EscrowOpenedKey(rid, recoveryKey(t)); !errors.Is(err, ErrEscrowMismatch) {
+		t.Fatalf("another key handed in: %v", err)
+	}
+	if err := u.EscrowOpenedKey(pwID, rk); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("handed in for a password slot: %v", err)
+	}
+	if err := u.EscrowOpenedKey(rid, rk); err != nil {
+		t.Fatalf("handed in: %v", err)
+	}
+	if err := u.EscrowOpenedKey(rid, rk); err != nil {
+		t.Fatalf("handed in again: %v", err)
+	}
+	if got, err := u.RecoveryKey(rid); err != nil || got != rk || len(u.Registry().Escrows) != 1 {
+		t.Fatalf("after handing in: %x %v escrows=%d", got, err, len(u.Registry().Escrows))
+	}
+	// A record moved to another slot fails its AAD (corruption); one that
+	// opens but holds another key is never shown.
+	var rid3 [16]byte
+	for _, s := range u.k.Slots() {
+		if s.Type == format.SlotRecovery && s.RecipientID != rid {
+			rid3 = s.RecipientID
+		}
+	}
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		a := *g.Escrow(rid)
+		a.RecipientID = rid3
+		g.Escrows = append(g.Escrows, a)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.RecoveryKey(rid3); !errors.Is(err, format.ErrInvalid) {
+		t.Fatalf("a record moved to another slot: %v", err)
+	}
+	// Such a record fails a rotation too (fail closed), so it goes first.
+	if _, err := u.Rotate(RotateOptions{}); !errors.Is(err, format.ErrInvalid) {
+		t.Fatalf("a rotation over a record that does not unwrap: %v", err)
+	}
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows = g.Escrows[:len(g.Escrows)-1]
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		e, err := escrowRecord(u.vmk, u.k.sb.VaultID, rid, recoveryKey(t))
+		if err != nil {
+			return err
+		}
+		*g.Escrow(rid) = e
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.RecoveryKey(rid); !errors.Is(err, ErrEscrowMismatch) {
+		t.Fatalf("a record holding another key: %v", err)
+	}
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		e, err := escrowRecord(u.vmk, u.k.sb.VaultID, rid, rk)
+		if err != nil {
+			return err
+		}
+		*g.Escrow(rid) = e
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A rotation and an export carry no orphan either.
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows = append(g.Escrows, format.EscrowRecord{RecipientID: [16]byte{8}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Rotate(RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if u.Registry().Escrow([16]byte{8}) != nil {
+		t.Fatal("an orphan survived a rotation")
+	}
+	if err := u.RemoveSlot(rid3); err != nil {
+		t.Fatal(err)
+	}
+	// A record that does not open under KWK_recovery is corruption, never
+	// a wrong credential.
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows[0].WrappedRecoveryKey[0] ^= 1
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.RecoveryKey(rid); !errors.Is(err, format.ErrInvalid) {
+		t.Fatalf("damaged escrow: %v", err)
+	}
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows[0].WrappedRecoveryKey[0] ^= 1
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The export carries the record: opened with the recovery key, it
+	// shows that key again.
+	export := filepath.Join(dir, "backup.eks")
+	if err := u.Export(export); err != nil {
+		t.Fatal(err)
+	}
+	u.Close()
+	u.k.Close()
+	e := mustOpen(t, export)
+	ue, err := e.Unlock(RecoveryCredential{Key: rk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ue.Close()
+	if got, err := ue.RecoveryKey(rid); err != nil || got != rk {
+		t.Fatalf("recovery key from the export: %x %v", got, err)
+	}
+	if n := len(ue.Registry().Escrows); n != 1 {
+		t.Fatalf("the export carries records of slots it does not: %d", n)
+	}
+	// After Close the VMK is gone, and so is the way to the record.
+	ue.Close()
+	if _, err := ue.RecoveryKey(rid); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed: %v", err)
+	}
+}

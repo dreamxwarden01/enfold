@@ -81,6 +81,7 @@ METHODS = {
     2470395052: lambda a: None, 913354260: lambda a: "http://127.0.0.1:1/p/x/y", 723007364: lambda a: state["text"],
     1850767145: lambda a: [], 2446376312: lambda a: None, 448053830: lambda a: {"id": a[0], "kind": "add", "done": 1, "total": 1, "phase": "", "startedAt": NOW, "finished": True},
     632849442: lambda a: state["slots"], 309727738: lambda a: None, 3159373965: lambda a: None, 1280438677: lambda a: None,
+    207819850: lambda a: None, 3463005426: lambda a: None, 3166408438: lambda a: None,  # RevealRecoveryKey, SaveRecoveryKey, DropRecoveryKey
     332274822: lambda a: None,
     3319062579: lambda a: {"path": a[0], "kind": "backup", "modifiedAt": NOW - 90000, "vaultMatches": True, "slotCount": 1, "hardware": 0, "password": 0, "recovery": 1, "newer": False},  # vault.InspectFile
     18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: lambda a: None,  # ImportFile, FinishSetup, VerifyBackup

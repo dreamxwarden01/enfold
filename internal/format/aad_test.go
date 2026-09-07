@@ -19,8 +19,15 @@ func TestWrapAADs(t *testing.T) {
 	if len(i) != 22+32 || !bytes.HasPrefix(i, []byte("Enfold/v1/aad/identity")) || i[22] != 0x55 || i[38] != 0xD1 {
 		t.Fatalf("identity AAD %x", i)
 	}
-	// The three domains never collide, even with identical identities.
+	e := RecoveryEscrowAAD(fill16(0x55), fill16(0xE2))
+	if len(e) != 29+32 || !bytes.HasPrefix(e, []byte("Enfold/v1/aad/recovery-escrow")) || e[29] != 0x55 || e[45] != 0xE2 {
+		t.Fatalf("recovery escrow AAD %x", e)
+	}
+	// The domains never collide, even with identical identities.
 	if bytes.Equal(ArchiveKeyAAD(fill16(1), fill16(1))[:17], DEKAAD(fill16(1), fill16(1), 0)[:17]) {
 		t.Fatal("domains collide")
+	}
+	if bytes.Equal(IdentityKeyAAD(fill16(1), fill16(1))[:22], RecoveryEscrowAAD(fill16(1), fill16(1))[:22]) {
+		t.Fatal("identity and escrow domains collide")
 	}
 }

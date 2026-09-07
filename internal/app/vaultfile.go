@@ -28,7 +28,8 @@ const (
 	incomingPrefix = "vault.incoming-" // <prefix><id>.eks: an import or a build, beside its destination, until installed
 	inspectPrefix  = "vault.inspect-"  // <prefix><id>.eks: a copy being inspected or verified, removed after
 	retiredPrefix  = "vault-replaced-" // <prefix><unix>-<n>.eks: a vault kept as a dated copy
-	otherPrefix    = "file-replaced-"  // <prefix><unix>-<n>.bin: something else that sat at the vault's place
+	damagedPrefix  = "vault-damaged-"  // <prefix><unix>-<n>.eks: the vault's own file, refused, kept for salvage
+	otherPrefix    = "file-replaced-"  // <prefix><unix>-<n>.bin: something else that sat at a chosen place
 )
 
 // maxKeystoreBytes bounds what is copied into the data folder: a keystore
@@ -202,29 +203,60 @@ func (c *Core) setupNeededLocked() bool {
 	return true
 }
 
-// scanRetired lists the retired vaults in the data folder, oldest first.
+// scanRetired lists the retired vaults and the damaged copies in the data
+// folder, oldest first.
 func (c *Core) scanRetired() {
 	entries, _ := os.ReadDir(c.deps.DataDir)
-	var out []string
+	var retired, damaged []string
 	for _, e := range entries {
 		n := e.Name()
-		if !e.IsDir() && strings.HasPrefix(n, retiredPrefix) && strings.HasSuffix(n, ".eks") {
-			out = append(out, filepath.Join(c.deps.DataDir, n))
+		if e.IsDir() || !strings.HasSuffix(n, ".eks") {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(n, retiredPrefix):
+			retired = append(retired, filepath.Join(c.deps.DataDir, n))
+		case strings.HasPrefix(n, damagedPrefix):
+			damaged = append(damaged, filepath.Join(c.deps.DataDir, n))
 		}
 	}
-	sort.Strings(out)
+	sort.Strings(retired)
+	sort.Strings(damaged)
 	c.mu.Lock()
-	c.retired = out
+	c.retired, c.damaged = retired, damaged
 	c.mu.Unlock()
+}
+
+// noteMissingLocked records a configured vault whose file could not be
+// opened: missing, or damaged when the file is there and refused — the
+// one case a rebuild is offered for (APP.md §2.1). Caller holds the mutex.
+func (c *Core) noteMissingLocked(path string, err error) {
+	c.vault.missing = path
+	c.vault.damaged = notAKeystore(err)
+}
+
+// notAKeystore is the format's verdict on a file: refused as malformed,
+// rather than absent, unreadable or busy.
+func notAKeystore(err error) bool {
+	return errors.Is(err, format.ErrInvalid) || errors.Is(err, format.ErrTruncated)
+}
+
+// vaultPlace reports whether path is where the vault is, or was: the one
+// place, the configured path, or the file that could not be opened.
+func (c *Core) vaultPlace(path string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return samePath(path, c.defaultVaultPath()) || samePath(path, c.vault.path) || (c.vault.missing != "" && samePath(path, c.vault.missing))
 }
 
 // retire keeps whatever sits at path as a dated copy in the data folder —
 // a copy, never a rename, so the vault's place is never empty — under a
 // name taken with O_EXCL and a counter, so no copy is ever overwritten. A
-// keystore is kept as a retired vault; anything else under a name that
-// says so, which the status does not count. A file too large to be a
-// keystore is refused.
-func (c *Core) retire(path string) (string, error) {
+// keystore is kept as a retired vault; the vault's own file that does not
+// open as a damaged copy, for salvage (APP.md §2.1); anything else under a
+// name that says so, which the status does not count. A file too large to
+// be a keystore is refused.
+func (c *Core) retire(path string, vaultPlace bool) (string, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -237,6 +269,9 @@ func (c *Core) retire(path string) (string, error) {
 		ks.Close()
 	} else if !errors.Is(err, keystore.ErrBusy) {
 		prefix, ext = otherPrefix, ".bin"
+		if vaultPlace && notAKeystore(err) {
+			prefix, ext = damagedPrefix, ".eks"
+		}
 	}
 	stamp := c.now().Unix()
 	for n := 0; n < 1000; n++ {
@@ -274,7 +309,7 @@ func (c *Core) install(staged, dst, displayName string) error {
 	c.mu.Unlock()
 	var retired string
 	if _, err := os.Stat(dst); err == nil {
-		r, err := c.retire(dst)
+		r, err := c.retire(dst, c.vaultPlace(dst))
 		if err != nil {
 			return installError("retiring the file at the vault's place", err)
 		}
@@ -314,7 +349,7 @@ func (c *Core) install(staged, dst, displayName string) error {
 			// rather than keep the previous vault's facts standing.
 			c.mu.Lock()
 			c.dropFactsLocked(dst, displayName)
-			c.vault.missing = dst
+			c.noteMissingLocked(dst, err)
 			c.mu.Unlock()
 		}
 	}
@@ -512,6 +547,9 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 			continue
 		}
 		cer.closeCard(card)
+		if err == nil {
+			cer.escrowOpenedKey(unl, cred)
+		}
 		return unl, err
 	}
 }
@@ -527,6 +565,7 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions) (*k
 	if err != nil {
 		return nil, err
 	}
+	cer.escrowOpenedKey(unl, cred)
 	spec, err := cer.firstSlotSpec(first)
 	if err != nil {
 		unl.Close()

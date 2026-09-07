@@ -79,6 +79,7 @@ type Core struct {
 
 	archives map[[16]byte]*openArchive
 	retired  []string // vault-replaced-*.eks in the data folder, oldest first
+	damaged  []string // vault-damaged-*.eks in the data folder, oldest first: the vault's own file, refused, kept for salvage
 	ops      map[string]*op
 	owed     map[[16]byte]owedReceipt
 	preview  *previewServer
@@ -145,7 +146,7 @@ func (c *Core) Start() (previewPort int, err error) {
 				// Never "no vault yet": the screen names the file it could
 				// not open, so nothing invites a second vault.
 				c.mu.Lock()
-				c.vault.missing = path
+				c.noteMissingLocked(path, err)
 				c.mu.Unlock()
 			}
 		}

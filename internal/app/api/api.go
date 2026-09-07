@@ -225,6 +225,21 @@ func (k *Keys) RemoveSlot(recipientID string) error { return asErr(k.c.RemoveSlo
 func (k *Keys) RotateNow() error                    { return asErr(k.c.RotateNow()) }
 func (k *Keys) ExportBackup(path string) error      { return asErr(k.c.ExportBackup(path)) }
 
+// RevealRecoveryKey shows a recovery slot's key again, after a protector
+// unlock; the digits arrive over the one-time URL, never here.
+func (k *Keys) RevealRecoveryKey(recipientID string) error {
+	return asErr(k.c.RevealRecoveryKey(recipientID))
+}
+
+// SaveRecoveryKey writes the key behind a reveal's handle to a path the
+// user chose; the handle is the URL's token, not the digits.
+func (k *Keys) SaveRecoveryKey(handle, path string) error {
+	return asErr(k.c.SaveRecoveryKey(handle, path))
+}
+
+// DropRecoveryKey ends a reveal's handle when its dialog closes.
+func (k *Keys) DropRecoveryKey(handle string) error { return asErr(k.c.DropRecoveryKey(handle)) }
+
 // VerifyBackup proves a backup opens with its recovery key, on a copy;
 // nothing changes.
 func (k *Keys) VerifyBackup(path string) error { return asErr(k.c.VerifyBackup(path)) }

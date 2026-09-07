@@ -11,7 +11,10 @@ import (
 
 // RecoveryKey is the 128-bit recovery key R (§3.1). Its user-facing form is 48
 // digits in 8 groups of 6 (R11).
-type RecoveryKey [16]byte
+type RecoveryKey [RecoveryKeySize]byte
+
+// RecoveryKeySize is the recovery key's length: 128 bits (DESIGN.md §5).
+const RecoveryKeySize = 16
 
 const (
 	recoveryGroups   = 8

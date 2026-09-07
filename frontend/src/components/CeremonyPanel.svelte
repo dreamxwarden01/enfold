@@ -27,6 +27,7 @@
       case "import": return "Import";
       case "setup": return "Finish setting up";
       case "verify": return "Check a backup";
+      case "reveal": return "Show the recovery key";
     }
     return "Unlock";
   }

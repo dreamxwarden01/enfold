@@ -37,12 +37,14 @@ type VaultStatus struct {
 	DirtyArchives   int            `json:"dirtyArchives"`
 	HasPasswordSlot bool           `json:"hasPasswordSlot"`
 	HasHardwareSlot bool           `json:"hasHardwareSlot"`
-	SetupNeeded     bool           `json:"setupNeeded"`   // only a recovery slot: FinishSetup is the one action
-	DefaultPath     string         `json:"defaultPath"`   // where the vault lives unless kept elsewhere
-	MissingPath     string         `json:"missingPath"`   // a configured vault that could not be opened at start
-	KeptElsewhere   bool           `json:"keptElsewhere"` // the vault is not at DefaultPath (the override is set)
-	RetiredCopies   int            `json:"retiredCopies"` // vault-replaced-*.eks files in the data folder
-	RetiredPath     string         `json:"retiredPath"`   // the newest of them
+	SetupNeeded     bool           `json:"setupNeeded"`     // only a recovery slot: FinishSetup is the one action
+	DefaultPath     string         `json:"defaultPath"`     // where the vault lives unless kept elsewhere
+	MissingPath     string         `json:"missingPath"`     // a configured vault that could not be opened at start
+	KeptElsewhere   bool           `json:"keptElsewhere"`   // the vault is not at DefaultPath (the override is set)
+	RetiredCopies   int            `json:"retiredCopies"`   // vault-replaced-*.eks files in the data folder
+	RetiredPath     string         `json:"retiredPath"`     // the newest of them
+	Damaged         bool           `json:"damaged"`         // MissingPath is there and not a keystore: the rebuild of APP.md §2.1 applies
+	DamagedCopyPath string         `json:"damagedCopyPath"` // the newest vault-damaged-*.eks kept for salvage
 }
 
 // CeremonyStep is where the unlock or enrollment ceremony is.
@@ -70,7 +72,7 @@ const (
 // CeremonyState is the ceremony as the panel shows it.
 type CeremonyState struct {
 	Seq          uint64       `json:"seq"`
-	Kind         string       `json:"kind"` // unlock | create | enroll | remove | rotate | export | import | setup | verify
+	Kind         string       `json:"kind"` // unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal
 	Step         CeremonyStep `json:"step"`
 	PromptID     string       `json:"promptId,omitempty"`
 	Choose       bool         `json:"choose"` // the prompt asks for a new secret (create, enrol), not an existing one
@@ -108,6 +110,7 @@ type SlotView struct {
 	CreatedAt   int64  `json:"createdAt"`
 	Entangled   bool   `json:"entangled"`
 	Stale       bool   `json:"stale"`
+	Escrowed    bool   `json:"escrowed"` // a recovery slot whose key can be shown again (FORMAT R38); known while Unlocked
 }
 
 // ArchiveSummary is a row of the archives list, from the registry plus

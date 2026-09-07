@@ -386,7 +386,7 @@ func TestWrapAuthentication(t *testing.T) {
 func TestSubordinateKeysAreDistinct(t *testing.T) {
 	vmk := random32(t)
 	vault := randomID(t)
-	keys := [][]byte{MetadataKey(vmk, vault), DBKey(vmk, vault), KWK(vmk, vault), KWKIdentity(vmk, vault)}
+	keys := [][]byte{MetadataKey(vmk, vault), DBKey(vmk, vault), KWK(vmk, vault), KWKIdentity(vmk, vault), KWKRecovery(vmk, vault)}
 	for i := range keys {
 		for j := i + 1; j < len(keys); j++ {
 			if bytes.Equal(keys[i], keys[j]) {
@@ -396,5 +396,37 @@ func TestSubordinateKeysAreDistinct(t *testing.T) {
 	}
 	if bytes.Equal(KWK(vmk, vault), KWK(vmk, randomID(t))) {
 		t.Fatal("vault_id does not separate KWKs")
+	}
+}
+
+func TestRecoveryKeyWrap(t *testing.T) {
+	vmk := random32(t)
+	vault := randomID(t)
+	kek := KWKRecovery(vmk, vault)
+	r, err := NewRecoveryKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := []byte("Enfold/v1/aad/recovery-escrow-test")
+	w, n, err := WrapRecoveryKey(kek, r, aad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnwrapRecoveryKey(kek, w, n, aad)
+	if err != nil || got != r {
+		t.Fatalf("round trip: %v %x", err, got)
+	}
+	if _, err := UnwrapRecoveryKey(KWKIdentity(vmk, vault), w, n, aad); !errors.Is(err, ErrAuth) {
+		t.Fatalf("another domain's key opened it: %v", err)
+	}
+	if _, err := UnwrapRecoveryKey(kek, w, n, []byte("other")); !errors.Is(err, ErrAuth) {
+		t.Fatalf("another AAD opened it: %v", err)
+	}
+	w2, n2, _ := WrapRecoveryKey(kek, r, aad)
+	if n == n2 || w == w2 {
+		t.Fatal("a re-wrap reused a nonce")
+	}
+	if _, _, err := WrapRecoveryKey(kek[:16], r, aad); !errors.Is(err, ErrKeySize) {
+		t.Fatalf("short KEK: %v", err)
 	}
 }

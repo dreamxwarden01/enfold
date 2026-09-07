@@ -494,7 +494,32 @@ func sampleRegistry() *Registry {
 	copy(pk[:], seq(0x10, 32))
 	g.Peers = []PeerPin{{IdentityPubkey: pk, DeviceName: "phone", PairedAt: 1, LastSeenAt: 2,
 		Capabilities: CapOpenArchive | CapFullSync, DeviceClass: DeviceEnrolledPersonal}}
+	e := EscrowRecord{RecipientID: fill16(0xE1)}
+	copy(e.WrapNonce[:], seq(0xB0, 12))
+	copy(e.WrappedRecoveryKey[:], seq(0x40, 32))
+	g.Escrows = []EscrowRecord{e}
 	return g
+}
+
+// escrowSectionLen is what the escrow section of an encoded sampleRegistry
+// takes: the count and one record.
+const escrowSectionLen = 4 + 16 + 12 + 32
+
+// v1Registry rewrites an encoded version-2 registry that carries no escrow
+// records as the version-1 bytes an older Enfold wrote: version 1, ending
+// after the peer pin records.
+func v1Registry(t *testing.T, g *Registry) []byte {
+	t.Helper()
+	if len(g.Escrows) != 0 {
+		t.Fatal("v1Registry needs a registry without escrow records")
+	}
+	b, err := g.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = append([]byte(nil), b...)
+	b[0] = 1
+	return b[:len(b)-4]
 }
 
 func TestRegistryRoundTripAndValidation(t *testing.T) {
@@ -543,12 +568,18 @@ func TestRegistryRoundTripAndValidation(t *testing.T) {
 	})
 	bad("unknown capability", func(g *Registry) { g.Peers[0].Capabilities = 1 << 5 })
 	bad("unknown device class", func(g *Registry) { g.Peers[0].DeviceClass = 3 })
-	if _, err := DecodeRegistry(b[:len(b)-3]); !errors.Is(err, ErrTruncated) {
+	// Cut inside the last record: the count guard refuses it (invalid) —
+	// cut before the escrow section, the record itself comes up short
+	// (truncated); both fail closed.
+	if _, err := DecodeRegistry(b[:len(b)-3]); !errors.Is(err, ErrInvalid) {
+		t.Errorf("truncated registry: %v", err)
+	}
+	if _, err := DecodeRegistry(b[:len(b)-escrowSectionLen-3]); !errors.Is(err, ErrTruncated) {
 		t.Errorf("truncated registry: %v", err)
 	}
 	// A short peer key on the wire fails closed.
 	short := append([]byte(nil), b...)
-	peerOff := len(b) - (2 + 32 + 2 + len("phone") + 8 + 8 + 4 + 1)
+	peerOff := len(b) - escrowSectionLen - (2 + 32 + 2 + len("phone") + 8 + 8 + 4 + 1)
 	short[peerOff] = 31
 	short = append(short[:peerOff+2+31], short[peerOff+2+32:]...)
 	if _, err := DecodeRegistry(short); !errors.Is(err, ErrInvalid) {
@@ -559,6 +590,38 @@ func TestRegistryRoundTripAndValidation(t *testing.T) {
 	copy(h[4+16+8+48+12+32+2+2:], []byte{0xFF, 0xFF, 0xFF, 0x7F})
 	if _, err := DecodeRegistry(h); !errors.Is(err, ErrInvalid) {
 		t.Errorf("hostile count: %v", err)
+	}
+	// A hostile escrow_count neither.
+	h = append([]byte(nil), b...)
+	copy(h[len(h)-escrowSectionLen:], []byte{0xFF, 0xFF, 0xFF, 0x7F})
+	if _, err := DecodeRegistry(h); !errors.Is(err, ErrInvalid) {
+		t.Errorf("hostile escrow count: %v", err)
+	}
+	// Two escrow records for one slot fail closed.
+	bad("duplicate escrow", func(g *Registry) { g.Escrows = append(g.Escrows, g.Escrows[0]) })
+	// A version-1 registry — no escrow section — decodes, with no escrow
+	// records, and is written back as version 2 (R38).
+	g1 := sampleRegistry()
+	g1.Escrows = nil
+	old := v1Registry(t, g1)
+	d1, err := DecodeRegistry(old)
+	if err != nil {
+		t.Fatalf("version 1: %v", err)
+	}
+	if !reflect.DeepEqual(d1, g1) {
+		t.Fatalf("version 1 decoded as %+v", d1)
+	}
+	if again, _ := d1.Encode(); again[0] != 2 || len(again) != len(old)+4 {
+		t.Fatalf("a version-1 registry is not rewritten as version 2: %x…", again[:4])
+	}
+	// Version 1 with an escrow section, or any other version, is refused.
+	if _, err := DecodeRegistry(append(old, 0, 0, 0, 0)); !errors.Is(err, ErrTrailing) {
+		t.Errorf("version 1 with a tail: %v", err)
+	}
+	v3 := append([]byte(nil), b...)
+	v3[0] = 3
+	if _, err := DecodeRegistry(v3); !errors.Is(err, ErrInvalid) {
+		t.Errorf("version 3: %v", err)
 	}
 }
 

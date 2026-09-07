@@ -3,6 +3,9 @@ import { CeremonyStep } from "./api";
 import type { CeremonyState } from "./api";
 import { outcomeAfter, secretAskedAfter } from "./outcome";
 import { samePath } from "./paths";
+import { firstRunCard } from "./firstrun";
+import type { VaultStatus } from "./api";
+import { VaultState } from "./api";
 
 function ev(kind: string, step: CeremonyStep, promptId = "", archives = 0): CeremonyState {
   return { seq: 1, kind, step, promptId, choose: false, slotLabel: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives };
@@ -47,5 +50,17 @@ describe("secretAskedAfter", () => {
     expect(s).toBe(false);
     s = secretAskedAfter(s, ev("create", CeremonyStep.StepRecovery));
     expect(s).toBe(false);
+  });
+});
+
+describe("firstRunCard", () => {
+  const st = (over: Partial<VaultStatus>): VaultStatus => ({ state: VaultState.StateNone, missingPath: "", damaged: false, ...over }) as unknown as VaultStatus;
+  it("offers a create only on first run, and a rebuild only over a file that is there and not a keystore", () => {
+    expect(firstRunCard(null)).toBeNull();
+    expect(firstRunCard(st({ state: VaultState.StateLocked }))).toBeNull();
+    expect(firstRunCard(st({ state: VaultState.StateBroken, missingPath: "C:\\v.eks", damaged: true }))).toBeNull();
+    expect(firstRunCard(st({}))).toBe("fresh");
+    expect(firstRunCard(st({ missingPath: "C:\\v.eks" }))).toBe("absent");
+    expect(firstRunCard(st({ missingPath: "C:\\v.eks", damaged: true }))).toBe("damaged");
   });
 });

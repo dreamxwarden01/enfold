@@ -29,7 +29,9 @@ type previewServer struct {
 
 type oneTimeSecret struct {
 	value   string
+	label   string // the way in the value belongs to, for the saved file
 	expires time.Time
+	fetched bool // the URL was consumed; the value stays behind the handle for a save (APP.md §3 Keys)
 }
 
 func startPreview(c *Core) (*previewServer, error) {
@@ -155,14 +157,46 @@ func (p *previewServer) serveFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", time.Unix(info.ModifiedAt, 0), rd)
 }
 
+// secretLife is how long a minted secret lives: the reveal's dialog, with
+// its save after the digits were shown, never needs the ceremony again.
+var secretLife = 10 * time.Minute
+
 // mintSecret registers a one-time secret and returns its URL. The value is
-// delivered once, to the app's origin, and forgotten.
-func (p *previewServer) mintSecret(value string) string {
+// delivered once, to the app's origin; it stays behind the URL's token —
+// the reveal's handle — until dropped or expired.
+func (p *previewServer) mintSecret(value, label string) string {
 	tok := newToken()
 	p.mu.Lock()
-	p.oneTime[tok] = oneTimeSecret{value: value, expires: p.c.now().Add(2 * time.Minute)}
+	p.oneTime[tok] = oneTimeSecret{value: value, label: label, expires: p.c.now().Add(secretLife)}
 	p.mu.Unlock()
 	return fmt.Sprintf("http://127.0.0.1:%d/s/%s", p.port, tok)
+}
+
+// secretValue is the value behind a handle, fetched or not, while it
+// lives, with the label of the way in it belongs to.
+func (p *previewServer) secretValue(tok string) (value, label string, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	s, ok := p.oneTime[tok]
+	if !ok || p.c.now().After(s.expires) {
+		delete(p.oneTime, tok)
+		return "", "", false
+	}
+	return s.value, s.label, true
+}
+
+// dropSecret ends a handle: the dialog closed.
+func (p *previewServer) dropSecret(tok string) {
+	p.mu.Lock()
+	delete(p.oneTime, tok)
+	p.mu.Unlock()
+}
+
+// dropAllSecrets ends every handle: a lock trigger fired.
+func (p *previewServer) dropAllSecrets() {
+	p.mu.Lock()
+	clear(p.oneTime)
+	p.mu.Unlock()
 }
 
 // serveSecret: GET /s/<token>, once.
@@ -182,14 +216,22 @@ func (p *previewServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimPrefix(r.URL.Path, "/s/")
 	p.mu.Lock()
 	s, ok := p.oneTime[tok]
-	delete(p.oneTime, tok)
+	good := ok && !s.fetched && !p.c.now().After(s.expires) && (origin == "" || r.Header.Get("Origin") == origin)
+	if good {
+		// The URL is consumed; the value stays behind the handle.
+		s.fetched = true
+		p.oneTime[tok] = s
+	} else {
+		// A second, a foreign or a late fetch ends the handle too.
+		delete(p.oneTime, tok)
+	}
 	for k, v := range p.oneTime {
 		if p.c.now().After(v.expires) {
 			delete(p.oneTime, k)
 		}
 	}
 	p.mu.Unlock()
-	if !ok || p.c.now().After(s.expires) || (origin != "" && r.Header.Get("Origin") != origin) {
+	if !good {
 		http.NotFound(w, r)
 		return
 	}

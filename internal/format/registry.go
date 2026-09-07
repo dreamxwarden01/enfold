@@ -22,6 +22,17 @@ type Registry struct {
 	AbsoluteMinutes uint16
 	Archives        []ArchiveRecord
 	Peers           []PeerPin
+	// Escrows keeps every recovery key once more, under KWK_recovery (R38,
+	// §7.6): one record per active recovery slot, keyed by its recipient
+	// ID. Registry version 2; a version-1 registry decodes with none.
+	Escrows []EscrowRecord
+}
+
+// EscrowRecord is one recovery key kept under the VMK (§7.6).
+type EscrowRecord struct {
+	RecipientID        [16]byte // the recovery slot this key belongs to
+	WrapNonce          [NonceSize]byte
+	WrappedRecoveryKey [WrappedRecoveryKeySize]byte // AES-256-GCM(KWK_recovery, R), AAD of R22
 }
 
 // ArchiveRecord is one archive with all of its versions (§7.1).
@@ -67,10 +78,15 @@ type PeerPin struct {
 }
 
 const (
-	registryVersion  = 1
-	minArchiveRecord = 16 + 2 + 2 + 4 + 8 + 16 + 32 + 8 + 8 + 8 + 16 + 8 + 8 + 4
-	minVersionRecord = 16 + WrappedKeySize + NonceSize + 8 + 8 + 1
-	minPeerRecord    = 2 + X25519PubSize + 2 + 8 + 8 + 4 + 1
+	// registryVersion is what Encode writes. registryVersionV1 is read too:
+	// it ends after the peer pin records and carries no escrow records, and
+	// is written back as the current version at its next commit (R38).
+	registryVersion   = 2
+	registryVersionV1 = 1
+	minArchiveRecord  = 16 + 2 + 2 + 4 + 8 + 16 + 32 + 8 + 8 + 8 + 16 + 8 + 8 + 4
+	minVersionRecord  = 16 + WrappedKeySize + NonceSize + 8 + 8 + 1
+	minPeerRecord     = 2 + X25519PubSize + 2 + 8 + 8 + 4 + 1
+	minEscrowRecord   = 16 + NonceSize + WrappedRecoveryKeySize
 )
 
 func (v *VersionRecord) validate() error {
@@ -161,6 +177,23 @@ func (g *Registry) Validate() error {
 			return err
 		}
 	}
+	escrows := make(map[[16]byte]struct{}, len(g.Escrows))
+	for i := range g.Escrows {
+		if _, dup := escrows[g.Escrows[i].RecipientID]; dup {
+			return invalidf("recovery key escrow for slot %x appears twice", g.Escrows[i].RecipientID)
+		}
+		escrows[g.Escrows[i].RecipientID] = struct{}{}
+	}
+	return nil
+}
+
+// Escrow returns the escrow record for a recovery slot, or nil.
+func (g *Registry) Escrow(recipientID [16]byte) *EscrowRecord {
+	for i := range g.Escrows {
+		if g.Escrows[i].RecipientID == recipientID {
+			return &g.Escrows[i]
+		}
+	}
 	return nil
 }
 
@@ -215,6 +248,13 @@ func (g *Registry) Encode() ([]byte, error) {
 		w.u32(p.Capabilities)
 		w.u8(uint8(p.DeviceClass))
 	}
+	w.u32(uint32(len(g.Escrows)))
+	for i := range g.Escrows {
+		e := &g.Escrows[i]
+		w.fixed(e.RecipientID[:])
+		w.fixed(e.WrapNonce[:])
+		w.fixed(e.WrappedRecoveryKey[:])
+	}
 	return w.done()
 }
 
@@ -237,8 +277,9 @@ func (g *Registry) VerifySlotRegion(encodedRegion []byte) error {
 // DecodeRegistry parses a registry plaintext.
 func DecodeRegistry(b []byte) (*Registry, error) {
 	r := newReader(b, "registry")
-	if v := r.u32(); r.err == nil && v != registryVersion {
-		return nil, invalidf("registry_version %d unsupported", v)
+	version := r.u32()
+	if r.err == nil && version != registryVersion && version != registryVersionV1 {
+		return nil, invalidf("registry_version %d unsupported", version)
 	}
 	g := &Registry{}
 	r.fixed(g.DeviceID[:])
@@ -294,6 +335,19 @@ func DecodeRegistry(b []byte) (*Registry, error) {
 		p.Capabilities = r.u32()
 		p.DeviceClass = DeviceClass(r.u8())
 		g.Peers = append(g.Peers, p)
+	}
+	if version >= 2 {
+		ne := r.count(r.u32(), minEscrowRecord)
+		if ne > 0 {
+			g.Escrows = make([]EscrowRecord, 0, ne) // nil when none, as a version-1 registry decodes
+		}
+		for i := 0; i < ne && r.err == nil; i++ {
+			var e EscrowRecord
+			r.fixed(e.RecipientID[:])
+			r.fixed(e.WrapNonce[:])
+			r.fixed(e.WrappedRecoveryKey[:])
+			g.Escrows = append(g.Escrows, e)
+		}
 	}
 	if err := r.done(); err != nil {
 		return nil, err

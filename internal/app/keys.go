@@ -159,12 +159,13 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 	if ks == nil {
 		return nil, nil, coded(CodeNeedsUnlock)
 	}
-	// A pending touch of a cancelled slot change is inside keystore.Unlock
-	// on this very handle: it ends first (§2.2).
-	if err := cer.settlePending(); err != nil {
-		return nil, nil, err
-	}
 	if !hasToken && !hasPassword {
+		// A pending touch of a cancelled slot change is inside
+		// keystore.Unlock on this very handle: it ends first (§2.2). The
+		// token flow adopts it instead (tokenCredential).
+		if err := cer.settlePending(); err != nil {
+			return nil, nil, err
+		}
 		cred, _, _, err := cer.credential(MethodRecovery, nil)
 		if err != nil {
 			return nil, nil, err
@@ -210,6 +211,9 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 		return nil, nil, err
 	}
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+	if err := cer.settlePending(); err != nil { // the handle a pending touch is inside
+		return nil, nil, err
+	}
 	unl, err := cer.unlockWith(ks, keystore.PasswordCredential{Password: pw})
 	if err != nil {
 		return nil, nil, err

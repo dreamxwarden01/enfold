@@ -924,7 +924,12 @@ func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.Hardware
 	cer.prompter = nil
 	c.mu.Unlock()
 	if a == nil {
-		a = &attempt{path: cer.vaultPath(), slot: slot, card: card, ks: ks, ownsKS: own, vaultHandle: !own, hc: hc, prompter: p}
+		// An unlock from Locked and the unlock half of a slot change,
+		// export or reveal agree on the vault's own VMK: the next such
+		// ceremony may take the agreement over. An import's or a
+		// verification's is another file's (and the path is the vault's
+		// only by coincidence of the copy), so it is never adoptable.
+		a = &attempt{adoptable: cer.kind == "unlock" || cer.mutation, path: cer.vaultPath(), slot: slot, card: card, ks: ks, ownsKS: own, vaultHandle: !own, hc: hc, prompter: p}
 		a.op = func() (*keystore.Unlocked, error) { return ks.Unlock(a.credential()) }
 		cer.startAttempt(a)
 	}

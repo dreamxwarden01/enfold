@@ -15,7 +15,7 @@ export interface StepCopy {
 // around.
 export const stepCopy: Record<StepKey, StepCopy> = {
   [CeremonyStep.StepWaitingForKey]: { title: "Insert your YubiKey", body: "The key that unlocks this vault." },
-  [CeremonyStep.StepTwoKeys]: { title: "Two YubiKeys are inserted", body: "Remove one to continue." },
+  [CeremonyStep.StepTwoKeys]: { title: "More than one YubiKey is inserted", body: "Leave just one in to continue." },
   [CeremonyStep.StepProbing]: { title: "Reading the key", body: "Looking for a slot this vault knows." },
   [CeremonyStep.StepNoMatch]: { title: "This key is not enrolled", body: "No slot in this vault matches a key on it. Try another key, or use your recovery key." },
   [CeremonyStep.StepBusy]: { title: "The key is in use", body: "Another program holds the YubiKey. Close it, or wait, then try again." },

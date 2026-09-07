@@ -3,6 +3,9 @@ package app
 import (
 	"testing"
 	"time"
+
+	"github.com/dreamxwarden01/enfold/internal/kdf"
+	"github.com/dreamxwarden01/enfold/internal/keystore"
 )
 
 // The pending touch (APP.md §2.2): a cancel is immediate for the page, the
@@ -277,8 +280,8 @@ func TestOpenersSayPendingWhileTheTouchIsPending(t *testing.T) {
 }
 
 // A slot change cancelled at its touch leaves a pending touch on the
-// vault's own handle: registry writes wait for it, a second slot change
-// waits for it with the note, and it is never adopted.
+// vault's own handle: registry writes wait for it, and the next slot
+// change adopts it — the same VMK — with no PIN asked.
 func TestPendingTouchOfASlotChangeHoldsTheHandle(t *testing.T) {
 	card := newFakeCard("123456")
 	pub := card.addKey(0x9d, true)
@@ -305,36 +308,102 @@ func TestPendingTouchOfASlotChangeHoldsTheHandle(t *testing.T) {
 	if e := h.c.updateRegistry(func(g *registry) error { return nil }); !isCode(e, CodeCeremonyRunning) {
 		t.Fatalf("a registry write under the pending touch: %v", e)
 	}
-	// The next slot change waits, and does not adopt.
+	// The next slot change — another kind — adopts: Touch at once, no PIN.
 	h.rec.reset()
-	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "Third"}); e != nil {
+	before := len(h.rec.snapshot())
+	if e := h.c.ExportBackup(h.dir + "/backup.eks"); e != nil {
 		t.Fatal(e)
 	}
-	h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
-		s, ok := x.(CeremonyState)
-		return ok && s.Error == CodeTokenPending
-	})
-	if n := card.touchCount(); n != 2 { // the unlock's, and the held one
-		t.Fatalf("touch prompts while waiting: %d", n)
+	touch := h.rec.waitCeremony(t, StepTouch, false)
+	if touch.Kind != "export" || touch.N != 1 || !touch.PINAsked {
+		t.Fatalf("the adopted touch: %+v", touch)
 	}
-	card.giveUp()
-	pin = h.rec.waitCeremony(t, StepPIN, true)
-	if pin.Error != "" {
-		t.Fatalf("the note outlived the wait: %+v", pin)
+	for _, ev := range h.rec.snapshot()[before:] {
+		if s, ok := ev.payload.(CeremonyState); ok && (s.Step == StepPIN || s.Error == CodeTokenPending) {
+			t.Fatalf("the adopter was made to wait or asked for the PIN: %+v", s)
+		}
+	}
+	if n := card.touchCount(); n != 2 { // the unlock's, and the held one
+		t.Fatalf("touch prompts after the adoption: %d", n)
 	}
 	if e := h.c.updateRegistry(func(g *registry) error { return nil }); e == nil || e.Code != CodeCeremonyRunning {
-		// The new ceremony holds the handle now: still refused, but by the
-		// live ceremony.
+		// The adopter holds the handle now: still refused, by the live
+		// ceremony.
 		t.Fatalf("a registry write under the live slot change: %v", e)
 	}
+	// Cancelled again, it is pending again; the key giving up ends it.
 	h.c.CancelUnlock()
 	h.rec.waitCeremony(t, StepFailed, false)
-	h.waitStatus(func(s VaultStatus) bool { return s.Ceremony == nil && !s.PendingTouch })
+	h.waitStatus(func(s VaultStatus) bool { return s.Ceremony == nil && s.PendingTouch })
+	card.giveUp()
+	h.waitStatus(func(s VaultStatus) bool { return !s.PendingTouch })
 	if e := h.c.updateRegistry(func(g *registry) error { return nil }); e != nil {
 		t.Fatalf("a registry write after: %v", e)
 	}
-	if h.status().State != StateUnlocked {
-		t.Fatalf("state: %v", h.status().State)
+	if h.status().State != StateUnlocked || card.closeCount() != 2 {
+		t.Fatalf("state: %v closes=%d", h.status().State, card.closeCount())
+	}
+}
+
+// makeVaultWithKey makes a vault whose ways in are a recovery key and the
+// hardware key pub.
+func makeVaultWithKey(t *testing.T, path string, pub []byte) {
+	t.Helper()
+	rk, _ := kdf.NewRecoveryKey()
+	unl, err := keystore.Create(path, keystore.CreateOptions{Slots: []keystore.SlotSpec{
+		keystore.RecoverySlot{Key: rk, Label: "Recovery key"},
+		keystore.HardwareSlot{PublicKey: pub, Label: "Test key"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := unl.Keystore()
+	unl.Close()
+	ks.Close()
+}
+
+// An import's agreement is another file's: nothing adopts it, and an
+// import tried again while it stands is answered with token.pending.
+func TestImportsPendingTouchIsNotAdopted(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	other := h.dir + "/other.eks"
+	card := newFakeCard("123456")
+	pub := card.addKey(0x9d, true)
+	card.holdTouch = true
+	makeVaultWithKey(t, other, pub)
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	data := t.TempDir()
+	rec := &recorder{}
+	c, err := New(Deps{Cards: cards, Events: rec, Clock: newFakeClock(), DataDir: data, Log: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Start()
+	t.Cleanup(c.Close)
+	if e := c.ImportFile(other, "Other", MethodToken, EnrollOptions{}, false); e != nil {
+		t.Fatal(e)
+	}
+	pin := rec.waitCeremony(t, StepPIN, true)
+	c.SubmitSecret("pin", pin.PromptID, "123456")
+	rec.waitCeremony(t, StepTouch, false)
+	c.CancelUnlock()
+	rec.waitCeremony(t, StepFailed, false)
+	deadline := time.Now().Add(5 * time.Second)
+	for !c.Status().PendingTouch && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Nothing to unlock here (no vault kept), so the import is tried
+	// again: it waits, it does not adopt.
+	if e := c.ImportFile(other, "Other", MethodToken, EnrollOptions{}, false); !isCode(e, CodeTokenPending) {
+		t.Fatalf("an import over the pending touch: %v", e)
+	}
+	card.giveUp()
+	for c.Status().PendingTouch && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if c.Status().PendingTouch || staged(data) {
+		t.Fatalf("after the key gave up: pending=%v staged=%v", c.Status().PendingTouch, staged(data))
 	}
 }
 

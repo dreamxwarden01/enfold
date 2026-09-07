@@ -19,11 +19,16 @@ import (
 // unlock of the same vault.
 type attempt struct {
 	c    *Core
-	kind string // the ceremony kind it was started for: only "unlock" is ever adopted
-	path string // the vault file an unlock opened, for the adoption's match
-	slot keystore.SlotInfo
-	card Card
-	ks   *keystore.Keystore
+	kind string // the ceremony kind it was started for, for the log
+	// adoptable: the agreement is this vault's VMK through one of its
+	// slots — an unlock's, or the unlock half of a slot change, export or
+	// reveal — which the next such ceremony may take over; a proof's, an
+	// import's and a verification's never are (APP.md §2.2).
+	adoptable bool
+	path      string // the vault file, for the adoption's match
+	slot      keystore.SlotInfo
+	card      Card
+	ks        *keystore.Keystore
 	// ownsKS: the ceremony opened the handle for this attempt (an unlock
 	// from Locked, an import's or a verification's staged copy): released
 	// with the attempt when nobody owns it. vaultHandle: the handle is
@@ -309,15 +314,16 @@ func (a *attempt) release() {
 }
 
 // adoptPending takes over the pending touch when it is one this ceremony
-// would have started itself: an unlock's, of the same vault file, through
-// one of its slots, not dropped by a trigger (APP.md §2.2 "Only an unlock
-// adopts"). The panel opens at the Touch step. Nil when there is nothing
-// to adopt; the caller then waits for whatever is pending (settlePending).
+// would have started itself: this vault's VMK through one of its slots —
+// the same agreement, whichever kind was cancelled — not dropped by a
+// trigger or a slot change (APP.md §2.2 "The same VMK adopts"). The panel
+// opens at the Touch step. Nil when there is nothing to adopt; the caller
+// then waits for whatever is pending (settlePending).
 func (cer *ceremony) adoptPending(path string, slots []keystore.SlotInfo) *attempt {
 	c := cer.c
 	c.mu.Lock()
 	p := c.pending
-	if p == nil || cer.kind != "unlock" || p.kind != "unlock" || p.dropped || p.finished || p.owner != nil || !samePath(p.path, path) {
+	if p == nil || !p.adoptable || !(cer.kind == "unlock" || cer.mutation) || p.dropped || p.finished || p.owner != nil || !samePath(p.path, path) {
 		c.mu.Unlock()
 		return nil
 	}

@@ -2765,3 +2765,32 @@ service down. Win32 codes come first, the `SCARD_` ones after; neither layer map
 (DESIGN trap 26). Now every return code outside the `SCARD_` facility is the key gone, the
 facility's own "not talking" codes likewise, and a reset that fails because the card is not
 there is not a failed reset: a card without power holds no verified state.
+
+---
+
+## 2026-09-07 — The same VMK adopts: the user's ruling over the critique's
+
+The first hands-on test of the pending touch was on the Keys page: cancel *Show recovery key*
+at the touch, click it again — and the panel said "insert your YubiKey" with the note that the
+key was still answering the cancelled request, then asked for the PIN. That was the critique's
+ruling at work (the entry above: only an unlock adopts), and it was not what the user wanted:
+"reuse" meant the normal flow with the PIN skipped, since the connection is still verified, and
+one timeout's retry. Asked whether the escalation the critique named — cancel *Add a key*, and
+whoever is at the keyboard presses the blinking key under *Show recovery key* — was the reason,
+the user ruled that the boundary that matters is the process: so long as the PIN-verified,
+touch-waiting state cannot be taken over by another program, the rest is acceptable. It cannot:
+the connection is exclusive for as long as the touch is pending, and its release resets the
+card. The exit waits for it (the entry above), so the process does not end under it.
+
+**Ruled.** Any ceremony that agrees on this vault's VMK through one of its hardware slots
+adopts the pending touch of any other such ceremony: an unlock from Locked, or the unlock half
+of a slot change, an export or a reveal on the open vault. The panel opens at the Touch step;
+the one continuation stays with the attempt. An import's, a verification's and a proof's
+agreement are never adopted and never adopt. What remains — a cancelled touch finished for
+another purpose on the same vault, within the key's window, by whoever is at the keyboard —
+is written into APP.md §2.2 as the user's ruling, with the reasons: the vault is already
+Unlocked or was seconds ago, the PIN was that person's, and every lock trigger closes the
+window.
+
+Smaller, from the same test: the strip said "two YubiKeys are inserted" for any number above
+one; it says "more than one" now and does not count.

@@ -255,7 +255,8 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
    any exit ──▶ Releasing (Card.Close in the ceremony goroutine) ──▶ Locked
 ```
 
-- The driver polls `Readers()` every 500 ms while waiting; one reader → `Open`; more → `TwoKeys`.
+- The driver polls `Readers()` every 500 ms while waiting; one reader → `Open`; more → `TwoKeys`
+  ("more than one YubiKey is inserted; leave just one in" — the count is not said).
   A stopped Smart Card service while waiting is the empty reader set, not a failure: Windows
   starts the service when a reader arrives and stops it when the last one leaves; it is logged
   once per wait, and after ten seconds of it the waiting state carries `token.no_service` as a
@@ -305,20 +306,26 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   and ends; the attempt stands as the **pending touch**, the key still blinking, until the card
   answers: the core holds it (`pending`, beside `cer`) and the vault status says so
   (`pendingTouch`). Then:
-  - **Only an unlock adopts.** A touch unlock from Locked that begins while the pending touch of
-    an unlock of the same vault stands **adopts** it: the panel opens at the Touch step, the key
-    still waiting, with the touch's ordinal and whether its PIN was asked taken from the
-    attempt, and a prompt the attempt needs after that — an entangled password refused; the PIN,
-    when the key's policy asks for it on every operation — goes to the adopter's panel. Nothing
-    changes but the wait: the same file, the same slot, the same outcome the cancelled unlock
-    would have had, and the PIN was typed seconds earlier on the same exclusive connection. No
-    other kind adopts, and nothing adopts another kind's touch: on an Unlocked vault every slot
-    change, export and reveal costs its own PIN and touch, today and still, because a touch
-    begun for one thing and finished for another — cancel *Add a key*, and one press of the
-    blinking key shows the recovery key to whoever is at the keyboard — would be a way past the
-    PIN. What remains is accepted: a cancelled unlock can be completed by whoever is at the
-    keyboard within the key's own window, at most two of its timeouts, and every lock trigger
-    closes that window (§2.1: the trigger leaves the pending touch unadoptable).
+  - **The same VMK adopts.** A ceremony that begins while a pending touch stands **adopts** it
+    when the touch is the agreement it would have asked for itself: this vault's VMK, through
+    one of its hardware slots — an unlock from Locked, or the unlock half of a slot change, an
+    export or a reveal on the open vault, whichever kind was cancelled (the state keeps them
+    apart: a Locked vault runs only unlocks, an Unlocked one only the rest). The adopter's panel
+    opens at the Touch step, the key still waiting, with the touch's ordinal and whether its PIN
+    was asked taken from the attempt, and a prompt the attempt needs after that — an entangled
+    password refused; the PIN, when the key's policy asks for it on every operation — goes to
+    the adopter's panel. An import's or a verification's agreement is another file's, and a
+    proof's is its own ephemeral key: none of them is ever adopted, and none of them adopts.
+    Adoption is refused after a lock trigger (§2.1: the trigger leaves the pending touch
+    unadoptable) and after any slot change, and never crosses a process, since the exclusive
+    connection cannot: no other program reaches the PIN-verified card while the touch is
+    pending, and the release resets it. **What remains is the user's ruling** (DECISIONS
+    2026-09-07, "The same VMK adopts"): within the key's own window — at most two of its
+    timeouts — whoever is at the keyboard can finish a cancelled touch for another purpose on
+    the same vault without the PIN typed seconds earlier: cancel *Add a key*, press the blinking
+    key under *Show recovery key*. The person is at the keyboard of a vault that is already
+    Unlocked (or was, seconds ago, the one who typed the PIN), the PIN was that person's, every
+    lock trigger closes the window, and the boundary that matters is the process.
   - **Two rounds, then a failure.** A *round* is one GENERAL AUTHENTICATE the key gives up on
     (`ErrTouch`; about 14 s on a 5.7.4). An attempt with an owner asks once more the moment its
     first round ends — the PIN is still verified on the exclusive connection, so the light is
@@ -342,9 +349,9 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
     the file's exclusive lock: `OpenVaultFile`, `Reopen`, an install and a rebuild answer
     `token.pending` while it stands — never `vault.busy`, which says "another Enfold", and never
     the Busy state. Exit waits for it (§5).
-  - A ceremony that cannot adopt — every kind but an unlock; an unlock while the pending touch
-    is another kind's, or left unadoptable by a trigger — and a typed-credential unlock that
-    needs the file the attempt holds *wait* for the pending touch to end, with `token.pending`
+  - A ceremony that cannot adopt — an import, a verification, a proof; any ceremony while the
+    pending touch is one of those, or left unadoptable by a trigger — and a typed credential
+    that needs the handle the attempt holds *wait* for the pending touch to end, with `token.pending`
     as the note on the step they wait in (WaitingForKey; Deriving, after the password): "the key
     is still answering the cancelled request — touch it, or pull it out, to end that now". Then
     they go on as if it had never been there: the card opened afresh, the PIN asked again.

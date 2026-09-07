@@ -11,8 +11,16 @@
 //	pivtool readers
 //	pivtool info     [-reader NAME]
 //	pivtool generate [-reader NAME] [-slot 9d] [-pin-policy once|always]
-//	pivtool selftest [-reader NAME] [-slot 9d]
+//	pivtool selftest [-reader NAME] [-slot 9d] [-slow SECONDS] [-default-pin]
 //	pivtool resetcheck [-reader NAME]
+//	pivtool idle [-seconds N] [-keepalive S] [-verify] [-verify-after] [-default-pin]
+//	pivtool busy [-rounds N] [-verify]
+//
+// -default-pin answers a test key's factory PIN (and management key) without
+// asking; it is for a key the user has handed over as a test key, never for
+// one in use. idle and busy are the measurements behind DESIGN.md §11 trap
+// 25: how long an idle exclusive connection survives, and how soon the card
+// can be reopened after this program's own close.
 package main
 
 import (
@@ -49,6 +57,10 @@ func main() {
 		err = cmdSelftest(os.Args[2:])
 	case "resetcheck":
 		err = cmdResetCheck(os.Args[2:])
+	case "idle":
+		err = cmdIdle(os.Args[2:])
+	case "busy":
+		err = cmdBusy(os.Args[2:])
 	default:
 		usage()
 	}
@@ -59,7 +71,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME]")
+	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME] | idle [-seconds N] [-keepalive S] [-verify] [-default-pin] | busy [-rounds N]")
 	os.Exit(2)
 }
 
@@ -259,6 +271,7 @@ func cmdGenerate(args []string) error {
 	reader := fs.String("reader", "", "reader name (default: the only one)")
 	slotArg := fs.String("slot", "", "slot in hex (default: 9d if empty, else the first empty retired slot)")
 	policy := fs.String("pin-policy", "once", "PIN policy: once or always")
+	defaults := fs.Bool("default-pin", false, "use the factory PIN and management key without asking (a test key only)")
 	fs.Parse(args)
 	var pp piv.PINPolicy
 	switch *policy {
@@ -291,8 +304,10 @@ func cmdGenerate(args []string) error {
 		}
 	}
 	fmt.Printf("will generate a P-256 key in slot %s with PIN policy %s and touch policy always\n", slot, pp)
-	mk, err := managementKey(c)
-	if err != nil {
+	var mk []byte
+	if *defaults {
+		mk = piv.DefaultManagementKey() // a test key with factory secrets, by the caller's word
+	} else if mk, err = managementKey(c); err != nil {
 		return err
 	}
 	defer kdf.Zero(mk)
@@ -313,9 +328,23 @@ func cmdGenerate(args []string) error {
 }
 
 // terminalPrompter runs the ceremony on the console.
-type terminalPrompter struct{}
+type terminalPrompter struct {
+	// slow: wait this long before answering the PIN, to stand in for a user
+	// typing slowly — the case the host resets the connection under
+	// (DESIGN.md §11 trap 25). defaultPIN answers the factory PIN
+	// without asking: a test key only.
+	slow       time.Duration
+	defaultPIN bool
+}
 
-func (terminalPrompter) PIN(st piv.PINStatus) (string, error) {
+func (p terminalPrompter) PIN(st piv.PINStatus) (string, error) {
+	if p.slow > 0 {
+		fmt.Printf("(answering the PIN in %v)\n", p.slow)
+		time.Sleep(p.slow)
+	}
+	if p.defaultPIN {
+		return "123456", nil
+	}
 	switch {
 	case st.Verified:
 		return readSecret("PIN (card already verified; count not readable): ")
@@ -333,6 +362,8 @@ func cmdSelftest(args []string) error {
 	reader := fs.String("reader", "", "reader name (default: the only one)")
 	slotArg := fs.String("slot", "9d", "slot in hex")
 	rounds := fs.Int("rounds", 2, "ECDH rounds")
+	slow := fs.Int("slow", 0, "answer the PIN only after this many seconds (a slow user)")
+	defaultPIN := fs.Bool("default-pin", false, "answer the factory PIN 123456 without asking (a test key only)")
 	fs.Parse(args)
 	slot, err := parseSlot(*slotArg)
 	if err != nil {
@@ -348,7 +379,7 @@ func cmdSelftest(args []string) error {
 		return err
 	}
 	printKey(info)
-	tok, err := c.Token(info.PublicKey, terminalPrompter{})
+	tok, err := c.Token(info.PublicKey, terminalPrompter{slow: time.Duration(*slow) * time.Second, defaultPIN: *defaultPIN})
 	if err != nil {
 		return err
 	}
@@ -444,4 +475,135 @@ func cmdResetCheck(args []string) error {
 	}
 	fmt.Println("OK: the PIN-verified state did not survive Close")
 	return nil
+}
+
+// cmdIdle measures what an idle exclusive connection survives: open, ask
+// the card something, hold the connection without sending anything for
+// -seconds (or with a PIN-state probe every -keepalive seconds), then ask
+// again and report whether the card was reset meanwhile. With -verify the
+// PIN is verified first (the factory default with -default-pin: test keys
+// only), so a lost verification shows too. This is the behaviour behind
+// DECISIONS.md 2026-09-07 (the first hardware test).
+func cmdIdle(args []string) error {
+	fs := flag.NewFlagSet("idle", flag.ExitOnError)
+	reader := fs.String("reader", "", "reader name (default: the only one)")
+	seconds := fs.Int("seconds", 10, "how long to hold the connection idle")
+	keepalive := fs.Int("keepalive", 0, "send a PIN-state probe every this many seconds (0: none)")
+	verify := fs.Bool("verify", false, "verify the PIN first")
+	verifyAfter := fs.Bool("verify-after", false, "verify the PIN after the idle: the app's own sequence, a slow user at the prompt")
+	defaultPIN := fs.Bool("default-pin", false, "use the factory PIN 123456 (a test key only)")
+	fs.Parse(args)
+	c, err := open(*reader)
+	if err != nil {
+		return err
+	}
+	defer closeCard(c)
+	if _, err := printPINState(c); err != nil {
+		return err
+	}
+	if *verify {
+		pin := "123456"
+		if !*defaultPIN {
+			pin, err = readSecret("PIN: ")
+			if err != nil {
+				return err
+			}
+		}
+		if _, err := c.ProtectedManagementKey(pin); err != nil && !errors.Is(err, piv.ErrNoProtectedKey) {
+			return fmt.Errorf("verify: %w", err)
+		}
+		st, err := c.PINState()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("verified: %v\n", st.Verified)
+	}
+	t0 := time.Now()
+	remaining := *seconds
+	for remaining > 0 {
+		step := remaining
+		if *keepalive > 0 && *keepalive < step {
+			step = *keepalive
+		}
+		time.Sleep(time.Duration(step) * time.Second)
+		remaining -= step
+		if *keepalive > 0 && remaining > 0 {
+			st, err := c.PINState()
+			fmt.Printf("t=%v keepalive: verified=%v err=%v\n", time.Since(t0).Round(time.Millisecond), st.Verified, err)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	st, err := c.PINState()
+	fmt.Printf("t=%v after idle: verified=%v retries=%d err=%v\n", time.Since(t0).Round(time.Millisecond), st.Verified, st.Retries, err)
+	if err != nil {
+		return err
+	}
+	if *verifyAfter {
+		pin := "123456"
+		if !*defaultPIN {
+			if pin, err = readSecret("PIN: "); err != nil {
+				return err
+			}
+		}
+		if _, err := c.ProtectedManagementKey(pin); err != nil && !errors.Is(err, piv.ErrNoProtectedKey) {
+			return fmt.Errorf("verify after the idle: %w", err)
+		}
+		st, err := c.PINState()
+		fmt.Printf("t=%v verified after the idle: %v err=%v\n", time.Since(t0).Round(time.Millisecond), st.Verified, err)
+		return err
+	}
+	return nil
+}
+
+// cmdBusy measures how long the card is unavailable after this program's
+// own close (which resets the card): open, close, then reopen in a loop
+// until it succeeds, reporting what each attempt answered.
+func cmdBusy(args []string) error {
+	fs := flag.NewFlagSet("busy", flag.ExitOnError)
+	reader := fs.String("reader", "", "reader name (default: the only one)")
+	rounds := fs.Int("rounds", 3, "open/close rounds")
+	verify := fs.Bool("verify", false, "verify the factory PIN before each close, so the close resets the card")
+	fs.Parse(args)
+	for i := 1; i <= *rounds; i++ {
+		c, err := open(*reader)
+		if err != nil {
+			return err
+		}
+		name := c.Reader()
+		if *verify {
+			if _, err := c.ProtectedManagementKey("123456"); err != nil && !errors.Is(err, piv.ErrNoProtectedKey) {
+				closeCard(c)
+				return fmt.Errorf("verify: %w", err)
+			}
+		}
+		t0 := time.Now()
+		closeCard(c)
+		fmt.Printf("round %d: closed in %v\n", i, time.Since(t0).Round(time.Millisecond))
+		t1 := time.Now()
+		for attempt := 1; ; attempt++ {
+			c2, err := piv.Open(name)
+			if err == nil {
+				fmt.Printf("round %d: reopened after %v (%d attempts)\n", i, time.Since(t1).Round(time.Millisecond), attempt)
+				closeCard(c2)
+				break
+			}
+			fmt.Printf("round %d: attempt %d at %v: %v\n", i, attempt, time.Since(t1).Round(time.Millisecond), err)
+			if time.Since(t1) > 10*time.Second {
+				return fmt.Errorf("still not openable after 10 s: %w", err)
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	return nil
+}
+
+// readSecretOr asks at the terminal, or answers a known value when the
+// caller said the key is a test key with factory secrets.
+func readSecretOr(useDefault bool, value, prompt string) (string, error) {
+	if useDefault {
+		return value, nil
+	}
+	return readSecret(prompt)
 }

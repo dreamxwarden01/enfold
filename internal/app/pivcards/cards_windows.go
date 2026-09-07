@@ -152,6 +152,7 @@ var table = []struct {
 	{piv.ErrNoService, app.ErrTokenNoService},
 	{piv.ErrNoReader, app.ErrTokenNoReader},
 	{piv.ErrNoCard, app.ErrTokenNoCard},
+	{piv.ErrCardReset, app.ErrTokenReset},
 	{piv.ErrBusy, app.ErrTokenBusy},
 	{piv.ErrInUse, app.ErrTokenBusy},
 	{piv.ErrNoPIVApplet, app.ErrTokenNoPIV},

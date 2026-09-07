@@ -194,6 +194,7 @@ type fakeCards struct {
 	readers    []string
 	readersErr error // Readers fails with this while set
 	openErr    error
+	busyOpens  int // the next this many opens answer ErrTokenBusy
 	card       *fakeCard
 	opens      int
 }
@@ -236,6 +237,10 @@ func (f *fakeCards) Readers() ([]string, error) {
 func (f *fakeCards) Open(reader string) (Card, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.busyOpens > 0 {
+		f.busyOpens--
+		return nil, ErrTokenBusy
+	}
 	if f.openErr != nil {
 		return nil, f.openErr
 	}
@@ -260,6 +265,14 @@ type fakeCard struct {
 	mgmt     []byte // the PIN-protected management key; nil when none
 	touches  []TouchRequest
 	ops      int
+	removed  bool // pulled: every operation answers ErrTokenNoCard
+}
+
+// setRemoved pulls the key, or puts it back.
+func (f *fakeCard) setRemoved(gone bool) {
+	f.mu.Lock()
+	f.removed = gone
+	f.mu.Unlock()
 }
 
 func newFakeCard(pin string) *fakeCard {
@@ -286,6 +299,9 @@ func (f *fakeCard) PINState() (PINStatus, error) {
 	defer f.mu.Unlock()
 	if f.closed {
 		return PINStatus{}, ErrTokenClosed
+	}
+	if f.removed {
+		return PINStatus{}, ErrTokenNoCard
 	}
 	return PINStatus{Retries: f.retries, RetriesKnown: true}, nil
 }

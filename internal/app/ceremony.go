@@ -40,6 +40,8 @@ type ceremony struct {
 	card        Card
 	unlockPub   []byte
 	unlockLabel string
+	// held is the card open right now, probed while a prompt stands.
+	held Card
 	// restore is the state the vault returns to when the ceremony ends
 	// without publishing: Locked for an unlock, None for a create from
 	// nothing.
@@ -64,6 +66,19 @@ type prompt struct {
 	kind   string // pin | password | recovery | mgmtkey
 	choose bool   // a secret being chosen now: the minimum applies
 	ch     chan string
+	gone   chan error // the key held for this prompt went away
+}
+
+// keepAliveEvery is how often a held card is probed while a prompt stands:
+// the host resets an exclusive connection that carries nothing for about
+// five seconds (DESIGN.md §11 trap 25), and a probe every three keeps it
+// — and tells within three seconds that the key was pulled.
+var keepAliveEvery = 3 * time.Second
+
+// keyGone reports the errors that mean the key is no longer there to talk
+// to: the flow goes back to waiting for it.
+func keyGone(err error) bool {
+	return errors.Is(err, ErrTokenNoCard) || errors.Is(err, ErrTokenNoReader) || errors.Is(err, ErrTokenNoService) || errors.Is(err, ErrTokenReset)
 }
 
 // minPasswordLen is the least a chosen password may be: BitLocker's rule,
@@ -316,9 +331,10 @@ func (cer *ceremony) askNew(kind string, step CeremonyStep) (string, error) {
 
 func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, choose bool) (string, error) {
 	c := cer.c
-	p := &prompt{id: randomID(), kind: kind, choose: choose, ch: make(chan string, 1)}
+	p := &prompt{id: randomID(), kind: kind, choose: choose, ch: make(chan string, 1), gone: make(chan error, 1)}
 	c.mu.Lock()
 	cer.prompt = p
+	held := cer.held
 	cer.state.Step, cer.state.PromptID, cer.state.Choose = step, p.id, choose
 	cer.state.Retries, cer.state.RetriesKnown, cer.state.Verified = status.Retries, status.RetriesKnown, status.Verified
 	cer.state.Error = ""
@@ -328,24 +344,75 @@ func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, c
 	c.emit(EventVaultCeremony, st)
 	timer := c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("prompt_deadline") })
 	defer timer.Stop()
+	stop := make(chan struct{})
+	defer close(stop)
+	if held != nil {
+		go cer.keepAlive(held, p, stop)
+	}
+	clear := func() {
+		c.mu.Lock()
+		if cer.prompt == p {
+			cer.prompt = nil
+		}
+		cer.state.PromptID, cer.state.Choose = "", false
+		c.mu.Unlock()
+	}
 	select {
 	case v := <-p.ch:
-		c.mu.Lock()
-		if cer.prompt == p {
-			cer.prompt = nil
-		}
-		cer.state.PromptID, cer.state.Choose = "", false
-		c.mu.Unlock()
+		clear()
 		return v, nil
+	case err := <-p.gone:
+		clear()
+		return "", err
 	case <-cer.ctx.Done():
-		c.mu.Lock()
-		if cer.prompt == p {
-			cer.prompt = nil
-		}
-		cer.state.PromptID, cer.state.Choose = "", false
-		c.mu.Unlock()
+		clear()
 		return "", ErrTokenCancelled
 	}
+}
+
+// keepAlive probes the held card while a prompt stands, so that the
+// exclusive connection is never idle long enough for the host to reset it
+// and so that a key pulled meanwhile is noticed: the prompt then ends with
+// the key's error and the flow goes back to waiting for it. A probe that
+// finds the card busy with its own operation, or closed, says nothing.
+func (cer *ceremony) keepAlive(card Card, p *prompt, stop <-chan struct{}) {
+	t := time.NewTicker(keepAliveEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		_, err := card.PINState()
+		switch {
+		case err == nil, errors.Is(err, ErrTokenBusy), errors.Is(err, ErrTokenClosed):
+			continue
+		case keyGone(err):
+			cer.c.log("ceremony %s: the key went away during the prompt: %v", cer.kind, err)
+			select {
+			case p.gone <- err:
+			default:
+			}
+			return
+		default:
+			cer.c.log("ceremony %s: probe while prompting: %v", cer.kind, err)
+		}
+	}
+}
+
+// awayNote sets the waiting state's note to say the key went away, so
+// the strip tells the user to insert it again; the note clears when a
+// reader is seen.
+func (cer *ceremony) awayNote(err error) {
+	cer.c.log("ceremony %s: back to waiting for the key: %v", cer.kind, err)
+	c := cer.c
+	c.mu.Lock()
+	cer.state.Step, cer.state.ReaderCount, cer.state.Error, cer.state.PromptID = StepWaitingForKey, 0, CodeTokenNoCard, ""
+	cer.state.Seq = c.bump()
+	st := cer.state
+	c.mu.Unlock()
+	c.emit(EventVaultCeremony, st)
 }
 
 func (cer *ceremony) cancelWith(reason string) {
@@ -543,8 +610,8 @@ func (cer *ceremony) setIf(step CeremonyStep, readers int) {
 		return
 	}
 	cer.state.Step, cer.state.ReaderCount = step, readers
-	if cer.state.Error != CodeTokenNoService {
-		cer.state.Error = ""
+	if cer.state.Error != CodeTokenNoService && !(cer.state.Error == CodeTokenNoCard && readers == 0) {
+		cer.state.Error = "" // a note stands while nothing is inserted
 	}
 	cer.state.Seq = c.bump()
 	st := cer.state
@@ -554,9 +621,25 @@ func (cer *ceremony) setIf(step CeremonyStep, readers int) {
 
 // openCard opens the one reader, parking on the errors the user must act
 // on (DESIGN trap 24: never retry a reader in a loop).
+// busyRetries is how long an open is retried when another program holds
+// the card — a few seconds: Windows' own services take a card for a
+// moment after it is inserted or reset — before the ceremony parks.
+var busyRetries, busyRetryEvery = 8, 250 * time.Millisecond
+
 func (cer *ceremony) openCard(reader string) (Card, error) {
-	card, err := cer.c.deps.Cards.Open(reader)
-	if err != nil {
+	var card Card
+	var err error
+	for attempt := 0; ; attempt++ {
+		card, err = cer.c.deps.Cards.Open(reader)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, ErrTokenBusy) && attempt < busyRetries {
+			if err := cer.wait(busyRetryEvery); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		cer.c.log("ceremony %s: open %q: %v", cer.kind, reader, err)
 		switch {
 		case errors.Is(err, ErrTokenBusy):
@@ -565,12 +648,22 @@ func (cer *ceremony) openCard(reader string) (Card, error) {
 			return nil, cer.park(StepFailed, CodeTokenNoPIV)
 		case errors.Is(err, ErrTokenUnsupported):
 			return nil, cer.park(StepFailed, CodeTokenUnsupport)
-		case errors.Is(err, ErrTokenNoCard):
-			return nil, cer.park(StepFailed, CodeTokenNoCard)
 		}
-		return nil, err
+		return nil, err // a key gone is the caller's to wait for again
 	}
+	cer.c.mu.Lock()
+	cer.held = card
+	cer.c.mu.Unlock()
 	return card, nil
+}
+
+// unhold forgets a card that is being closed by hand.
+func (cer *ceremony) unhold(card Card) {
+	cer.c.mu.Lock()
+	if cer.held == card {
+		cer.held = nil
+	}
+	cer.c.mu.Unlock()
 }
 
 // matchSlot finds the vault's hardware slot the card holds a key for.
@@ -609,15 +702,18 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 	slot, key, keys, ok, err := cer.matchSlot(card, slots)
 	if err != nil {
 		cer.c.log("ceremony %s: reading the keys: %v", cer.kind, err)
+		cer.unhold(card)
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
 	if !ok {
 		cer.c.log("ceremony %s: no slot matches the keys on the token (%s)", cer.kind, describeKeys(keys))
+		cer.unhold(card)
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepNoMatch, CodeTokenNoKey)
 	}
 	if slot.Stale {
+		cer.unhold(card)
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepFailed, CodeVaultStale)
 	}
@@ -625,6 +721,7 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 	if slot.EntangledPassword {
 		pw, err := cer.ask("password", StepPassword, PINStatus{})
 		if err != nil {
+			cer.unhold(card)
 			card.Close()
 			return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 		}
@@ -632,6 +729,7 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 	}
 	tok, err := card.Token(key.PublicKey, &ceremonyPrompter{cer: cer, label: slot.Label})
 	if err != nil {
+		cer.unhold(card)
 		card.Close()
 		if errors.Is(err, ErrTokenNotUsable) {
 			return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepFailed, CodeTokenNotUsable)
@@ -664,6 +762,7 @@ func (cer *ceremony) closeCard(card Card) {
 	if card == nil {
 		return
 	}
+	cer.unhold(card)
 	cer.set(func(s *CeremonyState) { s.Step = StepReleasing })
 	c := cer.c
 	c.mu.Lock()
@@ -749,22 +848,41 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 	path, slots := c.vault.path, c.vault.slots
 	c.mu.Unlock()
 
-	cred, hc, card, err := cer.credential(method, slots)
-	if err != nil {
-		return err
+	var (
+		cred keystore.Credential
+		hc   *keystore.HardwareCredential
+		card Card
+		ks   *keystore.Keystore
+		unl  *keystore.Unlocked
+		err  error
+	)
+	for {
+		cred, hc, card, err = cer.credential(method, slots)
+		if err != nil {
+			return err
+		}
+		ks, err = cer.openVault(path)
+		if err != nil {
+			cer.closeCard(card)
+			return err
+		}
+		unl, err = cer.unlockFile(ks, cred, hc)
+		if err != nil {
+			ks.Close() // the file is held open only while Unlocked; a park is not that
+			if hc != nil && keyGone(err) {
+				// The key went during the PIN or the touch: back to waiting.
+				cer.unhold(card)
+				card.Close()
+				cer.awayNote(err)
+				continue
+			}
+			cer.closeCard(card)
+			return err
+		}
+		break
 	}
 	if card != nil {
 		defer cer.closeCard(card)
-	}
-
-	ks, err := cer.openVault(path)
-	if err != nil {
-		return err
-	}
-	unl, err := cer.unlockFile(ks, cred, hc)
-	if err != nil {
-		ks.Close() // the file is held open only while Unlocked; a park is not that
-		return err
 	}
 	// Publish, unless a lock trigger latched the ceremony or the user
 	// cancelled it while the keys were being derived.
@@ -787,15 +905,23 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 
 // credential collects the way in for method against slots — the vault's,
 // or an incoming file's: the token flow (the Card returned is the
-// caller's to close), a password, or the recovery digits.
+// caller's to close), a password, or the recovery digits. A key that goes
+// away while the token flow runs — pulled during the PIN, reset under a
+// probe that could not heal it — is waited for again, not a failure.
 func (cer *ceremony) credential(method UnlockMethod, slots []keystore.SlotInfo) (keystore.Credential, *keystore.HardwareCredential, Card, error) {
 	switch method {
 	case MethodToken:
-		h, card, _, err := cer.tokenCredentialFor(slots)
-		if err != nil {
-			return nil, nil, nil, err
+		for {
+			h, card, _, err := cer.tokenCredentialFor(slots)
+			if err != nil {
+				if keyGone(err) {
+					cer.awayNote(err)
+					continue
+				}
+				return nil, nil, nil, err
+			}
+			return nil, &h, card, nil
 		}
-		return nil, &h, card, nil
 	case MethodPassword:
 		pw, err := cer.ask("password", StepPassword, PINStatus{})
 		if err != nil {

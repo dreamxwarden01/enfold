@@ -2474,3 +2474,38 @@ silently for the wait's whole hour (logged once, and said on the screen after te
 log rotation threw away the newest window (it is renamed aside instead); the enrolment logged a
 second full read of the token; the error lines had no accessible name; a dialog reopened after a
 refused press showed the press again; the recovery prompt said its rule twice.
+
+---
+
+## 2026-09-07 — The card is never left idle: what the second hardware test measured
+
+The retest with logging said the same thing every time: `verify pin: transmitting request: the
+smart card has been reset`, three times in a create and twice in an unlock, always after the PIN
+prompt; once the reader itself vanished (`resource manager has shut down`, then `no YubiKey
+reader`). The one create that succeeded had its PIN typed in four seconds; every failure had
+stood at the prompt for eight to twenty. The user's read — "sort out when the key is held" — was
+the right one.
+
+**Measured on the test key** (`tools/pivtool idle`, `busy`; a YubiKey 5.7.4 with an empty PIV
+module): an exclusive winscard connection with no APDU survives 5 s and is reset before 6 s; the
+reset clears a verified PIN; a probe every 4 s (or 2 s) keeps it alive for as long as tried;
+after this program's own close-with-reset the card reopens in 9 ms, so the "busy" answers seen
+are not that reset's doing — Windows' own services taking the card for a moment after an insert
+or a re-enumeration remain the likely cause, and an open now retries for two seconds before it
+parks. Whether the reset is USB selective suspend or the resource manager's idle policy does not
+change the rule and was not chased.
+
+**Ruled.** The card is never held idle across a prompt (APP.md §2.2, DESIGN §11 trap 25): `piv`
+releases the operation lock while a prompter waits and repeats an operation once after a reset
+it meets, reconnecting to the same card; the ceremony probes a held card every 3 s while any
+prompt stands, which keeps the connection alive and notices a pulled key within three seconds;
+a key gone at any point in the token flow — the PIN, the touch, the management key — sends the
+strip back to *waiting for the key* with a note, never to a failure. A second ceremony on a
+card whose prompt stands is still refused; a probe is not. `pivtool idle`, `busy`, and `-slow`
+on `selftest` stay in the tree as the way to measure this again on other firmware.
+
+**Proved on the test key.** `pivtool idle -seconds 8 -verify-after` and `-seconds 12`: the PIN
+verifies after the idle (it failed before the change). `pivtool selftest -default-pin -slow 8
+-rounds 2`, run by the user with the touches: the PIN answered after eight idle seconds,
+reconnect, VERIFY, touch, ECDH matching the software computation, twice — the exact sequence
+every create and unlock had lost.

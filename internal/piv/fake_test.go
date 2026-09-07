@@ -47,6 +47,18 @@ type fakeDevice struct {
 	failKeyInfo  error // injected on KeyInfo of any slot
 	failCert     error // injected on Certificate of any slot
 	failGenerate error // injected in place of the management-key authentication
+	resetNext    bool  // the host reset the card: the next request answers so, once, and the verified state is gone
+	reopens      int   // openDevice calls after the first
+}
+
+// resetIfDue is what a request meets after the host reset the card.
+func (f *fakeDevice) resetIfDue() error {
+	if !f.resetNext {
+		return nil
+	}
+	f.resetNext = false
+	f.reset()
+	return fmt.Errorf("transmitting request: the smart card has been reset, so any shared state information is invalid")
 }
 
 type fakeSlot struct {
@@ -98,6 +110,9 @@ func (f *fakeDevice) Version() pivgo.Version  { return f.version }
 func (f *fakeDevice) Serial() (uint32, error) { return f.serial, nil }
 
 func (f *fakeDevice) Retries() (int, error) {
+	if err := f.resetIfDue(); err != nil {
+		return 0, err
+	}
 	if f.verified {
 		return 0, fmt.Errorf("expected error code from empty pin")
 	}
@@ -105,6 +120,9 @@ func (f *fakeDevice) Retries() (int, error) {
 }
 
 func (f *fakeDevice) VerifyPIN(pin string) error {
+	if err := f.resetIfDue(); err != nil {
+		return fmt.Errorf("verify pin: %w", err)
+	}
 	f.verifies++
 	if f.retries == 0 {
 		return fmt.Errorf("verify pin: %w", pivgo.AuthErr{Retries: 0})
@@ -307,7 +325,14 @@ func newFixture(t interface{ Cleanup(func()) }) *fixture {
 		v := fx.dev.version
 		return Version{v.Major, v.Minor, v.Patch}, nil
 	}
-	openDevice = func(reader string) (device, error) { return fx.dev, nil }
+	opens := 0
+	openDevice = func(reader string) (device, error) {
+		opens++
+		if opens > 1 {
+			fx.dev.reopens++
+		}
+		return fx.dev, nil
+	}
 	prepareReset = func(reader string) func() (bool, bool, error) {
 		fx.prepared++
 		return func() (bool, bool, error) {

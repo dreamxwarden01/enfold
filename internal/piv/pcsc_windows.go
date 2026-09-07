@@ -79,7 +79,9 @@ func (e *scError) sentinel() error {
 		return ErrNoReader
 	case scardESharingViolation:
 		return ErrBusy
-	case scardENoSmartcard, scardWRemovedCard, scardWUnpoweredCard, scardWResetCard, scardWUnresponsive, scardEProtoMismatch, scardECommDataLost:
+	case scardWResetCard:
+		return ErrCardReset
+	case scardENoSmartcard, scardWRemovedCard, scardWUnpoweredCard, scardWUnresponsive, scardEProtoMismatch, scardECommDataLost:
 		return ErrNoCard
 	}
 	return nil

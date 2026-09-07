@@ -67,6 +67,26 @@ type Card struct {
 	dirty        dirtyReason // what this Card left on the card, to reset on Close
 	verifiedHere bool        // this Card sent the VERIFY that verified the card
 	resetFailed  bool
+	prompting    bool // a Token is waiting on its prompter: no second ceremony meanwhile
+}
+
+// beginPrompt marks a ceremony waiting on the user, so that another
+// ceremony is refused (ErrInUse) while probes pass; it reports false when
+// one is already waiting.
+func (c *Card) beginPrompt() bool {
+	c.st.Lock()
+	defer c.st.Unlock()
+	if c.prompting {
+		return false
+	}
+	c.prompting = true
+	return true
+}
+
+func (c *Card) endPrompt() {
+	c.st.Lock()
+	c.prompting = false
+	c.st.Unlock()
 }
 
 // dirtyReason is what a Card may have left on the card that a Close must
@@ -180,6 +200,49 @@ func (c *Card) isClosed() bool {
 	return c.closed
 }
 
+// reconnectLocked replaces the device connection after the host reset the
+// card under it (ErrCardReset): the same reader, the same card — the
+// serial is checked — over a fresh exclusive connection. Whatever the card
+// held of ours went with the reset, so the verified state this Card
+// trusted is forgotten; the dirty marks stay, since a reset on Close is
+// harmless. Caller holds the operation lock.
+func (c *Card) reconnectLocked() error {
+	c.dev.Close()
+	dev, err := openDevice(c.reader)
+	if err != nil {
+		return mapErr(err)
+	}
+	serial, err := dev.Serial()
+	if err != nil {
+		dev.Close()
+		return mapErr(err)
+	}
+	if serial != c.serial {
+		dev.Close()
+		return fmt.Errorf("%w: another card answered (serial %d)", ErrNoCard, serial)
+	}
+	c.dev = dev
+	c.st.Lock()
+	c.verifiedHere = false
+	c.st.Unlock()
+	return nil
+}
+
+// retryReset runs fn and, when the card was reset under the connection,
+// reconnects and runs it once more. fn must be safe to repeat: an APDU
+// the reset swallowed never reached the card, so nothing was spent.
+// Caller holds the operation lock.
+func (c *Card) retryReset(fn func() error) error {
+	err := fn()
+	if !errors.Is(err, ErrCardReset) {
+		return err
+	}
+	if rerr := c.reconnectLocked(); rerr != nil {
+		return rerr
+	}
+	return fn()
+}
+
 // Close releases the card. If a PIN was sent through this Card, a verified
 // state was used, or the management key authenticated, the card is reset
 // afterwards through the package's own connection; ErrResetFailed when it
@@ -239,7 +302,13 @@ func (c *Card) PINState() (PINStatus, error) {
 		return PINStatus{}, err
 	}
 	defer release()
-	return c.pinState()
+	var st PINStatus
+	err = c.retryReset(func() error {
+		var e error
+		st, e = c.pinState()
+		return e
+	})
+	return st, err
 }
 
 func (c *Card) pinState() (PINStatus, error) {
@@ -264,7 +333,13 @@ func (c *Card) Inspect(slot Slot) (KeyInfo, error) {
 		return KeyInfo{}, err
 	}
 	defer release()
-	return c.inspect(slot)
+	var info KeyInfo
+	err = c.retryReset(func() error {
+		var e error
+		info, e = c.inspect(slot)
+		return e
+	})
+	return info, err
 }
 
 func (c *Card) inspect(slot Slot) (KeyInfo, error) {
@@ -315,7 +390,13 @@ func (c *Card) Keys() ([]KeyInfo, error) {
 		return nil, err
 	}
 	defer release()
-	return c.keys()
+	var out []KeyInfo
+	err = c.retryReset(func() error {
+		var e error
+		out, e = c.keys()
+		return e
+	})
+	return out, err
 }
 
 func (c *Card) keys() ([]KeyInfo, error) {
@@ -341,7 +422,13 @@ func (c *Card) Find(pub []byte) (KeyInfo, error) {
 		return KeyInfo{}, err
 	}
 	defer release()
-	return c.find(pub)
+	var info KeyInfo
+	err = c.retryReset(func() error {
+		var e error
+		info, e = c.find(pub)
+		return e
+	})
+	return info, err
 }
 
 func (c *Card) find(pub []byte) (KeyInfo, error) {
@@ -369,16 +456,21 @@ func (c *Card) FirstEmptySlot() (Slot, error) {
 		return 0, err
 	}
 	defer release()
-	for _, s := range AllSlots() {
-		_, err := c.inspect(s)
-		if errors.Is(err, ErrEmpty) {
-			return s, nil
+	var found Slot
+	err = c.retryReset(func() error {
+		for _, s := range AllSlots() {
+			_, err := c.inspect(s)
+			if errors.Is(err, ErrEmpty) {
+				found = s
+				return nil
+			}
+			if err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			return 0, err
-		}
-	}
-	return 0, ErrFull
+		return ErrFull
+	})
+	return found, err
 }
 
 // DefaultManagementKey is the factory management key, a fresh copy each
@@ -416,9 +508,14 @@ func (c *Card) ProtectedManagementKey(pin string) ([]byte, error) {
 	}
 	defer release()
 	c.markDirty(dirtyPIN)
-	m, err := c.dev.Metadata(pin)
+	var m *pivgo.Metadata
+	err = c.retryReset(func() error {
+		var e error
+		m, e = c.dev.Metadata(pin)
+		return mapErr(e)
+	})
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, err
 	}
 	c.markVerifiedByUs()
 	if m == nil || m.ManagementKey == nil || len(*m.ManagementKey) == 0 {
@@ -479,7 +576,11 @@ func (c *Card) Generate(mgmtKey []byte, o GenerateOptions) (KeyInfo, error) {
 		return KeyInfo{}, err
 	}
 	c.markDirty(dirtyMgmt)
-	if _, err := c.dev.GenerateKey(mgmtKey, ps, pivgo.Key{Algorithm: pivgo.AlgorithmEC256, PINPolicy: pivPP, TouchPolicy: pivgo.TouchPolicyAlways}); err != nil {
+	generate := func() error {
+		_, err := c.dev.GenerateKey(mgmtKey, ps, pivgo.Key{Algorithm: pivgo.AlgorithmEC256, PINPolicy: pivPP, TouchPolicy: pivgo.TouchPolicyAlways})
+		if err == nil {
+			return nil
+		}
 		// piv-go wraps every failure of its management-key authentication —
 		// the card going away included — under one prefix (v2.6.0
 		// key.go:970 over piv.go:415/448/509), so the transport is
@@ -488,12 +589,28 @@ func (c *Card) Generate(mgmtKey []byte, o GenerateOptions) (KeyInfo, error) {
 		// returns a *PINError that does not carry it.
 		m := mapErr(err)
 		if isTransport(m) {
-			return KeyInfo{}, m
+			return m
 		}
 		if strings.Contains(err.Error(), "authenticating with management key") {
-			return KeyInfo{}, fmt.Errorf("%w: %v", ErrManagementKey, err)
+			return fmt.Errorf("%w: %v", ErrManagementKey, err)
 		}
-		return KeyInfo{}, m
+		return m
+	}
+	if err := generate(); err != nil {
+		if !errors.Is(err, ErrCardReset) {
+			return KeyInfo{}, err
+		}
+		// Reset under the generate: reconnect, and take the key if the
+		// card did generate it before the reset, else generate again.
+		if rerr := c.reconnectLocked(); rerr != nil {
+			return KeyInfo{}, rerr
+		}
+		if info, ierr := c.inspect(o.Slot); ierr == nil && info.Usable() {
+			return info, nil
+		}
+		if err := generate(); err != nil {
+			return KeyInfo{}, err
+		}
 	}
 	info, err := c.inspect(o.Slot)
 	if err != nil {
@@ -576,7 +693,12 @@ func (c *Card) Token(pub []byte, p Prompter) (*Token, error) {
 		return nil, err
 	}
 	defer release()
-	info, err := c.find(pub)
+	var info KeyInfo
+	err = c.retryReset(func() error {
+		var e error
+		info, e = c.find(pub)
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -608,7 +730,7 @@ func statusWord(err error) (uint16, bool) {
 }
 
 var sentinels = []error{
-	ErrNoService, ErrNoReader, ErrNoCard, ErrBusy, ErrInUse, ErrNoPIVApplet, ErrUnsupported, ErrClosed,
+	ErrNoService, ErrNoReader, ErrNoCard, ErrCardReset, ErrBusy, ErrInUse, ErrNoPIVApplet, ErrUnsupported, ErrClosed,
 	ErrForbiddenSlot, ErrEmpty, ErrOccupied, ErrFull, ErrNoKey, ErrNotUsable, ErrNoProtectedKey,
 	ErrManagementKey, ErrPINBlocked, ErrPINRequired, ErrTouch, ErrCancelled, ErrTooManyOperations,
 	ErrAttestation, ErrResetFailed, ErrParams,
@@ -624,7 +746,7 @@ var pcscTexts = []struct {
 	{"no Smart Card is currently in the device", ErrNoCard},
 	{"the smart card has been removed", ErrNoCard},
 	{"power has been removed from the smart card", ErrNoCard},
-	{"the smart card has been reset", ErrNoCard},
+	{"the smart card has been reset", ErrCardReset},
 	{"not responding to a reset", ErrNoCard},
 	{"resource manager is not running", ErrNoService},
 	{"resource manager has shut down", ErrNoService},
@@ -666,5 +788,5 @@ func mapErr(err error) error {
 // isTransport: the card or the reader went away, rather than the card
 // answering something.
 func isTransport(err error) bool {
-	return errors.Is(err, ErrNoCard) || errors.Is(err, ErrBusy) || errors.Is(err, ErrNoService) || errors.Is(err, ErrNoReader)
+	return errors.Is(err, ErrNoCard) || errors.Is(err, ErrCardReset) || errors.Is(err, ErrBusy) || errors.Is(err, ErrNoService) || errors.Is(err, ErrNoReader)
 }

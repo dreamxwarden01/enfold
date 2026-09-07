@@ -772,7 +772,20 @@ Correct in this document, and easy to lose during implementation.
     reader is probed first over the package's own PC/SC connection (SELECT, GET VERSION, reset
     disconnect) with typed errors from the real return codes (`ErrBusy`, `ErrNoCard`,
     `ErrNoPIVApplet`, `ErrUnsupported`), so piv-go is only handed a reader that just answered.
-    Never retry a reader in a loop after a failed `Open`.
+    Never retry a reader in a loop after a failed `Open` — except for a few seconds on a
+    sharing violation, which is Windows' own services taking the card for a moment.
+25. **The host resets an idle exclusive connection.** Measured 2026-09-07 on a YubiKey 5.7.4
+    over winscard (`tools/pivtool idle`): an exclusive connection that carries no APDU survives
+    5 s and is reset before 6 s — the next request answers `SCARD_W_RESET_CARD`, "the smart card
+    has been reset" — and the reset clears a verified PIN; a probe every 4 s (an empty VERIFY)
+    keeps it alive indefinitely. The first hardware test lost every create and unlock whose PIN
+    took longer than five seconds to type, because the card was held across the prompt. Rules:
+    the operation lock is released while a prompter waits, so the caller can probe the card every
+    3 s meanwhile — which is also how a key pulled during the prompt is noticed within 3 s — and
+    a `SCARD_W_RESET_CARD` met by a request is answered by reconnecting (same reader, the serial
+    checked) and repeating the request once, since the request it swallowed never reached the
+    card; a PIN already collected is used again without a prompt. A close during a prompt no
+    longer waits for the user: the operation finds the Card closed when the prompt returns.
 
 ## 12. Deferred
 

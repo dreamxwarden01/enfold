@@ -103,6 +103,7 @@ func (e *TokenOccupiedError) Error() string { return "token: slot " + e.Slot.Str
 var (
 	ErrTokenNoService      = errors.New("token: smart card service not running")
 	ErrTokenNoReader       = errors.New("token: no reader")
+	ErrTokenReset          = errors.New("token: the card was reset under the connection")
 	ErrTokenNoCard         = errors.New("token: no card, or the card went away")
 	ErrTokenBusy           = errors.New("token: in use by another program")
 	ErrTokenNoPIV          = errors.New("token: no PIV application")

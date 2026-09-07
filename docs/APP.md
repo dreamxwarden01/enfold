@@ -236,6 +236,14 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   hardware slots; R34 makes the match unique. No match → `NoMatch`. The matched slot's
   `EntangledPassword` decides whether `Password` comes first — the credential is assembled before
   any prompt, because `keystore.Unlock` takes it whole and the PIN prompt fires inside `ECDH`.
+- **The card is never left idle.** The host resets an exclusive connection that carries nothing
+  for about five seconds (DESIGN §11 trap 25), so while any prompt stands with a card open — the
+  entangled password, the PIN inside `ECDH`, an enrolment's PIN or management key — the ceremony
+  probes the card every 3 s; the probe keeps the connection alive, heals a reset it meets
+  (`piv` reconnects and repeats), and notices a key pulled during the prompt: the prompt ends,
+  the strip goes back to *WaitingForKey* with `token.no_card` as a note ("insert it again"), and
+  the flow — unlock, import's proof, enrolment — waits for the key again instead of failing. An
+  open that finds the card in use is retried for two seconds before the ceremony parks in Busy.
 - Prompts (PIN, password, recovery digits, management key) are **mailboxes with an identity**:
   each `Prompter.PIN`/password call mints a `PromptID`, carried on `vault.ceremony`; a
   submission names the id, is accepted once under a mutex (a duplicate gets

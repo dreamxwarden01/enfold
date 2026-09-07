@@ -14,9 +14,16 @@ var (
 	// ErrNoReader: no reader with a YubiKey is attached, or the named reader
 	// is gone.
 	ErrNoReader = errors.New("piv: no YubiKey reader")
-	// ErrNoCard: the reader has no card, or the card was removed, reset or
+	// ErrNoCard: the reader has no card, or the card was removed or
 	// powered down under an operation.
 	ErrNoCard = errors.New("piv: no card, or the card went away")
+	// ErrCardReset: the host reset the card under this connection — the
+	// resource manager does so to an exclusive connection that carried no
+	// APDU for about five seconds (DESIGN.md §11 trap 25) — and the
+	// connection's state, a verified PIN included, is gone. The card is
+	// still there: the package reconnects and repeats the operation once;
+	// what reaches a caller is what the repeat answered.
+	ErrCardReset = errors.New("piv: the card was reset under the connection")
 	// ErrBusy: another program holds the card. It is opened exclusively, and
 	// so do most others.
 	ErrBusy = errors.New("piv: card is in use by another program")

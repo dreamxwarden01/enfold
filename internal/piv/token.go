@@ -5,6 +5,7 @@ package piv
 import (
 	"bytes"
 	"crypto/ecdh"
+	"errors"
 	"fmt"
 
 	pivgo "github.com/go-piv/piv-go/v2/piv"
@@ -60,13 +61,17 @@ func (t *Token) Info() KeyInfo { return t.info }
 // ECDH returns the 32-byte X coordinate of the shared point with epk, an
 // uncompressed P-256 point, which is validated here again before it
 // reaches the token (DESIGN.md §11 trap 2). The ceremony: the card is
-// asked whether it is verified; the PIN is prompted for and verified by
-// this package when the key's policy needs it — always, or once and not
-// verified by this Card: a verified state this Card did not create (a
-// reset that did not take, another program's VERIFY) is not trusted, so
-// the PIN is asked once — with no second attempt inside; the touch prompt
-// goes up; the token does the agreement. The result is piv-go's own
-// buffer, so the caller's zeroing reaches it.
+// asked whether it is verified; the PIN is prompted for — with the
+// operation lock released, so that the caller can keep the exclusive
+// connection alive meanwhile (a probe every few seconds; DESIGN.md §11
+// trap 25) — and verified by this package when the key's policy needs it:
+// always, or once and not verified by this Card (a verified state this
+// Card did not create — a reset that did not take, another program's
+// VERIFY — is not trusted), with no second attempt inside; the touch
+// prompt goes up; the token does the agreement. When the host reset the
+// card under the connection, the package reconnects and repeats once,
+// with the PIN already collected: it never reached the card. The result
+// is piv-go's own buffer, so the caller's zeroing reaches it.
 //
 // Errors: *PINError (wrong PIN, retries left), ErrPINBlocked, ErrCancelled,
 // ErrTouch, ErrPINRequired, ErrNoCard, ErrClosed, ErrInUse,
@@ -80,29 +85,72 @@ func (t *Token) ECDH(epk []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer release()
 	if t.n >= MaxOperations {
+		release()
 		return nil, ErrTooManyOperations
 	}
+	if !t.c.beginPrompt() {
+		release()
+		return nil, ErrInUse
+	}
+	defer t.c.endPrompt()
 	t.n++
+	release()
+	var pin string
+	for attempt := 0; ; attempt++ {
+		h, err := t.ecdhOnce(peer, &pin)
+		if errors.Is(err, ErrCardReset) && attempt == 0 {
+			release, aerr := t.c.acquire()
+			if aerr != nil {
+				return nil, aerr
+			}
+			rerr := t.c.reconnectLocked()
+			release()
+			if rerr != nil {
+				return nil, rerr
+			}
+			continue
+		}
+		return h, err
+	}
+}
+
+// ecdhOnce is one attempt of ECDH: the card's state, the prompt with the
+// operation lock released for it, then VERIFY, touch and the agreement
+// under the lock. A PIN collected by an earlier attempt is used again
+// without a prompt.
+func (t *Token) ecdhOnce(peer *ecdh.PublicKey, pin *string) ([]byte, error) {
+	release, err := t.c.acquire()
+	if err != nil {
+		return nil, err
+	}
 	st, err := t.c.pinState()
+	release()
 	if err != nil {
 		return nil, err
 	}
 	needPIN := t.info.PINPolicy == PINPolicyAlways || !st.Verified || !t.c.verifiedByUs()
-	if needPIN {
+	if needPIN && *pin == "" {
 		if st.Blocked() {
 			return nil, ErrPINBlocked
 		}
-		pin, err := t.p.PIN(st)
+		p, err := t.p.PIN(st)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrCancelled, err)
 		}
-		if err := checkPIN(pin); err != nil {
+		if err := checkPIN(p); err != nil {
 			return nil, err
 		}
+		*pin = p
+	}
+	release, err = t.c.acquire()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if needPIN {
 		t.c.markDirty(dirtyPIN)
-		if err := t.c.dev.VerifyPIN(pin); err != nil {
+		if err := t.c.dev.VerifyPIN(*pin); err != nil {
 			return nil, mapErr(err)
 		}
 		t.c.markVerifiedByUs()

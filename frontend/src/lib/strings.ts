@@ -73,7 +73,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeCancelled]: "Cancelled.",
   [Code.CodeTokenNoService]: "The Smart Card service is not running. Windows starts it when a YubiKey is plugged in; if it stays off, start the Smart Card service.",
   [Code.CodeTokenNoReader]: "No YubiKey is attached.",
-  [Code.CodeTokenNoCard]: "The YubiKey went away, or was reset part-way by another program that uses smart cards. Remove and reinsert it, then start again.",
+  [Code.CodeTokenNoCard]: "The YubiKey went away. Insert it again to go on.",
   [Code.CodeTokenBusy]: "Another program holds the YubiKey.",
   [Code.CodeTokenNoPIV]: "This key has PIV disabled, or it is not a YubiKey.",
   [Code.CodeTokenUnsupport]: "This YubiKey's firmware is too old (5.3 or later is needed).",

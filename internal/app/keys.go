@@ -284,6 +284,20 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 		}
 		cer.set(func(s *CeremonyState) { s.Step, s.RemoveLabel = StepSwapKey, "" })
 	}
+	for {
+		pub, err := cer.enrollOnce()
+		if err != nil && keyGone(err) {
+			// Pulled during the PIN or the management key: waited for again.
+			cer.awayNote(err)
+			continue
+		}
+		return pub, err
+	}
+}
+
+// enrollOnce is one attempt at the key to enrol: wait for it, open it,
+// reuse or generate.
+func (cer *ceremony) enrollOnce() ([]byte, error) {
 	reader, err := cer.waitForOneReader()
 	if err != nil {
 		return nil, err

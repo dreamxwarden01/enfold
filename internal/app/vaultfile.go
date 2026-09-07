@@ -496,18 +496,24 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 // prove unlocks an incoming vault file with one of its own ways in: what
 // makes a file the user's, rather than its plaintext.
 func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystore.Unlocked, error) {
-	cred, hc, card, err := cer.credential(method, ks.Slots())
-	if err != nil {
-		return nil, err
+	for {
+		cred, hc, card, err := cer.credential(method, ks.Slots())
+		if err != nil {
+			return nil, err
+		}
+		unl, err := cer.unlockFile(ks, cred, hc)
+		if hc != nil {
+			hc.Token = nil
+		}
+		if err != nil && hc != nil && keyGone(err) {
+			cer.unhold(card)
+			card.Close()
+			cer.awayNote(err)
+			continue
+		}
+		cer.closeCard(card)
+		return unl, err
 	}
-	if card != nil {
-		defer cer.closeCard(card)
-	}
-	unl, err := cer.unlockFile(ks, cred, hc)
-	if hc != nil {
-		hc.Token = nil
-	}
-	return unl, err
 }
 
 // adoptBackup opens an incoming backup with its recovery key and gives it

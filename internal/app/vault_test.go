@@ -759,3 +759,48 @@ func TestNoServiceWhileWaitingIsNoReader(t *testing.T) {
 	h.c.SubmitSecret("pin", pin.PromptID, "123456")
 	h.rec.waitState(t, StateUnlocked)
 }
+
+// A key pulled while its PIN prompt stands is noticed by the probe that
+// keeps the connection alive; the prompt ends, the strip goes back to
+// waiting for the key with a note, and the ceremony goes on when the key
+// is back. A card busy for a moment is retried before the ceremony parks.
+func TestKeyPulledDuringPINGoesBackToWaiting(t *testing.T) {
+	old := keepAliveEvery
+	keepAliveEvery = 30 * time.Millisecond
+	defer func() { keepAliveEvery = old }()
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	cards := &fakeCards{card: first, busyOpens: 2}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	// Pulled while the PIN is being typed.
+	first.setRemoved(true)
+	cards.setReaders()
+	w := h.rec.waitCeremony(t, StepWaitingForKey, false)
+	if w.Error != CodeTokenNoCard {
+		t.Fatalf("waiting again without the note: %+v", w)
+	}
+	if e := h.c.SubmitSecret("pin", pin.PromptID, "123456"); !isCode(e, CodeStalePrompt) {
+		t.Fatalf("the pulled key's prompt still stands: %v", e)
+	}
+	// Back in: the PIN is asked again, and the note is gone.
+	first.setRemoved(false)
+	first.mu.Lock()
+	first.closed = false
+	first.mu.Unlock()
+	cards.setReaders("Yubico A")
+	pin2 := h.rec.waitCeremony(t, StepPIN, true)
+	if pin2.PromptID == pin.PromptID || pin2.Error != "" {
+		t.Fatalf("second prompt: %+v", pin2)
+	}
+	h.c.SubmitSecret("pin", pin2.PromptID, "123456")
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+	if n := cards.openCount(); n != 2 {
+		t.Fatalf("opens: %d", n)
+	}
+}

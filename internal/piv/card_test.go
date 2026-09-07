@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	pivgo "github.com/go-piv/piv-go/v2/piv"
 )
@@ -557,7 +556,11 @@ func TestCloseAfterGenerateWithFailedReset(t *testing.T) {
 // TestCloseWaitsForInFlightVerify is the blocker the review found: a Close
 // issued while the PIN prompt is open must wait, and then reset, because
 // the operation verifies the PIN after Close was called.
-func TestCloseWaitsForInFlightVerify(t *testing.T) {
+func TestCloseDuringPromptEndsTheOperation(t *testing.T) {
+	// The prompt runs with the operation lock released (DESIGN.md §11 trap
+	// 25), so a Close meanwhile — the user cancelled, the vault locked —
+	// does not wait for the user: the operation finds the Card closed once
+	// the prompt returns, and nothing was verified, so nothing is reset.
 	fx := newFixture(t)
 	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
 	c := open(t)
@@ -570,24 +573,19 @@ func TestCloseWaitsForInFlightVerify(t *testing.T) {
 		_, err := tok.ECDH(eph.PublicKey().Bytes())
 		opDone <- err
 	}()
-	<-inPrompt // the operation is waiting for the user
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- c.Close() }()
-	for !c.isClosed() { // Close has marked the Card and is waiting for the operation
-		time.Sleep(time.Millisecond)
+	<-inPrompt // the operation is waiting for the user, holding nothing
+	if err := c.Close(); err != nil {
+		t.Fatalf("close during the prompt: %v", err)
 	}
 	if fx.resets != 0 {
-		t.Fatal("Close reset the card under a live operation")
+		t.Fatal("Close reset a card nothing was verified on")
 	}
-	close(release) // the user types the PIN: VERIFY, touch, agreement
-	if err := <-opDone; err != nil {
-		t.Fatalf("operation: %v", err)
+	close(release) // the user types the PIN into a closed Card
+	if err := <-opDone; !errors.Is(err, ErrClosed) {
+		t.Fatalf("operation after the close: %v", err)
 	}
-	if err := <-closeDone; err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	if fx.resets != 1 || fx.dev.verified {
-		t.Fatalf("the PIN verified during Close was not reset away: resets=%d verified=%v", fx.resets, fx.dev.verified)
+	if fx.dev.verifies != 0 {
+		t.Fatalf("a PIN was sent after the close: verifies=%d", fx.dev.verifies)
 	}
 }
 
@@ -652,12 +650,26 @@ func TestConcurrentOperationRefused(t *testing.T) {
 		done <- err
 	}()
 	<-inPrompt
-	if _, err := c.PINState(); !errors.Is(err, ErrInUse) {
-		t.Errorf("concurrent op: %v", err)
+	// A probe passes while the prompt stands: it is what keeps the
+	// connection alive. A second ceremony does not.
+	if _, err := c.PINState(); err != nil {
+		t.Errorf("probe during the prompt: %v", err)
+	}
+	tok2, _ := c.Token(pubBytes(k), &testPrompter{pins: []string{"123456"}})
+	if _, err := tok2.ECDH(eph.PublicKey().Bytes()); !errors.Is(err, ErrInUse) {
+		t.Errorf("second ceremony during the prompt: %v", err)
 	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	// With the prompt over, the card is free for the next ceremony.
+	if _, err := tok2.ECDH(eph.PublicKey().Bytes()); err != nil {
+		t.Fatalf("after the prompt: %v", err)
+	}
+	// Two ceremonies, one VERIFY: the second found the card verified by us.
+	if fx.dev.verifies != 1 {
+		t.Errorf("verifies=%d", fx.dev.verifies)
 	}
 }
 
@@ -719,5 +731,43 @@ func TestErrorMapping(t *testing.T) {
 	}
 	if got := mapErr(errors.New("something else")); got == nil || errors.Is(got, ErrNoCard) {
 		t.Errorf("unknown: %v", got)
+	}
+}
+
+// The host resets an idle exclusive connection (DESIGN.md §11 trap 25). A
+// reset met at the VERIFY — the PIN typed slowly — is reconnected and the
+// operation repeated with the PIN already collected: one prompt, one
+// consumed VERIFY, and the agreement.
+func TestTokenReconnectsAfterReset(t *testing.T) {
+	fx := newFixture(t)
+	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	c := open(t)
+	defer c.Close()
+	p := &testPrompter{pins: []string{"123456"}}
+	tok, err := c.Token(pubBytes(k), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eph, _ := ecdh.P256().GenerateKey(rand.Reader)
+	want, _ := eph.ECDH(mustECDH(k))
+	fx.dev.resetNext = true // the reset lands on the VERIFY, after the prompt
+	got, err := tok.ECDH(eph.PublicKey().Bytes())
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("ecdh across a reset: %x %v", got, err)
+	}
+	if len(p.statuses) != 1 || fx.dev.verifies != 1 || fx.dev.reopens != 1 || len(p.touches) != 1 {
+		t.Errorf("prompts=%d verifies=%d reopens=%d touches=%d", len(p.statuses), fx.dev.verifies, fx.dev.reopens, len(p.touches))
+	}
+	// A reset met by a plain query is reconnected too, with nothing asked.
+	fx.dev.resetNext = true
+	st, err := c.PINState()
+	if err != nil || fx.dev.reopens != 2 || st.Verified {
+		t.Fatalf("PIN state across a reset: %+v %v reopens=%d", st, err, fx.dev.reopens)
+	}
+	// The card that answers after a reconnect must be the same card.
+	fx.dev.resetNext = true
+	fx.dev.serial = 99
+	if _, err := c.PINState(); !errors.Is(err, ErrNoCard) {
+		t.Fatalf("another card after the reset: %v", err)
 	}
 }

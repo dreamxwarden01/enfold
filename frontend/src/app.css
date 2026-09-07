@@ -218,6 +218,9 @@ select.input { border-bottom-color: var(--ctl-bottom); border-bottom-width: 1px;
 .field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .field-top label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .field-top .hint { color: var(--ink-2); font-size: 12px; }
+.pin-note.danger { color: var(--danger); }
+.input.invalid { border-bottom-color: var(--danger); }
+.field-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
 .check input { accent-color: var(--accent); }
 

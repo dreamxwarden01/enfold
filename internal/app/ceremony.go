@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,10 +60,16 @@ func (p *parkAt) Error() string { return "park: " + string(p.code) }
 // prompt is a mailbox with an identity: answered once, by the id it was
 // issued with, never by the next prompt's answer.
 type prompt struct {
-	id   string
-	kind string // pin | password | recovery | mgmtkey
-	ch   chan string
+	id     string
+	kind   string // pin | password | recovery | mgmtkey
+	choose bool   // a secret being chosen now: the minimum applies
+	ch     chan string
 }
+
+// minPasswordLen is the least a chosen password may be: BitLocker's rule,
+// checked here as the backstop and on the page as the guide. Neither an
+// entropy estimate nor a strength meter is a substitute for it.
+const minPasswordLen = 8
 
 // UnlockMethod is which way in a ceremony takes.
 type UnlockMethod string
@@ -178,6 +185,11 @@ func (c *Core) SubmitSecret(kind, promptID, value string) *Error {
 		c.mu.Unlock()
 		return coded(CodeStalePrompt)
 	}
+	if p.kind == "password" && p.choose && len([]rune(value)) < minPasswordLen {
+		// The prompt stands; the page says why.
+		c.mu.Unlock()
+		return coded(CodePasswordShort)
+	}
 	cer.prompt = nil // consumed exactly once
 	c.mu.Unlock()
 	p.ch <- value // cap 1, and the slot was empty: never blocks
@@ -203,15 +215,22 @@ func (cer *ceremony) run(fn func(ctx context.Context) error) {
 		switch {
 		case errors.As(err, &pk):
 			// The flow asked to be parked after releasing what it held.
+			cer.c.log("ceremony %s: parked at %s: %s", cer.kind, pk.step, pk.code)
 			err = cer.park(pk.step, pk.code)
 			e = coded(CodeCancelled)
 		case errors.Is(err, context.Canceled), errors.Is(err, ErrTokenCancelled):
 			e = coded(CodeCancelled)
+			cer.c.mu.Lock()
+			step, code, reason := cer.state.Step, cer.state.Error, cer.cancelReason
+			cer.c.mu.Unlock()
+			if code != "" && code != CodeCancelled {
+				cer.c.log("ceremony %s: parked at %s: %s (left by %s)", cer.kind, step, code, mustString(reason, "user"))
+			} else {
+				cer.c.log("ceremony %s: cancelled (%s)", cer.kind, mustString(reason, "user"))
+			}
 		default:
 			e = classify(err)
-			if e.Code == CodeInternal {
-				cer.c.log("ceremony: %v", err)
-			}
+			cer.c.log("ceremony %s: failed: %s: %v", cer.kind, e.Code, err)
 		}
 		// A commit whose outcome is unknown, or one the file refused as
 		// conflicting, leaves the handle broken: the state says so.
@@ -297,7 +316,7 @@ func (cer *ceremony) askNew(kind string, step CeremonyStep) (string, error) {
 
 func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, choose bool) (string, error) {
 	c := cer.c
-	p := &prompt{id: randomID(), kind: kind, ch: make(chan string, 1)}
+	p := &prompt{id: randomID(), kind: kind, choose: choose, ch: make(chan string, 1)}
 	c.mu.Lock()
 	cer.prompt = p
 	cer.state.Step, cer.state.PromptID, cer.state.Choose = step, p.id, choose
@@ -383,6 +402,61 @@ func (p *ceremonyPrompter) Touch(req TouchRequest) {
 	})
 }
 
+// noServiceNoteAfter is how many consecutive polls without the Smart Card
+// service pass before the waiting state says so (10 s at readerPoll).
+var noServiceNoteAfter = 20
+
+// readerPoller lists the readers for a waiting loop, treating a stopped
+// Smart Card service as no reader: Windows starts the service when a
+// reader arrives and stops it when the last one leaves, so "no service"
+// while waiting is the empty reader set, not a failure. It is logged once
+// per wait, and after noServiceNoteAfter polls in a row the waiting state
+// carries token.no_service as a note, so a service that stays down is
+// not an hour of silence.
+type readerPoller struct {
+	cer    *ceremony
+	logged bool
+	run    int
+}
+
+func (p *readerPoller) names() ([]string, error) {
+	names, err := p.cer.c.deps.Cards.Readers()
+	if err != nil {
+		if !errors.Is(err, ErrTokenNoService) {
+			return nil, err
+		}
+		if !p.logged {
+			p.cer.c.log("ceremony %s: no Smart Card service; treated as no reader", p.cer.kind)
+			p.logged = true
+		}
+		p.run++
+		if p.run == noServiceNoteAfter {
+			p.cer.note(CodeTokenNoService)
+		}
+		return nil, nil
+	}
+	if p.run > 0 {
+		p.run = 0
+		p.cer.note("")
+	}
+	return names, nil
+}
+
+// note sets or clears the waiting state's note without changing the step.
+func (cer *ceremony) note(code Code) {
+	c := cer.c
+	c.mu.Lock()
+	if cer.state.Error == code {
+		c.mu.Unlock()
+		return
+	}
+	cer.state.Error = code
+	cer.state.Seq = c.bump()
+	st := cer.state
+	c.mu.Unlock()
+	c.emit(EventVaultCeremony, st)
+}
+
 // waitForOtherKey waits until the key that unlocked is out of the reader:
 // no reader, or the one card present is another key. The swap may already
 // have happened while a prompt stood, and a swap in the same port shows
@@ -393,12 +467,10 @@ func (p *ceremonyPrompter) Touch(req TouchRequest) {
 func (cer *ceremony) waitForOtherKey(unlockPub []byte) error {
 	deadline := cer.c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("wait_deadline") })
 	defer deadline.Stop()
+	poll := &readerPoller{cer: cer}
 	for {
-		names, err := cer.c.deps.Cards.Readers()
+		names, err := poll.names()
 		if err != nil {
-			if errors.Is(err, ErrTokenNoService) {
-				return cer.park(StepFailed, CodeTokenNoService)
-			}
 			return err
 		}
 		if len(names) != 1 {
@@ -441,12 +513,10 @@ func (cer *ceremony) holdsKey(reader string, pub []byte) (bool, error) {
 func (cer *ceremony) waitForOneReader() (string, error) {
 	deadline := cer.c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("wait_deadline") })
 	defer deadline.Stop()
+	poll := &readerPoller{cer: cer}
 	for {
-		names, err := cer.c.deps.Cards.Readers()
+		names, err := poll.names()
 		if err != nil {
-			if errors.Is(err, ErrTokenNoService) {
-				return "", cer.park(StepFailed, CodeTokenNoService)
-			}
 			return "", err
 		}
 		switch len(names) {
@@ -463,7 +533,8 @@ func (cer *ceremony) waitForOneReader() (string, error) {
 	}
 }
 
-// setIf updates the step only when it changes, so the poll does not flood.
+// setIf updates the step only when it changes, so the poll does not flood;
+// a note the poller set stands.
 func (cer *ceremony) setIf(step CeremonyStep, readers int) {
 	c := cer.c
 	c.mu.Lock()
@@ -471,7 +542,10 @@ func (cer *ceremony) setIf(step CeremonyStep, readers int) {
 		c.mu.Unlock()
 		return
 	}
-	cer.state.Step, cer.state.ReaderCount, cer.state.Error = step, readers, ""
+	cer.state.Step, cer.state.ReaderCount = step, readers
+	if cer.state.Error != CodeTokenNoService {
+		cer.state.Error = ""
+	}
 	cer.state.Seq = c.bump()
 	st := cer.state
 	c.mu.Unlock()
@@ -483,6 +557,7 @@ func (cer *ceremony) setIf(step CeremonyStep, readers int) {
 func (cer *ceremony) openCard(reader string) (Card, error) {
 	card, err := cer.c.deps.Cards.Open(reader)
 	if err != nil {
+		cer.c.log("ceremony %s: open %q: %v", cer.kind, reader, err)
 		switch {
 		case errors.Is(err, ErrTokenBusy):
 			return nil, cer.park(StepBusy, CodeTokenBusy)
@@ -499,10 +574,10 @@ func (cer *ceremony) openCard(reader string) (Card, error) {
 }
 
 // matchSlot finds the vault's hardware slot the card holds a key for.
-func (cer *ceremony) matchSlot(card Card, slots []keystore.SlotInfo) (keystore.SlotInfo, KeyInfo, bool, error) {
+func (cer *ceremony) matchSlot(card Card, slots []keystore.SlotInfo) (keystore.SlotInfo, KeyInfo, []KeyInfo, bool, error) {
 	keys, err := card.Keys()
 	if err != nil {
-		return keystore.SlotInfo{}, KeyInfo{}, false, err
+		return keystore.SlotInfo{}, KeyInfo{}, nil, false, err
 	}
 	for _, k := range keys {
 		if k.PublicKey == nil {
@@ -510,11 +585,11 @@ func (cer *ceremony) matchSlot(card Card, slots []keystore.SlotInfo) (keystore.S
 		}
 		for _, s := range slots {
 			if s.PublicKey != nil && string(s.PublicKey) == string(k.PublicKey) {
-				return s, k, true, nil
+				return s, k, keys, true, nil
 			}
 		}
 	}
-	return keystore.SlotInfo{}, KeyInfo{}, false, nil
+	return keystore.SlotInfo{}, KeyInfo{}, keys, false, nil
 }
 
 // credential runs the token part of the flow and returns a credential the
@@ -531,12 +606,14 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 	if err != nil {
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
-	slot, key, ok, err := cer.matchSlot(card, slots)
+	slot, key, keys, ok, err := cer.matchSlot(card, slots)
 	if err != nil {
+		cer.c.log("ceremony %s: reading the keys: %v", cer.kind, err)
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
 	if !ok {
+		cer.c.log("ceremony %s: no slot matches the keys on the token (%s)", cer.kind, describeKeys(keys))
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepNoMatch, CodeTokenNoKey)
 	}
@@ -565,6 +642,23 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 	return cred, card, slot, nil
 }
 
+// describeKeys lists what a token holds, for the log: slots, usability,
+// why not. Nothing secret.
+func describeKeys(keys []KeyInfo) string {
+	var parts []string
+	for _, k := range keys {
+		s := fmt.Sprintf("%02x %s pin=%s touch=%s usable=%v", byte(k.Slot), k.Algorithm, k.PINPolicy, k.TouchPolicy, k.Usable)
+		if !k.Usable {
+			s += " (" + k.WhyNot + ")"
+		}
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return "no keys"
+	}
+	return strings.Join(parts, "; ")
+}
+
 // closeCard runs the release step; a failed reset is a warning.
 func (cer *ceremony) closeCard(card Card) {
 	if card == nil {
@@ -577,7 +671,11 @@ func (cer *ceremony) closeCard(card Card) {
 		c.vault.state = StateReleasing
 	}
 	c.mu.Unlock()
-	if err := card.Close(); err != nil && errors.Is(err, ErrTokenResetFailed) {
+	err := card.Close()
+	if err != nil {
+		c.log("ceremony %s: releasing the key: %v", cer.kind, err)
+	}
+	if err != nil && errors.Is(err, ErrTokenResetFailed) {
 		c.mu.Lock()
 		c.vault.warnings[CodeTokenReset] = true
 		c.mu.Unlock()

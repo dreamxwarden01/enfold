@@ -37,6 +37,7 @@ const (
 	CodeAuth            Code = "vault.auth"
 	CodeNoSlot          Code = "vault.no_slot"
 	CodePasswordNeeded  Code = "vault.password_required"
+	CodePasswordShort   Code = "vault.password_short" // a chosen password under the minimum
 	CodeInvariant       Code = "vault.invariant"
 	CodeSlotPolicy      Code = "vault.slot_policy"
 	CodeDuplicateSlot   Code = "vault.duplicate_slot"

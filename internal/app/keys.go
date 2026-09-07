@@ -295,23 +295,29 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 	defer cer.closeCard(card)
 	keys, err := card.Keys()
 	if err != nil {
+		cer.c.log("ceremony %s: reading the keys: %v", cer.kind, err)
 		return nil, err
 	}
+	cer.c.log("ceremony %s: token holds %s", cer.kind, describeKeys(keys))
 	for _, k := range keys {
 		if k.Slot == 0x9d && k.Usable {
+			cer.c.log("ceremony %s: reusing the key in 9d", cer.kind)
 			return k.PublicKey, nil
 		}
 	}
 	slot, err := card.FirstEmptySlot()
 	if err != nil {
+		cer.c.log("ceremony %s: no empty slot: %v", cer.kind, err)
 		if errors.Is(err, ErrTokenFull) {
 			return nil, &parkAt{StepFailed, CodeTokenFull} // parked after the card is released
 		}
 		return nil, err
 	}
+	cer.c.log("ceremony %s: generating in %02x", cer.kind, byte(slot))
 	// The management key: the PIN-protected one first, else typed as hex.
 	st, err := card.PINState()
 	if err != nil {
+		cer.c.log("ceremony %s: PIN state: %v", cer.kind, err)
 		return nil, err
 	}
 	if st.Blocked() {
@@ -325,6 +331,7 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 	mgmt, err = card.ProtectedManagementKey(pin)
 	if err != nil {
 		if errors.Is(err, ErrTokenNoProtectedKey) {
+			cer.c.log("ceremony %s: no PIN-protected management key; asking for it", cer.kind)
 			hexKey, aerr := cer.ask("mgmtkey", StepManagementKey, PINStatus{})
 			if aerr != nil {
 				return nil, aerr
@@ -334,6 +341,7 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 				return nil, &parkAt{StepFailed, CodeTokenMgmtKey}
 			}
 		} else {
+			cer.c.log("ceremony %s: management key after the PIN: %v", cer.kind, err)
 			return nil, err
 		}
 	}
@@ -341,8 +349,10 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 	info, err := card.Generate(mgmt, GenerateOptions{Slot: slot})
 	if err != nil {
+		cer.c.log("ceremony %s: generate in %02x: %v", cer.kind, byte(slot), err)
 		return nil, err
 	}
+	cer.c.log("ceremony %s: generated in %02x", cer.kind, byte(slot))
 	return info.PublicKey, nil
 }
 

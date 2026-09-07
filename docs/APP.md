@@ -224,6 +224,12 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
 ```
 
 - The driver polls `Readers()` every 500 ms while waiting; one reader → `Open`; more → `TwoKeys`.
+  A stopped Smart Card service while waiting is the empty reader set, not a failure: Windows
+  starts the service when a reader arrives and stops it when the last one leaves; it is logged
+  once per wait, and after ten seconds of it the waiting state carries `token.no_service` as a
+  note, so a service that stays down is said on the screen, not an hour of silence. Every
+  ceremony's end that is not a success is logged with its step, code and underlying error, and
+  an enrolment logs what the token holds and what it decided; the log is appended across runs.
   A failed `Open` is never fed back into the poll (DESIGN trap 24): `ErrBusy` parks the ceremony
   in `Busy` until the user cancels or retries.
 - Probing: `Card.Keys()` (no PIN, no touch) matched by public key against the keystore's
@@ -536,6 +542,20 @@ screen: Busy, then Broken, then setup needed, then the ways in; Tampered is a ba
 secret never rides a bound-method argument (§1). Ticking "also require a password with this
 key" says the password is chosen first, before the key is set up.
 
+**Forms and their errors.** A field that holds something wrong is marked once the user leaves it
+— the underline turns red and, beneath it, either the requirement already shown there turns red
+("At least 8 characters.") or a line says what is missing — and the mark goes the moment the
+value is right, to return only after the field is left again with something wrong. Pressing the
+form's button marks every field that would refuse, an empty required one with "This field is
+required."; the button is never disabled for an empty field, only for a consent not yet given
+(a replacement's tick) or a state that forbids the action (archives open). The lines fade in and
+out like everything else. Every typed secret is judged before it is sent — a chosen password's
+minimum of 8 characters (BitLocker's rule; the core refuses a shorter one at submit with
+`vault.password_short` and keeps the prompt), the recovery key's 48 digits with any whitespace or
+dash between them (the set the core ignores), the management key's hex with the whitespace the
+core ignores — and an existing secret is never measured: it is what it is, so a PIN is refused
+only for what the card itself refuses (more than 8 bytes), never for being short.
+
 **Motion.** Every dialog, menu and popover enters over 140 ms (the box also scales from 97%)
 and leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
 steps, the lock screen's three cards — fades the new content in over 140 ms and the cards ease
@@ -596,7 +616,9 @@ ceremony states and the "never 0 attempts" rule.
 
 ## 12. Deferred, and open for the user
 
-pdf.js preview; `ForgetKey`; memguard for the session keys; `RestoreArchiveRecord` (one record
+pdf.js preview; `ForgetKey`; memguard for the session keys; an entropy estimate for a chosen
+password (SCOPE: "with an entropy estimate shown"; the minimum of 8 stands in for it);
+`RestoreArchiveRecord` (one record
 from a backup into the vault, re-wrapped), and merging records from another vault; folder move
 as one operation;
 `overwrite` on extraction (an archive-layer change); an unelevated BitLocker check (measure

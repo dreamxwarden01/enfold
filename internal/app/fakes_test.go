@@ -190,11 +190,12 @@ func (r *recorder) reset() {
 
 // fakeCards is a controllable reader set and one card.
 type fakeCards struct {
-	mu      sync.Mutex
-	readers []string
-	openErr error
-	card    *fakeCard
-	opens   int
+	mu         sync.Mutex
+	readers    []string
+	readersErr error // Readers fails with this while set
+	openErr    error
+	card       *fakeCard
+	opens      int
 }
 
 func (f *fakeCards) setReaders(names ...string) {
@@ -217,9 +218,18 @@ func (f *fakeCards) setCard(c *fakeCard) {
 	f.mu.Unlock()
 }
 
+func (f *fakeCards) setReadersErr(err error) {
+	f.mu.Lock()
+	f.readersErr = err
+	f.mu.Unlock()
+}
+
 func (f *fakeCards) Readers() ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.readersErr != nil {
+		return nil, f.readersErr
+	}
 	return append([]string(nil), f.readers...), nil
 }
 

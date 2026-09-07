@@ -195,6 +195,11 @@ export enum Code {
     CodeAuth = "vault.auth",
     CodeNoSlot = "vault.no_slot",
     CodePasswordNeeded = "vault.password_required",
+
+    /**
+     * a chosen password under the minimum
+     */
+    CodePasswordShort = "vault.password_short",
     CodeInvariant = "vault.invariant",
     CodeSlotPolicy = "vault.slot_policy",
     CodeDuplicateSlot = "vault.duplicate_slot",

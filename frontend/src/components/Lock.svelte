@@ -12,6 +12,7 @@
   import Dialog from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
   import ImportDialog from "./ImportDialog.svelte";
+  import TextField from "./TextField.svelte";
 
   const st = $derived(store.status);
   const c = $derived(store.ceremony);
@@ -62,6 +63,8 @@
   let createLabel = $state("");
   let createEntangle = $state(false);
   let createConfirm = $state(false);
+  let createNameValid = $state(true);
+  let createAttempt = $state(0);
   // Where the create lands, and what that replaces: the vault kept here
   // (at its own file, or at the one place), or the file that could not
   // be opened. Anything else already at the place is retired unasked
@@ -106,6 +109,7 @@
 
   function openCreate() {
     createConfirm = false; // a replacement is confirmed each time
+    createAttempt = 0;
     create = true;
   }
 
@@ -167,7 +171,8 @@
   }
 
   async function doCreate() {
-    if (!createName || (createReplaces && !createConfirm)) return;
+    createAttempt++;
+    if (!createNameValid || (createReplaces && !createConfirm)) return;
     create = false;
     store.dismissCeremony();
     try {
@@ -277,6 +282,9 @@
               {:else}
                 <div class="u-meta q">{stepText(c.step).body}</div>
               {/if}
+              {#if c.error && c.step === CeremonyStep.StepWaitingForKey}
+                <div class="bar attention u-bar"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
+              {/if}
               <div class="u-links">
                 <button type="button" class="btn sm" onclick={() => void Vault.CancelUnlock()}>Cancel</button>
               </div>
@@ -365,9 +373,9 @@
               <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={stepText(c.step).body} button="Unlock" />
             {:else if c.step === CeremonyStep.StepPassword}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} note={c.choose ? "Choose a long one." : ""} button={c.choose || c.kind !== "unlock" ? "Continue" : "Unlock"} />
+              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} choose={c.choose} note={c.choose ? "Longer is better; a passphrase of several words is best." : ""} button={c.choose || c.kind !== "unlock" ? "Continue" : "Unlock"} />
             {:else if c.step === CeremonyStep.StepRecovery}
-              <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : "The digits you wrote down, with or without spaces."} button={c.kind === "verify" ? "Check" : c.kind === "unlock" ? "Unlock" : "Continue"} />
+              <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : ""} button={c.kind === "verify" ? "Check" : c.kind === "unlock" ? "Unlock" : "Continue"} />
             {:else if c.step === CeremonyStep.StepManagementKey}
               <SecretInput kind="mgmtkey" promptId={c.promptId} label="Management key (hex)" note={stepText(c.step).body} />
             {/if}
@@ -423,10 +431,7 @@
 
 {#if create}
   <Dialog title="Create a vault" onclose={() => (create = false)}>
-    <div class="field">
-      <div class="field-top"><label for="cv-name">Name</label></div>
-      <input id="cv-name" class="input" bind:value={createName} />
-    </div>
+    <TextField id="cv-name" label="Name" bind:value={createName} bind:valid={createNameValid} attempt={createAttempt} />
     <div class="field">
       <div class="field-top"><label for="cv-path">Kept in</label>{#if createPath}<button type="button" class="btn link" onclick={() => (createPath = "")}>Use the usual place</button>{:else}<button type="button" class="btn link" onclick={pickCreatePath}>Keep it elsewhere…</button>{/if}</div>
       <div id="cv-path" class="path ellipsis" title={createPath || st?.defaultPath}>{createPath || st?.defaultPath}</div>
@@ -451,7 +456,7 @@
     {/if}
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (create = false)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!createName || (createReplaces && !createConfirm) || openArchives > 0} onclick={doCreate}>Create</button>
+      <button type="button" class="btn accent" disabled={(createReplaces && !createConfirm) || openArchives > 0} onclick={doCreate}>Create</button>
     {/snippet}
   </Dialog>
 {/if}

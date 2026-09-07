@@ -2432,3 +2432,45 @@ was shown nowhere on the first-run card; the elsewhere wording named the wrong f
 path compare was weaker than the core's (it is the same now, `lib/paths.ts`); "try again" kept a
 dead ceremony's error; the strip's wording lagged a frame behind the event (the store derives it
 from the events, `lib/outcome.ts`, with tests for both).
+
+---
+
+## 2026-09-07 — Passwords: at least 8; forms show their errors after the field is left; first hardware test
+
+**Ruled by the user.** A chosen password — entangled or standalone — must be at least 8 characters,
+BitLocker's rule; there was no minimum, and a one-character entangled password went through.
+The core refuses a shorter one at submit (`vault.password_short`) and keeps the prompt; the page
+judges it first. An existing password is never measured. An entropy estimate (SCOPE) stays
+deferred; the minimum stands in for it.
+
+**A design principle for every form, from the user:** a field with something wrong is marked once
+the user leaves it — the underline turns red, and beneath it either the requirement already shown
+turns red or a line says what is missing — the mark leaves the moment the value is right and
+returns only after the field is left again; pressing the button marks every field that would
+refuse, an empty required one with "This field is required."; the marks fade like everything
+else. APP.md §6 has it; `lib/validate.ts` judges secrets and names; `SecretInput` and `TextField`
+carry the behaviour.
+
+**The first hardware test failed after the PIN, twice**, with "the YubiKey went away" and then
+"the Smart Card service is not running" — and the log said nothing, because a coded failure was
+not logged and the log was truncated at every start. What could be established from the code:
+the second message is Windows stopping the Smart Card service when the last reader leaves (it is
+trigger-started), which the waiting states treated as a failure instead of an empty reader set
+— fixed, in the waits and in `Readers()`; the first is a PC/SC "removed or reset" answer after
+the PIN was verified, inside the enrolment's management-key or generate step — which means the
+key in 9d was *not* reused (a usable 9d key skips the PIN), so either the token does not report
+the 9d key as usable (P-256, touch always, PIN once or always) or something reset the card
+mid-way; piv-go holds the card exclusively, so a reset from another process is not the plain
+reading. The log now appends across runs and records every ceremony's end with its code and
+underlying error, and an enrolment logs what the token holds (slot, algorithm, policies, usable
+or why not) and the slot it generates into. The next run tells.
+
+**Verified (two agents).** The page's new checks had overreached in two places that are the
+last resort: a recovery key typed with the dashes a word processor substitutes was refused
+before the core, which accepts them, ever saw it; and a PIN shorter than six — an existing
+secret, which the rule says is never measured — was refused although the card accepts one to
+eight bytes. Both are the core's sets now, tested. A stopped Smart Card service was swallowed
+silently for the wait's whole hour (logged once, and said on the screen after ten seconds); the
+log rotation threw away the newest window (it is renamed aside instead); the enrolment logged a
+second full read of the token; the error lines had no accessible name; a dialog reopened after a
+refused press showed the press again; the recovery prompt said its rule twice.

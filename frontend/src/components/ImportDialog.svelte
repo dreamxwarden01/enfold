@@ -10,6 +10,7 @@
   import { dateTime, leaf } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
+  import TextField from "./TextField.svelte";
 
   interface Props {
     onclose: () => void;
@@ -30,6 +31,8 @@
   let label = $state("");
   let entangle = $state(false);
   let confirm = $state(false);
+  let nameValid = $state(true);
+  let attempt = $state(0);
   // copy: the file is copied in and proved; inplace: it becomes the vault
   // where it is (advanced), copying and retiring nothing.
   let mode = $state<"copy" | "inplace">("copy");
@@ -69,11 +72,12 @@
     }
   }
 
-  const ready = $derived(!!info && !!name && (!kept || confirm));
+  const ready = $derived(!!info && (!kept || confirm));
   const openArchives = $derived(st?.openArchives ?? 0);
 
   async function doImport() {
-    if (!info || !ready) return;
+    attempt++;
+    if (!info || !ready || !nameValid) return;
     onclose();
     store.dismissCeremony();
     try {
@@ -86,7 +90,8 @@
   // The advanced choice: the file stays where it is and becomes the
   // vault by reference; nothing is copied and nothing is retired.
   async function useInPlace() {
-    if (!info || isBackup || !ready) return;
+    attempt++;
+    if (!info || isBackup || !ready || !nameValid) return;
     onclose();
     store.dismissCeremony();
     try {
@@ -121,10 +126,7 @@
         <div class="fact"><dt>This vault</dt><dd>{info.vaultMatches ? (info.newer ? "yes — newer than the one kept here" : "yes — not newer than the one kept here") : "no — another vault"}</dd></div>
       {/if}
     </dl>
-    <div class="field">
-      <div class="field-top"><label for="im-name">Name</label></div>
-      <input id="im-name" class="input" bind:value={name} />
-    </div>
+    <TextField id="im-name" label="Name" bind:value={name} bind:valid={nameValid} {attempt} />
     {#if isBackup}
       <p>It is copied into Enfold's folder and opened with its recovery key; you then choose the first way in, as when creating a vault. Archives added after this backup was made are not in it.</p>
       <FirstWayIn bind:kind bind:label bind:entangle idPrefix="im" />

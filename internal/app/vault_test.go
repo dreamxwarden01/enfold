@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dreamxwarden01/enfold/internal/kdf"
 	"github.com/dreamxwarden01/enfold/internal/keystore"
@@ -698,4 +699,63 @@ func TestCreateOverUnreadableFile(t *testing.T) {
 	if st := c.Status(); others != 1 || st.RetiredCopies != 0 {
 		t.Fatalf("garbage retired as a vault: others=%d %+v", others, st)
 	}
+}
+
+// A chosen password under the minimum is refused at submit and the prompt
+// stands; an existing password is never measured.
+func TestChosenPasswordMinimum(t *testing.T) {
+	data := t.TempDir()
+	c, rec := freshCore(t, data)
+	c.SetAppOrigin("wails://wails")
+	if e := c.CreateVault("", "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); e != nil {
+		t.Fatal(e)
+	}
+	p := rec.waitCeremony(t, StepPassword, true)
+	if e := c.SubmitSecret("password", p.PromptID, "short"); !isCode(e, CodePasswordShort) {
+		t.Fatalf("a short password: %v", e)
+	}
+	if e := c.SubmitSecret("password", p.PromptID, "long enough now"); e != nil {
+		t.Fatalf("the prompt did not stand: %v", e)
+	}
+	rec.waitCeremony(t, StepRecovery, false)
+	rec.waitState(t, StateLocked)
+	// The existing password, however short the rule would call it, is
+	// what it is: an unlock measures nothing.
+	h := newHarness(t, nil, nil)
+	h.rec.reset()
+	h.c.BeginUnlock(MethodPassword)
+	p = h.rec.waitCeremony(t, StepPassword, true)
+	if e := h.c.SubmitSecret("password", p.PromptID, "x"); e != nil {
+		t.Fatalf("an existing password measured: %v", e)
+	}
+}
+
+// The Smart Card service stops when the last reader leaves and starts
+// when one arrives: while waiting for a key, "no service" is no reader,
+// not a failure.
+func TestNoServiceWhileWaitingIsNoReader(t *testing.T) {
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	cards := &fakeCards{card: first}
+	cards.setReadersErr(ErrTokenNoService)
+	h := newHarness(t, cards, pub)
+	if r, e := h.c.Readers(); e != nil || len(r) != 0 {
+		t.Fatalf("readers with the service down: %v %v", r, e)
+	}
+	old := noServiceNoteAfter
+	noServiceNoteAfter = 2
+	defer func() { noServiceNoteAfter = old }()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitCeremony(t, StepWaitingForKey, false)
+	time.Sleep(3 * readerPoll)
+	if st := h.status(); st.Ceremony == nil || st.Ceremony.Step != StepWaitingForKey || st.Ceremony.Error != CodeTokenNoService {
+		t.Fatalf("waiting did not survive the stopped service, or did not say so: %+v", st.Ceremony)
+	}
+	cards.setReadersErr(nil)
+	cards.setReaders("Yubico A")
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitState(t, StateUnlocked)
 }

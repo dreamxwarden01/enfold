@@ -524,6 +524,9 @@ func (c *Core) Readers() ([]Reader, *Error) {
 	}
 	names, err := c.deps.Cards.Readers()
 	if err != nil {
+		if errors.Is(err, ErrTokenNoService) {
+			return []Reader{}, nil // the service starts with the first reader
+		}
 		return nil, c.fail("readers", err)
 	}
 	out := make([]Reader, 0, len(names))

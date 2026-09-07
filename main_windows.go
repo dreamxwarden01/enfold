@@ -495,7 +495,15 @@ type fileLog struct {
 }
 
 func openLog(dir string) *fileLog {
-	f, err := os.OpenFile(filepath.Join(dir, "enfold.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	path := filepath.Join(dir, "enfold.log")
+	// Appended, so what went wrong in the previous run survives a restart;
+	// past 2 MiB the file becomes enfold.log.1 and a new one starts, so the
+	// most recent window is never the one thrown away.
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 2<<20 {
+		os.Remove(path + ".1")
+		os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return &fileLog{}
 	}

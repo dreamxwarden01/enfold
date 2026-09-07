@@ -1,39 +1,68 @@
 <script lang="ts">
   // One prompt's field. The value goes over the raw channel on submit and
   // the field is cleared; it is never held anywhere else on this side.
+  // Its errors follow the form rule (APP.md §6): shown once the user
+  // leaves the field or presses the button, gone the moment the value is
+  // right, and back only after the field is left again.
+  import { fade } from "svelte/transition";
   import { submitSecret } from "../lib/api";
+  import { motion } from "../lib/motion";
+  import { RECOVERY_SEPARATORS, secretProblem, secretRule } from "../lib/validate";
+  import type { SecretKind } from "../lib/validate";
 
   interface Props {
-    kind: "pin" | "password" | "recovery" | "mgmtkey";
+    kind: SecretKind;
     promptId: string;
     label: string;
     hint?: string;
     note?: string;
     button?: string;
+    choose?: boolean;
   }
-  let { kind, promptId, label, hint = "", note = "", button = "Continue" }: Props = $props();
+  let { kind, promptId, label, hint = "", note = "", button = "Continue", choose = false }: Props = $props();
   let value = $state("");
   let el: HTMLInputElement | undefined = $state();
+  let left = $state(false); // the field was left with what it holds
+  let pressed = $state(false); // the button was pressed with what it holds
 
   const numeric = $derived(kind === "pin" || kind === "recovery");
+  const problem = $derived(secretProblem(kind, value, choose));
+  const rule = $derived(secretRule(kind, choose));
+  const show = $derived((left || pressed) && !!problem);
+  // The rule itself turns red when it is what is broken; anything else is
+  // said beneath it.
+  const ruleBroken = $derived(show && problem === rule);
+  const said = $derived(show && problem !== rule ? problem : "");
 
   $effect(() => {
     // A new prompt: a clean field, focused.
     void promptId;
     value = "";
+    left = false;
+    pressed = false;
     el?.focus();
   });
 
+  function typed() {
+    if (!secretProblem(kind, value, choose)) {
+      left = false;
+      pressed = false;
+    }
+  }
+
   function submit(e: Event) {
     e.preventDefault();
-    const v = kind === "recovery" ? value.replace(/[\s-]/g, "") : value;
-    if (!v) return;
+    pressed = true;
+    if (problem) return;
+    const v = kind === "recovery" ? value.replace(RECOVERY_SEPARATORS, "") : value;
     submitSecret(kind, promptId, v);
     value = "";
+    left = false;
+    pressed = false;
   }
 </script>
 
-<form class="field" onsubmit={submit}>
+<form class="field" onsubmit={submit} novalidate>
   <div class="field-top">
     <label for="secret-{promptId}">{label}</label>
     {#if hint}<span class="hint num">{hint}</span>{/if}
@@ -43,15 +72,22 @@
     bind:this={el}
     bind:value
     class="input secret"
+    class:invalid={show}
     type={kind === "mgmtkey" ? "text" : "password"}
     inputmode={numeric ? "numeric" : "text"}
     autocomplete="off"
     autocapitalize="off"
     spellcheck="false"
     aria-label={label}
+    aria-invalid={show}
+    aria-describedby={[rule ? `secret-${promptId}-rule` : "", said ? `secret-${promptId}-said` : ""].filter(Boolean).join(" ") || undefined}
+    onblur={() => (left = true)}
+    oninput={typed}
   />
+  {#if rule}<div id="secret-{promptId}-rule" class="pin-note" class:danger={ruleBroken}>{rule}</div>{/if}
+  {#if said}<div id="secret-{promptId}-said" class="field-error" transition:fade={motion()}>{said}</div>{/if}
   {#if note}<div class="pin-note">{note}</div>{/if}
-  <div class="submit"><button type="submit" class="btn accent wide" disabled={!value}>{button}</button></div>
+  <div class="submit"><button type="submit" class="btn accent wide">{button}</button></div>
 </form>
 
 <style>

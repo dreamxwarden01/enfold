@@ -136,14 +136,22 @@ func (t *Token) ecdhOnce(peer *ecdh.PublicKey, pin *string) ([]byte, error) {
 		}
 		p, err := t.p.PIN(st)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrCancelled, err)
+			// The prompter's own error stays in the chain: a caller that
+			// ended the prompt because its probe found the key gone must
+			// see that identity, not a cancel.
+			if errors.Is(err, ErrCancelled) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: %w", ErrCancelled, err)
 		}
 		if err := checkPIN(p); err != nil {
 			return nil, err
 		}
 		*pin = p
 	}
-	release, err = t.c.acquire()
+	// The caller's keep-alive probe may be on the card this instant: the
+	// operation waits for it rather than refusing.
+	release, err = t.c.acquireWait()
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +186,12 @@ func (t *Token) ecdhOnce(peer *ecdh.PublicKey, pin *string) ([]byte, error) {
 			// "Security status not satisfied" is the card's word for both a
 			// missing touch and an unsatisfied PIN policy. The empty VERIFY
 			// tells them apart after the fact, at no cost.
-			if st, e2 := t.c.pinState(); e2 == nil && !st.Verified {
+			st, e2 := t.c.pinState()
+			switch {
+			case e2 != nil && isTransport(e2):
+				// A reset met here is the caller's to heal, not a missed touch.
+				return nil, e2
+			case e2 == nil && !st.Verified:
 				return nil, fmt.Errorf("%w: %v", ErrPINRequired, err)
 			}
 			return nil, fmt.Errorf("%w: %v", ErrTouch, err)

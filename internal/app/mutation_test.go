@@ -377,3 +377,94 @@ func TestEnrollSwapDuringPasswordPrompt(t *testing.T) {
 		t.Fatalf("slots after the swapped enrolment: %+v", h.c.Slots())
 	}
 }
+
+// The unlock half of a slot change waits for the key again when it is
+// pulled during the PIN, as an unlock does; nothing warns afterwards
+// about a verified state the pull took with it.
+func TestKeyPulledDuringMutationPINGoesBackToWaiting(t *testing.T) {
+	old := keepAliveEvery
+	keepAliveEvery = 30 * time.Millisecond
+	defer func() { keepAliveEvery = old }()
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	cards := &fakeCards{card: first}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+
+	h.rec.reset()
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollRecovery, Label: "Paper"}); e != nil {
+		t.Fatal(e)
+	}
+	pin = h.rec.waitCeremony(t, StepPIN, true)
+	first.setRemoved(true)
+	cards.setReaders()
+	w := h.rec.waitCeremony(t, StepWaitingForKey, false)
+	if w.Error != CodeTokenNoCard {
+		t.Fatalf("waiting again without the note: %+v", w)
+	}
+	first.setRemoved(false)
+	cards.setReaders("Yubico A")
+	pin2 := h.rec.waitCeremony(t, StepPIN, true)
+	if pin2.PromptID == pin.PromptID || pin2.Error != "" {
+		t.Fatalf("second prompt: %+v", pin2)
+	}
+	h.c.SubmitSecret("pin", pin2.PromptID, "123456")
+	h.rec.waitCeremony(t, StepRecovery, false)
+	for _, e := range h.rec.snapshot() {
+		if e.name == EventVaultWarning {
+			t.Fatalf("a warning after the pull: %+v", e.payload)
+		}
+	}
+}
+
+// A password enrolment releases the key that unlocked before asking for
+// the password: the key is not needed any more, and pulling it meanwhile
+// is no event. (The vault's policy then refuses a standalone password
+// beside a hardware slot — the refusal, not the pull, is what ends it.)
+func TestEnrollPasswordReleasesTheKeyBeforeThePrompt(t *testing.T) {
+	old := keepAliveEvery
+	keepAliveEvery = 30 * time.Millisecond
+	defer func() { keepAliveEvery = old }()
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	cards := &fakeCards{card: first}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+
+	h.rec.reset()
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollPassword, Label: "Words"}); e != nil {
+		t.Fatal(e)
+	}
+	pin = h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	first.mu.Lock()
+	closed := first.closed
+	first.mu.Unlock()
+	if !closed {
+		t.Fatal("the unlocking key is held across the password prompt")
+	}
+	first.setRemoved(true)
+	cards.setReaders()
+	time.Sleep(3 * keepAliveEvery)
+	if e := h.c.SubmitSecret("password", pw.PromptID, "correct horse battery"); e != nil {
+		t.Fatalf("the prompt did not stand: %v", e)
+	}
+	if f := h.rec.waitCeremony(t, StepFailed, false); f.Error != CodeSlotPolicy {
+		t.Fatalf("ended by something other than the policy: %+v", f)
+	}
+}

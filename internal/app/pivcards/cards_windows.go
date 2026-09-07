@@ -125,7 +125,8 @@ func (p *prompter) Touch(req piv.TouchRequest) {
 }
 
 // wrap translates piv's errors into the core's sentinels, keeping the
-// original as context.
+// original — and whatever it wraps, such as the core's own error that a
+// prompter answered with — in the chain.
 func wrap(err error) error {
 	if err == nil {
 		return nil
@@ -140,7 +141,7 @@ func wrap(err error) error {
 	}
 	for _, m := range table {
 		if errors.Is(err, m.from) {
-			return fmt.Errorf("%w: %v", m.to, err)
+			return fmt.Errorf("%w: %w", m.to, err)
 		}
 	}
 	return err

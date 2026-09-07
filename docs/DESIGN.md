@@ -786,6 +786,13 @@ Correct in this document, and easy to lose during implementation.
     checked) and repeating the request once, since the request it swallowed never reached the
     card; a PIN already collected is used again without a prompt. A close during a prompt no
     longer waits for the user: the operation finds the Card closed when the prompt returns.
+    The reconnect probes the reader first, as `Open` does (trap 24), and retries a busy card
+    briefly; when the card cannot be reopened the Card is *lost*: every later operation answers
+    `ErrNoCard`, and its Close disconnects and resets nothing — the reset cleared the card. The
+    operation resuming after its prompt *waits* for the operation lock (the caller's probe may
+    hold it that instant) where every other entry refuses. A prompter's error keeps its identity
+    under `ErrCancelled` (`%w: %w`), and so does the adapter's wrap: the app's "key gone" is
+    recognisable at the far end of the round trip.
 
 ## 12. Deferred
 

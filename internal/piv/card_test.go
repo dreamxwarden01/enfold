@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	pivgo "github.com/go-piv/piv-go/v2/piv"
 )
@@ -769,5 +770,210 @@ func TestTokenReconnectsAfterReset(t *testing.T) {
 	fx.dev.serial = 99
 	if _, err := c.PINState(); !errors.Is(err, ErrNoCard) {
 		t.Fatalf("another card after the reset: %v", err)
+	}
+}
+
+// The app ends a prompt with the key's own error when its probe finds the
+// key gone, and only that identity — surviving the trip through this
+// package — sends its flow back to waiting rather than to a cancel.
+func TestPrompterErrorKeepsItsIdentity(t *testing.T) {
+	fx := newFixture(t)
+	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	c := open(t)
+	defer c.Close()
+	gone := errors.New("the key went away")
+	tok, _ := c.Token(pubBytes(k), &testPrompter{cancel: gone})
+	eph, _ := ecdh.P256().GenerateKey(rand.Reader)
+	_, err := tok.ECDH(eph.PublicKey().Bytes())
+	if !errors.Is(err, ErrCancelled) || !errors.Is(err, gone) {
+		t.Fatalf("the prompter's error was lost: %v", err)
+	}
+	// A plain cancel is not wrapped in itself.
+	tok2, _ := c.Token(pubBytes(k), &testPrompter{cancel: ErrCancelled})
+	if _, err := tok2.ECDH(eph.PublicKey().Bytes()); err != ErrCancelled {
+		t.Fatalf("a cancel: %v", err)
+	}
+	if fx.dev.verifies != 0 {
+		t.Fatalf("verifies=%d", fx.dev.verifies)
+	}
+}
+
+// The operation resuming after its prompt waits for a probe on the card
+// rather than refusing: the caller's keep-alive may be on it that instant.
+func TestResumeAfterPromptWaitsForAProbe(t *testing.T) {
+	fx := newFixture(t)
+	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	c := open(t)
+	defer c.Close()
+	inPrompt, release := make(chan struct{}), make(chan struct{})
+	tok, _ := c.Token(pubBytes(k), &blockingPrompter{inPrompt: inPrompt, release: release})
+	eph, _ := ecdh.P256().GenerateKey(rand.Reader)
+	done := make(chan error, 1)
+	go func() {
+		_, err := tok.ECDH(eph.PublicKey().Bytes())
+		done <- err
+	}()
+	<-inPrompt
+	c.op.Lock() // a probe in flight
+	close(release)
+	time.Sleep(30 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("resumed under the probe: %v", err)
+	default:
+	}
+	c.op.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("after the probe: %v", err)
+	}
+}
+
+// A reconnect probes the reader first, as Open does (DESIGN.md §11 trap
+// 24), and a probe that fails is the reconnect failing.
+func TestReconnectProbesFirst(t *testing.T) {
+	fx := newFixture(t)
+	c := open(t)
+	defer c.Close()
+	fx.dev.resetNext = true
+	if _, err := c.PINState(); err != nil {
+		t.Fatal(err)
+	}
+	if fx.preflights != 2 || fx.dev.reopens != 1 {
+		t.Fatalf("preflights=%d reopens=%d", fx.preflights, fx.dev.reopens)
+	}
+	fx.dev.resetNext = true
+	fx.preflightErr = fmt.Errorf("%w: pulled", ErrNoCard)
+	if _, err := c.PINState(); !errors.Is(err, ErrNoCard) {
+		t.Fatalf("probe failed on the reconnect: %v", err)
+	}
+	if fx.dev.reopens != 1 {
+		t.Fatalf("piv-go was handed a reader that failed the probe: reopens=%d", fx.dev.reopens)
+	}
+}
+
+// A reconnect that fails leaves a Card that says so on every call — the
+// card is gone as far as it is concerned — rather than one that
+// transmits on the handle the reset closed; its Close disconnects
+// nothing twice and resets nothing.
+func TestFailedReconnectLosesTheCard(t *testing.T) {
+	old := reopenRetries
+	reopenRetries = 1
+	defer func() { reopenRetries = old }()
+	fx := newFixture(t)
+	fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	c := open(t)
+	fx.dev.resetNext = true
+	fx.openErr = fmt.Errorf("%w: sharing violation", ErrBusy)
+	if _, err := c.PINState(); !errors.Is(err, ErrNoCard) {
+		t.Fatalf("reset with no reopen: %v", err)
+	}
+	if fx.preflights != 3 {
+		t.Fatalf("a busy reopen is retried once more: preflights=%d", fx.preflights)
+	}
+	fx.openErr = nil
+	if _, err := c.Inspect(SlotKeyManagement); !errors.Is(err, ErrNoCard) {
+		t.Fatalf("a lost card answered: %v", err)
+	}
+	if fx.dev.closed != 1 {
+		t.Fatalf("closes=%d", fx.dev.closed)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("close of a lost card: %v", err)
+	}
+	if fx.dev.closed != 1 || fx.resets != 0 {
+		t.Fatalf("close disconnected a closed handle, or reset: closes=%d resets=%d", fx.dev.closed, fx.resets)
+	}
+}
+
+// Every read heals a reset: Inspect, Keys, Attest, the management key.
+func TestEveryReadReconnects(t *testing.T) {
+	fx := newFixture(t)
+	fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	fx.dev.protected = bytes.Repeat([]byte{9}, 24)
+	c := open(t)
+	defer c.Close()
+	fx.dev.resetNext = true
+	if _, err := c.Inspect(SlotKeyManagement); err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	fx.dev.resetNext = true
+	if keys, err := c.Keys(); err != nil || len(keys) != 1 {
+		t.Fatalf("keys: %v %v", keys, err)
+	}
+	fx.dev.resetNext = true
+	if _, err := c.Attest(SlotKeyManagement); !errors.Is(err, ErrAttestation) {
+		t.Fatalf("attest: %v", err) // the fake's chain never verifies; the read itself healed
+	}
+	fx.dev.resetNext = true
+	if mk, err := c.ProtectedManagementKey("123456"); err != nil || len(mk) != 24 {
+		t.Fatalf("management key: %v", err)
+	}
+	if fx.dev.reopens != 4 {
+		t.Fatalf("reopens=%d", fx.dev.reopens)
+	}
+}
+
+// Generate across a reset: one met by the opening inspect is healed; a
+// GENERATE the reset swallowed is sent again, and with Overwrite the key
+// that was there is not mistaken for the new one; a GENERATE that ran
+// before the reset is read back, not repeated.
+func TestGenerateAcrossReset(t *testing.T) {
+	fx := newFixture(t)
+	old := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	c := open(t)
+	defer c.Close()
+	o := GenerateOptions{Slot: SlotKeyManagement, Overwrite: true}
+	fx.dev.resetNext = true // lands on the opening inspect
+	info, err := c.Generate(fx.dev.mgmtKey, o)
+	if err != nil || bytes.Equal(info.PublicKey, pubBytes(old)) {
+		t.Fatalf("reset on the inspect: %v %v", info, err)
+	}
+	if fx.dev.generates != 1 || fx.dev.reopens != 1 {
+		t.Fatalf("generates=%d reopens=%d", fx.dev.generates, fx.dev.reopens)
+	}
+	prev := info.PublicKey
+	fx.dev.resetBeforeGenerate = true // swallowed before the card ran it
+	info, err = c.Generate(fx.dev.mgmtKey, o)
+	if err != nil {
+		t.Fatalf("reset on the generate: %v", err)
+	}
+	if bytes.Equal(info.PublicKey, prev) {
+		t.Fatal("the key that was there came back as the new one")
+	}
+	if fx.dev.generates != 2 || fx.dev.reopens != 2 {
+		t.Fatalf("generates=%d reopens=%d", fx.dev.generates, fx.dev.reopens)
+	}
+	prev = info.PublicKey
+	fx.dev.resetAfterGenerate = true // the card generated; the answer was lost
+	info, err = c.Generate(fx.dev.mgmtKey, o)
+	if err != nil || bytes.Equal(info.PublicKey, prev) {
+		t.Fatalf("reset after the generate: %v %v", info, err)
+	}
+	if fx.dev.generates != 3 || fx.dev.reopens != 3 {
+		t.Fatalf("generated again instead of reading back: generates=%d reopens=%d", fx.dev.generates, fx.dev.reopens)
+	}
+	if got, _ := c.Inspect(SlotKeyManagement); !bytes.Equal(got.PublicKey, info.PublicKey) {
+		t.Fatal("the read-back key is not the slot's")
+	}
+}
+
+// A reset met by the probe that tells a missed touch from an unsatisfied
+// PIN is healed, not reported as the missed touch.
+func TestResetDuringTouchDisambiguationIsHealed(t *testing.T) {
+	fx := newFixture(t)
+	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	fx.dev.touch = false
+	fx.dev.resetAfterTouchFail = true
+	c := open(t)
+	defer c.Close()
+	p := &testPrompter{pins: []string{"123456"}}
+	tok, _ := c.Token(pubBytes(k), p)
+	eph, _ := ecdh.P256().GenerateKey(rand.Reader)
+	_, err := tok.ECDH(eph.PublicKey().Bytes())
+	if !errors.Is(err, ErrTouch) {
+		t.Fatalf("no touch, after the reset was healed: %v", err)
+	}
+	if fx.dev.reopens != 1 || len(p.statuses) != 1 || fx.dev.verifies != 2 {
+		t.Fatalf("reopens=%d prompts=%d verifies=%d", fx.dev.reopens, len(p.statuses), fx.dev.verifies)
 	}
 }

@@ -242,8 +242,14 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   probes the card every 3 s; the probe keeps the connection alive, heals a reset it meets
   (`piv` reconnects and repeats), and notices a key pulled during the prompt: the prompt ends,
   the strip goes back to *WaitingForKey* with `token.no_card` as a note ("insert it again"), and
-  the flow — unlock, import's proof, enrolment — waits for the key again instead of failing. An
-  open that finds the card in use is retried for two seconds before the ceremony parks in Busy.
+  the flow — unlock, import's proof, enrolment, and the unlock half of every slot change — waits
+  for the key again instead of failing. The prober is joined before a prompt returns, so no
+  probe is on the card when the operation resumes; a key gone while its reader is still listed
+  (a removal in progress, a card that answers nothing) is tried again after a pause that doubles
+  from the poll interval to two seconds, never in a spin; and a reset the probe could not heal
+  (`token.reset`) is the key gone. A password enrolment releases the key that unlocked before
+  asking for the password: it is not needed any more. An open that finds the card in use is
+  retried for two seconds before the ceremony parks in Busy.
 - Prompts (PIN, password, recovery digits, management key) are **mailboxes with an identity**:
   each `Prompter.PIN`/password call mints a `PromptID`, carried on `vault.ceremony`; a
   submission names the id, is accepted once under a mutex (a duplicate gets

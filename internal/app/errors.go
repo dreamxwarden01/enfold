@@ -157,6 +157,7 @@ var classifyTable = []struct {
 	{ErrTokenNoService, CodeTokenNoService},
 	{ErrTokenNoReader, CodeTokenNoReader},
 	{ErrTokenNoCard, CodeTokenNoCard},
+	{ErrTokenReset, CodeTokenNoCard}, // a reset the flow could not heal: the key is as good as gone
 	{ErrTokenBusy, CodeTokenBusy},
 	{ErrTokenNoPIV, CodeTokenNoPIV},
 	{ErrTokenUnsupported, CodeTokenUnsupport},

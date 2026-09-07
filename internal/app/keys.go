@@ -134,20 +134,29 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 		return unl, nil, nil
 	}
 	if hasToken && c.deps.Cards != nil {
-		h, card, slot, err := cer.tokenCredentialFor(slots)
-		if err != nil {
-			return nil, nil, err
-		}
-		c.mu.Lock()
-		cer.unlockPub, cer.unlockLabel = slot.PublicKey, slot.Label
-		c.mu.Unlock()
-		cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-		unl, err := cer.unlockWith(ks, nil, &h)
-		if err != nil {
+		for {
+			h, card, slot, err := cer.tokenCredential(slots)
+			if err != nil {
+				return nil, nil, err
+			}
+			c.mu.Lock()
+			cer.unlockPub, cer.unlockLabel = slot.PublicKey, slot.Label
+			c.mu.Unlock()
+			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+			unl, err := cer.unlockWith(ks, nil, &h)
+			if err == nil {
+				return unl, card, nil
+			}
+			if keyGone(err) {
+				// Pulled during the PIN or the touch: back to waiting.
+				cer.unhold(card)
+				card.Close()
+				cer.awayNote(err)
+				continue
+			}
 			cer.closeCard(card) // released before any park
 			return nil, nil, err
 		}
-		return unl, card, nil
 	}
 	pw, err := cer.ask("password", StepPassword, PINStatus{})
 	if err != nil {
@@ -190,6 +199,9 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 		var spec keystore.SlotSpec
 		switch o.Kind {
 		case EnrollPassword:
+			// The key that unlocked is not needed any more: released before
+			// the prompt, so that a key pulled meanwhile is no event.
+			cer.releaseCard()
 			pw, err := cer.askNew("password", StepPassword)
 			if err != nil {
 				return err
@@ -284,14 +296,17 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 		}
 		cer.set(func(s *CeremonyState) { s.Step, s.RemoveLabel = StepSwapKey, "" })
 	}
+	delay := readerPoll
 	for {
 		pub, err := cer.enrollOnce()
-		if err != nil && keyGone(err) {
-			// Pulled during the PIN or the management key: waited for again.
-			cer.awayNote(err)
-			continue
+		if err == nil || !keyGone(err) {
+			return pub, err
 		}
-		return pub, err
+		// Pulled during the PIN or the management key: waited for again.
+		if err := cer.awayAndWait(err, delay); err != nil {
+			return nil, err
+		}
+		delay = min(delay*2, awayRetryMax)
 	}
 }
 
@@ -306,7 +321,21 @@ func (cer *ceremony) enrollOnce() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer cer.closeCard(card)
+	pub, err := cer.enrollOn(card)
+	if keyGone(err) {
+		// The key is not there to reset: a close that reported it would
+		// warn of a verified state the pull took with it.
+		cer.unhold(card)
+		card.Close()
+		return nil, err
+	}
+	cer.closeCard(card)
+	return pub, err
+}
+
+// enrollOn is enrollOnce's work on the open card: reuse a usable key in
+// 9d, else generate one in the first empty slot.
+func (cer *ceremony) enrollOn(card Card) ([]byte, error) {
 	keys, err := card.Keys()
 	if err != nil {
 		cer.c.log("ceremony %s: reading the keys: %v", cer.kind, err)

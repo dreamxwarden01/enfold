@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	pivgo "github.com/go-piv/piv-go/v2/piv"
 
@@ -53,7 +55,11 @@ func (s PINStatus) Blocked() bool { return s.RetriesKnown && s.Retries == 0 }
 // the Card (DESIGN.md §11 trap 14).
 //
 // One operation at a time: a second concurrent operation is refused with
-// ErrInUse rather than queued. Close waits for an operation in flight.
+// ErrInUse rather than queued. A ceremony waiting on its prompter holds
+// nothing, so that probes pass meanwhile (a second ceremony still does
+// not); Close waits for an operation that holds the lock, and a Close
+// during a prompt wins: the operation finds the Card closed when the
+// prompt returns.
 type Card struct {
 	reader  string
 	dev     device
@@ -68,6 +74,7 @@ type Card struct {
 	verifiedHere bool        // this Card sent the VERIFY that verified the card
 	resetFailed  bool
 	prompting    bool // a Token is waiting on its prompter: no second ceremony meanwhile
+	broken       bool // a reconnect after a reset failed: no connection, dev is nil
 }
 
 // beginPrompt marks a ceremony waiting on the user, so that another
@@ -164,12 +171,30 @@ func (c *Card) acquire() (func(), error) {
 	if !c.op.TryLock() {
 		return nil, ErrInUse
 	}
+	return c.acquired()
+}
+
+// acquireWait takes the operation lock, waiting for whoever holds it. For
+// the one place that may wait: an operation resuming after its prompt,
+// whose only possible contender is the caller's keep-alive probe.
+func (c *Card) acquireWait() (func(), error) {
+	c.op.Lock()
+	return c.acquired()
+}
+
+// acquired checks a Card whose operation lock was just taken: closed, or
+// left without a connection by a reconnect that failed.
+func (c *Card) acquired() (func(), error) {
 	c.st.Lock()
-	closed := c.closed
+	closed, broken := c.closed, c.broken
 	c.st.Unlock()
-	if closed {
+	switch {
+	case closed:
 		c.op.Unlock()
 		return nil, ErrClosed
+	case broken:
+		c.op.Unlock()
+		return nil, fmt.Errorf("%w: the connection was lost after a reset", ErrNoCard)
 	}
 	return c.op.Unlock, nil
 }
@@ -200,32 +225,70 @@ func (c *Card) isClosed() bool {
 	return c.closed
 }
 
+// reopenRetries is how often a reopen that finds the card busy is tried
+// again, a moment apart: Windows' own services take a card for a moment
+// after a reset, and the operation waiting to resume has a PIN in hand.
+var reopenRetries, reopenRetryEvery = 4, 250 * time.Millisecond
+
 // reconnectLocked replaces the device connection after the host reset the
 // card under it (ErrCardReset): the same reader, the same card — the
 // serial is checked — over a fresh exclusive connection. Whatever the card
 // held of ours went with the reset, so the verified state this Card
 // trusted is forgotten; the dirty marks stay, since a reset on Close is
-// harmless. Caller holds the operation lock.
+// harmless. When the card cannot be reopened the connection is gone for
+// good: every operation answers ErrNoCard from then on, and Close has
+// nothing to disconnect or reset — the reset that cost the connection
+// cleared the card. Caller holds the operation lock.
 func (c *Card) reconnectLocked() error {
 	c.dev.Close()
-	dev, err := openDevice(c.reader)
+	c.dev = nil
+	dev, err := c.reopen()
 	if err != nil {
-		return mapErr(err)
-	}
-	serial, err := dev.Serial()
-	if err != nil {
-		dev.Close()
-		return mapErr(err)
-	}
-	if serial != c.serial {
-		dev.Close()
-		return fmt.Errorf("%w: another card answered (serial %d)", ErrNoCard, serial)
+		c.st.Lock()
+		c.broken = true
+		c.st.Unlock()
+		return fmt.Errorf("%w: reopening after a reset: %v", ErrNoCard, err)
 	}
 	c.dev = dev
 	c.st.Lock()
 	c.verifiedHere = false
 	c.st.Unlock()
 	return nil
+}
+
+// reopen is Open again on the same reader, a busy card retried briefly.
+func (c *Card) reopen() (device, error) {
+	for attempt := 0; ; attempt++ {
+		dev, err := c.reopenOnce()
+		if errors.Is(err, ErrBusy) && attempt < reopenRetries {
+			time.Sleep(reopenRetryEvery)
+			continue
+		}
+		return dev, err
+	}
+}
+
+// reopenOnce probes the reader first, as Open does — piv-go's Open leaks an
+// exclusive connection on the failures the probe catches (DESIGN.md §11
+// trap 24) — and checks that the same card answers.
+func (c *Card) reopenOnce() (device, error) {
+	if _, err := preflight(c.reader); err != nil {
+		return nil, err
+	}
+	dev, err := openDevice(c.reader)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	serial, err := dev.Serial()
+	if err != nil {
+		dev.Close()
+		return nil, mapErr(err)
+	}
+	if serial != c.serial {
+		dev.Close()
+		return nil, fmt.Errorf("%w: another card answered (serial %d)", ErrNoCard, serial)
+	}
+	return dev, nil
 }
 
 // retryReset runs fn and, when the card was reset under the connection,
@@ -247,9 +310,12 @@ func (c *Card) retryReset(fn func() error) error {
 // state was used, or the management key authenticated, the card is reset
 // afterwards through the package's own connection; ErrResetFailed when it
 // could not be and the card may still hold that state. Idempotent; a
-// second call does nothing. Waits for an operation in flight — one blocked
-// in a PIN prompt included — and decides on the reset only after it, so a
-// PIN verified while Close was waiting is reset away too.
+// second call does nothing. Waits for an operation that holds the lock and
+// decides on the reset only after it, so a PIN verified while Close was
+// waiting is reset away too. A prompt holds nothing: a Close during one
+// wins, the operation finds the Card closed when the prompt returns, and
+// what it had not yet verified is not reset. A Card whose connection was
+// lost after a reset has nothing to release.
 func (c *Card) Close() error {
 	c.st.Lock()
 	if c.closed {
@@ -260,6 +326,9 @@ func (c *Card) Close() error {
 	c.st.Unlock()
 	c.op.Lock() // the operation in flight, if any
 	defer c.op.Unlock()
+	if c.dev == nil {
+		return nil // lost after a reset: the reset cleared the card, and no handle is open
+	}
 	// Only now is dirty final: the operation that just finished may have
 	// verified a PIN after Close was called.
 	c.st.Lock()
@@ -568,7 +637,12 @@ func (c *Card) Generate(mgmtKey []byte, o GenerateOptions) (KeyInfo, error) {
 		return KeyInfo{}, err
 	}
 	defer release()
-	existing, err := c.inspect(o.Slot)
+	var existing KeyInfo
+	err = c.retryReset(func() error {
+		var e error
+		existing, e = c.inspect(o.Slot)
+		return e
+	})
 	switch {
 	case err == nil && !o.Overwrite:
 		return KeyInfo{}, &OccupiedError{Key: existing}
@@ -605,7 +679,10 @@ func (c *Card) Generate(mgmtKey []byte, o GenerateOptions) (KeyInfo, error) {
 		if rerr := c.reconnectLocked(); rerr != nil {
 			return KeyInfo{}, rerr
 		}
-		if info, ierr := c.inspect(o.Slot); ierr == nil && info.Usable() {
+		// The slot's key is this call's own only when it is not the one
+		// that was there: with Overwrite that one reads as usable too, and
+		// a GENERATE the reset swallowed left it in place.
+		if info, ierr := c.inspect(o.Slot); ierr == nil && info.Usable() && !bytes.Equal(info.PublicKey, existing.PublicKey) {
 			return info, nil
 		}
 		if err := generate(); err != nil {
@@ -649,16 +726,20 @@ func (c *Card) Attest(slot Slot) (*Attestation, error) {
 		return nil, err
 	}
 	defer release()
-	slotCert, err := c.dev.Attest(ps)
-	if err != nil {
-		if errors.Is(err, pivgo.ErrNotFound) {
-			return nil, ErrEmpty
+	var slotCert, attCert *x509.Certificate
+	err = c.retryReset(func() error {
+		var e error
+		if slotCert, e = c.dev.Attest(ps); e != nil {
+			if errors.Is(e, pivgo.ErrNotFound) {
+				return ErrEmpty
+			}
+			return mapErr(e)
 		}
-		return nil, mapErr(err)
-	}
-	attCert, err := c.dev.AttestationCertificate()
+		attCert, e = c.dev.AttestationCertificate()
+		return mapErr(e)
+	})
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, err
 	}
 	a, err := pivgo.Verify(attCert, slotCert)
 	if err != nil {

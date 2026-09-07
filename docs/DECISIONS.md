@@ -2504,6 +2504,23 @@ strip back to *waiting for the key* with a note, never to a failure. A second ce
 card whose prompt stands is still refused; a probe is not. `pivtool idle`, `busy`, and `-slow`
 on `selftest` stay in the tree as the way to measure this again on other firmware.
 
+**Verified, and what the review found.** The headline behaviour did not work on the real path:
+`piv` flattened the prompter's error under `ErrCancelled` with `%v`, and the adapter flattened
+it again, so a key pulled during the PIN ended the ceremony as *cancelled* — the fake token
+returned the prompter's error verbatim and the test passed. Both now wrap with `%w: %w`, the
+fake wraps like the real one, and the adapter has a test for the chain. Around it: a reconnect
+that failed left the Card on a closed handle (now *lost*: `ErrNoCard` from then on, nothing
+to disconnect or reset), skipped the trap-24 probe (now probed, a busy card retried), and could
+hand back the key `Overwrite` was meant to replace when the reset swallowed the GENERATE (now
+compared with what was there); the operation resuming after its prompt could meet the probe
+and fail as *busy* (the prober is joined first, and the resume waits for the lock); the
+"waited for again" loops spun when a reader stayed listed without its card (a doubling pause);
+the slot-change ceremonies' unlock half had no such loop (it does); a reset that leaked
+classified as *internal* (now the key gone); a password enrolment held the unlocking key across
+its prompt (released first); the enrolment's recover path could warn about a verified state a
+pulled key took with it (a raw close); the away note stayed over *Probing* (cleared when the key
+is back).
+
 **Proved on the test key.** `pivtool idle -seconds 8 -verify-after` and `-seconds 12`: the PIN
 verifies after the idle (it failed before the change). `pivtool selftest -default-pin -slow 8
 -rounds 2`, run by the user with the touches: the PIN answered after eight idle seconds,

@@ -181,6 +181,13 @@ func (r *recorder) waitOp(t *testing.T, id string) OpView {
 	return p.(OpView)
 }
 
+// snapshot is every event recorded so far.
+func (r *recorder) snapshot() []event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]event(nil), r.events...)
+}
+
 // reset moves the cursor past everything recorded so far.
 func (r *recorder) reset() {
 	r.mu.Lock()
@@ -196,7 +203,21 @@ type fakeCards struct {
 	openErr    error
 	busyOpens  int // the next this many opens answer ErrTokenBusy
 	card       *fakeCard
-	opens      int
+	opens      int // opens that succeeded
+	attempts   int // every open
+}
+
+// setOpenErr makes every open fail with err (nil: succeed again).
+func (f *fakeCards) setOpenErr(err error) {
+	f.mu.Lock()
+	f.openErr = err
+	f.mu.Unlock()
+}
+
+func (f *fakeCards) openAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
 }
 
 func (f *fakeCards) setReaders(names ...string) {
@@ -237,6 +258,7 @@ func (f *fakeCards) Readers() ([]string, error) {
 func (f *fakeCards) Open(reader string) (Card, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.attempts++
 	if f.busyOpens > 0 {
 		f.busyOpens--
 		return nil, ErrTokenBusy
@@ -435,7 +457,8 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 	}
 	pin, err := t.p.PIN(st)
 	if err != nil {
-		return nil, err
+		// As the real Token does: the prompter's error, under a cancel.
+		return nil, fmt.Errorf("%w: %w", ErrTokenCancelled, err)
 	}
 	t.card.mu.Lock()
 	if pin != t.card.pin {

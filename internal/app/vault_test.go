@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -802,5 +803,43 @@ func TestKeyPulledDuringPINGoesBackToWaiting(t *testing.T) {
 	h.rec.waitState(t, StateUnlocked)
 	if n := cards.openCount(); n != 2 {
 		t.Fatalf("opens: %d", n)
+	}
+}
+
+// A reader listed without its key — the moment of a removal, or a card
+// that answers nothing — is not opened in a spin: the attempts pause, and
+// the flow goes on when the key answers.
+func TestKeyGoneWithReaderListedBacksOff(t *testing.T) {
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	cards := &fakeCards{card: first, openErr: ErrTokenNoCard}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitFor(t, EventVaultCeremony, func(p any) bool {
+		s, ok := p.(CeremonyState)
+		return ok && s.Step == StepWaitingForKey && s.Error == CodeTokenNoCard
+	})
+	time.Sleep(1200 * time.Millisecond)
+	if n := cards.openAttempts(); n > 4 {
+		t.Fatalf("%d opens in 1.2 s: a spin", n)
+	}
+	cards.setOpenErr(nil)
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	if pin.Error != "" {
+		t.Fatalf("the note stands after the key answered: %+v", pin)
+	}
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+}
+
+// A reset the flow could not heal reads as the key gone, never as an
+// internal error.
+func TestResetClassifiesAsKeyGone(t *testing.T) {
+	if e := classify(fmt.Errorf("probe: %w", ErrTokenReset)); e.Code != CodeTokenNoCard {
+		t.Fatalf("%+v", e)
 	}
 }

@@ -49,15 +49,28 @@ type fakeDevice struct {
 	failGenerate error // injected in place of the management-key authentication
 	resetNext    bool  // the host reset the card: the next request answers so, once, and the verified state is gone
 	reopens      int   // openDevice calls after the first
+	dead         bool  // the handle was closed: a request on it is a bug the fake reports
+	// resetBeforeGenerate: the reset lands on the GENERATE, before the card
+	// runs it; resetAfterGenerate: the card generated, then the answer was
+	// lost to the reset. resetAfterTouchFail: the reset follows a 6982.
+	resetBeforeGenerate, resetAfterGenerate, resetAfterTouchFail bool
 }
 
-// resetIfDue is what a request meets after the host reset the card.
+// resetIfDue is what a request meets after the host reset the card, or
+// on a handle the package closed and kept using.
 func (f *fakeDevice) resetIfDue() error {
+	if f.dead {
+		return fmt.Errorf("transmitting request: the handle is invalid (used after Close)")
+	}
 	if !f.resetNext {
 		return nil
 	}
 	f.resetNext = false
 	f.reset()
+	return resetText()
+}
+
+func resetText() error {
 	return fmt.Errorf("transmitting request: the smart card has been reset, so any shared state information is invalid")
 }
 
@@ -106,8 +119,14 @@ func status(sw string) error {
 	return fmt.Errorf("command failed: smart card error %s: security status not satisfied", sw)
 }
 
-func (f *fakeDevice) Version() pivgo.Version  { return f.version }
-func (f *fakeDevice) Serial() (uint32, error) { return f.serial, nil }
+func (f *fakeDevice) Version() pivgo.Version { return f.version }
+
+func (f *fakeDevice) Serial() (uint32, error) {
+	if err := f.resetIfDue(); err != nil {
+		return 0, err
+	}
+	return f.serial, nil
+}
 
 func (f *fakeDevice) Retries() (int, error) {
 	if err := f.resetIfDue(); err != nil {
@@ -138,6 +157,9 @@ func (f *fakeDevice) VerifyPIN(pin string) error {
 
 func (f *fakeDevice) KeyInfo(slot pivgo.Slot) (pivgo.KeyInfo, error) {
 	f.slotsNamed = append(f.slotsNamed, slot.Key)
+	if err := f.resetIfDue(); err != nil {
+		return pivgo.KeyInfo{}, err
+	}
 	if f.failKeyInfo != nil {
 		return pivgo.KeyInfo{}, f.failKeyInfo
 	}
@@ -150,6 +172,9 @@ func (f *fakeDevice) KeyInfo(slot pivgo.Slot) (pivgo.KeyInfo, error) {
 
 func (f *fakeDevice) Certificate(slot pivgo.Slot) (*x509.Certificate, error) {
 	f.slotsNamed = append(f.slotsNamed, slot.Key)
+	if err := f.resetIfDue(); err != nil {
+		return nil, err
+	}
 	if f.failCert != nil {
 		return nil, f.failCert
 	}
@@ -173,16 +198,32 @@ func selfSigned() *x509.Certificate {
 
 func (f *fakeDevice) Attest(slot pivgo.Slot) (*x509.Certificate, error) {
 	f.slotsNamed = append(f.slotsNamed, slot.Key)
+	if err := f.resetIfDue(); err != nil {
+		return nil, err
+	}
 	if s := f.slots[slot.Key]; s == nil || s.key == nil {
 		return nil, pivgo.ErrNotFound
 	}
 	return selfSigned(), nil
 }
 
-func (f *fakeDevice) AttestationCertificate() (*x509.Certificate, error) { return selfSigned(), nil }
+func (f *fakeDevice) AttestationCertificate() (*x509.Certificate, error) {
+	if err := f.resetIfDue(); err != nil {
+		return nil, err
+	}
+	return selfSigned(), nil
+}
 
 func (f *fakeDevice) GenerateKey(key []byte, slot pivgo.Slot, opts pivgo.Key) (crypto.PublicKey, error) {
 	f.slotsNamed = append(f.slotsNamed, slot.Key)
+	if err := f.resetIfDue(); err != nil {
+		return nil, err
+	}
+	if f.resetBeforeGenerate {
+		f.resetBeforeGenerate = false
+		f.reset()
+		return nil, resetText() // swallowed: nothing generated
+	}
 	f.generates++
 	if f.failGenerate != nil {
 		return nil, fmt.Errorf("authenticating with management key: %w", f.failGenerate)
@@ -194,6 +235,11 @@ func (f *fakeDevice) GenerateKey(key []byte, slot pivgo.Slot, opts pivgo.Key) (c
 		return nil, fmt.Errorf("unsupported algorithm")
 	}
 	k := f.addKey(slot.Key, opts.PINPolicy, opts.TouchPolicy)
+	if f.resetAfterGenerate {
+		f.resetAfterGenerate = false
+		f.reset()
+		return nil, resetText() // generated, and the answer lost
+	}
 	return &k.PublicKey, nil
 }
 
@@ -205,6 +251,9 @@ type fakePriv struct {
 
 func (f *fakeDevice) PrivateKey(slot pivgo.Slot, public crypto.PublicKey, auth pivgo.KeyAuth) (crypto.PrivateKey, error) {
 	f.slotsNamed = append(f.slotsNamed, slot.Key)
+	if err := f.resetIfDue(); err != nil {
+		return nil, err
+	}
 	f.lastAuth = auth
 	return &fakePriv{f: f, slot: slot, auth: auth}, nil
 }
@@ -214,6 +263,9 @@ func (f *fakeDevice) PrivateKey(slot pivgo.Slot, public crypto.PublicKey, auth p
 func (p *fakePriv) ECDH(peer *ecdh.PublicKey) ([]byte, error) {
 	f := p.f
 	f.ecdhCalls++
+	if err := f.resetIfDue(); err != nil {
+		return nil, err
+	}
 	if f.failECDH != nil {
 		return nil, f.failECDH
 	}
@@ -233,6 +285,9 @@ func (p *fakePriv) ECDH(peer *ecdh.PublicKey) ([]byte, error) {
 		f.verifiedOp = false
 	}
 	if s.touchPolicy != pivgo.TouchPolicyNever && !f.touch {
+		if f.resetAfterTouchFail {
+			f.resetAfterTouchFail, f.resetNext = false, true
+		}
 		return nil, status("6982")
 	}
 	priv, err := s.key.ECDH()
@@ -255,6 +310,7 @@ func (f *fakeDevice) Metadata(pin string) (*pivgo.Metadata, error) {
 
 func (f *fakeDevice) Close() error {
 	f.closed++
+	f.dead = true // until the fixture's openDevice hands the handle out again
 	return nil
 }
 
@@ -309,6 +365,9 @@ type fixture struct {
 	// opens with whatever state the card had.
 	noProbeReset bool
 	preflightErr error
+	// openErr scripts openDevice failing; preflights counts the probes.
+	openErr    error
+	preflights int
 }
 
 func newFixture(t interface{ Cleanup(func()) }) *fixture {
@@ -316,6 +375,7 @@ func newFixture(t interface{ Cleanup(func()) }) *fixture {
 	oldList, oldPre, oldOpen, oldReset := listReaders, preflight, openDevice, prepareReset
 	listReaders = func() ([]string, error) { return []string{"Yubico YubiKey OTP+FIDO+CCID 0"}, nil }
 	preflight = func(reader string) (Version, error) {
+		fx.preflights++
 		if fx.preflightErr != nil {
 			return Version{}, fx.preflightErr
 		}
@@ -327,10 +387,14 @@ func newFixture(t interface{ Cleanup(func()) }) *fixture {
 	}
 	opens := 0
 	openDevice = func(reader string) (device, error) {
+		if fx.openErr != nil {
+			return nil, fx.openErr
+		}
 		opens++
 		if opens > 1 {
 			fx.dev.reopens++
 		}
+		fx.dev.dead = false // a fresh handle to the same card
 		return fx.dev, nil
 	}
 	prepareReset = func(reader string) func() (bool, bool, error) {

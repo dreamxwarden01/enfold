@@ -142,11 +142,23 @@
         <option value="recovery">Another recovery key</option>
       </select>
     </div>
-    <div class="field"><div class="field-top"><label for="ak-label">Label</label></div><input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? "YubiKey 5 NFC — travel" : addKind === "recovery" ? "Printed, in the safe" : "Password"} /></div>
-    {#if addKind === "token"}<label class="check"><input type="checkbox" bind:checked={addEntangle} />Also require a password with this key</label>{/if}
+    {#if addKind === "password"}
+      <p>You choose the password once the current way in is checked.</p>
+    {:else}
+      <div class="field">
+        <div class="field-top"><label for="ak-label">{addKind === "token" ? "Name this key" : "Name this recovery key"}</label><span class="hint">Shown in the list of ways in.</span></div>
+        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? "YubiKey 5 NFC — travel" : "Printed, in the safe"} />
+      </div>
+    {/if}
+    {#if addKind === "token"}
+      <label class="check"><input type="checkbox" bind:checked={addEntangle} />Also require a password with this key</label>
+      {#if addEntangle}
+        <p>You choose that password before the key is set up. Unlocking with this key then needs both.</p>
+      {/if}
+    {/if}
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (adding = false)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!addLabel} onclick={() => { adding = false; void begin(Keys.BeginEnroll(addKind, addLabel, addEntangle)); addLabel = ""; }}>Add</button>
+      <button type="button" class="btn accent" disabled={!addLabel && addKind !== "password"} onclick={() => { adding = false; void begin(Keys.BeginEnroll(addKind, addKind === "password" ? "Password" : addLabel, addKind === "token" && addEntangle)); addLabel = ""; }}>Add</button>
     {/snippet}
   </Dialog>
 {/if}

@@ -5,6 +5,8 @@
   import { store } from "../lib/state.svelte";
   import { codeText, retriesText, stepText, warningCopy } from "../lib/strings";
   import { dateTime, leaf } from "../lib/format";
+  import { fade } from "svelte/transition";
+  import { motion } from "../lib/motion";
   import SecretInput from "./SecretInput.svelte";
   import Dialog from "./Dialog.svelte";
 
@@ -34,6 +36,13 @@
   });
 
   const tokenOnly = $derived(!c || c.kind !== "unlock" || (c.step !== CeremonyStep.StepPassword && c.step !== CeremonyStep.StepRecovery));
+
+  // Each card's body fades in when what it shows changes (APP.md §6): a
+  // dim card shows a line that depends on tokenOnly alone, so it is keyed
+  // on that, not on the step.
+  const k1 = $derived(live === 1 ? `1:${c?.step ?? ""}` : live === 0 ? "0" : "x");
+  const k2 = $derived(live === 2 ? `2:${c?.step ?? ""}` : `x:${tokenOnly}`);
+  const k3 = $derived(live === 3 ? `3:${c?.step ?? ""}` : `x:${tokenOnly}`);
 
   let create = $state(false);
   let createName = $state("Personal vault");
@@ -91,7 +100,9 @@
     create = false;
     store.dismissCeremony();
     try {
-      await Vault.CreateVault(createPath, createName, createKind, createLabel || (createKind === "token" ? "YubiKey" : "Password"), createEntangle);
+      // A password slot is named "Password", whatever was typed for a key
+      // before the kind was switched; entangling is a token's option only.
+      await Vault.CreateVault(createPath, createName, createKind, createKind === "token" ? createLabel || "YubiKey" : "Password", createKind === "token" && createEntangle);
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }
@@ -128,7 +139,8 @@
       <!-- 1: the key -->
       <article class="step" class:dim={live !== 1 && live !== 0}>
         <div class="step-label"><b>1</b>{tokenOnly ? "Waiting for the key" : "The way in"}</div>
-        <div class="step-body">
+        {#key k1}
+        <div class="step-body" in:fade={motion()}>
           {#if live === 1 && c}
             {#if c.step === CeremonyStep.StepFailed}
               <h2 class="u-lead">{stepText(c.step).title}</h2>
@@ -221,12 +233,14 @@
             {#if c?.slotLabel && c.step !== CeremonyStep.StepRecovery}<div class="u-meta">Matched {c.slotLabel}.</div>{/if}
           {/if}
         </div>
+        {/key}
       </article>
 
       <!-- 2: the secret -->
       <article class="step" class:dim={live !== 2}>
         <div class="step-label"><b>2</b>{c?.step === CeremonyStep.StepPassword ? "Password" : c?.step === CeremonyStep.StepRecovery ? "Recovery key" : c?.step === CeremonyStep.StepManagementKey ? "Management key" : "PIN"}</div>
-        <div class="step-body">
+        {#key k2}
+        <div class="step-body" in:fade={motion()}>
           {#if live === 2 && c && c.promptId}
             {#if c.step === CeremonyStep.StepPIN}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
@@ -234,7 +248,7 @@
               <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={stepText(c.step).body} button="Unlock" />
             {:else if c.step === CeremonyStep.StepPassword}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-              <SecretInput kind="password" promptId={c.promptId} label={c.kind === "create" ? "Choose a password" : "Password"} note={c.kind === "create" ? "This password opens the vault. Choose a long one." : ""} button={c.kind === "create" ? "Create" : "Unlock"} />
+              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} note={c.choose ? "Choose a long one." : ""} button={c.choose ? "Continue" : "Unlock"} />
             {:else if c.step === CeremonyStep.StepRecovery}
               <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note="The digits you wrote down, with or without spaces." button="Unlock" />
             {:else if c.step === CeremonyStep.StepManagementKey}
@@ -250,11 +264,14 @@
             <div class="u-meta q">{tokenOnly ? "The key's PIN, once it is matched." : "The secret this way in needs."}</div>
           {/if}
         </div>
+        {/key}
       </article>
 
       <!-- 3: the touch -->
       <article class="step" class:touch={live === 3 && c?.step === CeremonyStep.StepTouch} class:dim={live !== 3}>
         <div class="step-label"><b>3</b>{c?.step === CeremonyStep.StepTouch ? "Touch" : tokenOnly ? "Touch" : "Unlock"}</div>
+        {#key k3}
+        <div class="fill" in:fade={motion()}>
         {#if live === 3 && c}
           <div class="touch-body">
             {#if c.step === CeremonyStep.StepTouch}
@@ -271,6 +288,8 @@
         {:else}
           <div class="step-body"><div class="u-meta q">{tokenOnly ? "The key waits for a touch." : "The session keys are derived."}</div></div>
         {/if}
+        </div>
+        {/key}
       </article>
     </div>
 
@@ -305,12 +324,17 @@
         <option value="password">Password</option>
       </select>
     </div>
-    <div class="field">
-      <div class="field-top"><label for="cv-label">Label</label></div>
-      <input id="cv-label" class="input" bind:value={createLabel} placeholder={createKind === "token" ? "YubiKey 5C — desk" : "Password"} />
-    </div>
     {#if createKind === "token"}
+      <div class="field">
+        <div class="field-top"><label for="cv-label">Name this key</label><span class="hint">Shown in the list of ways in.</span></div>
+        <input id="cv-label" class="input" bind:value={createLabel} placeholder="YubiKey 5C — desk" />
+      </div>
       <label class="check"><input type="checkbox" bind:checked={createEntangle} />Also require a password with this key</label>
+      {#if createEntangle}
+        <p>You choose that password first, before the key is set up. Unlocking then needs both.</p>
+      {/if}
+    {:else}
+      <p>You choose the password in the next step.</p>
     {/if}
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (create = false)}>Cancel</button>
@@ -321,6 +345,7 @@
 
 <style>
   .u-strip.first { grid-template-columns: minmax(320px, 520px); justify-content: center; }
+  .fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .gap { margin-top: 10px; margin-bottom: 14px; }
   .u-links.tight { margin-top: 0; }
   .u-bar { margin-top: 12px; }

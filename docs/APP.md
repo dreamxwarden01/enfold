@@ -254,7 +254,12 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - `BeginUnlock()`, `CancelUnlock()`, `Lock()`, `Reopen()`, `Activity()`. Secret submissions
   arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`.
 - `CreateVault(path, displayName)` (recovery key shown once; then the first slot's ceremony from
-  the `Unlocked` that Create returned), `OpenVaultFile(path)`.
+  the `Unlocked` that Create returned), `OpenVaultFile(path)`. **A chosen secret comes before
+  the key**: for a token with an entangled password, create and enrol ask for the password
+  first, and only then wait for the key, inspect it and generate — a cancel at the password
+  leaves nothing on the token. Such prompts carry `Choose: true` on the ceremony state (the
+  page says "choose a password", never the same words as an existing one); a password typed to
+  prove a current way in never does.
 - Events: `vault.state` (the whole status), `vault.ceremony {Seq, Step, PromptID, SlotLabel,
   Retries, RetriesKnown, ReaderCount, N, Error}`, `vault.warning`, and from the shell
   `secret.refused {Code}`. A ceremony whose last step is the recovery key's reveal ends with that
@@ -295,8 +300,12 @@ sentinel of every package with a catch-all `internal` — and services are regis
 
 **Keys**
 - `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Entangled, Stale}`.
-- `BeginEnroll(kind, label, entangle bool)` runs the ceremony for the VMK, then for a YubiKey the
-  token flow: `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
+- `BeginEnroll(kind, label, entangle bool)` runs the ceremony for the VMK and releases the key
+  that unlocked, then — when `entangle` — asks for the new password (`Choose`), and only then
+  for a YubiKey the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
+  — the one card present is probed for that key's public key (no PIN, no touch), because the
+  swap may already have happened during the prompt and a swap in the same port shows the same
+  reader name throughout — then for the key to enrol; `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
   (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` → `AddSlot`.
   Sub-states mirror §2.2 plus `ManagementKey`. `AddRecoverySlot` shows the digits once.
 - `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`, `RewrapStale()`
@@ -398,6 +407,24 @@ drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, A
 Remove, Rotate now, Rewrap, backups with the R35 date, session and appearance settings). First
 run (create or open). Dialogs: new archive (path, name, compression), enrollment, recovery key
 display, remove slot, rotate, progress, extract destination and policy, collisions, errors.
+
+**The create and enrol dialogs name the key, never the secret.** A token gets "Name this key"
+(the label shown in the list of ways in); a password way in has no name field — its slot is
+"Password" — and the dialog says the password is chosen in the next step, because a typed
+secret never rides a bound-method argument (§1). Ticking "also require a password with this
+key" says the password is chosen first, before the key is set up.
+
+**Motion.** Every dialog, menu and popover enters over 140 ms (the box also scales from 97%)
+and leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
+steps, the lock screen's three cards — fades the new content in over 140 ms and the cards ease
+between live and dim; toasts fade. The script durations live in `lib/motion.ts` (`FAST` 140,
+`LEAVE` 100), the stylesheet's `--dur-fast` is the same 140 ms for the CSS-driven easing, and
+the two are kept equal by hand. `prefers-reduced-motion` zeroes both: the script reads the
+media query when a transition starts, the stylesheet's token collapses to 0. A closed dialog
+answers no key or click while it fades: Svelte marks the element inert the moment the outro is
+committed (synchronously, before any frame) and clears that if the dialog is reopened mid-fade,
+and the handlers check `inert`. Besides these, only the touch rings (gated on `no-preference`)
+and the 120 ms hover tint on controls animate.
 
 ## 7. Frontend
 

@@ -100,6 +100,11 @@ export interface CeremonyState {
     "kind": string;
     "step": CeremonyStep;
     "promptId"?: string;
+
+    /**
+     * the prompt asks for a new secret (create, enrol), not an existing one
+     */
+    "choose": boolean;
     "slotLabel"?: string;
     "retries": number;
     "retriesKnown": boolean;

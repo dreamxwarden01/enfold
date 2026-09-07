@@ -116,10 +116,13 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 		return nil, nil, coded(CodeNeedsUnlock)
 	}
 	if hasToken && c.deps.Cards != nil {
-		h, card, _, err := cer.tokenCredential()
+		h, card, slot, err := cer.tokenCredential()
 		if err != nil {
 			return nil, nil, err
 		}
+		c.mu.Lock()
+		cer.unlockPub, cer.unlockLabel = slot.PublicKey, slot.Label
+		c.mu.Unlock()
 		cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 		unl, err := cer.unlockWith(ks, nil, &h)
 		if err != nil {
@@ -169,7 +172,7 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 		var spec keystore.SlotSpec
 		switch o.Kind {
 		case EnrollPassword:
-			pw, err := cer.ask("password", StepPassword, PINStatus{})
+			pw, err := cer.askNew("password", StepPassword)
 			if err != nil {
 				return err
 			}
@@ -192,18 +195,24 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 			c.afterMutation()
 			return nil
 		case EnrollToken:
-			pub, err := cer.enrollToken()
-			if err != nil {
-				return err
-			}
-			hs := keystore.HardwareSlot{PublicKey: pub, Label: o.Label}
+			// The key that unlocked is released first — a verified card is
+			// not held across a prompt — then the entangled password is
+			// chosen before the key to enrol is touched: a cancel here
+			// leaves nothing generated on the token.
+			unlockPub := cer.releaseUnlocking()
+			hs := keystore.HardwareSlot{Label: o.Label}
 			if o.Entangle {
-				pw, err := cer.ask("password", StepPassword, PINStatus{})
+				pw, err := cer.askNew("password", StepPassword)
 				if err != nil {
 					return err
 				}
 				hs.Password, hs.Argon2 = pw, defaultArgon2
 			}
+			pub, err := cer.enrollToken(unlockPub)
+			if err != nil {
+				return err
+			}
+			hs.PublicKey = pub
 			spec = hs
 		}
 		if err := cer.check(); err != nil {
@@ -217,23 +226,45 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 	})
 }
 
-// enrollToken is the token half of an enrollment: release the key that
-// unlocked, wait for it to be removed and the key to enroll inserted,
-// then reuse a usable key in 9d or generate one in the first empty slot.
-func (cer *ceremony) enrollToken() ([]byte, error) {
-	// The card that unlocked is held exclusively; opening the reader again
-	// while it is would only report it busy. Release it, then wait for the
-	// reader set to empty and refill, so the same key is never re-opened
-	// and enrolled twice by accident.
+// releaseUnlocking releases the card that unlocked, when the ceremony
+// holds one, and returns the public key it unlocked with (nil when none):
+// the key enrollToken waits to see leave the reader. The card is held
+// exclusively — opening the reader again while it is would only report
+// it busy — and a verified card must not stay held into a prompt, where
+// the user may pull it and the close would then report a reset that
+// never happened.
+func (cer *ceremony) releaseUnlocking() []byte {
 	cer.c.mu.Lock()
-	hadCard := cer.card != nil
+	pub := cer.unlockPub
+	if cer.card == nil {
+		pub = nil
+	}
 	cer.c.mu.Unlock()
 	cer.releaseCard()
-	cer.set(func(s *CeremonyState) { s.Step, s.RemoveLabel, s.InsertLabel = StepSwapKey, "", "the key to enroll" })
-	if hadCard {
-		if err := cer.waitForNoReader(); err != nil {
+	return pub
+}
+
+// enrollToken is the token half of an enrollment, after releaseUnlocking:
+// wait for the key that unlocked (unlockPub, when one did) to be out of
+// the reader and the key to enroll inserted, then reuse a usable key in
+// 9d or generate one in the first empty slot. Waiting for the unlocking
+// key to leave is what keeps it from being re-opened and enrolled twice by
+// accident.
+func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
+	cer.c.mu.Lock()
+	remove := cer.unlockLabel
+	cer.c.mu.Unlock()
+	if unlockPub == nil {
+		remove = ""
+	}
+	cer.set(func(s *CeremonyState) {
+		s.Step, s.RemoveLabel, s.InsertLabel = StepSwapKey, remove, "the key to enroll"
+	})
+	if unlockPub != nil {
+		if err := cer.waitForOtherKey(unlockPub); err != nil {
 			return nil, err
 		}
+		cer.set(func(s *CeremonyState) { s.Step, s.RemoveLabel = StepSwapKey, "" })
 	}
 	reader, err := cer.waitForOneReader()
 	if err != nil {
@@ -426,24 +457,26 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions) *Error
 		var card Card
 		switch first.Kind {
 		case EnrollPassword:
-			pw, err := cer.ask("password", StepPassword, PINStatus{})
+			pw, err := cer.askNew("password", StepPassword)
 			if err != nil {
 				return err
 			}
 			specs = append(specs, keystore.PasswordSlot{Password: pw, Argon2: defaultArgon2, Label: mustString(first.Label, "Password")})
 		case EnrollToken:
-			pub, err := cer.enrollToken()
-			if err != nil {
-				return err
-			}
-			hs := keystore.HardwareSlot{PublicKey: pub, Label: mustString(first.Label, "YubiKey")}
+			// The entangled password first, then the key (as in BeginEnroll).
+			hs := keystore.HardwareSlot{Label: mustString(first.Label, "YubiKey")}
 			if first.Entangle {
-				pw, err := cer.ask("password", StepPassword, PINStatus{})
+				pw, err := cer.askNew("password", StepPassword)
 				if err != nil {
 					return err
 				}
 				hs.Password, hs.Argon2 = pw, defaultArgon2
 			}
+			pub, err := cer.enrollToken(nil) // nothing unlocked: no key to wait out
+			if err != nil {
+				return err
+			}
+			hs.PublicKey = pub
 			specs = append(specs, hs)
 		}
 		defer cer.closeCard(card)

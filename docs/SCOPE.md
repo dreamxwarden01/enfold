@@ -102,7 +102,12 @@ finished archive's bytes split into fixed-size parts, each with a small plaintex
 concatenation; a reader can also open the parts in place, since offsets map to parts. Parts are
 immutable — editing means reassemble, edit, re-export — which matches how RAR volumes behave and
 keeps the free-space map and the superblock flip out of it. The per-part hash makes a transfer
-verifiable and resumable part by part. Nothing in the v1 format changes.
+verifiable and resumable part by part. Nothing in the v1 format changes. **Part names follow
+RAR's convention, not `.001`:** `<name>.part01.efd`, `<name>.part02.efd`, … — the ordinal is
+padded to two digits, or to the width of the part count when an export has more than 99 parts
+(`part001` … `part120`), so the parts sort in order in every tool and every part keeps the
+`.efd` extension that Windows associates with Enfold; a bare numeric extension is associated with
+nothing (the user's ruling, 2026-09-06).
 
 **Recovery record** — optional Reed–Solomon parity so that scattered damage (bad sectors, bit
 rot, a corrupted transfer) can be repaired instead of losing the file. Computed over

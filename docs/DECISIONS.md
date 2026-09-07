@@ -2214,3 +2214,67 @@ brought back by the ceremony's final event; rows take a roving tab stop; a drop 
 is refused; secrets are accepted from the main frame only. Left as documented limits: file I/O
 of an abort or close under the state mutex, and an extract that overlaps a compaction losing
 the rest of its batch.
+
+---
+
+## 2026-09-06 — Volume names, the password before the key, motion
+
+Three rulings from the user after the first look at the built application.
+
+**Volume export names follow RAR, not `.001`.** `<name>.part01.efd`, `part02`, …; a two-digit
+ordinal, widened to the digit count of the part total when an export has more than 99 parts
+(`part001` … `part120`). The count is known before the first part is written — the export splits
+a finished file — so the width never has to change mid-export, and the parts sort in order in a
+plain lexical listing, not only in Explorer's natural sort. A bare numeric extension (`.efd.001`)
+is what Windows associates with nothing; keeping `.efd` on every part keeps the parts Enfold's.
+The user asked for "increment past 99" (`part100`, `part101`); the padded-to-count form gives
+exactly that for a large export and additionally keeps the order in tools that sort by string.
+`SCOPE.md` carries it; nothing in code yet (volumes are 1.1).
+
+**A chosen secret comes before the key.** Create and enrol for a token with an entangled
+password used to run the token flow first — wait for the key, PIN, management key, `Generate` —
+and ask for the password after. A cancel at the password step had already generated a key on
+the token for nothing; and the user rightly expects to type the password they are adding
+*before* the hardware is initialised. Both flows now ask for the password first. The ceremony
+state gained `Choose`, set on prompts for a secret the user is choosing now (a new standalone
+password, a new entangled password) and never on a prompt for one they hold, so the page labels
+the field "choose a password" and the enrol panel — which can ask for a current password and
+then a new one — never shows the same words for both. The dialogs stop asking for a "Label"
+under a password way in: a token is named ("Name this key"), a password slot is "Password",
+and the dialog says the password itself is chosen in the next step — a typed secret never
+rides a bound-method argument, so it cannot be a dialog field. The dialogs also send
+"Password" as a password slot's name whatever was typed for a key before the kind was switched.
+Tests: enrolment and creation with an entangled password both see the password prompt before
+any card is opened for the new key, and the new key then unlocks with password + PIN.
+
+The review of this change found what the reorder had moved: the key that unlocked was now held
+open across the password prompt — up to the prompt's hour — and a user who pulled it there (as
+the dialog's own note invites) would get a "may stay PIN-verified" warning that never clears.
+The unlocking key is released before the prompt, and the enrol test asserts it. The same class
+— a verified (dirty) card held across a prompt, whose close reports a reset that never happened
+if the key is pulled — exists on older prompts where the card is held on purpose: the PIN
+re-prompt after a wrong PIN, the entangled-password retry, and the enrolment's PIN and
+management-key prompts; the warning that never clears is a follow-up. Releasing early opened
+the next hole, found by the verification of the fix: the swap could now happen *during* the
+prompt, and a wait for an empty reader set would then stand for the prompt's hour — a swap in
+the same port shows the same reader name throughout. The wait is now for the unlocking key to
+be out of the reader, probed by content (the card present is opened for its public keys, no
+PIN, no touch, once per poll), and the swap step names the key to remove while it is still in.
+Tested: the swap during the prompt, and the step's wording while the unlocking key stays.
+
+**Motion.** Every dialog, menu and popover fades in over 140 ms (dialogs also scale from 97%)
+and out over 100 ms; a panel that swaps content in place fades the new content in; the lock
+screen's cards ease between live and dim; toasts fade. `prefers-reduced-motion` zeroes the
+durations — checked when a transition starts, through Svelte's `prefersReducedMotion`, so a
+preference changed while the app runs is honoured; the stylesheet's token collapses under the
+same media query. Svelte's transitions are used with `|global` on dialogs so the fade plays
+however the dialog came to exist; a card body that fades in must sit directly in its `{#key}`
+block, since a local intro inside a freshly created `{#if}` never plays. Because a fading-out
+dialog stays mounted until its fade ends, it ignores Escape and backdrop clicks from the moment
+its outro starts — otherwise a second Escape could dismiss the ceremony behind it, and with it
+the one-time recovery-key reveal. There are no menus in the frontend yet; the rule is written so
+the first one inherits it.
+
+**Not decided here: one vault per user.** The user proposes disallowing several keystores and
+fixing the location. `DECISIONS.md` 2026-09-01 already says "one per device, default
+`%LOCALAPPDATA%`"; the create dialog's free file picker drifted from that. Recorded when ruled.

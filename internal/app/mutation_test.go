@@ -215,3 +215,158 @@ func TestMutationGuards(t *testing.T) {
 	}
 	h.unlockWithPassword()
 }
+
+// Enrolling a token with an entangled password asks for the password
+// before the key is touched (the prompt says it is a new one), and the
+// new key then unlocks with password + PIN.
+func TestEnrollTokenEntangledAsksPasswordFirst(t *testing.T) {
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	cards := &fakeCards{card: first}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+
+	h.rec.reset()
+	opensBefore := cards.openCount()
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "Travel key", Entangle: true}); e != nil {
+		t.Fatal(e)
+	}
+	pin = h.rec.waitCeremony(t, StepPIN, true)
+	if pin.Choose {
+		t.Fatalf("the unlocking PIN is not a new secret: %+v", pin)
+	}
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	// The password comes before the swap, and is marked as chosen now.
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	if !pw.Choose {
+		t.Fatalf("the entangled password prompt is not marked choose: %+v", pw)
+	}
+	// By then the unlocking key has been released (it is never held across
+	// a prompt) and no other card has been opened.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		first.mu.Lock()
+		closed := first.closed
+		first.mu.Unlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the unlocking key is held across the password prompt")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := cards.openCount(); n != opensBefore+1 {
+		t.Fatalf("cards opened before the password was chosen: %d (the unlocking open only was expected)", n-opensBefore)
+	}
+	second := newFakeCard("654321")
+	second.mgmt = []byte("0123456789abcdef0123456789abcdef")
+	h.c.SubmitSecret("password", pw.PromptID, "entangled words")
+	h.rec.waitCeremony(t, StepSwapKey, false)
+	if st := h.c.Status(); st.Ceremony == nil || st.Ceremony.Choose {
+		t.Fatalf("choose survived the prompt: %+v", st.Ceremony)
+	}
+	cards.setReaders()
+	time.Sleep(2 * readerPoll)
+	cards.setCard(second)
+	cards.setReaders("Yubico B")
+	pin2 := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin2.PromptID, "654321")
+	h.rec.waitCeremony(t, StepDone, false)
+	var entangled int
+	for _, s := range h.c.Slots() {
+		if s.Type == "hardware" && s.Entangled {
+			entangled++
+		}
+	}
+	if entangled != 1 {
+		t.Fatalf("slots after enrolment: %+v", h.c.Slots())
+	}
+
+	// The new key needs the password, then its PIN.
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pw = h.rec.waitCeremony(t, StepPassword, true)
+	if pw.Choose {
+		t.Fatalf("an existing password marked choose: %+v", pw)
+	}
+	h.c.SubmitSecret("password", pw.PromptID, "entangled words")
+	pin = h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "654321")
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+}
+
+// The user may swap keys while the password prompt stands — in the same
+// port, so the reader set never looks empty. The enrolment goes on with
+// the key that is there instead of waiting for a removal that already
+// happened; and while the unlocking key is still in, the swap step names
+// it.
+func TestEnrollSwapDuringPasswordPrompt(t *testing.T) {
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	cards := &fakeCards{card: first}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+
+	// First: the unlocking key stays in; the swap step says to remove it.
+	h.rec.reset()
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "Travel key", Entangle: true}); e != nil {
+		t.Fatal(e)
+	}
+	pin = h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", pw.PromptID, "entangled words")
+	swap := h.rec.waitCeremony(t, StepSwapKey, false)
+	if swap.RemoveLabel != "Test key" || swap.InsertLabel == "" {
+		t.Fatalf("swap step does not name the key to remove: %+v", swap)
+	}
+	if e := h.c.CancelUnlock(); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitCeremony(t, StepFailed, false)
+
+	// Then: the swap happens during the prompt, same reader name.
+	h.rec.reset()
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "Travel key", Entangle: true}); e != nil {
+		t.Fatal(e)
+	}
+	pin = h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw = h.rec.waitCeremony(t, StepPassword, true)
+	second := newFakeCard("654321")
+	second.mgmt = []byte("0123456789abcdef0123456789abcdef")
+	cards.setCard(second)
+	h.c.SubmitSecret("password", pw.PromptID, "entangled words")
+	pin2 := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin2.PromptID, "654321")
+	h.rec.waitCeremony(t, StepDone, false)
+	hw := 0
+	for _, s := range h.c.Slots() {
+		if s.Type == "hardware" {
+			hw++
+		}
+	}
+	if hw != 2 {
+		t.Fatalf("slots after the swapped enrolment: %+v", h.c.Slots())
+	}
+}

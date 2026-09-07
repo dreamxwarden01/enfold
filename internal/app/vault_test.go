@@ -100,3 +100,59 @@ func TestNothingStagedIsClean(t *testing.T) {
 		t.Fatalf("verify op: %+v", o)
 	}
 }
+
+// Creating a vault with a token and an entangled password asks for the
+// password first, before anything is generated on the key.
+func TestCreateVaultTokenEntangled(t *testing.T) {
+	dir := t.TempDir()
+	card := newFakeCard("123456")
+	card.mgmt = []byte("0123456789abcdef0123456789abcdef")
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	rec := &recorder{}
+	c, _ := New(Deps{Cards: cards, Events: rec, Clock: newFakeClock(), DataDir: filepath.Join(dir, "data")})
+	c.Start()
+	defer c.Close()
+	c.SetAppOrigin("wails://wails")
+	vault := filepath.Join(dir, "v.eks")
+	if e := c.CreateVault(vault, "Mine", EnrollOptions{Kind: EnrollToken, Label: "Desk", Entangle: true}); e != nil {
+		t.Fatal(e)
+	}
+	pw := rec.waitCeremony(t, StepPassword, true)
+	if !pw.Choose {
+		t.Fatalf("the password prompt is not marked choose: %+v", pw)
+	}
+	if n := cards.openCount(); n != 0 {
+		t.Fatalf("a card was opened before the password was chosen: %d", n)
+	}
+	c.SubmitSecret("password", pw.PromptID, "entangled words")
+	pin := rec.waitCeremony(t, StepPIN, true)
+	c.SubmitSecret("pin", pin.PromptID, "123456")
+	rec.waitCeremony(t, StepRecovery, false)
+	rec.waitState(t, StateUnlocked)
+	var entangled int
+	for _, s := range c.Slots() {
+		if s.Type == "hardware" && s.Entangled {
+			entangled++
+		}
+	}
+	if entangled != 1 {
+		t.Fatalf("slots after create: %+v", c.Slots())
+	}
+	// The key then unlocks with the password and its PIN.
+	c.Lock()
+	rec.waitState(t, StateLocked)
+	rec.reset()
+	if e := c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pw = rec.waitCeremony(t, StepPassword, true)
+	if pw.Choose {
+		t.Fatalf("an existing password marked choose: %+v", pw)
+	}
+	c.SubmitSecret("password", pw.PromptID, "entangled words")
+	pin = rec.waitCeremony(t, StepPIN, true)
+	c.SubmitSecret("pin", pin.PromptID, "123456")
+	rec.waitCeremony(t, StepDone, false)
+	rec.waitState(t, StateUnlocked)
+}

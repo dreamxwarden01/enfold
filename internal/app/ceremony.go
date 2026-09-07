@@ -30,8 +30,12 @@ type ceremony struct {
 	// mutation: a slot change that commits to the open handle from this
 	// goroutine; registry writes wait while it runs.
 	mutation bool
-	// card is the token a mutation ceremony unlocked with, until released.
-	card Card
+	// card is the token a mutation ceremony unlocked with, until released;
+	// unlockPub and unlockLabel say which slot it was, for the swap that
+	// follows an enrolment.
+	card        Card
+	unlockPub   []byte
+	unlockLabel string
 	// restore is the state the vault returns to when the ceremony ends
 	// without publishing: Locked for an unlock, None for a create from
 	// nothing.
@@ -272,11 +276,22 @@ func (cer *ceremony) set(mut func(s *CeremonyState)) {
 // ask issues a prompt of kind, waits for its answer, the cancellation or
 // the prompt deadline. status is what the panel shows.
 func (cer *ceremony) ask(kind string, step CeremonyStep, status PINStatus) (string, error) {
+	return cer.askWith(kind, step, status, false)
+}
+
+// askNew asks for a secret the user is choosing now — a new password, a
+// new entangled password — rather than one they already hold; the state
+// says so (Choose) so the page can label the field "choose".
+func (cer *ceremony) askNew(kind string, step CeremonyStep) (string, error) {
+	return cer.askWith(kind, step, PINStatus{}, true)
+}
+
+func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, choose bool) (string, error) {
 	c := cer.c
 	p := &prompt{id: randomID(), kind: kind, ch: make(chan string, 1)}
 	c.mu.Lock()
 	cer.prompt = p
-	cer.state.Step, cer.state.PromptID = step, p.id
+	cer.state.Step, cer.state.PromptID, cer.state.Choose = step, p.id, choose
 	cer.state.Retries, cer.state.RetriesKnown, cer.state.Verified = status.Retries, status.RetriesKnown, status.Verified
 	cer.state.Error = ""
 	cer.state.Seq = c.bump()
@@ -291,7 +306,7 @@ func (cer *ceremony) ask(kind string, step CeremonyStep, status PINStatus) (stri
 		if cer.prompt == p {
 			cer.prompt = nil
 		}
-		cer.state.PromptID = ""
+		cer.state.PromptID, cer.state.Choose = "", false
 		c.mu.Unlock()
 		return v, nil
 	case <-cer.ctx.Done():
@@ -299,7 +314,7 @@ func (cer *ceremony) ask(kind string, step CeremonyStep, status PINStatus) (stri
 		if cer.prompt == p {
 			cer.prompt = nil
 		}
-		cer.state.PromptID = ""
+		cer.state.PromptID, cer.state.Choose = "", false
 		c.mu.Unlock()
 		return "", ErrTokenCancelled
 	}
@@ -359,9 +374,14 @@ func (p *ceremonyPrompter) Touch(req TouchRequest) {
 	})
 }
 
-// waitForNoReader waits until every reader is gone: the key that unlocked
-// has been removed, so the one inserted next is a different key.
-func (cer *ceremony) waitForNoReader() error {
+// waitForOtherKey waits until the key that unlocked is out of the reader:
+// no reader, or the one card present is another key. The swap may already
+// have happened while a prompt stood, and a swap in the same port shows
+// the same reader name throughout, so a present card is probed for the
+// unlocking key (Keys: no PIN, no touch) once per poll instead of waiting
+// for a reader set that may never look empty. Two readers are left to
+// waitForOneReader's TwoKeys.
+func (cer *ceremony) waitForOtherKey(unlockPub []byte) error {
 	deadline := cer.c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("wait_deadline") })
 	defer deadline.Stop()
 	for {
@@ -372,13 +392,40 @@ func (cer *ceremony) waitForNoReader() error {
 			}
 			return err
 		}
-		if len(names) == 0 {
+		if len(names) != 1 {
+			return nil
+		}
+		same, err := cer.holdsKey(names[0], unlockPub)
+		if err != nil {
+			return err
+		}
+		if !same {
 			return nil
 		}
 		if err := cer.wait(readerPoll); err != nil {
 			return err
 		}
 	}
+}
+
+// holdsKey opens the reader long enough to see whether its card holds
+// pub. Nothing is verified, so the close has no reset to report.
+func (cer *ceremony) holdsKey(reader string, pub []byte) (bool, error) {
+	card, err := cer.openCard(reader)
+	if err != nil {
+		return false, err
+	}
+	keys, err := card.Keys()
+	card.Close()
+	if err != nil {
+		return false, err
+	}
+	for _, k := range keys {
+		if k.PublicKey != nil && string(k.PublicKey) == string(pub) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // waitForOneReader is the WaitingForKey / TwoKeys loop.

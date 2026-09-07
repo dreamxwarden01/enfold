@@ -203,6 +203,13 @@ func (f *fakeCards) setReaders(names ...string) {
 	f.mu.Unlock()
 }
 
+// openCount is how many times a card has been opened so far.
+func (f *fakeCards) openCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opens
+}
+
 // setCard swaps the card behind the reader: the key the user inserts next.
 func (f *fakeCards) setCard(c *fakeCard) {
 	f.mu.Lock()

@@ -67,6 +67,7 @@ type CeremonyState struct {
 	Kind         string       `json:"kind"` // unlock | enroll | rewrap | restore
 	Step         CeremonyStep `json:"step"`
 	PromptID     string       `json:"promptId,omitempty"`
+	Choose       bool         `json:"choose"` // the prompt asks for a new secret (create, enrol), not an existing one
 	SlotLabel    string       `json:"slotLabel,omitempty"`
 	Retries      int          `json:"retries"`
 	RetriesKnown bool         `json:"retriesKnown"`

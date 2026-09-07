@@ -77,27 +77,44 @@ func (c *Core) openVaultFile(path, displayName string) error {
 	ks, err := keystore.Open(path)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err == nil && ks.VaultID() != c.vault.vaultID {
-		// Another vault: receipts owed to the previous one do not carry over.
-		c.owed = map[[16]byte]owedReceipt{}
-	}
-	c.vault.path, c.vault.displayName = path, displayName
 	if err != nil {
 		if errors.Is(err, keystore.ErrBusy) {
+			// Busy needs the path, so that "try again" can retry it.
+			c.vault.path, c.vault.displayName = path, displayName
 			c.vault.state = StateBusy
 			c.bump()
 			return err
 		}
-		c.vault.state = StateNone
-		c.bump()
+		// A file that does not open does not replace the configured vault:
+		// its state, path and facts stand.
 		return err
 	}
+	if ks.VaultID() != c.vault.vaultID {
+		// Another vault: receipts owed to the previous one do not carry
+		// over, and its clean archives are closed.
+		c.owed = map[[16]byte]owedReceipt{}
+		c.closeCleanArchivesLocked()
+	}
+	c.vault.path, c.vault.displayName = path, displayName
 	c.cacheFactsLocked(ks)
 	ks.Close()
 	c.vault.state = StateLocked
 	c.vault.broken = nil
 	c.bump()
 	return nil
+}
+
+// closeCleanArchivesLocked closes the open archives that hold no staged
+// change and are not busy; the dirty ones keep their transaction until
+// their cap. Caller holds the state mutex.
+func (c *Core) closeCleanArchivesLocked() {
+	for _, oa := range c.archives {
+		if oa.tx != nil || oa.state == "compacting" || !oa.opMu.TryLock() {
+			continue
+		}
+		c.closeArchiveLocked(oa)
+		oa.opMu.Unlock()
+	}
 }
 
 // cacheFactsLocked copies the lock screen's facts from an open handle.
@@ -128,8 +145,11 @@ func (c *Core) OpenVaultFile(path, displayName string) *Error {
 			return coded(CodeVaultBusy)
 		}
 		c.emitState()
-		if os.IsNotExist(err) {
+		switch {
+		case os.IsNotExist(err):
 			return coded(CodeVaultNotFound)
+		case errors.Is(err, format.ErrInvalid), errors.Is(err, format.ErrTruncated):
+			return coded(CodeVaultInvalid)
 		}
 		return c.fail("open vault", err)
 	}
@@ -219,6 +239,11 @@ func (c *Core) sessionLocked() (*keystore.Session, *Error) {
 	}
 	if err := v.sess.Live(); err != nil {
 		if errors.Is(err, keystore.ErrStale) {
+			if c.cer != nil && c.cer.mutation {
+				// A rotation has committed and is about to install the
+				// re-derived session; nothing writes meanwhile.
+				return nil, coded(CodeCeremonyRunning)
+			}
 			// An invariant violation: the core should have re-derived it.
 			// The stale keys are not left in memory behind an Unlocked state.
 			c.log("session stale in Unlocked state: %v", err)

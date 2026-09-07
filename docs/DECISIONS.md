@@ -2137,3 +2137,80 @@ non-input path, timeouts can be restored to their defaults, an indeterminate or 
 slot-change commit enters Broken, only lock contention means "open in another Enfold", and an
 export is dated no earlier than the vault it came from. The remaining dimensions' findings are
 handled in the next entry.
+
+## 2026-09-06 — The application layer's review, second half
+
+The remaining four dimensions of the review (archives and operations, the shell and its Win32
+code, the frontend, the stage-1 format and keystore changes) were triaged from the journal of
+the stopped run; every finding a verifier confirmed is fixed here, with the tests that pin it.
+
+**Archives and operations.** A failed or cancelled `Compact` left the archive handle and its
+file lock alive (the handle is now closed whatever `archive.Compact` returned, and the clean gate
+is re-checked once the operation holds the archive's mutex, so a change staged in between keeps
+the archive rather than losing its transaction); closing an archive whose save ended
+indeterminate dropped the entry without closing the handle, so a reopen reported it busy; the
+figures shown under the state mutex were read from the handle, whose own mutex a running hash
+holds for the whole file — `size`, `files` and `free` are cached at every snapshot instead, and
+`ListArchives` asks the file system with the mutex released, so a lock trigger never waits on
+I/O; replacing a staged add made a second overlay entry (the row could no longer be un-staged),
+now one object; a cap or idle callback that was already running when its clock was re-armed or
+cleared acted anyway (each clock carries a generation the callback must still match); a file
+whose seq disagrees with the registry was logged and adopted, now `archive.copy_mismatch` on the
+stat and the list; `RotateKey` adopted the new kid before the archive was rewritten; the
+extraction containment check rejected names beginning with two dots; a negative page offset
+panicked; preview responses carry `Content-Security-Policy: sandbox`.
+
+**Frontend.** The recovery key of a newly created vault was never shown: the reveal lived in
+the lock screen, which unmounts on the Unlocked event that precedes the ceremony's final event.
+The reveal is rendered by the root above every route, for any ceremony. Starting a ceremony
+while one ran dismissed the visible panel and then failed (`ceremony.in_progress`): a live
+ceremony is cancelled and its end awaited first. An unlock made from an open archive left the
+locked banner in place (the archive's stat now follows the session). Folder rows carried an
+empty file id, so selecting one selected every folder: rows are keyed by kind and path, and
+extraction and deletion act on files only. A boot snapshot could overwrite a newer state event
+(the sequence rule now admits an equal-seq snapshot and nothing older). The expiring prompt
+showed only on the archive's own page, so a dirty archive left elsewhere ran to the cap unseen:
+it is asked at the root. The tables were mouse-only; rows take focus, Space selects, Enter
+opens, the arrows move.
+
+**Shell.** The poll fallback for workstation locks read `SessionFlags` at the wrong offset of
+`WTSINFOEXW` (the union is 8-byte aligned: offset 16, not 12), so it would have locked every
+five seconds; a mirror struct fixes the offset and the unknown state counts as no answer. The
+quit confirmation could never return: a Windows question dialog is a Yes/No message box and
+Wails runs only the callback whose label matches — the buttons are "Yes" and "No" and `Show` is
+awaited. Cancelling a native file dialog reached the page as "internal" (the common-file-dialog
+wrapper reports cancel as an error): it is "nothing chosen". The tray's click ran on the Wails
+main thread while other callers hold the window mutex across main-thread calls, a deadlock: tray
+and menu callbacks leave the thread first. The poll fallback exited at once when the watch
+window could not be created (it has its own stop signal). A refused secret is reported back as
+`secret.refused`; the WebView2 profile is removed at exit, best effort; the MSIX task pointed at a
+file that does not exist. Branches for broadcasts a message-only window never receives were
+removed and `APP.md` §5 says why.
+
+**Keystore.** The OS-level lock was never exercised by a test — the in-process table refused the
+second handle first; a `\?\`-spelled path bypasses the table so only `LockFileEx` can refuse.
+
+**Refuted, with reasons in the journal.** The reopen-after-lock race (the state event is emitted
+after the close) and parked ceremonies holding the file (neither park is reachable there) — both
+guarded anyway, since the guards are cheap and the design reads better with them.
+
+**Verified again.** A second workflow (three sweeps over the changed code, every finding above
+low verified adversarially; 15 agents) confirmed twelve more, all fixed: a file that fails to
+open replaced the configured vault and demoted the state to "none" (the vault's path and facts
+now stand unless the open succeeds or the file is busy, and a garbage file is `vault.invalid`);
+a failed create from a fresh core landed in Locked over an empty path (a ceremony records the
+state it returns to); a rotation's commit opened a window in which any caller saw a stale
+session and locked the vault (a stale session during a slot-change ceremony is
+`ceremony.in_progress`, not a lock); shutdown during a slot change stranded the receipts it
+committed (it waits for the cancelled ceremony first); token enrolment parked with the key to
+enrol still held; a Save whose commit failed before the commit point kept showing changes the
+archive had already discarded; closing an archive during its compaction blocked for the whole
+run; the copy-mismatch flag was never cleared; a compaction whose reopen failed lost its receipt
+(recorded before the reopen, at seq 1); an indeterminate key rotation left the archive "open"
+on a broken handle; a recovery-key prompt could be dismissed as if it were the reveal; a page
+reply could land for the wrong folder. Also from the sweep: an add in which every file is
+skipped no longer leaves the archive "dirty with nothing to save"; a dismissed reveal is not
+brought back by the ceremony's final event; rows take a roving tab stop; a drop with no target
+is refused; secrets are accepted from the main frame only. Left as documented limits: file I/O
+of an abort or close under the state mutex, and an extract that overlaps a compaction losing
+the rest of its batch.

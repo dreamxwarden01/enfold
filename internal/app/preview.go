@@ -149,6 +149,9 @@ func (p *previewServer) serveFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition", "inline")
+	// Whatever the type says, a preview is never a document that runs:
+	// an HTML or SVG file opened as a top-level navigation is sandboxed.
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
 	http.ServeContent(w, r, "", time.Unix(info.ModifiedAt, 0), rd)
 }
 

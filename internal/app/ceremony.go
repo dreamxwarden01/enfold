@@ -32,6 +32,10 @@ type ceremony struct {
 	mutation bool
 	// card is the token a mutation ceremony unlocked with, until released.
 	card Card
+	// restore is the state the vault returns to when the ceremony ends
+	// without publishing: Locked for an unlock, None for a create from
+	// nothing.
+	restore VaultState
 
 	done chan struct{}
 }
@@ -123,7 +127,10 @@ func (c *Core) BeginUnlock(method UnlockMethod) *Error {
 // newCeremonyLocked installs a ceremony. Caller holds the state mutex.
 func (c *Core) newCeremonyLocked(kind string) *ceremony {
 	ctx, cancel := context.WithCancel(context.Background())
-	cer := &ceremony{kind: kind, ctx: ctx, cancel: cancel, c: c, done: make(chan struct{})}
+	cer := &ceremony{kind: kind, ctx: ctx, cancel: cancel, c: c, done: make(chan struct{}), restore: c.vault.state}
+	if cer.restore != StateNone {
+		cer.restore = StateLocked
+	}
 	cer.state = CeremonyState{Kind: kind, Step: StepWaitingForKey, Seq: c.seq}
 	c.cer = cer
 	return cer
@@ -231,7 +238,7 @@ func (cer *ceremony) finish(e *Error) {
 		c.cer = nil
 	}
 	if c.vault.state == StateUnlocking || c.vault.state == StateReleasing {
-		c.vault.state = StateLocked
+		c.vault.state = cer.restore
 	}
 	if cer.mutation && c.vault.state == StateUnlocked {
 		c.applyOwedLocked()

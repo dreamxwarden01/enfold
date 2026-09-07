@@ -6,7 +6,6 @@
   import { codeText, retriesText, stepText, warningCopy } from "../lib/strings";
   import { dateTime, leaf } from "../lib/format";
   import SecretInput from "./SecretInput.svelte";
-  import RecoveryReveal from "./RecoveryReveal.svelte";
   import Dialog from "./Dialog.svelte";
 
   const st = $derived(store.status);
@@ -43,13 +42,33 @@
   let createLabel = $state("");
   let createEntangle = $state(false);
 
+  // begin starts a ceremony. One that is still running (the token flow
+  // waiting for a PIN, a parked state) is cancelled first and its end
+  // awaited; the panel keeps showing it until the new one's first event.
   async function begin(method: "token" | "password" | "recovery") {
-    store.dismissCeremony();
     try {
+      if (running) {
+        await Vault.CancelUnlock().catch(() => {});
+        await untilLocked();
+      }
       await Vault.BeginUnlock(method);
+      if (store.ceremonyIsOver) store.dismissCeremony();
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }
+  }
+
+  function untilLocked(): Promise<void> {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        const s = store.status?.state;
+        if (s !== VaultState.StateUnlocking && s !== VaultState.StateReleasing) return resolve();
+        if (Date.now() - started > 8000) return resolve();
+        setTimeout(tick, 50);
+      };
+      tick();
+    });
   }
 
   async function openFile() {
@@ -265,10 +284,6 @@
     {/if}
   {/if}
 </section>
-
-{#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel && store.ceremonyIsOver}
-  <RecoveryReveal url={c.slotLabel} ondone={() => store.dismissCeremony()} />
-{/if}
 
 {#if create}
   <Dialog title="Create a vault" onclose={() => (create = false)}>

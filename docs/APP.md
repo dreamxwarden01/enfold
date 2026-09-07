@@ -184,11 +184,13 @@ Closed ──Open──▶ Open ──first staged change──▶ Dirty ──S
   `Commit` → receipt → one `Session.UpdateRegistry` (`LastStoredSize`, `LastWrittenAt`,
   `LastSeq`, `Revision`); Discard = `Abort`. Closing the window keeps the transaction; a lock
   keeps it. **Save and Compact are gated on `Session.Live()`** before they start
-  (`NeedsUnlock`: the staged changes are kept and finish after the next unlock); one core mutex
-  spans Commit → UpdateRegistry so a software lock cannot land between them, and a hardware
-  trigger that does (the ~2 s suspend budget) leaves a **receipt owed**, held in memory, applied
-  at the next unlock before any archive is opened (dropped if the record's kid moved), shown as
-  "saved; vault record pending". On reopen a file whose size or `last_seq` disagrees with the
+  (`NeedsUnlock`: the staged changes are kept and finish after the next unlock). The commit —
+  index seal, free map, two syncs — runs under the archive's own mutex only, so the state mutex
+  stays short and a lock trigger is never held up by I/O; the receipt is written under the state
+  mutex right after. A lock that lands between the two, a hardware trigger inside the ~2 s
+  suspend budget, or a slot-change ceremony holding the handle leaves a **receipt owed**, held in
+  memory, applied when the ceremony ends or at the next unlock before any archive is opened
+  (dropped if the record's kid moved), shown as "saved; vault record pending". On reopen a file whose size or `last_seq` disagrees with the
   record is reported, never adopted silently.
 - **Two clocks per archive** (DESIGN §10's own idle timeout): idleness — no running op, no open
   reader, no request — closes a clean archive; a dirty one gets `archive.expiring` and a visible
@@ -254,7 +256,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - `CreateVault(path, displayName)` (recovery key shown once; then the first slot's ceremony from
   the `Unlocked` that Create returned), `OpenVaultFile(path)`.
 - Events: `vault.state` (the whole status), `vault.ceremony {Seq, Step, PromptID, SlotLabel,
-  Retries, RetriesKnown, ReaderCount, N, Error}`, `vault.warning`.
+  Retries, RetriesKnown, ReaderCount, N, Error}`, `vault.warning`, and from the shell
+  `secret.refused {Code}`. A ceremony whose last step is the recovery key's reveal ends with that
+  step in its final event, so the page shows the one-time URL above whatever view it is on.
 
 **Archives**
 - `List() []ArchiveSummary{ID, Name, Path, StoredSize, LastWrittenAt, KeyVersion, Open, Dirty,
@@ -284,7 +288,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
   planner before the first file; each file all-or-nothing, the batch not), `Save(id) opID`,
   `Discard(id)`, `PreviewURL(id, fileID)` (only for committed rows; staged adds and replaces are
   not previewable until Save), `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
-  `OpenReader` + `LimitReader`; no cross-origin fetch exists).
+  `OpenReader` + `LimitReader`; no cross-origin fetch exists). `Stat` carries `CopyMismatch` and the
+  list a `Note` of `archive.copy_mismatch` when the file's seq is not the one the registry last
+  saw (an older copy restored): shown, never adopted silently; a save records this copy.
 - Events: `archive.changed {ID, Seq}`, `archive.expiring {ID, ClosesAt}`, progress as above.
 
 **Keys**
@@ -296,6 +302,11 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`, `RewrapStale()`
   (the loop of §2.2), `Export(path)`, `BackupInfo(path) {ModifiedAt, VaultMatches, SlotCount}`,
   `VerifyBackup(path)`, `RestoreArchiveRecord(path, archiveID)` (re-wrap under the current KWK).
+- **Slot changes and registry writes never share the handle.** While a slot-change ceremony
+  runs, a registry write is refused with `ceremony.in_progress` — a Save still commits its
+  archive and owes the receipt, paid when the ceremony ends — and a slot change does not start
+  while a save, verify, compact or rotation is running (`op.in_progress`). A lock trigger in any
+  state latches and cancels the ceremony, and the lock's close of the handle waits for it.
 - **Tampered is a state, not a banner**: every mutating call and Export is disabled with the
   reason; the one action is "open a backup"; it is never cleared silently (R25).
 
@@ -307,8 +318,11 @@ registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
 
 **Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile`, `Reveal`, `Quit`
-(names the unsaved changes in a native question, then `ResolveForShutdown`, then `app.Quit()`;
-never asked twice). The service lives in `internal/app/api` like the others and holds the Wails
+(names the unsaved changes in a native Yes/No question — the only buttons a Windows message box
+has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
+dialog is "nothing chosen", never an error; a submitted secret that found no prompt is reported
+back as the `secret.refused {Code}` event. Tray and menu callbacks run on the Wails main thread
+and leave it (a goroutine) before touching the window or a dialog. The service lives in `internal/app/api` like the others and holds the Wails
 calls behind an unexported `Hooks` value the shell supplies, so nothing of Wails is reflected. File
 drop: the window is created with `EnableFileDrop`; the shell re-emits the dropped paths and the
 drop target's `data-archive-id` / `data-folder` to the frontend, which calls `AddFiles`; the
@@ -320,7 +334,8 @@ loudly. Dropped paths carry no authority beyond what a file dialog would.
 A loopback `net/http` server on `127.0.0.1:<port>`, **bound once for the process lifetime**
 (the CSP names the port and is fixed at document load), serving
 `GET /p/<archive-token>/<fileID>` with `http.ServeContent` over one `archive.Reader` per request,
-`Cache-Control: no-store`, `Content-Type` from the name, multi-range refused (single range or
+`Cache-Control: no-store`, `Content-Security-Policy: sandbox` (a preview is never a document
+that runs), `Content-Type` from the name, multi-range refused (single range or
 none, so the handler may `Close` its Reader on return). **The preview transport outlives the
 session; it dies with the last open archive, and a live reader is archive activity.** The token
 is per archive (an unknown token is a 404 with no archive id in the URL); closing the archive
@@ -357,7 +372,12 @@ of `WTSQuerySessionInformation(WTSSessionInfoEx).SessionFlags` as the substitute
 `RegisterPowerSettingNotification` for `GUID_SESSION_DISPLAY_STATUS` and
 `GUID_SESSION_USER_PRESENCE` (unregistered at shutdown), `WM_WTSSESSION_CHANGE` handled for
 lock, logoff, console/remote disconnect and remote control; `PBT_APMSUSPEND` comes from Wails'
-own application event. Every handler posts a `lockTrigger` and calls `lockNow` synchronously.
+own application event. A message-only window receives only what is addressed to it — the
+registered WTS and power-setting notifications; broadcasts such as `PBT_APMSUSPEND` and
+`WM_QUERYENDSESSION` never reach it, which is why suspend comes from Wails and logoff from WTS.
+When WTS registration fails the poll reads `WTSINFOEXW.Data.WTSInfoExLevel1.SessionFlags` (at
+offset 16: the union is 8-byte aligned) and treats the unknown state as no answer. Every handler
+calls `LockNow` synchronously.
 
 **Shutdown.** `Options.ShouldQuit` never shows UI. `Options.OnShutdown` runs
 `resolveForShutdown()`: for each dirty archive `Commit` under a fresh ~2 s context, write each

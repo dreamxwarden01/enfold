@@ -289,6 +289,7 @@ thead th button { background: none; border: none; padding: 0; font: inherit; col
 tbody td { padding: 0 12px; height: 36px; border-bottom: 1px solid var(--stroke); color: var(--ink-2); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: var(--surface-alt); }
+tbody tr:focus-visible { outline: 2px solid var(--focus-outer); outline-offset: -2px; box-shadow: none; border-radius: 0; }
 tbody tr[aria-selected="true"] td, tbody tr[aria-selected="true"]:hover td { background: var(--accent-wash); }
 tbody tr[aria-selected="true"] .fname { color: var(--ink); font-weight: 600; }
 tbody tr.pending-deleted .fname { text-decoration: line-through; color: var(--ink-3); }

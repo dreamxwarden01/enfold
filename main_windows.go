@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -53,11 +54,19 @@ type shell struct {
 	app  *application.App
 	tray *tray
 	lock *lockWatch
+	log  func(string, ...any)
 
+	profile  string
 	winMu    sync.Mutex
 	quitMu   sync.Mutex
 	quitting bool
 	settings func() app.Settings
+}
+
+// secretRefused tells the page that a submitted secret was not accepted
+// (a stale prompt, no ceremony); the value itself is not echoed.
+type secretRefused struct {
+	Code app.Code `json:"code"`
 }
 
 func main() {
@@ -69,7 +78,7 @@ func main() {
 	logger := openLog(dataDir)
 	defer logger.close()
 
-	s := &shell{}
+	s := &shell{log: logger.printf}
 	core, err := app.New(app.Deps{
 		Cards:   pivcards.New(),
 		Events:  s,
@@ -95,6 +104,7 @@ func main() {
 	})
 
 	profile := filepath.Join(dataDir, "WebView2")
+	s.profile = profile
 	opts := application.Options{
 		Name:        appName,
 		Description: "Compression and encryption archives, unlocked by a YubiKey.",
@@ -212,11 +222,16 @@ func (s *shell) rawMessage(_ application.Window, message string, origin *applica
 	if origin != nil && !fromApp(origin.Origin) {
 		return
 	}
+	if origin != nil && origin.TopOrigin != "" && origin.Origin != origin.TopOrigin {
+		return // not the main frame
+	}
 	parts := strings.SplitN(message, " ", 4)
 	if len(parts) != 4 {
 		return
 	}
-	s.core.SubmitSecret(parts[1], parts[2], parts[3])
+	if e := s.core.SubmitSecret(parts[1], parts[2], parts[3]); e != nil {
+		s.app.Event.Emit("secret.refused", secretRefused{Code: e.Code})
+	}
 }
 
 // fromApp reports whether a WebView2 source URL is the page's own origin.
@@ -314,17 +329,29 @@ func (s *shell) window() application.Window {
 	return w
 }
 
+// The native dialogs report a cancelled dialog as an error (the common
+// file dialog's cancel HRESULT); to the page, cancelling is "nothing
+// chosen", never a failure. A real failure is logged.
 func (s *shell) pickFiles(title string, multiple bool) ([]string, error) {
 	d := s.app.Dialog.OpenFile().SetTitle(title).CanChooseFiles(true).CanChooseDirectories(false)
 	if w := s.window(); w != nil {
 		d.AttachToWindow(w)
 	}
 	if multiple {
-		return d.PromptForMultipleSelection()
+		p, err := d.PromptForMultipleSelection()
+		if err != nil {
+			s.log("open dialog: %v", err)
+			return nil, nil
+		}
+		return p, nil
 	}
 	p, err := d.PromptForSingleSelection()
-	if err != nil || p == "" {
-		return nil, err
+	if err != nil {
+		s.log("open dialog: %v", err)
+		return nil, nil
+	}
+	if p == "" {
+		return nil, nil
 	}
 	return []string{p}, nil
 }
@@ -334,7 +361,12 @@ func (s *shell) pickFolder(title string) (string, error) {
 	if w := s.window(); w != nil {
 		d.AttachToWindow(w)
 	}
-	return d.PromptForSingleSelection()
+	p, err := d.PromptForSingleSelection()
+	if err != nil {
+		s.log("folder dialog: %v", err)
+		return "", nil
+	}
+	return p, nil
 }
 
 func (s *shell) saveFile(title, filename string) (string, error) {
@@ -342,7 +374,12 @@ func (s *shell) saveFile(title, filename string) (string, error) {
 	if w := s.window(); w != nil {
 		d.AttachToWindow(w)
 	}
-	return d.PromptForSingleSelection()
+	p, err := d.PromptForSingleSelection()
+	if err != nil {
+		s.log("save dialog: %v", err)
+		return "", nil
+	}
+	return p, nil
 }
 
 func (s *shell) reveal(path string) error {
@@ -362,24 +399,24 @@ func (s *shell) quit() {
 	s.quitMu.Unlock()
 	st := s.core.Status()
 	if st.DirtyArchives > 0 || st.State == app.StateUnlocking {
-		msg := fmt.Sprintf("%d archive(s) have changes not yet saved. They are saved as one step before quitting.", st.DirtyArchives)
+		// A Windows question dialog is a Yes/No message box: Show blocks
+		// until it closes and then runs the callback of the button whose
+		// label is the one pressed — "Yes" or "No", nothing else.
+		msg := fmt.Sprintf("%d archive(s) have changes not yet saved. Save them and quit?", st.DirtyArchives)
 		if st.State == app.StateUnlocking {
-			msg = "An unlock is in progress; quitting cancels it."
+			msg = "An unlock is in progress. Cancel it and quit?"
 		}
 		d := s.app.Dialog.Question().SetTitle(appName).SetMessage(msg)
-		quitBtn := d.AddButton("Quit")
-		cancel := d.AddButton("Cancel")
-		d.SetDefaultButton(quitBtn).SetCancelButton(cancel)
-		proceed := make(chan bool, 1)
-		quitBtn.OnClick(func() { proceed <- true })
-		cancel.OnClick(func() { proceed <- false })
+		yes := d.AddButton("Yes")
+		no := d.AddButton("No")
+		d.SetDefaultButton(yes).SetCancelButton(no)
+		var proceed atomic.Bool
+		yes.OnClick(func() { proceed.Store(true) })
 		if w := s.window(); w != nil {
 			d.AttachToWindow(w)
 		}
-		go func() {
-			d.Show()
-		}()
-		if !<-proceed {
+		d.Show()
+		if !proceed.Load() {
 			s.quitMu.Lock()
 			s.quitting = false
 			s.quitMu.Unlock()
@@ -396,6 +433,11 @@ func (s *shell) onShutdown() {
 		s.lock.stop()
 	}
 	s.core.Close()
+	// The WebView2 profile: best effort now (the browser still holds some
+	// of it), swept for certain at the next start (DESIGN trap 13).
+	if s.profile != "" {
+		os.RemoveAll(s.profile)
+	}
 }
 
 // securityHeaders is the asset middleware (§4): the CSP names the preview

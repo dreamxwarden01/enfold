@@ -16,7 +16,7 @@
     fetch(url, { cache: "no-store" })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
       .then((t) => {
-        if (!cancelled) digits = t.trim();
+        if (!cancelled) digits = t.replace(/\D/g, "");
       })
       .catch(() => {
         if (!cancelled) failed = true;
@@ -26,7 +26,8 @@
     };
   });
 
-  const groups = $derived(digits.match(/.{1,4}/g) ?? []);
+  // The key is eight groups of six digits; it is shown the way it is typed.
+  const groups = $derived(digits.match(/.{1,6}/g) ?? []);
 </script>
 
 <Dialog title="Your recovery key" onclose={() => {}}>

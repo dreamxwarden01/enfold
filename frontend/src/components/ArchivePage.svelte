@@ -15,9 +15,13 @@
   const alive = $derived(stat?.sessionAlive ?? false);
   const dirty = $derived(stat?.dirty ?? 0);
 
+  // Rows are keyed by kind and path: folder rows carry no file id.
+  function rowKey(r: FileRow): string {
+    return (r.isFolder ? "d:" : "f:") + r.path;
+  }
   let selected = $state<Set<string>>(new Set());
   let anchor = $state<string | null>(null);
-  const one = $derived(selected.size === 1 ? rows.find((r) => r.fileId === [...selected][0]) ?? null : null);
+  const one = $derived(selected.size === 1 ? rows.find((r) => rowKey(r) === [...selected][0]) ?? null : null);
 
   let previewUrl = $state("");
   let previewText = $state<{ text: string; truncated: boolean } | null>(null);
@@ -48,17 +52,45 @@
   }
 
   function click(e: MouseEvent, r: FileRow) {
+    const k = rowKey(r);
     if (e.ctrlKey) {
       const s = new Set(selected);
-      if (s.has(r.fileId)) s.delete(r.fileId); else s.add(r.fileId);
+      if (s.has(k)) s.delete(k); else s.add(k);
       selected = s;
     } else if (e.shiftKey && anchor) {
-      const ids = rows.map((x) => x.fileId);
-      const a = ids.indexOf(anchor), b = ids.indexOf(r.fileId);
-      if (a >= 0 && b >= 0) selected = new Set(ids.slice(Math.min(a, b), Math.max(a, b) + 1));
+      const keys = rows.map(rowKey);
+      const a = keys.indexOf(anchor), b = keys.indexOf(k);
+      if (a >= 0 && b >= 0) selected = new Set(keys.slice(Math.min(a, b), Math.max(a, b) + 1));
     } else {
-      selected = new Set([r.fileId]);
-      anchor = r.fileId;
+      selected = new Set([k]);
+      anchor = k;
+    }
+  }
+
+  // The keyboard path: Space selects, Enter selects and opens, the arrows
+  // move the focus between rows.
+  function keydown(e: KeyboardEvent, r: FileRow) {
+    const el = e.currentTarget as HTMLElement;
+    switch (e.key) {
+      case " ":
+        e.preventDefault();
+        selected = new Set([rowKey(r)]);
+        anchor = rowKey(r);
+        break;
+      case "Enter":
+        e.preventDefault();
+        selected = new Set([rowKey(r)]);
+        anchor = rowKey(r);
+        open(r);
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        (el.nextElementSibling as HTMLElement | null)?.focus();
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        (el.previousElementSibling as HTMLElement | null)?.focus();
+        break;
     }
   }
 
@@ -205,17 +237,9 @@
     }
   }
 
-  const selectedRows = $derived(rows.filter((r) => selected.has(r.fileId)));
-  const expiring = $derived(store.expiring && store.expiring.id === id ? store.expiring : null);
-
-  async function keepOpen() {
-    store.expiring = null;
-    try {
-      await Archive.KeepOpen(id);
-    } catch (e) {
-      fail(e);
-    }
-  }
+  // selectedRows are the files in the selection; folders are containers
+  // here, not things to extract or delete.
+  const selectedRows = $derived(rows.filter((r) => !r.isFolder && selected.has(rowKey(r))));
 </script>
 
 <div class="layer-head">
@@ -229,7 +253,7 @@
     {/each}
   </nav>
   <div class="grow"></div>
-  <button type="button" class="btn sm" onclick={close} disabled={dirty > 0}>Close archive</button>
+  <button type="button" class="btn sm" onclick={close} disabled={dirty > 0 && stat?.state !== "needs_reopen"}>Close archive</button>
 </div>
 
 <div class="layer-body">
@@ -249,7 +273,10 @@
     </div>
   {/if}
   {#if stat?.state === "needs_reopen"}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("archive.needs_reopen")}</span></div>
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span><button type="button" class="btn sm" onclick={close}>Close and reopen</button></div>
+  {/if}
+  {#if stat?.copyMismatch}
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("archive.copy_mismatch")}</span></div>
   {/if}
   {#if dirty > 0}
     <div class="pending">
@@ -274,8 +301,9 @@
           <colgroup><col /><col class="w-size" /><col class="w-store" /><col class="w-date" /></colgroup>
           <thead><tr><th scope="col">Name</th><th scope="col">Size</th><th scope="col">Stored as</th><th scope="col">Modified</th></tr></thead>
           <tbody>
-            {#each rows as r (r.fileId + r.name)}
-              <tr aria-selected={selected.has(r.fileId)} class:pending-deleted={r.pending === "deleted"} onclick={(e) => click(e, r)} ondblclick={() => open(r)}>
+            {#each rows as r, i (rowKey(r))}
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+              <tr tabindex={selected.has(rowKey(r)) || (selected.size === 0 && i === 0) ? 0 : -1} aria-selected={selected.has(rowKey(r))} class:pending-deleted={r.pending === "deleted"} onclick={(e) => click(e, r)} ondblclick={() => open(r)} onkeydown={(e) => keydown(e, r)}>
                 <td class="sel-mark">
                   <div class="fname">
                     <svg class="i i-14"><use href="#{fileIcon(r)}" /></svg>
@@ -383,16 +411,6 @@
       <button type="button" class="btn" onclick={() => collisions && addWith(collisions.paths, collisions.dir, "skip")}>Skip those</button>
       <button type="button" class="btn" onclick={() => collisions && addWith(collisions.paths, collisions.dir, "keep-both")}>Keep both</button>
       <button type="button" class="btn accent" onclick={() => collisions && addWith(collisions.paths, collisions.dir, "replace")}>Replace</button>
-    {/snippet}
-  </Dialog>
-{/if}
-
-{#if expiring}
-  <Dialog title="Unsaved changes are waiting" onclose={() => (store.expiring = null)}>
-    <p>{stat?.name} has {expiring.dirty} unsaved change(s) and has been idle. It closes at {dateTime(expiring.closesAt).slice(11)} unless you keep it open or save.</p>
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={keepOpen}>Keep open</button>
-      <button type="button" class="btn accent" disabled={!alive} onclick={() => { store.expiring = null; void save(); }}>Save now</button>
     {/snippet}
   </Dialog>
 {/if}

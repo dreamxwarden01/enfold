@@ -19,6 +19,11 @@ import (
 // zero-window process would otherwise never see, and turns each into a
 // lock trigger. It lives on its own OS-thread-locked goroutine with its own
 // message loop.
+//
+// A message-only window receives only what is addressed to it: the WTS
+// session notifications and the power-setting notifications it registered
+// for. Broadcasts (PBT_APMSUSPEND, WM_QUERYENDSESSION) never reach it;
+// suspend comes from Wails' own application event, logoff from WTS.
 type lockWatch struct {
 	core *app.Core
 	log  func(string, ...any)
@@ -27,6 +32,7 @@ type lockWatch struct {
 	wtsOK   bool
 	power   []uintptr // RegisterPowerSettingNotification handles
 	stopped chan struct{}
+	quit    chan struct{}
 	once    sync.Once
 }
 
@@ -43,6 +49,7 @@ var (
 	procDispatchMessageW                   = user32.NewProc("DispatchMessageW")
 	procDestroyWindow                      = user32.NewProc("DestroyWindow")
 	procPostMessageW                       = user32.NewProc("PostMessageW")
+	procPostQuitMessage                    = user32.NewProc("PostQuitMessage")
 	procRegisterPowerSettingNotification   = user32.NewProc("RegisterPowerSettingNotification")
 	procUnregisterPowerSettingNotification = user32.NewProc("UnregisterPowerSettingNotification")
 	procGetLastInputInfo                   = user32.NewProc("GetLastInputInfo")
@@ -53,15 +60,12 @@ var (
 )
 
 const (
-	wmClose            = 0x0010
-	wmQueryEndSession  = 0x0011
-	wmEndSession       = 0x0016
+	wmDestroy          = 0x0002
 	wmPowerBroadcast   = 0x0218
 	wmWTSSessionChange = 0x02B1
 	wmUser             = 0x0400
 	wmStopWatch        = wmUser + 1
 
-	pbtAPMSuspend         = 0x0004
 	pbtPowerSettingChange = 0x8013
 
 	notifyForThisSession = 0
@@ -69,10 +73,11 @@ const (
 
 	deviceNotifyWindowHandle = 0
 
-	wtsCurrentServerHandle = 0
-	wtsCurrentSession      = 0xFFFFFFFF
-	wtsSessionInfoEx       = 25
-	wtsSessionStateLocked  = 0
+	wtsCurrentServerHandle  = 0
+	wtsCurrentSession       = 0xFFFFFFFF
+	wtsSessionInfoEx        = 25
+	wtsSessionStateLocked   = 0
+	wtsSessionStateUnlocked = 1
 )
 
 // GUID_SESSION_DISPLAY_STATUS and GUID_SESSION_USER_PRESENCE.
@@ -111,10 +116,21 @@ type powerBroadcastSetting struct {
 	data         [1]byte
 }
 
+// wtsInfoEx mirrors the head of WTSINFOEXW: Level, then the union whose
+// LEVEL1 member starts 8-byte aligned (it holds LARGE_INTEGERs) with
+// SessionId, SessionState and SessionFlags.
+type wtsInfoEx struct {
+	level        uint32
+	_            [4]byte
+	sessionID    uint32
+	sessionState uint32
+	sessionFlags int32
+}
+
 // startLockWatch creates the window and its loop; registration failures
 // are reported as a warning and covered by a poll.
 func startLockWatch(core *app.Core, logf func(string, ...any)) *lockWatch {
-	l := &lockWatch{core: core, log: logf, stopped: make(chan struct{})}
+	l := &lockWatch{core: core, log: logf, stopped: make(chan struct{}), quit: make(chan struct{})}
 	ready := make(chan error, 1)
 	go l.loop(ready)
 	if err := <-ready; err != nil {
@@ -160,17 +176,17 @@ func (l *lockWatch) loop(ready chan<- error) {
 	}
 	l.hwnd = hwnd
 
-	// WTS: checked, with a bounded retry (the service may still be
-	// starting at logon).
+	// WTS: checked, with a short retry (the service may still be starting
+	// at logon); the poll covers a failure, so startup is not held up.
 	var wtsErr error
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		r, _, e := procWTSRegisterSessionNotification.Call(hwnd, notifyForThisSession)
 		if r != 0 {
 			l.wtsOK = true
 			break
 		}
 		wtsErr = fmt.Errorf("WTSRegisterSessionNotification: %v", e)
-		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 	for _, g := range []*windows.GUID{&guidDisplayStatus, &guidUserPresence} {
 		h, _, e := procRegisterPowerSettingNotification.Call(hwnd, uintptr(unsafe.Pointer(g)), deviceNotifyWindowHandle)
@@ -201,7 +217,6 @@ func (l *lockWatch) loop(ready chan<- error) {
 	if l.wtsOK {
 		procWTSUnRegisterSessionNotification.Call(hwnd)
 	}
-	procDestroyWindow.Call(hwnd)
 }
 
 // wndProc turns notifications into lock triggers. Every branch calls
@@ -227,37 +242,24 @@ func (l *lockWatch) wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr
 		}
 		return 0
 	case wmPowerBroadcast:
-		switch wParam {
-		case pbtAPMSuspend:
-			l.core.LockNow(app.ReasonSuspend)
-		case pbtPowerSettingChange:
-			if lParam == 0 {
-				break
-			}
+		// Only the registered power-setting notifications arrive here.
+		if wParam == pbtPowerSettingChange && lParam != 0 {
 			pbs := (*powerBroadcastSetting)(ptr(lParam))
-			if pbs.dataLength < 1 {
-				break
-			}
-			switch {
-			case pbs.powerSetting == guidDisplayStatus && pbs.data[0] == 0:
-				l.core.LockNow(app.ReasonDisplayOff)
-			case pbs.powerSetting == guidUserPresence && pbs.data[0] == 2: // PowerUserInactive
-				l.core.LockNow(app.ReasonInactive)
+			if pbs.dataLength >= 1 {
+				switch {
+				case pbs.powerSetting == guidDisplayStatus && pbs.data[0] == 0:
+					l.core.LockNow(app.ReasonDisplayOff)
+				case pbs.powerSetting == guidUserPresence && pbs.data[0] == 2: // PowerUserInactive
+					l.core.LockNow(app.ReasonInactive)
+				}
 			}
 		}
 		return 1 // TRUE
-	case wmQueryEndSession:
-		l.core.ResolveForShutdown(2 * time.Second)
-		l.core.LockNow(app.ReasonLogoff)
-		return 1
-	case wmEndSession:
-		l.core.LockNow(app.ReasonLogoff)
-		return 0
 	case wmStopWatch:
 		procDestroyWindow.Call(hwnd)
 		return 0
-	case 0x0002: // WM_DESTROY
-		user32.NewProc("PostQuitMessage").Call(0)
+	case wmDestroy:
+		procPostQuitMessage.Call(0)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, uintptr(message), wParam, lParam)
@@ -265,7 +267,7 @@ func (l *lockWatch) wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr
 }
 
 // poll is the substitute when WTS registration failed: the session's lock
-// flag every 5 s.
+// flag every 5 s, until stop.
 func (l *lockWatch) poll() {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
@@ -275,13 +277,14 @@ func (l *lockWatch) poll() {
 			if locked, ok := sessionLocked(); ok && locked {
 				l.core.LockNow(app.ReasonWorkstation)
 			}
-		case <-l.stopped:
+		case <-l.quit:
 			return
 		}
 	}
 }
 
-// sessionLocked asks WTSQuerySessionInformation(WTSSessionInfoEx).
+// sessionLocked asks WTSQuerySessionInformation(WTSSessionInfoEx). ok is
+// false when the answer is unusable (unknown state, wrong level).
 func sessionLocked() (locked, ok bool) {
 	var buf uintptr
 	var n uint32
@@ -291,22 +294,26 @@ func sessionLocked() (locked, ok bool) {
 		return false, false
 	}
 	defer windows.WTSFreeMemory(buf)
-	// WTSINFOEXW: Level uint32, then WTSINFOEX_LEVEL1_W: SessionId uint32,
-	// SessionState uint32, SessionFlags int32, ...
-	if n < 16 {
+	if uintptr(n) < unsafe.Sizeof(wtsInfoEx{}) {
 		return false, false
 	}
-	level := *(*uint32)(ptr(buf))
-	if level != 1 {
+	info := (*wtsInfoEx)(ptr(buf))
+	if info.level != 1 {
 		return false, false
 	}
-	flags := *(*int32)(ptr(buf + 12))
-	return flags == wtsSessionStateLocked, true
+	switch info.sessionFlags {
+	case wtsSessionStateLocked:
+		return true, true
+	case wtsSessionStateUnlocked:
+		return false, true
+	}
+	return false, false // WTS_SESSIONSTATE_UNKNOWN
 }
 
-// stop ends the loop; it is called from the shutdown hook.
+// stop ends the loop and the poll; it is called from the shutdown hook.
 func (l *lockWatch) stop() {
 	l.once.Do(func() {
+		close(l.quit)
 		if l.hwnd != 0 {
 			procPostMessageW.Call(l.hwnd, wmStopWatch, 0, 0)
 		}

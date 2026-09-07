@@ -31,6 +31,11 @@ export interface ArchiveStat {
      * Save is possible now
      */
     "sessionAlive": boolean;
+
+    /**
+     * the file is not the copy the vault last saw
+     */
+    "copyMismatch": boolean;
 }
 
 /**
@@ -220,6 +225,7 @@ export enum Code {
     CodeArchiveNotFound = "archive.not_found",
     CodeArchiveInvalid = "archive.invalid",
     CodeArchiveMissing = "archive.file_missing",
+    CodeArchiveCopyMismatch = "archive.copy_mismatch",
     CodeFileExists = "file.exists",
     CodeFileNotFound = "file.not_found",
     CodeFileName = "file.name",

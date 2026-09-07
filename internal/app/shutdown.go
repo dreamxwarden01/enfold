@@ -14,11 +14,23 @@ import (
 func (c *Core) ResolveForShutdown(budget time.Duration) {
 	deadline := c.now().Add(budget)
 	c.mu.Lock()
-	if c.cer != nil {
-		c.cer.latch = true
-		c.cer.cancelReason = string(ReasonExit)
-		c.cer.cancel()
+	cer := c.cer
+	if cer != nil {
+		cer.latch = true
+		cer.cancelReason = string(ReasonExit)
+		cer.cancel()
 	}
+	c.mu.Unlock()
+	if cer != nil && cer.mutation {
+		// A slot change holds the handle; the receipts below would be
+		// refused while it exists. It is cancelled: wait for its end,
+		// within the budget.
+		select {
+		case <-cer.done:
+		case <-time.After(budget / 2):
+		}
+	}
+	c.mu.Lock()
 	var list []*openArchive
 	for _, oa := range c.archives {
 		list = append(list, oa)

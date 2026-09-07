@@ -256,7 +256,7 @@ func (cer *ceremony) enrollToken() ([]byte, error) {
 	slot, err := card.FirstEmptySlot()
 	if err != nil {
 		if errors.Is(err, ErrTokenFull) {
-			return nil, cer.park(StepFailed, CodeTokenFull)
+			return nil, &parkAt{StepFailed, CodeTokenFull} // parked after the card is released
 		}
 		return nil, err
 	}
@@ -266,7 +266,7 @@ func (cer *ceremony) enrollToken() ([]byte, error) {
 		return nil, err
 	}
 	if st.Blocked() {
-		return nil, cer.park(StepBlocked, CodeTokenPINBlocked)
+		return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
 	}
 	var mgmt []byte
 	pin, err := cer.ask("pin", StepPIN, st)
@@ -282,7 +282,7 @@ func (cer *ceremony) enrollToken() ([]byte, error) {
 			}
 			mgmt, err = decodeHexKey(hexKey)
 			if err != nil {
-				return nil, cer.park(StepFailed, CodeTokenMgmtKey)
+				return nil, &parkAt{StepFailed, CodeTokenMgmtKey}
 			}
 		} else {
 			return nil, err
@@ -336,11 +336,11 @@ func (c *Core) rotateWith(cer *ceremony, unl *keystore.Unlocked) error {
 	c.mu.Lock()
 	v := &c.vault
 	if v.state != StateUnlocked || v.ks != unl.Keystore() {
-		// A lock landed meanwhile: the new keys are not installed behind a
-		// Locked state.
+		// A lock landed meanwhile: the rotation is on disk, but the new
+		// keys are not installed behind a Locked state.
 		c.mu.Unlock()
 		next.Lock()
-		return ErrTokenCancelled
+		return coded(CodeNeedsUnlock)
 	}
 	old := v.sess
 	v.sess = next
@@ -465,6 +465,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions) *Error
 		}
 		c.vault.path, c.vault.displayName = path, displayName
 		c.owed = map[[16]byte]owedReceipt{}
+		c.closeCleanArchivesLocked() // the previous vault's
 		c.publishUnlockedLocked(ks, unl)
 		c.settings.VaultPath, c.settings.DisplayName = path, displayName
 		file := c.settings

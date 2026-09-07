@@ -6,7 +6,6 @@
   import { countdown, date, dateTime, leaf } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
-  import RecoveryReveal from "./RecoveryReveal.svelte";
 
   const st = $derived(store.status);
   const unlocked = $derived(store.unlocked);
@@ -173,7 +172,7 @@
 {/if}
 
 {#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel}
-  <RecoveryReveal url={c.slotLabel} ondone={() => { store.dismissCeremony(); void store.refreshSlots(); }} />
+  <!-- the recovery key is revealed by App, above every route -->
 {:else if c}
   <Dialog title={c.kind === "enroll" ? "Add a key" : c.kind === "remove" ? "Remove a key" : c.kind === "rotate" ? "Rotate the vault key" : "Export a backup"} onclose={() => { if (store.ceremonyIsOver) store.dismissCeremony(); }}>
     <CeremonyPanel {c} onclose={() => { store.dismissCeremony(); void store.refreshSlots(); }} />

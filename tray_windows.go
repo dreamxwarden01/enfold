@@ -35,20 +35,25 @@ func newTray(s *shell) *tray {
 		t.icons[st][0] = brand.PNG(brand.Tray(32, st, false))
 		t.icons[st][1] = brand.PNG(brand.Tray(32, st, true))
 	}
+	// Tray and menu callbacks run on the Wails main thread; anything that
+	// waits on the window mutex (which other callers hold across main-
+	// thread calls) or shows a dialog leaves that thread first.
 	menu := s.app.Menu.New()
-	menu.Add("Open").OnClick(func(*application.Context) { s.ensureWindow() })
+	menu.Add("Open").OnClick(func(*application.Context) { go s.ensureWindow() })
 	t.lock = menu.Add("Lock now")
-	t.lock.OnClick(func(*application.Context) { s.core.Lock() })
+	t.lock.OnClick(func(*application.Context) { go s.core.Lock() })
 	t.close = menu.Add("Close all archives")
 	t.close.OnClick(func(*application.Context) {
-		if dirty := s.core.CloseAllArchives(); len(dirty) > 0 {
-			s.ensureWindow() // the page shows what is unsaved
-		}
+		go func() {
+			if dirty := s.core.CloseAllArchives(); len(dirty) > 0 {
+				s.ensureWindow() // the page shows what is unsaved
+			}
+		}()
 	})
 	menu.AddSeparator()
-	menu.Add("Quit").OnClick(func(*application.Context) { s.quit() })
+	menu.Add("Quit").OnClick(func(*application.Context) { go s.quit() })
 	t.t.SetMenu(menu)
-	t.t.OnClick(func() { s.ensureWindow() })
+	t.t.OnClick(func() { go s.ensureWindow() })
 	t.state = -1
 	t.update(s.core.Status())
 	t.t.Run()

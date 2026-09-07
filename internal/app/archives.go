@@ -38,9 +38,21 @@ type openArchive struct {
 	token   string
 	readers int
 	lastUse time.Time
-	// Clocks.
+	// The handle's figures, cached at every snapshot so that nothing under
+	// the state mutex takes the archive's own mutex (a running hash holds
+	// it for the whole read).
+	size  uint64
+	files int
+	free  uint64
+	// copyMismatch: the file's seq is not the one the registry last saw.
+	copyMismatch bool
+	// Clocks. Each arm bumps its generation and the callback carries the
+	// one it was armed with, so a callback that was already running when
+	// the clock was re-armed or cleared does nothing.
 	idleTimer  Timer
 	capTimer   Timer
+	idleGen    uint64
+	capGen     uint64
 	dirtySince time.Time
 	expiresAt  time.Time
 	capAt      time.Time
@@ -60,6 +72,22 @@ type pendingChange struct {
 	kind string // added | replaced | renamed | deleted
 	name string // the new name for renamed; the name for added
 	info archive.FileInfo
+}
+
+// stageReplace records a replaced record in the overlay. A record that is
+// itself a staged add stays one object — the same pendingChange in the
+// overlay and in adds — so that it can still be renamed or un-staged.
+// Caller holds the state mutex.
+func (oa *openArchive) stageReplace(info archive.FileInfo) {
+	if p := oa.overlay[info.ID]; p != nil && p.kind == "added" {
+		p.info = info
+		return
+	}
+	name := info.Name
+	if p := oa.overlay[info.ID]; p != nil && p.kind == "renamed" {
+		name = p.name
+	}
+	oa.overlay[info.ID] = &pendingChange{kind: "replaced", name: name, info: info}
 }
 
 // owedReceipt is a Save's receipt a lock stranded (APP.md §2.3).
@@ -107,9 +135,9 @@ func (c *Core) findArchive(id string) (*openArchive, *Error) {
 // unlocked, the open ones alone when locked.
 func (c *Core) ListArchives(showHidden bool) ([]ArchiveSummary, *Error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	out := []ArchiveSummary{}
 	seen := map[[16]byte]bool{}
+	var check []int // rows whose file is looked for, outside the mutex
 	if sess, e := c.sessionLocked(); e == nil {
 		g := sess.Registry()
 		for i := range g.Archives {
@@ -123,13 +151,13 @@ func (c *Core) ListArchives(showHidden bool) ([]ArchiveSummary, *Error) {
 				NoCompression: a.Policy&format.PolicyNoCompression != 0, Hidden: a.Policy&format.PolicyHidden != 0,
 				HashBehind: a.LastSeq - a.HashAtSeq,
 			}
-			if _, err := os.Stat(a.LastPath); err != nil && a.LastPath != "" {
-				s.Note = CodeArchiveMissing
-			}
 			if _, owed := c.owed[a.ArchiveID]; owed {
 				s.ReceiptOwed = true
 			}
 			c.decorateLocked(&s, a.ArchiveID)
+			if !s.Open && a.LastPath != "" {
+				check = append(check, len(out))
+			}
 			seen[a.ArchiveID] = true
 			out = append(out, s)
 		}
@@ -141,6 +169,14 @@ func (c *Core) ListArchives(showHidden bool) ([]ArchiveSummary, *Error) {
 		s := ArchiveSummary{ID: hexID(id), Name: oa.name, Path: oa.path, KeyVersion: oa.keyVersion, NoCompression: oa.noCompression, LastWrittenAt: oa.lastSavedAt}
 		c.decorateLocked(&s, id)
 		out = append(out, s)
+	}
+	c.mu.Unlock()
+	// The file system is asked with the state mutex released: an
+	// unreachable network path must not hold up a lock trigger.
+	for _, i := range check {
+		if _, err := os.Stat(out[i].Path); err != nil {
+			out[i].Note = CodeArchiveMissing
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	return out, nil
@@ -154,11 +190,13 @@ func (c *Core) decorateLocked(s *ArchiveSummary, id [16]byte) {
 	}
 	s.Open, s.Dirty, s.State, s.ReceiptOwed = true, oa.dirty(), oa.state, s.ReceiptOwed || oa.receiptOwed
 	if oa.state != "needs_reopen" && oa.state != "compacting" {
-		size, files, free := oa.a.Stat()
-		s.Files, s.FreeSpace = files, free
-		if size > 0 {
-			s.StoredSize = size
+		s.Files, s.FreeSpace = oa.files, oa.free
+		if oa.size > 0 {
+			s.StoredSize = oa.size
 		}
+	}
+	if oa.copyMismatch && s.Note == "" {
+		s.Note = CodeArchiveCopyMismatch
 	}
 }
 
@@ -287,10 +325,10 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 		c.log("archive %s opened with warnings: stale=%v freemap=%v envelope=%v", name, a.Stale(), a.FreeMapRebuilt(), a.EnvelopeStale())
 	}
 	if lastSeq != 0 && lastSeq != a.Seq() {
-		// The file is not the copy the record last saw; reported, never
-		// adopted silently.
+		// The file is not the copy the record last saw: shown on the
+		// archive until a save records this copy, never adopted silently.
 		c.log("archive %s: registry saw seq %d, file is at %d", name, lastSeq, a.Seq())
-		oa.receiptOwed = false
+		oa.copyMismatch = true
 	}
 	st := c.statLocked(oa)
 	c.mu.Unlock()
@@ -324,28 +362,46 @@ func (oa *openArchive) refreshSnapshot() {
 	for i := range oa.snap {
 		oa.byID[oa.snap[i].ID] = i
 	}
+	oa.size, oa.files, oa.free = oa.a.Stat()
 }
 
 // CloseArchive closes an open, clean archive.
 func (c *Core) CloseArchive(id string) *Error {
-	oa, e := c.findArchive(id)
-	if e != nil {
-		if e.Code == CodeArchiveNeedsReopen {
-			aid, _ := parseID(id)
-			c.mu.Lock()
-			delete(c.archives, aid)
-			c.mu.Unlock()
-			c.emitArchivesChanged()
-			return nil
-		}
-		return e
+	aid, ok := parseID(id)
+	if !ok {
+		return coded(CodeParams)
+	}
+	c.mu.Lock()
+	oa := c.archives[aid]
+	if oa != nil && (oa.state == "compacting" || oa.quiesced) {
+		// A compaction holds the archive's mutex for its whole run: say so
+		// now rather than after it.
+		c.mu.Unlock()
+		return coded(CodeArchiveCompacting)
+	}
+	c.mu.Unlock()
+	if oa == nil {
+		return coded(CodeArchiveNotOpen)
 	}
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
-	if oa.dirty() > 0 {
+	if c.archives[aid] != oa {
 		c.mu.Unlock()
-		return coded(CodeArchiveDirty)
+		return coded(CodeArchiveNotOpen)
+	}
+	switch oa.state {
+	case "compacting":
+		c.mu.Unlock()
+		return coded(CodeArchiveCompacting)
+	case "needs_reopen":
+		// The handle is broken but still holds the file: closing it is
+		// what lets a reopen succeed.
+	default:
+		if oa.dirty() > 0 {
+			c.mu.Unlock()
+			return coded(CodeArchiveDirty)
+		}
 	}
 	c.closeArchiveLocked(oa)
 	c.mu.Unlock()
@@ -389,10 +445,9 @@ func (c *Core) CloseAllArchives() []string {
 
 // statLocked builds the status strip. Caller holds the state mutex.
 func (c *Core) statLocked(oa *openArchive) ArchiveStat {
-	st := ArchiveStat{ID: hexID(oa.id), Name: oa.name, Seq: oa.seq, KeyVersion: oa.keyVersion, Dirty: oa.dirty(), State: oa.state, LastSavedAt: oa.lastSavedAt, ReceiptOwed: oa.receiptOwed}
+	st := ArchiveStat{ID: hexID(oa.id), Name: oa.name, Seq: oa.seq, KeyVersion: oa.keyVersion, Dirty: oa.dirty(), State: oa.state, LastSavedAt: oa.lastSavedAt, ReceiptOwed: oa.receiptOwed, CopyMismatch: oa.copyMismatch}
 	if oa.state != "needs_reopen" && oa.state != "compacting" {
-		size, files, free := oa.a.Stat()
-		st.Size, st.Files, st.FreeSpace = size, files+len(oa.adds), free
+		st.Size, st.Files, st.FreeSpace = oa.size, oa.files+len(oa.adds), oa.free
 	}
 	if !oa.expiresAt.IsZero() {
 		st.ExpiresAt = oa.expiresAt.Unix()
@@ -435,23 +490,27 @@ func (c *Core) armArchiveIdleLocked(oa *openArchive) {
 		idle = defaultIdle
 	}
 	oa.expiresAt = c.now().Add(idle)
-	oa.idleTimer = c.deps.Clock.AfterFunc(idle, func() { c.archiveIdle(oa) })
+	oa.idleGen++
+	gen := oa.idleGen
+	oa.idleTimer = c.deps.Clock.AfterFunc(idle, func() { c.archiveIdle(oa, gen) })
 }
 
-// archiveIdle is the idle clock's expiry.
-func (c *Core) archiveIdle(oa *openArchive) {
+// archiveIdle is the idle clock's expiry, for the arm it was set by.
+func (c *Core) archiveIdle(oa *openArchive, gen uint64) {
 	if !oa.opMu.TryLock() {
 		// An operation is running: that is activity. Look again later.
 		c.mu.Lock()
-		c.armArchiveIdleLocked(oa)
+		if c.archives[oa.id] == oa && oa.idleGen == gen {
+			c.armArchiveIdleLocked(oa)
+		}
 		c.mu.Unlock()
 		return
 	}
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
-	if c.archives[oa.id] != oa {
+	if c.archives[oa.id] != oa || oa.idleGen != gen {
 		c.mu.Unlock()
-		return
+		return // closed, or re-armed while this callback was on its way
 	}
 	if oa.readers > 0 || oa.state == "compacting" {
 		c.armArchiveIdleLocked(oa)
@@ -470,7 +529,9 @@ func (c *Core) archiveIdle(oa *openArchive) {
 	if oa.extensions < 2 {
 		oa.extensions++
 		oa.expiresAt = c.now().Add(archiveExtension)
-		oa.idleTimer = c.deps.Clock.AfterFunc(archiveExtension, func() { c.archiveIdle(oa) })
+		oa.idleGen++
+		next := oa.idleGen
+		oa.idleTimer = c.deps.Clock.AfterFunc(archiveExtension, func() { c.archiveIdle(oa, next) })
 		ev := ArchiveExpiring{ID: hexID(oa.id), ClosesAt: oa.expiresAt.Unix(), Dirty: oa.dirty()}
 		c.mu.Unlock()
 		c.emit(EventArchiveExpiring, ev)
@@ -509,15 +570,19 @@ func (c *Core) markDirtyLocked(oa *openArchive) {
 		abs = defaultAbsolute
 	}
 	oa.capAt = oa.dirtySince.Add(abs)
-	oa.capTimer = c.deps.Clock.AfterFunc(abs, func() { c.archiveCap(oa) })
+	oa.capGen++
+	gen := oa.capGen
+	oa.capTimer = c.deps.Clock.AfterFunc(abs, func() { c.archiveCap(oa, gen) })
 }
 
-// archiveCap is the dirty cap's expiry: abort, then close, and say so.
-func (c *Core) archiveCap(oa *openArchive) {
+// archiveCap is the dirty cap's expiry: abort, then close, and say so. A
+// callback that waited behind a Save which cleared the dirty state finds
+// its generation gone and does nothing.
+func (c *Core) archiveCap(oa *openArchive, gen uint64) {
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
-	if c.archives[oa.id] != oa || oa.tx == nil {
+	if c.archives[oa.id] != oa || oa.tx == nil || oa.capGen != gen {
 		c.mu.Unlock()
 		return
 	}
@@ -539,6 +604,7 @@ func (c *Core) clearDirtyLocked(oa *openArchive) {
 	oa.overlay, oa.adds = nil, nil
 	oa.dirtySince, oa.capAt = time.Time{}, time.Time{}
 	oa.extensions = 0
+	oa.capGen++ // a cap callback already on its way is void
 	if oa.capTimer != nil {
 		oa.capTimer.Stop()
 		oa.capTimer = nil
@@ -631,6 +697,9 @@ func (c *Core) Page(id, folder, sortBy string, offset, limit int) (Page, *Error)
 	}
 	sortRows(rows, sortBy)
 	total := len(rows)
+	if offset < 0 {
+		offset = 0
+	}
 	if offset > total {
 		offset = total
 	}
@@ -786,11 +855,23 @@ func (c *Core) DeleteFiles(id string, fileIDs []string) *Error {
 		}
 		oa.overlay[fid] = &pendingChange{kind: "deleted"}
 	}
+	c.settleLocked(oa)
 	c.touchArchiveLocked(oa)
 	oa.seq++
 	go c.emit(EventArchiveChanged, ArchiveChanged{ID: hexID(oa.id), Seq: oa.seq})
 	go c.emitState()
 	return nil
+}
+
+// settleLocked ends a transaction that no longer holds a staged change
+// (every add un-staged, every added file skipped): the archive is clean
+// again, not "dirty with nothing to save". Caller holds both mutexes.
+func (c *Core) settleLocked(oa *openArchive) {
+	if oa.tx == nil || len(oa.overlay) > 0 {
+		return
+	}
+	oa.tx.Abort()
+	c.clearDirtyLocked(oa)
 }
 
 func (oa *openArchive) removeAdd(fid [16]byte) {

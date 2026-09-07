@@ -95,6 +95,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeArchiveNotFound]: "The archive is not in this vault.",
   [Code.CodeArchiveInvalid]: "The file is not an archive, or it is damaged.",
   [Code.CodeArchiveMissing]: "The archive file is not where the vault last saw it.",
+  [Code.CodeArchiveCopyMismatch]: "This file is not the copy the vault last saved: an older backup, or one written elsewhere. Saving records this copy.",
   [Code.CodeFileExists]: "A file with that name already exists.",
   [Code.CodeFileNotFound]: "The file is not in the archive.",
   [Code.CodeFileName]: "That name cannot be stored.",

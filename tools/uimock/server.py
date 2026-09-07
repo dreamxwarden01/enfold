@@ -92,6 +92,18 @@ class H(SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_GET(self):
+        # The one-time recovery URL the core would mint: 48 digits, once.
+        if self.path.startswith("/s/"):
+            data = b"1234 5678 9012 3456 7890 1234 5678 9012 3456 7890 1234 5678"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        super().do_GET()
+
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")

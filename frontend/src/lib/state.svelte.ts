@@ -82,7 +82,16 @@ class Store {
     Events.On("op.progress", (e) => this.applyOp(e.data as OpView));
     Events.On("op.done", (e) => this.applyOp(e.data as OpView, true));
     Events.On("shell.drop", (e) => {
-      this.drop = e.data as Drop;
+      const d = e.data as Drop;
+      if (!d.archiveId) {
+        this.toast("Drop files onto an open archive's file list.", "error");
+        return;
+      }
+      this.drop = d;
+    });
+    Events.On("secret.refused", (e) => {
+      const r = e.data as { code: string };
+      this.toast(codeText(r.code), "error");
     });
     setInterval(() => {
       this.now = Date.now();
@@ -104,12 +113,17 @@ class Store {
   }
 
   private applyStatus(s: VaultStatus, snapshot = false): void {
-    if (s.seq <= this.seq && !snapshot) return;
+    // Older payloads are dropped; a snapshot of the same seq as the last
+    // event is the same state and may apply (the first-run snapshot is
+    // seq 0).
+    if (s.seq < this.seq || (s.seq === this.seq && !snapshot)) return;
     const before = this.status?.state;
-    this.seq = Math.max(this.seq, s.seq);
+    this.seq = s.seq;
     this.status = s;
     if (s.ops) {
-      for (const o of s.ops) this.ops[o.id] = o;
+      for (const o of s.ops) {
+        if (!this.ops[o.id]?.finished) this.ops[o.id] = o;
+      }
     }
     if (s.ceremony && s.ceremony.seq > this.ceremonySeq) {
       this.ceremonySeq = s.ceremony.seq;
@@ -120,6 +134,7 @@ class Store {
         void this.refreshArchives();
         void this.refreshSlots();
         void this.refreshSettings();
+        if (this.stat) void this.refreshArchive(); // sessionAlive follows the new session
         if (this.route === "lock") this.route = this.current ? "archive" : "archives";
       } else if (s.state === VaultState.StateLocked && before === VaultState.StateUnlocked) {
         void this.refreshArchives();
@@ -196,10 +211,13 @@ class Store {
   }
 
   async refreshArchive(): Promise<void> {
-    if (!this.current) return;
+    const id = this.current;
+    if (!id) return;
     try {
-      this.stat = await Archive.Stat(this.current);
-      this.archiveSeq[this.current] = this.stat.seq;
+      const stat = await Archive.Stat(id);
+      if (this.current !== id) return; // the user moved on meanwhile
+      this.stat = stat;
+      this.archiveSeq[id] = stat.seq;
       await this.loadPage();
     } catch (e) {
       const code = errorOf(e).code;
@@ -211,10 +229,16 @@ class Store {
     }
   }
 
+  private pageToken = 0;
+
   async loadPage(): Promise<void> {
-    if (!this.current) return;
+    const id = this.current;
+    if (!id) return;
+    const t = ++this.pageToken; // a superseded reply is dropped
     try {
-      this.page = await Archive.Page(this.current, this.folder, this.sortBy, 0, 2000);
+      const page = await Archive.Page(id, this.folder, this.sortBy, 0, 2000);
+      if (this.current !== id || t !== this.pageToken) return;
+      this.page = page;
     } catch (e) {
       this.toast(codeText(errorOf(e).code), "error");
     }
@@ -254,11 +278,27 @@ class Store {
     void Vault.Activity();
   }
 
-  // ceremonyIsOver: the final event has arrived and the panel may be dismissed.
+  // ceremonyIsOver: the final event has arrived and the panel may be
+  // dismissed. A ceremony with an outstanding prompt is never over: the
+  // recovery step is a prompt when it asks and a reveal when it shows.
   get ceremonyIsOver(): boolean {
     const c = this.ceremony;
     if (!c) return true;
+    if (c.promptId) return false;
     return c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || c.step === CeremonyStep.StepRecovery;
+  }
+
+  // Reveals already dismissed: the ceremony's final event repeats the
+  // one-time URL, which must not bring the dialog back.
+  private revealed = new Set<string>();
+
+  dismissReveal(url: string): void {
+    this.revealed.add(url);
+    this.dismissCeremony();
+  }
+
+  revealPending(url: string): boolean {
+    return !this.revealed.has(url);
   }
 }
 

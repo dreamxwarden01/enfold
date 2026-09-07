@@ -139,6 +139,7 @@ type ArchiveStat struct {
 	CapAt        int64  `json:"capAt"`     // the dirty cap, 0 when clean
 	ReceiptOwed  bool   `json:"receiptOwed"`
 	SessionAlive bool   `json:"sessionAlive"` // Save is possible now
+	CopyMismatch bool   `json:"copyMismatch"` // the file is not the copy the vault last saw
 }
 
 // FileRow is one row of a page.

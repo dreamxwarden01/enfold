@@ -295,7 +295,7 @@ func (c *Core) addItems(ctx context.Context, o *op, oa *openArchive, folder stri
 		}
 		c.mu.Lock()
 		if exists && policy == PolicyReplace {
-			oa.overlay[info.ID] = &pendingChange{kind: "replaced", name: name, info: info}
+			oa.stageReplace(info)
 			res.Outcome = "replaced"
 		} else {
 			p := &pendingChange{kind: "added", name: name, info: info}
@@ -310,6 +310,9 @@ func (c *Core) addItems(ctx context.Context, o *op, oa *openArchive, folder stri
 		done += uint64(sizes[i])
 		o.progress(done, total, "adding")
 	}
+	c.mu.Lock()
+	c.settleLocked(oa) // nothing staged after all: not dirty
+	c.mu.Unlock()
 	c.emitArchiveChanged(oa)
 	c.emitState()
 	return results, nil
@@ -375,7 +378,7 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 			return nil, err
 		}
 		c.mu.Lock()
-		oa.overlay[fid] = &pendingChange{kind: "replaced", name: cur.Name, info: info}
+		oa.stageReplace(info)
 		oa.seq++
 		c.touchArchiveLocked(oa)
 		c.mu.Unlock()
@@ -448,7 +451,7 @@ func (c *Core) Extract(id string, fileIDs []string, dir string, policy ExtractPo
 		for i := range items {
 			dst := filepath.Join(root, filepath.FromSlash(items[i].name))
 			rel, err := filepath.Rel(root, dst)
-			if err != nil || strings.HasPrefix(rel, "..") {
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				return nil, coded(CodeFileName)
 			}
 			key := strings.ToLower(dst)
@@ -552,7 +555,18 @@ func (c *Core) Save(id string) (string, *Error) {
 				c.emitArchivesChanged()
 				return nil, err
 			}
+			// Any other failure aborted the transaction (the archive's
+			// contract): the staged changes are gone, and the page must not
+			// keep showing them as pending.
+			n := oa.dirty()
+			c.clearDirtyLocked(oa)
+			oa.refreshSnapshot()
+			oa.seq++
 			c.mu.Unlock()
+			c.log("save of %s failed, %d changes discarded: %v", oa.name, n, err)
+			c.emit(EventVaultWarning, Warning{Code: "archive.changes_discarded"})
+			c.emitArchiveChanged(oa)
+			c.emitArchivesChanged()
 			return nil, err
 		}
 		c.clearDirtyLocked(oa)
@@ -592,6 +606,7 @@ func (c *Core) recordReceiptLocked(oa *openArchive, rec archive.Receipt, hash *[
 		return
 	}
 	oa.receiptOwed = false
+	oa.copyMismatch = false // the registry now names this copy
 	delete(c.owed, oa.id)
 }
 
@@ -626,6 +641,9 @@ func (c *Core) Verify(id string) (string, *Error) {
 			a.LastCiphertextHash, a.HashAtSeq, a.LastSeq, a.LastStoredSize = h, seq, seq, size
 			return nil
 		})
+		if e == nil {
+			oa.copyMismatch = false // the registry now names this copy
+		}
 		c.mu.Unlock()
 		if e != nil {
 			return nil, e
@@ -654,7 +672,7 @@ func (c *Core) Compact(id string) (string, *Error) {
 		return "", coded(CodeNeedsUnlock)
 	}
 	// Fit before the absolute cap: a rough estimate over 200 MB/s.
-	size, _, _ := oa.a.Stat()
+	size := oa.size
 	remaining := c.vault.absoluteAt.Sub(c.now())
 	if est := time.Duration(size/200e6) * time.Second; est > remaining {
 		c.mu.Unlock()
@@ -683,30 +701,38 @@ func (c *Core) Compact(id string) (string, *Error) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		c.mu.Lock()
+		if oa.tx != nil || c.archives[oa.id] != oa {
+			// A change was staged between the gate and the operation's
+			// turn on the handle: the archive stays as it is.
+			oa.quiesced = false
+			c.mu.Unlock()
+			return nil, coded(CodeArchiveDirty)
+		}
 		oa.state = "compacting"
 		c.mu.Unlock()
 		o.progress(0, 1, "compacting")
 		hash, newSize, err := oa.a.Compact(ctx, func(done, total uint64) { o.progress(done, total, "compacting") })
-		// Whatever happened, the handle is finished.
+		// Whatever happened, this handle is finished: closed (idempotent
+		// after a successful compaction) so that a failure never leaves the
+		// file locked, and forgotten.
 		c.mu.Lock()
-		delete(c.archives, oa.id)
+		c.closeArchiveLocked(oa)
+		if err == nil {
+			// The receipt is recorded (or owed) now, before the reopen: a
+			// reopen that fails must not lose it. A compacted file starts
+			// again at seq 1.
+			c.recordReceiptLocked(oa, archive.Receipt{Seq: 1, Size: newSize, WrittenAt: c.now().Unix()}, &hash)
+		}
 		c.mu.Unlock()
 		if err != nil {
 			c.emitArchivesChanged()
+			c.emitState()
 			return nil, err
 		}
-		// Reopen and record.
-		st, e := c.OpenArchive(hexID(oa.id))
-		if e != nil {
+		// Reopen for the page.
+		if _, e := c.OpenArchive(hexID(oa.id)); e != nil {
 			return nil, e
 		}
-		_ = st
-		c.mu.Lock()
-		if noa := c.archives[oa.id]; noa != nil {
-			rec := archive.Receipt{Seq: noa.a.Seq(), Size: newSize, WrittenAt: c.now().Unix()}
-			c.recordReceiptLocked(noa, rec, &hash)
-		}
-		c.mu.Unlock()
 		o.progress(1, 1, "compacted")
 		c.emitArchivesChanged()
 		return nil, nil
@@ -744,6 +770,11 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 		defer kdf.Zero(key[:])
 		o.progress(0, 3, "registry")
 		c.mu.Lock()
+		if oa.tx != nil {
+			// Staged between the gate and the operation's turn.
+			c.mu.Unlock()
+			return nil, coded(CodeArchiveDirty)
+		}
 		sess, e := c.sessionLocked()
 		if e != nil {
 			c.mu.Unlock()
@@ -775,21 +806,34 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 		}
 		o.progress(1, 3, "archive")
 		rec, err := oa.a.RotateKey(ctx, kid, key)
+		if err != nil {
+			// The registry already holds the new version; the archive is
+			// still under the old key (the next open unwraps both). Only a
+			// rotation that reached the file changes what this handle says;
+			// an unknown outcome leaves the handle for a reopen.
+			stale := oa.a.EnvelopeStale()
+			c.mu.Lock()
+			if stale {
+				c.vault.warnings["archive.envelope_stale"] = true
+			}
+			if errors.Is(err, archive.ErrIndeterminate) {
+				oa.state = "needs_reopen"
+			}
+			if rec.Seq != 0 {
+				oa.kid, oa.keyVersion = kid, oa.keyVersion+1
+				c.recordReceiptLocked(oa, rec, nil)
+			}
+			c.mu.Unlock()
+			c.emitArchiveChanged(oa)
+			c.emitArchivesChanged()
+			return nil, err
+		}
 		c.mu.Lock()
 		oa.kid = kid
 		oa.keyVersion++
-		if rec.Seq != 0 {
-			c.recordReceiptLocked(oa, rec, nil)
-		}
+		oa.refreshSnapshot()
+		c.recordReceiptLocked(oa, rec, nil)
 		c.mu.Unlock()
-		if err != nil {
-			if oa.a.EnvelopeStale() {
-				c.mu.Lock()
-				c.vault.warnings["archive.envelope_stale"] = true
-				c.mu.Unlock()
-			}
-			return nil, err
-		}
 		o.progress(3, 3, "rotated")
 		c.emitArchivesChanged()
 		return nil, nil

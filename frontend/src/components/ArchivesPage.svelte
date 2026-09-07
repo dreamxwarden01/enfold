@@ -53,6 +53,30 @@
     if (p.length) await run(Archives.Locate(a.id, p[0]));
   }
 
+  // The keyboard path: Space selects, Enter opens, the arrows move focus.
+  function rowKey(e: KeyboardEvent, id: string) {
+    const el = e.currentTarget as HTMLElement;
+    switch (e.key) {
+      case " ":
+        e.preventDefault();
+        selected = id;
+        break;
+      case "Enter":
+        e.preventDefault();
+        selected = id;
+        void store.openArchive(id);
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        (el.nextElementSibling as HTMLElement | null)?.focus();
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        (el.previousElementSibling as HTMLElement | null)?.focus();
+        break;
+    }
+  }
+
   function note(a: ArchiveSummary): string {
     if (a.note) return codeText(a.note);
     const parts: string[] = [];
@@ -114,8 +138,9 @@
             <colgroup><col /><col class="w-size" /><col class="w-files" /><col class="w-date" /><col class="w-key" /></colgroup>
             <thead><tr><th scope="col">Name</th><th scope="col">Size</th><th scope="col">Files</th><th scope="col">Last saved</th><th scope="col">Key</th></tr></thead>
             <tbody>
-              {#each store.archives as a (a.id)}
-                <tr aria-selected={selected === a.id} onclick={() => (selected = a.id)} ondblclick={() => store.openArchive(a.id)}>
+              {#each store.archives as a, i (a.id)}
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+                <tr tabindex={selected === a.id || (!selected && i === 0) ? 0 : -1} aria-selected={selected === a.id} onclick={() => (selected = a.id)} ondblclick={() => store.openArchive(a.id)} onkeydown={(e) => rowKey(e, a.id)}>
                   <td class="sel-mark">
                     <div class="fname">
                       <svg class="i i-14"><use href="#i-box" /></svg>

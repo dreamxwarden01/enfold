@@ -37,6 +37,12 @@ type VaultStatus struct {
 	DirtyArchives   int            `json:"dirtyArchives"`
 	HasPasswordSlot bool           `json:"hasPasswordSlot"`
 	HasHardwareSlot bool           `json:"hasHardwareSlot"`
+	SetupNeeded     bool           `json:"setupNeeded"`   // only a recovery slot: FinishSetup is the one action
+	DefaultPath     string         `json:"defaultPath"`   // where the vault lives unless kept elsewhere
+	MissingPath     string         `json:"missingPath"`   // a configured vault that could not be opened at start
+	KeptElsewhere   bool           `json:"keptElsewhere"` // the vault is not at DefaultPath (the override is set)
+	RetiredCopies   int            `json:"retiredCopies"` // vault-replaced-*.eks files in the data folder
+	RetiredPath     string         `json:"retiredPath"`   // the newest of them
 }
 
 // CeremonyStep is where the unlock or enrollment ceremony is.
@@ -64,7 +70,7 @@ const (
 // CeremonyState is the ceremony as the panel shows it.
 type CeremonyState struct {
 	Seq          uint64       `json:"seq"`
-	Kind         string       `json:"kind"` // unlock | enroll | rewrap | restore
+	Kind         string       `json:"kind"` // unlock | create | enroll | remove | rotate | export | import | setup | verify
 	Step         CeremonyStep `json:"step"`
 	PromptID     string       `json:"promptId,omitempty"`
 	Choose       bool         `json:"choose"` // the prompt asks for a new secret (create, enrol), not an existing one
@@ -79,6 +85,8 @@ type CeremonyState struct {
 	// SwapKey: the labels involved.
 	RemoveLabel string `json:"removeLabel,omitempty"`
 	InsertLabel string `json:"insertLabel,omitempty"`
+	// Verify, at Done: how many archives the backup's registry names.
+	Archives int `json:"archives"`
 }
 
 // Reader is a PC/SC reader that looks like a YubiKey.
@@ -194,14 +202,23 @@ type OpView struct {
 	Results   []FileOutcome `json:"results,omitempty"`
 }
 
-// BackupInfo is what a backup file says about itself before any unlock.
-type BackupInfo struct {
+// FileInfo is what a backup file says about itself before any unlock.
+type FileInfo struct {
 	Path         string `json:"path"`
+	Kind         string `json:"kind"` // vault | backup (recovery slots only, R28)
 	ModifiedAt   int64  `json:"modifiedAt"`
-	VaultMatches bool   `json:"vaultMatches"`
+	VaultMatches bool   `json:"vaultMatches"` // the same vault as the one kept (plaintext; proven only by an unlock)
 	SlotCount    int    `json:"slotCount"`
-	Newer        bool   `json:"newer"` // than this vault
+	Hardware     int    `json:"hardware"` // slots by kind, so a confirmation can say what is traded away
+	Password     int    `json:"password"`
+	Recovery     int    `json:"recovery"`
+	Newer        bool   `json:"newer"` // than the vault kept (plaintext, R35: dated, not authenticated)
 }
+
+const (
+	FileKindVault  = "vault"
+	FileKindBackup = "backup"
+)
 
 // Settings is the machine-local settings file plus the registry's timeouts.
 type Settings struct {

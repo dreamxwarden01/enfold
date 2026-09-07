@@ -98,7 +98,8 @@
         <div class="ks-head top"><h2 class="t-section">About</h2></div>
         <div class="card setcard">
           <div class="setrow"><div class="lab"><b>Enfold 0.1.0</b><span>Compression and encryption archives, unlocked by a YubiKey.</span></div></div>
-          <div class="setrow"><div class="lab"><b>Data folder</b><span>%LOCALAPPDATA%\Enfold — settings and the log; nothing secret.</span></div></div>
+          <div class="setrow"><div class="lab"><b>Vault</b><span class="ellipsis" title={s.vaultPath || store.status?.defaultPath}>{s.vaultPath ? `${s.vaultPath} — kept elsewhere` : store.status?.defaultPath ?? ""}</span></div></div>
+          <div class="setrow"><div class="lab"><b>Data folder</b><span>%LOCALAPPDATA%\Enfold — the vault, settings and the log.</span></div></div>
         </div>
       </div>
     </div>

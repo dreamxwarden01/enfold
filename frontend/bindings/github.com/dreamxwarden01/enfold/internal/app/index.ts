@@ -10,9 +10,9 @@ export {
 export type {
     ArchiveStat,
     ArchiveSummary,
-    BackupInfo,
     CeremonyState,
     Collision,
+    FileInfo,
     FileOutcome,
     FileRow,
     OpView,

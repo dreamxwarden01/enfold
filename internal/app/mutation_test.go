@@ -203,7 +203,14 @@ func TestMutationGuards(t *testing.T) {
 	h.rec.waitState(t, StateLocked)
 	h.rec.reset()
 	bad := filepath.Join(h.dir, "no-such-dir", "v.eks")
-	if e := h.c.CreateVault(bad, "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}); e != nil {
+	// An open archive refuses a new vault, whose registry its saves would
+	// miss; closed, the create to a bad path fails without touching the
+	// vault's facts.
+	if e := h.c.CreateVault(bad, "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); !isCode(e, CodeArchivesOpen) {
+		t.Fatalf("create with an archive open: %v", e)
+	}
+	h.c.CloseArchive(id)
+	if e := h.c.CreateVault(bad, "New", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, false); e != nil {
 		t.Fatal(e)
 	}
 	p := h.rec.waitCeremony(t, StepPassword, true)

@@ -10,9 +10,11 @@ package app
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +78,7 @@ type Core struct {
 	cer      *ceremony
 
 	archives map[[16]byte]*openArchive
+	retired  []string // vault-replaced-*.eks in the data folder, oldest first
 	ops      map[string]*op
 	owed     map[[16]byte]owedReceipt
 	preview  *previewServer
@@ -121,12 +124,57 @@ func (c *Core) Start() (previewPort int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	if c.settings.VaultPath != "" {
-		if err := c.openVaultFile(c.settings.VaultPath, c.settings.DisplayName); err != nil {
-			c.log("start: vault %s: %v", c.settings.VaultPath, err)
+	path := c.settings.VaultPath
+	if path == "" {
+		// The one place a vault lives (APP.md §2.1); a file put there by
+		// hand is adopted.
+		if _, err := os.Stat(c.defaultVaultPath()); err == nil {
+			path = c.defaultVaultPath()
+		}
+	}
+	c.sweepStaging()
+	c.scanRetired()
+	if path != "" {
+		name := c.settings.DisplayName
+		if name == "" {
+			name = defaultDisplayName
+		}
+		if err := c.openVaultFile(path, name); err != nil {
+			c.log("start: vault %s: %v", path, err)
+			if !errors.Is(err, keystore.ErrBusy) {
+				// Never "no vault yet": the screen names the file it could
+				// not open, so nothing invites a second vault.
+				c.mu.Lock()
+				c.vault.missing = path
+				c.mu.Unlock()
+			}
 		}
 	}
 	return c.preview.port, nil
+}
+
+// vaultFileName is the vault's name in the data folder: one vault per
+// Windows user (APP.md §2.1).
+const vaultFileName = "vault.eks"
+
+// defaultDisplayName names a vault the user did not name.
+const defaultDisplayName = "Personal vault"
+
+// defaultVaultPath is where the vault lives unless kept elsewhere.
+func (c *Core) defaultVaultPath() string { return filepath.Join(c.deps.DataDir, vaultFileName) }
+
+// overrideFor is what settings.vaultPath holds for a vault at path: empty
+// for the default place, the path otherwise.
+func (c *Core) overrideFor(path string) string {
+	if samePath(path, c.defaultVaultPath()) {
+		return ""
+	}
+	return path
+}
+
+// samePath compares two paths the way the file system does here.
+func samePath(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
 // Close ends the process's use of the core: locks, closes archives after

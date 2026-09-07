@@ -6,6 +6,8 @@ import { Archive, Archives, Keys, Settings, Vault, errorOf } from "./api";
 import type { ArchiveStat, ArchiveSummary, CeremonyState, OpView, Page, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, warningCopy } from "./strings";
+import { outcomeAfter, secretAskedAfter } from "./outcome";
+import type { Outcome } from "./outcome";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
 
@@ -42,6 +44,13 @@ class Store {
   slots = $state<SlotView[]>([]);
   settings = $state<SettingsView | null>(null);
   toasts = $state<Toast[]>([]);
+  // The last ceremony that ended with something to say on the lock screen
+  // (an import, a check of a backup, a create): it outlives the ceremony
+  // object, which the reveal dismisses.
+  outcome = $state<Outcome | null>(null);
+  // Whether the running ceremony asked for a typed secret: the lock
+  // screen's wording follows it for the rest of the ceremony.
+  secretAsked = $state(false);
   expiring = $state<Expiring | null>(null);
   drop = $state<Drop | null>(null);
   now = $state(Date.now());
@@ -128,9 +137,11 @@ class Store {
     if (s.ceremony && s.ceremony.seq > this.ceremonySeq) {
       this.ceremonySeq = s.ceremony.seq;
       this.ceremony = s.ceremony;
+      this.noteOutcome(s.ceremony);
     }
     if (before !== s.state) {
       if (s.state === VaultState.StateUnlocked) {
+        this.outcome = null;
         void this.refreshArchives();
         void this.refreshSlots();
         void this.refreshSettings();
@@ -147,6 +158,12 @@ class Store {
     if (c.seq <= this.ceremonySeq) return;
     this.ceremonySeq = c.seq;
     this.ceremony = c;
+    this.noteOutcome(c);
+  }
+
+  private noteOutcome(c: CeremonyState): void {
+    this.outcome = outcomeAfter(this.outcome, c);
+    this.secretAsked = secretAskedAfter(this.secretAsked, c);
   }
 
   // dismissCeremony clears a finished panel; the core has already forgotten it.

@@ -24,6 +24,9 @@
       case "rotate": return "Rotate the vault key";
       case "export": return "Export a backup";
       case "create": return "Create the vault";
+      case "import": return "Import";
+      case "setup": return "Finish setting up";
+      case "verify": return "Check a backup";
     }
     return "Unlock";
   }
@@ -46,7 +49,7 @@
   {:else if c.step === CeremonyStep.StepPassword && c.promptId}
     <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : c.slotLabel ? "Password for this key" : "Vault password"} note={c.choose ? "The new way in's password. Choose a long one." : ""} />
   {:else if c.step === CeremonyStep.StepRecovery && c.promptId}
-    <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note="The digits, with or without spaces." />
+    <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : "The digits, with or without spaces."} />
   {:else if c.step === CeremonyStep.StepManagementKey && c.promptId}
     <SecretInput kind="mgmtkey" promptId={c.promptId} label="Management key (hex)" note={copy.body} />
   {:else if c.step === CeremonyStep.StepBlocked}
@@ -54,7 +57,7 @@
   {:else if c.step === CeremonyStep.StepFailed}
     <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
   {:else if c.step === CeremonyStep.StepDone}
-    <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Done.</span></div>
+    <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{c.kind === "verify" ? `Opens. ${c.archives} archive${c.archives === 1 ? "" : "s"} inside.` : "Done."}</span></div>
   {:else if c.step === CeremonyStep.StepSwapKey}
     <h3 class="u-lead">{copy.title}</h3>
     <p class="u-meta">{c.removeLabel ? `Remove ${c.removeLabel}, then insert ${c.insertLabel || "the key to enroll"}.` : c.insertLabel ? `Insert ${c.insertLabel}.` : copy.body}</p>

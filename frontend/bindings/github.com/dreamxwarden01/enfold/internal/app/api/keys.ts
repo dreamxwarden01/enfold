@@ -14,10 +14,6 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as app$0 from "../models.js";
 
-export function BackupInfo(path: string): $CancellablePromise<app$0.BackupInfo> {
-    return $Call.ByID(3270959287, path);
-}
-
 export function BeginEnroll(kind: string, label: string, entangle: boolean): $CancellablePromise<void> {
     return $Call.ByID(309727738, kind, label, entangle);
 }
@@ -36,4 +32,12 @@ export function RotateNow(): $CancellablePromise<void> {
 
 export function Slots(): $CancellablePromise<app$0.SlotView[] | null> {
     return $Call.ByID(632849442);
+}
+
+/**
+ * VerifyBackup proves a backup opens with its recovery key, on a copy;
+ * nothing changes.
+ */
+export function VerifyBackup(path: string): $CancellablePromise<void> {
+    return $Call.ByID(3093488550, path);
 }

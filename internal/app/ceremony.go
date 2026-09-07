@@ -30,6 +30,9 @@ type ceremony struct {
 	// mutation: a slot change that commits to the open handle from this
 	// goroutine; registry writes wait while it runs.
 	mutation bool
+	// commits: an import or a build that installs a file at the vault's
+	// place; shutdown waits for it, so the install is never half done.
+	commits bool
 	// card is the token a mutation ceremony unlocked with, until released;
 	// unlockPub and unlockLabel say which slot it was, for the swap that
 	// follows an enrolment.
@@ -109,12 +112,18 @@ func (c *Core) BeginUnlock(method UnlockMethod) *Error {
 		return coded(CodeCeremonyRunning)
 	}
 	switch method {
-	case MethodToken:
-		if c.deps.Cards == nil {
+	case MethodToken, MethodPassword:
+		if c.setupNeededLocked() {
+			// A backup adopted but not set up has no such way in; the
+			// recovery key still opens it, and FinishSetup is the action.
+			c.mu.Unlock()
+			return coded(CodeSetupNeeded)
+		}
+		if method == MethodToken && c.deps.Cards == nil {
 			c.mu.Unlock()
 			return coded(CodeTokenNoService)
 		}
-	case MethodPassword, MethodRecovery:
+	case MethodRecovery:
 	default:
 		c.mu.Unlock()
 		return coded(CodeParams)
@@ -490,14 +499,11 @@ func (cer *ceremony) openCard(reader string) (Card, error) {
 }
 
 // matchSlot finds the vault's hardware slot the card holds a key for.
-func (cer *ceremony) matchSlot(card Card) (keystore.SlotInfo, KeyInfo, bool, error) {
+func (cer *ceremony) matchSlot(card Card, slots []keystore.SlotInfo) (keystore.SlotInfo, KeyInfo, bool, error) {
 	keys, err := card.Keys()
 	if err != nil {
 		return keystore.SlotInfo{}, KeyInfo{}, false, err
 	}
-	cer.c.mu.Lock()
-	slots := cer.c.vault.slots
-	cer.c.mu.Unlock()
 	for _, k := range keys {
 		if k.PublicKey == nil {
 			continue
@@ -515,7 +521,7 @@ func (cer *ceremony) matchSlot(card Card) (keystore.SlotInfo, KeyInfo, bool, err
 // keystore can take, with the Card to close afterwards. The password of an
 // entangled slot is collected before the PIN (the credential is assembled
 // whole; the PIN prompt fires inside ECDH).
-func (cer *ceremony) tokenCredential() (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
+func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
 	reader, err := cer.waitForOneReader()
 	if err != nil {
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
@@ -525,7 +531,7 @@ func (cer *ceremony) tokenCredential() (keystore.HardwareCredential, Card, keyst
 	if err != nil {
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
-	slot, key, ok, err := cer.matchSlot(card)
+	slot, key, ok, err := cer.matchSlot(card, slots)
 	if err != nil {
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
@@ -642,51 +648,24 @@ func (cer *ceremony) openVault(path string) (*keystore.Keystore, error) {
 func (cer *ceremony) unlock(method UnlockMethod) error {
 	c := cer.c
 	c.mu.Lock()
-	path := c.vault.path
+	path, slots := c.vault.path, c.vault.slots
 	c.mu.Unlock()
 
-	var (
-		cred keystore.Credential
-		hc   *keystore.HardwareCredential
-		card Card
-	)
-	switch method {
-	case MethodToken:
-		h, cd, _, err := cer.tokenCredential()
-		if err != nil {
-			return err
-		}
-		card, hc = cd, &h
+	cred, hc, card, err := cer.credential(method, slots)
+	if err != nil {
+		return err
+	}
+	if card != nil {
 		defer cer.closeCard(card)
-	case MethodPassword:
-		pw, err := cer.ask("password", StepPassword, PINStatus{})
-		if err != nil {
-			return err
-		}
-		cred = keystore.PasswordCredential{Password: pw}
-	case MethodRecovery:
-		digits, err := cer.ask("recovery", StepRecovery, PINStatus{})
-		if err != nil {
-			return err
-		}
-		rk, perr := kdf.ParseRecoveryDigits(digits)
-		if perr != nil {
-			return cer.park(StepFailed, CodeAuth)
-		}
-		cred = keystore.RecoveryCredential{Key: rk}
 	}
 
 	ks, err := cer.openVault(path)
 	if err != nil {
 		return err
 	}
-	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-	unl, err := cer.unlockWith(ks, cred, hc)
+	unl, err := cer.unlockFile(ks, cred, hc)
 	if err != nil {
 		ks.Close() // the file is held open only while Unlocked; a park is not that
-		if errors.Is(err, keystore.ErrAuth) || errors.Is(err, keystore.ErrNoSlot) || errors.Is(err, keystore.ErrVerifier) {
-			return &parkAt{StepFailed, CodeAuth}
-		}
 		return err
 	}
 	// Publish, unless a lock trigger latched the ceremony or the user
@@ -706,6 +685,51 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 		hc.Token = nil
 	}
 	return nil
+}
+
+// credential collects the way in for method against slots — the vault's,
+// or an incoming file's: the token flow (the Card returned is the
+// caller's to close), a password, or the recovery digits.
+func (cer *ceremony) credential(method UnlockMethod, slots []keystore.SlotInfo) (keystore.Credential, *keystore.HardwareCredential, Card, error) {
+	switch method {
+	case MethodToken:
+		h, card, _, err := cer.tokenCredentialFor(slots)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return nil, &h, card, nil
+	case MethodPassword:
+		pw, err := cer.ask("password", StepPassword, PINStatus{})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return keystore.PasswordCredential{Password: pw}, nil, nil, nil
+	case MethodRecovery:
+		digits, err := cer.ask("recovery", StepRecovery, PINStatus{})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		rk, perr := kdf.ParseRecoveryDigits(digits)
+		if perr != nil {
+			return nil, nil, nil, cer.park(StepFailed, CodeAuth)
+		}
+		return keystore.RecoveryCredential{Key: rk}, nil, nil, nil
+	}
+	return nil, nil, nil, coded(CodeParams)
+}
+
+// unlockFile derives the VMK from an open file, mapping a refusal to the
+// park the user must act on. The caller closes ks on error.
+func (cer *ceremony) unlockFile(ks *keystore.Keystore, cred keystore.Credential, hc *keystore.HardwareCredential) (*keystore.Unlocked, error) {
+	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+	unl, err := cer.unlockWith(ks, cred, hc)
+	if err != nil {
+		if errors.Is(err, keystore.ErrAuth) || errors.Is(err, keystore.ErrNoSlot) || errors.Is(err, keystore.ErrVerifier) {
+			return nil, &parkAt{StepFailed, CodeAuth}
+		}
+		return nil, err
+	}
+	return unl, nil
 }
 
 var _ = fmt.Sprintf

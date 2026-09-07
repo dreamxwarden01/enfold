@@ -45,10 +45,15 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeVaultLocked]: "The vault is locked.",
   [Code.CodeVaultBroken]: "A write's outcome is unknown. Reopen the vault to continue.",
   [Code.CodeVaultBusy]: "The vault file is open in another Enfold. Close it first.",
-  [Code.CodeVaultTampered]: "The vault's slot region does not verify. Open a backup.",
+  [Code.CodeVaultTampered]: "The vault's slot region does not verify. Import a copy of this vault from the lock screen.",
   [Code.CodeVaultStale]: "This way in holds an old key. Unlock with another and rewrap it.",
   [Code.CodeVaultNotFound]: "The vault file was not found.",
   [Code.CodeVaultInvalid]: "This is not a vault file, or it is damaged.",
+  [Code.CodeVaultExists]: "A vault, or a file, is already at that place. Replacing it must be confirmed first.",
+  [Code.CodeVaultUnlocked]: "Lock the vault first.",
+  [Code.CodeSettingsUnsaved]: "The vault's place could not be recorded in the settings. Check the data folder is writable, or Enfold may open the previous vault next time.",
+  [Code.CodeSetupNeeded]: "This vault has only its recovery key so far. Finish setting it up first.",
+  [Code.CodeArchivesOpen]: "Close the open archives first: their saves would land in the wrong vault.",
   [Code.CodeNeedsUnlock]: "Unlock the vault first.",
   [Code.CodeAuth]: "That did not open the vault.",
   [Code.CodeNoSlot]: "No way in matches.",
@@ -138,7 +143,7 @@ export function retriesText(s: Pick<CeremonyState, "retries" | "retriesKnown" | 
 export function warningCopy(code: string): string {
   switch (code) {
     case Code.CodeVaultTampered:
-      return "The vault's slot region does not verify. Every change is disabled until you open a backup.";
+      return "The vault's slot region does not verify. Every change is disabled until a copy of this vault is imported from the lock screen.";
     case Code.CodeVaultStale:
       return "A way in holds an old key after a rotation. Unlock with a current one and rewrap it.";
     case Code.CodeTokenReset:

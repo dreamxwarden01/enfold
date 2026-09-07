@@ -124,6 +124,94 @@ open (`keystore.ErrBusy`, shown as "this vault is open in another Enfold"), and 
 re-reads the live superblock's `seq` before writing and refuses when it moved. Nothing in the
 core opens the keystore or starts a goroutine before `application.New` returns.
 
+**One vault.** Enfold keeps one keystore per Windows user, at `vault.eks` in the data folder
+(`%LOCALAPPDATA%\Enfold`, or `ENFOLD_DATA_DIR`); `VaultStatus.DefaultPath` names it. The one
+override is `settings.vaultPath` — a vault kept elsewhere, chosen through "keep it elsewhere" when
+creating or "use it where it is" when importing — and it is empty in the normal case; at start an
+empty override with a `vault.eks` present adopts that file, so a copy put there by hand works
+(accepted, not recommended; an override set wins over such a file, which then lies shadowed). A
+configured vault that cannot be opened at start is `MissingPath` on the status and the first-run
+screen names it, never "no vault yet": nothing invites a second vault over a mislaid one.
+
+Everything else arrives by **import**, and **nothing replaces the vault kept here until the
+incoming file has proved itself.** `Vault.InspectFile` reads a file's plaintext facts through a
+staged copy in the data folder (so read-only media and a file another process holds work, and the
+vault's own path answers from the cached facts) — `FileInfo{Kind, ModifiedAt, VaultMatches, Newer,
+SlotCount, Hardware, Password, Recovery}`, where a *backup* has only recovery slots active (R28's
+export) and a *vault* has at least one other — and every one of those is a plaintext claim (R25,
+R35): they inform the dialog, they decide nothing. `Vault.ImportFile` stages the file as
+`vault.incoming.eks` (read raw, never opened in place), inspects that copy, and runs the **import
+ceremony** (`kind: import`) on it: a vault must unlock with one of its own ways in (`method`), a
+backup opens with its recovery key and then takes the first way in exactly as at creation (`kind`,
+`label`, `entangle`; `Choose` on the new secret). Only then is the vault kept here retired and the
+staged file installed: retirement is a *copy* to `vault-replaced-<unix>-<n>.eks` (a name taken with
+`O_EXCL`, so two retirements in one second get two names), then one rename of the staged file over
+`vault.eks` — the place is never empty for an instant — after the previous handle is closed and a
+pending lock's close waited for, as `openVaultFile` does. The ceremony ends **Locked**, since the
+install needs the handle closed; the credential spent on proving is not reused to publish a
+session. The status counts the retired copies (`RetiredCopies`, `RetiredPath`), the Keys page shows
+them, and the first-run screen offers the newest one when no vault is kept — a crash between the two
+steps leaves a vault under a name the app knows. Retired copies are never read by Enfold again and
+are the user's to delete; their ways in stay valid for them, which the confirmation says.
+
+With a vault kept here, *every* replacement needs `replace` — "same vault, newer" included, since
+both are attacker-writable plaintext — and the page sets it only after a confirmation that names
+the vault being replaced, its date and, for a backup, that archives registered after the backup's
+date are not in it; without `replace` the call is `vault.exists`. An import is refused while any
+archive is open (`vault.archives_open`), whose saves would land in the wrong registry, and from any
+state but None and Locked (Broken needs `Reopen` first; Busy is another process). **Every create
+is built as the incoming file** beside its destination and installed only after the ceremony's
+latch and cancel are checked — a create cut short (Cancel, a lock trigger, a crash) leaves nothing
+at the vault's place, so nothing is ever adopted whose recovery key was not shown — and therefore
+ends Locked too; over the vault kept here — or over any file already at the chosen destination —
+it needs `replace` and, with a vault kept, no open archive; a file at the place that could not be
+opened is retired rather than fought over. **Up to the rename nothing has happened; from the
+rename on the install has happened whatever follows:** the settings name the file first (a save
+that fails is the `settings.unsaved` warning), a reopen that fails keeps the file's path and
+name with the facts dropped and `MissingPath` set for "try again" (`Reopen` works too), and the
+ceremony reports success — so a create always shows its recovery key and an import never reports
+a failure for a vault that is in place. A rename that fails (retried briefly: a scanner may hold
+a fresh file) removes the copy just retired, so no phantom "replaced copy" is counted, and is
+reported as `vault.busy` when the file is in use; a file at the place that cannot even be looked
+at is never overwritten. What is retired is inspected: a keystore becomes
+`vault-replaced-…eks`, anything else `file-replaced-…bin`, which the status does not count.
+Import and create are *committing* ceremonies (`commits`): shutdown waits for them within its
+budget, as for a slot change, so an install is never half done; a quit that lands inside the
+install itself still completes it, and the recovery key of a create then goes to a page that may
+already be gone — the one window left, documented rather than closed. Every staged file has a
+fresh name (`vault.incoming-<id>.eks` beside its destination, `vault.inspect-<id>.eks` in the
+data folder), so stagings may overlap and nothing of the user's is ever removed to make room;
+those names can never be the vault or an export (`OpenVaultFile`, `CreateVault` and
+`ExportBackup` refuse them, and an export into the data folder), a staged copy is bounded (64
+MiB, regular files only) by the copy itself, and start sweeps what an interrupted one left in
+the data folder. A fresh open of a file clears the tampered warning, which only an unlock can
+raise. "Use it where it is" (`OpenVaultFile`)
+copies and retires nothing, follows the open-archives rule and the ceremony gate all the same,
+and with an empty name keeps the name already given. A mutation on a vault that has neither a
+usable token nor a password — an adopted backup being set up from a recovery-key session, a
+vault whose one token is stale — proves itself with the recovery key.
+
+**A backup is adopted, not restored** (FORMAT §15, R28: open it, unlock with the recovery key,
+enrol new slots). A backup placed by hand, or an import interrupted after the copy, is a vault with
+only its recovery slot: `SetupNeeded` on the status, `BeginUnlock` with a token or a password
+refused with `vault.setup_needed` (the recovery key still unlocks it — the archives stay
+reachable), and the lock screen's one action is *Finish setting up* (`Vault.FinishSetup`, `kind:
+setup`): the recovery key, then the first way in, ending Unlocked; a cancel after the slot committed
+still leaves a vault, and the facts are refreshed. The recovery key that opened the backup stays
+valid; no new one is shown. The display name is machine-local (settings), so an import asks for
+one, defaulting to the current name for the same vault and to the file's name otherwise. Setup
+is a mutation ceremony (`AddSlot` commits to the vault kept here): shutdown waits for it and an
+unknown outcome is Broken, as for any slot change.
+
+**A backup is verifiable without touching anything** (FORMAT §15: an untested backup is a belief):
+`Keys.VerifyBackup` stages a copy, opens it with the recovery key (`kind: verify`), reports how many
+archives its registry names (`CeremonyState.Archives`) and removes the copy. It runs from the lock
+screen — the one screen a ceremony runs on while the vault is locked, first run included — as
+"Check that a backup opens…"; the Keys page inspects a backup and points there. The outcome of an
+import, a check or a create is kept by the page apart from the ceremony (`store.outcome`), so it
+stays on the lock screen after the reveal is dismissed and on the first-run card when nothing is
+kept.
+
 ### 2.2 Ceremony
 
 ```
@@ -253,8 +341,13 @@ sentinel of every package with a catch-all `internal` — and services are regis
   OpenArchives int}`; `Readers() []Reader{Name}`.
 - `BeginUnlock()`, `CancelUnlock()`, `Lock()`, `Reopen()`, `Activity()`. Secret submissions
   arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`.
-- `CreateVault(path, displayName)` (recovery key shown once; then the first slot's ceremony from
-  the `Unlocked` that Create returned), `OpenVaultFile(path)`. **A chosen secret comes before
+- `CreateVault(path, displayName, kind, label, entangle, replace)` (`path` empty = the one place,
+  §2.1; the first way in's ceremony, then the keystore built as the incoming file and installed,
+  the recovery key shown once, ending Locked; over the vault kept here, `replace`),
+  `InspectFile(path) FileInfo`, `ImportFile(path, displayName, method, kind, label, entangle,
+  replace)` (`method` proves a vault; `kind`/`label`/`entangle` are the first way in of a backup),
+  `FinishSetup(kind, label, entangle)`, `OpenVaultFile(path, displayName)` (the advanced "use it
+  where it is": sets the override, copies nothing, retires nothing). **A chosen secret comes before
   the key**: for a token with an entangled password, create and enrol ask for the password
   first, and only then wait for the key, inspect it and generate — a cancel at the password
   leaves nothing on the token. Such prompts carry `Choose: true` on the ceremony state (the
@@ -309,18 +402,22 @@ sentinel of every package with a catch-all `internal` — and services are regis
   (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` → `AddSlot`.
   Sub-states mirror §2.2 plus `ManagementKey`. `AddRecoverySlot` shows the digits once.
 - `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`, `RewrapStale()`
-  (the loop of §2.2), `Export(path)`, `BackupInfo(path) {ModifiedAt, VaultMatches, SlotCount}`,
-  `VerifyBackup(path)`, `RestoreArchiveRecord(path, archiveID)` (re-wrap under the current KWK).
+  (the loop of §2.2), `Export(path)`, `VerifyBackup(path)` (§2.1: a staged copy opened with the
+  recovery key, nothing kept). What a backup is and whether it is this vault is
+  `Vault.InspectFile`; restoring a single archive record from a backup (`RestoreArchiveRecord`,
+  re-wrap under the current KWK) is deferred (§12).
 - **Slot changes and registry writes never share the handle.** While a slot-change ceremony
   runs, a registry write is refused with `ceremony.in_progress` — a Save still commits its
   archive and owes the receipt, paid when the ceremony ends — and a slot change does not start
   while a save, verify, compact or rotation is running (`op.in_progress`). A lock trigger in any
   state latches and cancels the ceremony, and the lock's close of the handle waits for it.
 - **Tampered is a state, not a banner**: every mutating call and Export is disabled with the
-  reason; the one action is "open a backup"; it is never cleared silently (R25).
+  reason; the one action is importing a copy of this vault (§2.1); it is never cleared silently
+  (R25).
 
 **Settings** — `Get()`, `Set()`. Machine-local, in `%LOCALAPPDATA%\Enfold\settings.json`
-(temp-then-rename): vault path and display name, close-to-tray behaviour, theme, look, recovery
+(temp-then-rename): the vault's path when kept elsewhere (empty: `vault.eks` in the data folder)
+and its display name, close-to-tray behaviour, theme, look, recovery
 record percentage, dictionary threshold. **Security-relevant values live in the authenticated
 registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
@@ -405,8 +502,33 @@ projection, paged table with pending markers, preview pane — image, video, aud
 loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
 drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
 Remove, Rotate now, Rewrap, backups with the R35 date, session and appearance settings). First
-run (create or open). Dialogs: new archive (path, name, compression), enrollment, recovery key
-display, remove slot, rotate, progress, extract destination and policy, collisions, errors.
+run (create, or import a vault or a backup; a file that is only a backup leads into *Finish
+setting up*, and so does a vault left half set up). Dialogs: new archive (path, name,
+compression), enrollment, recovery key display, remove slot, rotate, progress, extract
+destination and policy, collisions, errors, import.
+
+**The import dialog** (lock screen and first run) picks the file, shows what it is — vault or
+backup, its date, its ways in by kind, whether it claims to be this vault and newer — and says
+what will happen before the button is pressed: a vault is copied in and must unlock with one of
+its own ways in (chosen here: "prove it with"); a backup is copied in and opened with its recovery
+key, then takes the first way in (the kind, a name for a key — never a secret); with a vault kept
+here, a confirmation names the vault being replaced and its date, says it is kept as a dated copy
+whose ways in stay valid, and, for a backup, that archives added since its date are not in it —
+the button stays disabled until it is ticked. "Use the file where it is" is an advanced link for
+a vault, with the warning that removable media and network shares are outside Enfold's
+protection; choosing it turns the confirmation into "switch to this file — it stays where it is".
+With archives open, both dialogs say so and their buttons stay disabled. The create dialog shows
+where the vault will live, offers "keep it elsewhere" as a link, not a field, and over the vault
+kept here carries the same confirmation (naming where a vault kept elsewhere stays; the tick is
+cleared each time the dialog opens); a create ends with "Created. Unlock it with the way in you
+chose" beside the recovery key's reveal; a ceremony that fails without parking is shown on the
+first-run card as well. The first-run
+screen says to have the recovery key ready before importing a backup, because a backup opens
+with nothing else; when a configured vault could not be opened it names the file and offers
+"try again" and import before "create"; when a replaced copy exists and no vault is kept, it
+names the copy and offers to import it. A vault with only its recovery key shows *Finish setting
+up* as its one action, with "unlock with the recovery key only" beneath. Precedence on the lock
+screen: Busy, then Broken, then setup needed, then the ways in; Tampered is a banner over any.
 
 **The create and enrol dialogs name the key, never the secret.** A token gets "Name this key"
 (the label shown in the list of ways in); a password way in has no name field — its slot is
@@ -460,8 +582,8 @@ The core is tested without Wails: it takes app-side interfaces `Cards` (`Readers
 `piv` error the states depend on; one windows-tagged adapter is the only importer of
 `internal/piv`. Lock triggers are an interface the shell implements and the tests drive. Keystore
 and archive are the real packages over temp files; timers take a clock. The shell is exercised
-by hand in `wails3 dev` against a throwaway vault; `ENFOLD_DATA_DIR` points any build at a throwaway
-data folder (settings, log, WebView2 profile) instead of `%LOCALAPPDATA%\Enfold`. Frontend tests cover the copy mapping of
+by hand in `wails3 dev` with `ENFOLD_DATA_DIR` set to a throwaway data folder — which now holds
+the vault too (§2.1), so a throwaway folder is a throwaway vault — instead of `%LOCALAPPDATA%\Enfold`. Frontend tests cover the copy mapping of
 ceremony states and the "never 0 attempts" rule.
 
 ## 11. Format changes this layer needs (FORMAT.md §7)
@@ -474,7 +596,9 @@ ceremony states and the "never 0 attempts" rule.
 
 ## 12. Deferred, and open for the user
 
-pdf.js preview; `ForgetKey`; memguard for the session keys; folder move as one operation;
+pdf.js preview; `ForgetKey`; memguard for the session keys; `RestoreArchiveRecord` (one record
+from a backup into the vault, re-wrapped), and merging records from another vault; folder move
+as one operation;
 `overwrite` on extraction (an archive-layer change); an unelevated BitLocker check (measure
 first — if none exists, the SCOPE bullet or the least-privilege ruling has to move); the
 permitted range of the timeouts beyond the clamps.

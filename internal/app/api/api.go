@@ -64,11 +64,34 @@ func (v *Vault) OpenVaultFile(path, displayName string) error {
 	return asErr(v.c.OpenVaultFile(path, displayName))
 }
 
+// InspectFile says what a keystore file is — a vault or a backup — and
+// whether it is this vault and newer, without a credential.
+func (v *Vault) InspectFile(path string) (app.FileInfo, error) {
+	i, e := v.c.InspectFile(path)
+	return i, asErr(e)
+}
+
 // CreateVault makes a new vault with a recovery key and a first slot of
 // kind "token" or "password"; the recovery key is shown once through the
-// ceremony's one-time URL.
-func (v *Vault) CreateVault(path, displayName, kind, label string, entangle bool) error {
-	return asErr(v.c.CreateVault(path, displayName, app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label, Entangle: entangle}))
+// ceremony's one-time URL. path empty is the one place a vault lives;
+// over a vault kept there, replace must be true (a confirmed replacement).
+func (v *Vault) CreateVault(path, displayName, kind, label string, entangle, replace bool) error {
+	return asErr(v.c.CreateVault(path, displayName, app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label, Entangle: entangle}, replace))
+}
+
+// ImportFile makes a vault or backup file the vault kept here, once it
+// has proved itself: a vault by unlocking with method ("token",
+// "password", "recovery"), a backup by its recovery key and then the
+// first way in (kind, label, entangle). replace confirms replacing the
+// vault kept here.
+func (v *Vault) ImportFile(path, displayName, method, kind, label string, entangle, replace bool) error {
+	return asErr(v.c.ImportFile(path, displayName, app.UnlockMethod(method), app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label, Entangle: entangle}, replace))
+}
+
+// FinishSetup gives a vault that has only its recovery key its first way
+// in.
+func (v *Vault) FinishSetup(kind, label string, entangle bool) error {
+	return asErr(v.c.FinishSetup(app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label, Entangle: entangle}))
 }
 
 // Archives is the registry's list and the per-archive operations that do
@@ -202,10 +225,9 @@ func (k *Keys) RemoveSlot(recipientID string) error { return asErr(k.c.RemoveSlo
 func (k *Keys) RotateNow() error                    { return asErr(k.c.RotateNow()) }
 func (k *Keys) ExportBackup(path string) error      { return asErr(k.c.ExportBackup(path)) }
 
-func (k *Keys) BackupInfo(path string) (app.BackupInfo, error) {
-	b, e := k.c.BackupInfo(path)
-	return b, asErr(e)
-}
+// VerifyBackup proves a backup opens with its recovery key, on a copy;
+// nothing changes.
+func (k *Keys) VerifyBackup(path string) error { return asErr(k.c.VerifyBackup(path)) }
 
 // Settings is the machine-local settings plus the registry's timeouts.
 type Settings struct {

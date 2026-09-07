@@ -33,10 +33,38 @@ export function CancelUnlock(): $CancellablePromise<void> {
 /**
  * CreateVault makes a new vault with a recovery key and a first slot of
  * kind "token" or "password"; the recovery key is shown once through the
- * ceremony's one-time URL.
+ * ceremony's one-time URL. path empty is the one place a vault lives;
+ * over a vault kept there, replace must be true (a confirmed replacement).
  */
-export function CreateVault(path: string, displayName: string, kind: string, label: string, entangle: boolean): $CancellablePromise<void> {
-    return $Call.ByID(882388909, path, displayName, kind, label, entangle);
+export function CreateVault(path: string, displayName: string, kind: string, label: string, entangle: boolean, replace: boolean): $CancellablePromise<void> {
+    return $Call.ByID(882388909, path, displayName, kind, label, entangle, replace);
+}
+
+/**
+ * FinishSetup gives a vault that has only its recovery key its first way
+ * in.
+ */
+export function FinishSetup(kind: string, label: string, entangle: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1994498129, kind, label, entangle);
+}
+
+/**
+ * ImportFile makes a vault or backup file the vault kept here, once it
+ * has proved itself: a vault by unlocking with method ("token",
+ * "password", "recovery"), a backup by its recovery key and then the
+ * first way in (kind, label, entangle). replace confirms replacing the
+ * vault kept here.
+ */
+export function ImportFile(path: string, displayName: string, method: string, kind: string, label: string, entangle: boolean, replace: boolean): $CancellablePromise<void> {
+    return $Call.ByID(18027300, path, displayName, method, kind, label, entangle, replace);
+}
+
+/**
+ * InspectFile says what a keystore file is — a vault or a backup — and
+ * whether it is this vault and newer, without a credential.
+ */
+export function InspectFile(path: string): $CancellablePromise<app$0.FileInfo> {
+    return $Call.ByID(3319062579, path);
 }
 
 export function Lock(): $CancellablePromise<void> {

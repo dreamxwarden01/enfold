@@ -435,13 +435,14 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 
 // harness is one core with fakes over a fresh vault.
 type harness struct {
-	t     *testing.T
-	dir   string
-	vault string
-	c     *Core
-	clk   *fakeClock
-	rec   *recorder
-	cards *fakeCards
+	t        *testing.T
+	dir      string
+	vault    string
+	recovery string // the recovery key's digits
+	c        *Core
+	clk      *fakeClock
+	rec      *recorder
+	cards    *fakeCards
 }
 
 const testPassword = "correct horse battery staple"
@@ -471,7 +472,7 @@ func newHarness(t *testing.T, cards *fakeCards, hwPub []byte) *harness {
 	unl.Close()
 	ks.Close()
 
-	h := &harness{t: t, dir: dir, vault: vault, clk: newFakeClock(), rec: &recorder{}, cards: cards}
+	h := &harness{t: t, dir: dir, vault: vault, recovery: rk.Digits(), clk: newFakeClock(), rec: &recorder{}, cards: cards}
 	var cs Cards
 	if cards != nil {
 		cs = cards

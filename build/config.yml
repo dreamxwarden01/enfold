@@ -1,5 +1,5 @@
 # Wails project configuration. `info` feeds the Windows version resource and
-# the installers (build/windows/info.json, wails.exe.manifest, nsis, msix);
+# the NSIS installer (build/windows/info.json, wails.exe.manifest, nsis);
 # after changing it, run `wails3 task common:update:build-assets`.
 version: '3'
 

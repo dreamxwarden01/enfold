@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
 	"github.com/dreamxwarden01/enfold/internal/kdf"
@@ -99,24 +101,40 @@ func writesRegistry(kind string) bool {
 
 // acquireUnlocked runs the unlock flow against the open handle and keeps
 // the Unlocked (the VMK) for the caller. The method is the one that
-// opened the vault's kind of slot: a token when one is enrolled, else a
-// password; the recovery key is never used for a mutation's ceremony.
+// opened the vault's kind of slot: a token when a usable one is enrolled,
+// else a password; the recovery key only when the vault has nothing else
+// — an adopted backup being set up, or a vault whose one token is stale.
 func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 	c := cer.c
 	c.mu.Lock()
 	ks := c.vault.ks
-	var hasToken bool
-	for _, s := range c.vault.slots {
+	slots := c.vault.slots
+	var hasToken, hasPassword bool
+	for _, s := range slots {
 		if s.PublicKey != nil && !s.Stale {
 			hasToken = true
+		}
+		if s.Type == format.SlotStandalonePassword {
+			hasPassword = true
 		}
 	}
 	c.mu.Unlock()
 	if ks == nil {
 		return nil, nil, coded(CodeNeedsUnlock)
 	}
+	if !hasToken && !hasPassword {
+		cred, _, _, err := cer.credential(MethodRecovery, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		unl, err := cer.unlockFile(ks, cred, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return unl, nil, nil
+	}
 	if hasToken && c.deps.Cards != nil {
-		h, card, slot, err := cer.tokenCredential()
+		h, card, slot, err := cer.tokenCredentialFor(slots)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -386,7 +404,11 @@ func (c *Core) rotateWith(cer *ceremony, unl *keystore.Unlocked) error {
 }
 
 // ExportBackup writes a keystore file of registry plus recovery slots.
+// Not into the data folder, which is Enfold's to sweep.
 func (c *Core) ExportBackup(path string) *Error {
+	if reservedName(path) || samePath(filepath.Dir(path), c.deps.DataDir) {
+		return coded(CodeParams)
+	}
 	return c.beginMutation("export", func(cer *ceremony, unl *keystore.Unlocked) error {
 		if err := cer.check(); err != nil {
 			return err
@@ -395,117 +417,97 @@ func (c *Core) ExportBackup(path string) *Error {
 	})
 }
 
-// BackupInfo reads a backup's plaintext facts; nothing is unlocked.
-func (c *Core) BackupInfo(path string) (BackupInfo, *Error) {
-	ks, err := keystore.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return BackupInfo{}, coded(CodeVaultNotFound)
-		}
-		if errors.Is(err, keystore.ErrBusy) {
-			return BackupInfo{}, coded(CodeVaultBusy)
-		}
-		return BackupInfo{}, c.fail("backup info", err)
-	}
-	defer ks.Close()
-	c.mu.Lock()
-	vid, mod := c.vault.vaultID, c.vault.modifiedAt
-	c.mu.Unlock()
-	return BackupInfo{Path: path, ModifiedAt: ks.ModifiedAt(), VaultMatches: ks.VaultID() == vid, SlotCount: len(ks.Slots()), Newer: ks.ModifiedAt() > mod}, nil
-}
-
 // CreateVault makes a new keystore with a recovery slot and a first slot
 // of the given kind, both needed for the invariant. The recovery key is
 // handed to the frontend once, over the one-time channel, as the URL in
-// the ceremony state.
-func (c *Core) CreateVault(path, displayName string, first EnrollOptions) *Error {
-	c.mu.Lock()
-	switch c.vault.state {
-	case StateNone, StateLocked:
-	case StateBroken, StateBusy:
-		// The configured vault is still held or contested; Reopen or
-		// OpenVaultFile settles that first.
-		c.mu.Unlock()
-		return coded(CodeVaultBroken)
-	default:
-		c.mu.Unlock()
-		return coded(CodeVaultLocked)
+// the ceremony state. path is where the vault lives: empty for the one
+// place (APP.md §2.1), else a vault kept elsewhere. The keystore is built
+// as the incoming file beside its destination and installed only after
+// the ceremony's latch and cancel are checked — a create cut short leaves
+// nothing behind, and nothing is ever adopted whose recovery key was not
+// shown — so every create ends Locked. Replacing the vault kept here, or
+// any file already at the destination, needs replace; with a vault kept,
+// no archive may be open.
+func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replace bool) *Error {
+	if path == "" {
+		path = c.defaultVaultPath()
 	}
-	if c.cer != nil {
-		c.mu.Unlock()
-		return coded(CodeCeremonyRunning)
-	}
-	if first.Kind == EnrollToken && c.deps.Cards == nil {
-		c.mu.Unlock()
-		return coded(CodeTokenNoService)
-	}
-	if first.Kind != EnrollToken && first.Kind != EnrollPassword {
-		c.mu.Unlock()
+	if reservedName(path) || first.Kind != EnrollToken && first.Kind != EnrollPassword {
 		return coded(CodeParams)
 	}
+	if first.Kind == EnrollToken && c.deps.Cards == nil {
+		return coded(CodeTokenNoService)
+	}
+	c.mu.Lock()
+	if e := c.importGateLocked(false); e != nil {
+		c.mu.Unlock()
+		return e
+	}
+	configured := c.vault.state != StateNone
+	replacing := configured && (samePath(path, c.defaultVaultPath()) || samePath(path, c.vault.path))
+	if configured && len(c.archives) > 0 {
+		// A save from an open archive would land in the wrong registry.
+		c.mu.Unlock()
+		return coded(CodeArchivesOpen)
+	}
+	c.mu.Unlock()
+	if !replace {
+		// Anything at the destination — a vault, a file, something that
+		// cannot even be looked at — is replaced only knowingly.
+		if _, err := os.Stat(path); replacing || !errors.Is(err, fs.ErrNotExist) {
+			return coded(CodeVaultExists)
+		}
+	}
+	c.mu.Lock()
+	if e := c.importGateLocked(false); e != nil {
+		c.mu.Unlock()
+		return e
+	}
 	cer := c.newCeremonyLocked("create")
+	cer.commits = true // installs at the vault's place: shutdown waits for it
 	c.vault.state = StateUnlocking
 	// The previous vault's path and facts stand until the new one exists.
 	c.mu.Unlock()
 	c.emitState()
+	staged := filepath.Join(filepath.Dir(path), stagingName(incomingPrefix)) // beside its destination: one rename
 	go cer.run(func(ctx context.Context) error {
+		installed := false
+		defer func() {
+			if !installed {
+				os.Remove(staged)
+			}
+		}()
 		rk, err := kdf.NewRecoveryKey()
 		if err != nil {
 			return err
 		}
-		specs := []keystore.SlotSpec{keystore.RecoverySlot{Key: rk, Label: "Recovery key"}}
-		var card Card
-		switch first.Kind {
-		case EnrollPassword:
-			pw, err := cer.askNew("password", StepPassword)
-			if err != nil {
-				return err
-			}
-			specs = append(specs, keystore.PasswordSlot{Password: pw, Argon2: defaultArgon2, Label: mustString(first.Label, "Password")})
-		case EnrollToken:
-			// The entangled password first, then the key (as in BeginEnroll).
-			hs := keystore.HardwareSlot{Label: mustString(first.Label, "YubiKey")}
-			if first.Entangle {
-				pw, err := cer.askNew("password", StepPassword)
-				if err != nil {
-					return err
-				}
-				hs.Password, hs.Argon2 = pw, defaultArgon2
-			}
-			pub, err := cer.enrollToken(nil) // nothing unlocked: no key to wait out
-			if err != nil {
-				return err
-			}
-			hs.PublicKey = pub
-			specs = append(specs, hs)
+		spec, err := cer.firstSlotSpec(first)
+		if err != nil {
+			return err
 		}
-		defer cer.closeCard(card)
 		if err := cer.check(); err != nil {
 			return err
 		}
 		cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-		unl, err := keystore.Create(path, keystore.CreateOptions{Slots: specs})
+		unl, err := keystore.Create(staged, keystore.CreateOptions{Slots: []keystore.SlotSpec{keystore.RecoverySlot{Key: rk, Label: "Recovery key"}, spec}})
 		if err != nil {
 			return err
 		}
 		ks := unl.Keystore()
+		unl.Close()
+		ks.Close()
+		// Built; installed only if nothing cut the ceremony short meanwhile.
 		c.mu.Lock()
-		if cer.latch || cer.ctx.Err() != nil {
-			c.mu.Unlock()
-			unl.Close()
-			ks.Close()
+		cut := cer.latch || cer.ctx.Err() != nil
+		c.mu.Unlock()
+		if cut {
 			return ErrTokenCancelled
 		}
-		c.vault.path, c.vault.displayName = path, displayName
-		c.owed = map[[16]byte]owedReceipt{}
-		c.closeCleanArchivesLocked() // the previous vault's
-		c.publishUnlockedLocked(ks, unl)
-		c.settings.VaultPath, c.settings.DisplayName = path, displayName
-		file := c.settings
-		c.mu.Unlock()
-		if err := saveSettings(c.deps.DataDir, file); err != nil {
-			c.log("settings: %v", err)
+		if err := c.install(staged, path, displayName); err != nil {
+			return err
 		}
+		installed = true
+		// Installed: the key is shown whatever happens now.
 		url := c.preview.mintSecret(rk.Digits())
 		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
 		return nil

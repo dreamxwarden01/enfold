@@ -21,10 +21,10 @@ func (c *Core) ResolveForShutdown(budget time.Duration) {
 		cer.cancel()
 	}
 	c.mu.Unlock()
-	if cer != nil && cer.mutation {
+	if cer != nil && (cer.mutation || cer.commits) {
 		// A slot change holds the handle; the receipts below would be
-		// refused while it exists. It is cancelled: wait for its end,
-		// within the budget.
+		// refused while it exists. An install must finish or not start.
+		// It is cancelled: wait for its end, within the budget.
 		select {
 		case <-cer.done:
 		case <-time.After(budget / 2):

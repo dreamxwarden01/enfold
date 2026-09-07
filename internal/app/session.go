@@ -42,6 +42,7 @@ type vaultState struct {
 
 	warnings map[Code]bool
 	broken   error
+	missing  string // a configured vault that could not be opened at start
 }
 
 // LockReason is why a lock trigger fired.
@@ -79,8 +80,12 @@ func (c *Core) openVaultFile(path, displayName string) error {
 	defer c.mu.Unlock()
 	if err != nil {
 		if errors.Is(err, keystore.ErrBusy) {
-			// Busy needs the path, so that "try again" can retry it.
-			c.vault.path, c.vault.displayName = path, displayName
+			// Busy needs the path, so that "try again" can retry it; the
+			// facts are the file's, of which nothing is known yet.
+			c.vault.path, c.vault.displayName, c.vault.missing = path, displayName, ""
+			c.vault.vaultID, c.vault.modifiedAt, c.vault.rotationPending, c.vault.slots, c.vault.stale = [16]byte{}, 0, false, nil, nil
+			delete(c.vault.warnings, CodeVaultStale)
+			delete(c.vault.warnings, CodeVaultTampered)
 			c.vault.state = StateBusy
 			c.bump()
 			return err
@@ -95,8 +100,9 @@ func (c *Core) openVaultFile(path, displayName string) error {
 		c.owed = map[[16]byte]owedReceipt{}
 		c.closeCleanArchivesLocked()
 	}
-	c.vault.path, c.vault.displayName = path, displayName
+	c.vault.path, c.vault.displayName, c.vault.missing = path, displayName, ""
 	c.cacheFactsLocked(ks)
+	delete(c.vault.warnings, CodeVaultTampered) // known only after an unlock; a fresh file starts clean
 	ks.Close()
 	c.vault.state = StateLocked
 	c.vault.broken = nil
@@ -131,12 +137,29 @@ func (c *Core) cacheFactsLocked(ks *keystore.Keystore) {
 	}
 }
 
-// OpenVaultFile configures path as the vault and reads its facts.
+// OpenVaultFile configures path as the vault — where it is, copying
+// nothing — and reads its facts. Like an import it is refused while an
+// archive is open, whose saves would land in the wrong registry. An
+// empty displayName keeps the name already given.
 func (c *Core) OpenVaultFile(path, displayName string) *Error {
+	if reservedName(path) {
+		return coded(CodeParams)
+	}
 	c.mu.Lock()
-	if c.vault.state == StateUnlocked || c.vault.state == StateUnlocking {
+	if c.cer != nil {
 		c.mu.Unlock()
-		return coded(CodeVaultLocked)
+		return coded(CodeCeremonyRunning)
+	}
+	if e := c.importGateLocked(false); e != nil && !(c.vault.state == StateBusy && samePath(path, c.vault.path)) {
+		c.mu.Unlock()
+		return e
+	}
+	if c.vault.state != StateNone && len(c.archives) > 0 && !samePath(path, c.vault.path) {
+		c.mu.Unlock()
+		return coded(CodeArchivesOpen)
+	}
+	if displayName == "" {
+		displayName = mustString(c.settings.DisplayName, defaultDisplayName)
 	}
 	c.mu.Unlock()
 	if err := c.openVaultFile(path, displayName); err != nil {
@@ -154,7 +177,7 @@ func (c *Core) OpenVaultFile(path, displayName string) *Error {
 		return c.fail("open vault", err)
 	}
 	c.mu.Lock()
-	c.settings.VaultPath, c.settings.DisplayName = path, displayName
+	c.settings.VaultPath, c.settings.DisplayName = c.overrideFor(path), displayName
 	file := c.settings
 	c.mu.Unlock()
 	if err := saveSettings(c.deps.DataDir, file); err != nil {
@@ -194,6 +217,14 @@ func (c *Core) statusLocked() VaultStatus {
 		case s.Type == format.SlotStandalonePassword:
 			st.HasPasswordSlot = true
 		}
+	}
+	st.SetupNeeded = v.state != StateNone && len(v.slots) > 0 && !st.HasHardwareSlot && !st.HasPasswordSlot
+	st.DefaultPath = c.defaultVaultPath()
+	st.MissingPath = v.missing
+	st.KeptElsewhere = v.state != StateNone && !samePath(v.path, c.defaultVaultPath())
+	st.RetiredCopies = len(c.retired)
+	if n := len(c.retired); n > 0 {
+		st.RetiredPath = c.retired[n-1]
 	}
 	if c.cer != nil {
 		cs := c.cer.state
@@ -305,9 +336,9 @@ func (c *Core) brokenLocked(err error) {
 // is closed and the file reopened.
 func (c *Core) Reopen() *Error {
 	c.mu.Lock()
-	if c.vault.state == StateUnlocked || c.vault.state == StateUnlocking {
+	if c.vault.state == StateUnlocked || c.vault.state == StateUnlocking || c.vault.state == StateReleasing || c.cer != nil {
 		c.mu.Unlock()
-		return coded(CodeVaultLocked)
+		return coded(CodeCeremonyRunning)
 	}
 	if c.vault.ks != nil {
 		c.vault.ks.Close()

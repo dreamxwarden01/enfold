@@ -14,6 +14,8 @@ state = {
         "lastUnlockedAt": NOW - 86400, "locksAt": 0, "absoluteAt": 0, "modifiedAt": NOW - 3600,
         "rotationPending": False, "tampered": False, "warnings": [], "ops": [], "openArchives": 0,
         "dirtyArchives": 0, "hasPasswordSlot": False, "hasHardwareSlot": True,
+        "setupNeeded": False, "defaultPath": "C:/Users/me/AppData/Local/Enfold/vault.eks", "missingPath": "",
+        "keptElsewhere": True, "retiredCopies": 0, "retiredPath": "",
     },
     "archives": [
         {"id": "a1" * 16, "name": "Photos 2024", "path": "D:/Archives/photos-2024.efd", "storedSize": 51_700_000_000,
@@ -79,7 +81,9 @@ METHODS = {
     2470395052: lambda a: None, 913354260: lambda a: "http://127.0.0.1:1/p/x/y", 723007364: lambda a: state["text"],
     1850767145: lambda a: [], 2446376312: lambda a: None, 448053830: lambda a: {"id": a[0], "kind": "add", "done": 1, "total": 1, "phase": "", "startedAt": NOW, "finished": True},
     632849442: lambda a: state["slots"], 309727738: lambda a: None, 3159373965: lambda a: None, 1280438677: lambda a: None,
-    332274822: lambda a: None, 3270959287: lambda a: {"path": a[0], "modifiedAt": NOW - 90000, "vaultMatches": True, "slotCount": 3, "newer": False},
+    332274822: lambda a: None,
+    3319062579: lambda a: {"path": a[0], "kind": "backup", "modifiedAt": NOW - 90000, "vaultMatches": True, "slotCount": 1, "hardware": 0, "password": 0, "recovery": 1, "newer": False},  # vault.InspectFile
+    18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: lambda a: None,  # ImportFile, FinishSetup, VerifyBackup
     2652127606: lambda a: state["settings"], 740356410: lambda a: None,
     3606391931: lambda a: None, 3229291943: lambda a: ["D:/Pictures/a.jpg"], 2529646972: lambda a: "D:/Pictures", 2079207478: lambda a: None,
     842300112: lambda a: None, 1923582270: lambda a: "D:/new.efd", 3130426784: lambda a: None,

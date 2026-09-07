@@ -1,14 +1,17 @@
 <script lang="ts">
   // The lock screen (APP.md §6): one panel, the token ceremony's three
   // moments side by side, the secondary ways in below the first.
-  import { CeremonyStep, Shell, Vault, VaultState, errorOf } from "../lib/api";
+  import { CeremonyStep, Keys, Shell, Vault, VaultState, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, retriesText, stepText, warningCopy } from "../lib/strings";
   import { dateTime, leaf } from "../lib/format";
   import { fade } from "svelte/transition";
   import { motion } from "../lib/motion";
+  import { samePath } from "../lib/paths";
   import SecretInput from "./SecretInput.svelte";
   import Dialog from "./Dialog.svelte";
+  import FirstWayIn from "./FirstWayIn.svelte";
+  import ImportDialog from "./ImportDialog.svelte";
 
   const st = $derived(store.status);
   const c = $derived(store.ceremony);
@@ -16,6 +19,8 @@
   const firstRun = $derived(st?.state === VaultState.StateNone);
   const busy = $derived(st?.state === VaultState.StateBusy);
   const broken = $derived(st?.state === VaultState.StateBroken);
+  // A backup adopted but not set up: the one action is finishing setup.
+  const setupNeeded = $derived(!!st?.setupNeeded && st?.state === VaultState.StateLocked);
 
   // Which of the three cards is live.
   const live = $derived.by((): 0 | 1 | 2 | 3 => {
@@ -35,7 +40,13 @@
     return 1;
   });
 
-  const tokenOnly = $derived(!c || c.kind !== "unlock" || (c.step !== CeremonyStep.StepPassword && c.step !== CeremonyStep.StepRecovery));
+  // tokenOnly is a fact about the ceremony, not the step: once a secret
+  // was asked for, the strip stays worded for a secret until the ceremony
+  // ends (the store tracks it from the events), and a check or a setup is
+  // never worded for a token.
+  const tokenOnly = $derived(!c || (!store.secretAsked && c.kind !== "verify" && c.kind !== "setup" && c.step !== CeremonyStep.StepPassword && c.step !== CeremonyStep.StepRecovery));
+  const outcome = $derived(store.outcome);
+  const same = samePath;
 
   // Each card's body fades in when what it shows changes (APP.md §6): a
   // dim card shows a line that depends on tokenOnly alone, so it is keyed
@@ -50,6 +61,76 @@
   let createKind = $state<"token" | "password">("token");
   let createLabel = $state("");
   let createEntangle = $state(false);
+  let createConfirm = $state(false);
+  // Where the create lands, and what that replaces: the vault kept here
+  // (at its own file, or at the one place), or the file that could not
+  // be opened. Anything else already at the place is retired unasked
+  // beyond the save dialog's own question.
+  const dest = $derived(createPath || st?.defaultPath || "");
+  const replacesMissing = $derived(!!st?.missingPath && same(dest, st.missingPath));
+  const replacesVault = $derived(!firstRun && (same(dest, st?.path) || same(dest, st?.defaultPath)));
+  const createReplaces = $derived(replacesVault || replacesMissing);
+  const openArchives = $derived(st?.openArchives ?? 0);
+
+  let importing = $state(false);
+  let importPrefill = $state("");
+  function openImport(prefill = "") {
+    importPrefill = prefill;
+    importing = true;
+  }
+
+  let setup = $state(false);
+  let setupKind = $state<"token" | "password">("token");
+  let setupLabel = $state("");
+  let setupEntangle = $state(false);
+
+  async function doSetup() {
+    setup = false;
+    store.dismissCeremony();
+    try {
+      await Vault.FinishSetup(setupKind, setupKind === "token" ? setupLabel || "YubiKey" : "Password", setupKind === "token" && setupEntangle);
+    } catch (e) {
+      store.toast(codeText(errorOf(e).code), "error");
+    }
+  }
+
+  async function retryMissing() {
+    if (!st?.missingPath) return;
+    store.dismissCeremony();
+    try {
+      await Vault.OpenVaultFile(st.missingPath, ""); // the name it already has
+    } catch (e) {
+      store.toast(codeText(errorOf(e).code), "error");
+    }
+  }
+
+  function openCreate() {
+    createConfirm = false; // a replacement is confirmed each time
+    create = true;
+  }
+
+  // checkBackup proves a backup opens, on a copy, from the lock screen —
+  // the one screen a ceremony runs on while the vault is locked.
+  async function checkBackup() {
+    const p = (await Shell.PickFiles("Check that a backup opens", false)) ?? [];
+    if (!p.length) return;
+    store.dismissCeremony();
+    try {
+      await Keys.VerifyBackup(p[0]);
+    } catch (e) {
+      store.toast(codeText(errorOf(e).code), "error");
+    }
+  }
+
+  // What card 3 says when a ceremony ends, by kind.
+  function doneTitle(kind: string): string {
+    switch (kind) {
+      case "import": return "Imported";
+      case "setup": return "Set up";
+      case "verify": return "Opens";
+    }
+    return "Unlocked";
+  }
 
   // begin starts a ceremony. One that is still running (the token flow
   // waiting for a PIN, a parked state) is cancelled first and its end
@@ -80,29 +161,21 @@
     });
   }
 
-  async function openFile() {
-    const p = (await Shell.PickFiles("Open a vault or a backup", false)) ?? [];
-    if (!p.length) return;
-    try {
-      await Vault.OpenVaultFile(p[0], leaf(p[0]).replace(/\.eks$/i, ""));
-    } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
-    }
-  }
-
   async function pickCreatePath() {
     const p = await Shell.SaveFile("Where to keep the vault", "vault.eks");
     if (p) createPath = p;
   }
 
   async function doCreate() {
-    if (!createPath || !createName) return;
+    if (!createName || (createReplaces && !createConfirm)) return;
     create = false;
     store.dismissCeremony();
     try {
       // A password slot is named "Password", whatever was typed for a key
       // before the kind was switched; entangling is a token's option only.
-      await Vault.CreateVault(createPath, createName, createKind, createKind === "token" ? createLabel || "YubiKey" : "Password", createKind === "token" && createEntangle);
+      // Elsewhere, a file already at the chosen place is retired as a
+      // dated copy — the save dialog asked about it; here, the tick.
+      await Vault.CreateVault(createPath, createName, createKind, createKind === "token" ? createLabel || "YubiKey" : "Password", createKind === "token" && createEntangle, createReplaces ? createConfirm : !!createPath);
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }
@@ -116,21 +189,51 @@
     <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
     <div class="state">
       <svg class="i i-14"><use href="#i-lock" /></svg>
-      {#if running}Unlocking{:else if firstRun}No vault yet{:else if busy}Vault open elsewhere{:else if broken}Needs attention{:else}Keystore locked{/if}
+      {#if running}{c?.kind === "import" ? "Importing" : c?.kind === "setup" ? "Setting up" : c?.kind === "verify" ? "Checking a backup" : "Unlocking"}{:else if firstRun && st?.missingPath}Vault not found{:else if firstRun}No vault yet{:else if busy}Vault open elsewhere{:else if broken}Needs attention{:else if setupNeeded}Needs setting up{:else}Keystore locked{/if}
     </div>
   </div>
 
-  {#if firstRun}
+  {#if firstRun && !running}
     <div class="u-strip first">
       <article class="step">
         <div class="step-label"><b>1</b>Start</div>
         <div class="step-body">
-          <h2 class="u-lead">Create a vault, or open one</h2>
-          <div class="u-meta">A vault is one file: the keys to your archives, opened by a YubiKey, a password or a recovery key.</div>
-          <div class="u-links">
-            <button type="button" class="btn accent" onclick={() => (create = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Create a vault</button>
-            <button type="button" class="btn" onclick={openFile}><svg class="i i-14"><use href="#i-open" /></svg>Open a vault file</button>
-          </div>
+          {#if st?.missingPath}
+            <h2 class="u-lead">The vault could not be opened</h2>
+            <div class="u-meta">Enfold keeps your vault at <span class="mono">{st.missingPath}</span>, and that file is missing or unreadable.</div>
+            <div class="u-links">
+              <button type="button" class="btn accent" onclick={retryMissing}>Try again</button>
+              <button type="button" class="btn" onclick={() => openImport()}><svg class="i i-14"><use href="#i-open" /></svg>Import a vault or a backup…</button>
+              <button type="button" class="btn link" onclick={openCreate}>Create a new vault instead</button>
+            </div>
+          {:else}
+            <h2 class="u-lead">Create a vault, or import one</h2>
+            <div class="u-meta">A vault is one file: the keys to your archives, opened by a YubiKey, a password or a recovery key. Enfold keeps it in <span class="mono">{st?.defaultPath}</span>.</div>
+            <div class="u-links">
+              <button type="button" class="btn accent" onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>Create a vault</button>
+              <button type="button" class="btn" onclick={() => openImport()}><svg class="i i-14"><use href="#i-open" /></svg>Import a vault or a backup…</button>
+              <button type="button" class="btn link" onclick={checkBackup}>Check that a backup opens…</button>
+            </div>
+            <div class="u-meta q gap">To import a backup, have its recovery key ready: a backup opens with nothing else.</div>
+          {/if}
+          {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
+            <div class="bar danger u-bar"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
+          {:else if outcome?.kind === "verify"}
+            <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>The backup opens. {outcome.archives} archive{outcome.archives === 1 ? "" : "s"} inside.</span></div>
+          {:else if outcome?.kind === "import"}
+            <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>Imported, but the file could not be opened afterwards. Try again.</span></div>
+          {:else if outcome?.kind === "create"}
+            <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>Created, but the file could not be opened afterwards. Try again.</span></div>
+          {/if}
+          {#if (st?.retiredCopies ?? 0) > 0 && st?.retiredPath}
+            <div class="u-foot">
+              <div class="bar">
+                <svg class="i i-14"><use href="#i-info" /></svg>
+                <span class="grow">A replaced copy of a vault is in Enfold's folder: {leaf(st.retiredPath)}.</span>
+                <button type="button" class="btn link" onclick={() => openImport(st?.retiredPath ?? "")}>Import it…</button>
+              </div>
+            </div>
+          {/if}
         </div>
       </article>
     </div>
@@ -191,11 +294,19 @@
                 <path d="M80 30v12M88 30v12" class="k-lines" stroke-width="1.5" stroke-linecap="round" />
               </svg>
             </div>
-            <h2 class="u-lead">{st?.hasHardwareSlot ? "Insert your YubiKey" : "Unlock the vault"}</h2>
+            <h2 class="u-lead">{setupNeeded ? "Finish setting up" : st?.hasHardwareSlot ? "Insert your YubiKey" : "Unlock the vault"}</h2>
             <div class="u-meta">{st?.displayName || leaf(st?.path ?? "")}</div>
-            {#if st?.lastUnlockedAt}<div class="u-meta q">Last unlocked {dateTime(st.lastUnlockedAt)}</div>{/if}
+            {#if setupNeeded}
+              <div class="u-meta q">This vault has only its recovery key so far. Choose the first way in; the recovery key is asked for first.</div>
+            {:else if st?.lastUnlockedAt}<div class="u-meta q">Last unlocked {dateTime(st.lastUnlockedAt)}</div>{/if}
             {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
               <div class="bar danger u-bar"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
+            {:else if outcome?.kind === "import"}
+              <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>Imported. Unlock it with its own way in.</span></div>
+            {:else if outcome?.kind === "verify"}
+              <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>The backup opens. {outcome.archives} archive{outcome.archives === 1 ? "" : "s"} inside.</span></div>
+            {:else if outcome?.kind === "create"}
+              <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>Created. Unlock it with the way in you chose.</span></div>
             {/if}
             <div class="u-links">
               {#if busy}
@@ -204,7 +315,10 @@
               {:else if broken}
                 <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("vault.broken")}</span></div>
                 <button type="button" class="btn accent" onclick={() => void Vault.Reopen()}>Reopen the vault</button>
-              {:else}
+              {:else if setupNeeded}
+                <button type="button" class="btn accent" onclick={() => (setup = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Finish setting up</button>
+                <button type="button" class="btn sm" onclick={() => begin("recovery")}>Unlock with the recovery key only</button>
+              {:else if !firstRun}
                 {#if st?.hasHardwareSlot}
                   <button type="button" class="btn accent" onclick={() => begin("token")}><svg class="i i-14"><use href="#i-yubi" /></svg>Unlock with YubiKey</button>
                 {/if}
@@ -213,8 +327,11 @@
                 {/if}
                 <button type="button" class="btn sm" onclick={() => begin("recovery")}>Use recovery key</button>
               {/if}
-              <button type="button" class="btn link" onclick={openFile}>Open a backup or another vault</button>
-              <button type="button" class="btn link" onclick={() => (create = true)}>Create a new vault</button>
+              {#if !busy && !broken}
+                <button type="button" class="btn link" onclick={() => openImport()}>Import a backup or a copy of this vault…</button>
+                <button type="button" class="btn link" onclick={checkBackup}>Check that a backup opens…</button>
+                <button type="button" class="btn link" onclick={openCreate}>Create a new vault…</button>
+              {/if}
             </div>
             <div class="u-foot">
               {#each warnings as w (w)}
@@ -229,7 +346,7 @@
               {/if}
             </div>
           {:else}
-            <h2 class="u-lead">{st?.displayName}</h2>
+            <h2 class="u-lead">{st?.displayName || (c?.kind === "verify" ? "Checking a backup" : c?.kind === "import" ? "Importing" : c?.kind === "create" ? "Creating the vault" : "")}</h2>
             {#if c?.slotLabel && c.step !== CeremonyStep.StepRecovery}<div class="u-meta">Matched {c.slotLabel}.</div>{/if}
           {/if}
         </div>
@@ -248,9 +365,9 @@
               <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={stepText(c.step).body} button="Unlock" />
             {:else if c.step === CeremonyStep.StepPassword}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} note={c.choose ? "Choose a long one." : ""} button={c.choose ? "Continue" : "Unlock"} />
+              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} note={c.choose ? "Choose a long one." : ""} button={c.choose || c.kind !== "unlock" ? "Continue" : "Unlock"} />
             {:else if c.step === CeremonyStep.StepRecovery}
-              <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note="The digits you wrote down, with or without spaces." button="Unlock" />
+              <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : "The digits you wrote down, with or without spaces."} button={c.kind === "verify" ? "Check" : c.kind === "unlock" ? "Unlock" : "Continue"} />
             {:else if c.step === CeremonyStep.StepManagementKey}
               <SecretInput kind="mgmtkey" promptId={c.promptId} label="Management key (hex)" note={stepText(c.step).body} />
             {/if}
@@ -281,7 +398,7 @@
               <div class="touch-slot"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.pinAsked ? "PIN accepted" : "Touch"}{c.slotLabel ? ` · ${c.slotLabel}` : ""}{c.n > 1 ? ` · touch ${c.n}` : ""}</div>
             {:else}
               <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core"><svg viewBox="0 0 20 20"><use href="#i-check" /></svg></div></div>
-              <h2 class="touch-lead quiet">{c.step === CeremonyStep.StepDone ? "Unlocked" : stepText(c.step).title}</h2>
+              <h2 class="touch-lead quiet">{c.step === CeremonyStep.StepDone ? doneTitle(c.kind) : stepText(c.step).title}</h2>
               <p class="touch-sub quiet">{stepText(c.step).body}</p>
             {/if}
           </div>
@@ -311,40 +428,52 @@
       <input id="cv-name" class="input" bind:value={createName} />
     </div>
     <div class="field">
-      <div class="field-top"><label for="cv-path">File</label></div>
-      <div class="row">
-        <input id="cv-path" class="input grow" readonly value={createPath} placeholder="Choose where the vault file lives" />
-        <button type="button" class="btn" onclick={pickCreatePath}>Choose…</button>
-      </div>
+      <div class="field-top"><label for="cv-path">Kept in</label>{#if createPath}<button type="button" class="btn link" onclick={() => (createPath = "")}>Use the usual place</button>{:else}<button type="button" class="btn link" onclick={pickCreatePath}>Keep it elsewhere…</button>{/if}</div>
+      <div id="cv-path" class="path ellipsis" title={createPath || st?.defaultPath}>{createPath || st?.defaultPath}</div>
     </div>
-    <div class="field">
-      <div class="field-top"><label for="cv-kind">First way in</label><span class="hint">A recovery key is always added too.</span></div>
-      <select id="cv-kind" class="input" bind:value={createKind}>
-        <option value="token">YubiKey (PIN + touch)</option>
-        <option value="password">Password</option>
-      </select>
-    </div>
-    {#if createKind === "token"}
-      <div class="field">
-        <div class="field-top"><label for="cv-label">Name this key</label><span class="hint">Shown in the list of ways in.</span></div>
-        <input id="cv-label" class="input" bind:value={createLabel} placeholder="YubiKey 5C — desk" />
+    <FirstWayIn bind:kind={createKind} bind:label={createLabel} bind:entangle={createEntangle} idPrefix="cv" />
+    {#if openArchives > 0}
+      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{openArchives} archive{openArchives === 1 ? " is" : "s are"} still open. Close them first: their saves would land in the wrong vault.</span></div>
+    {:else if replacesMissing && st}
+      <div class="bar attention">
+        <svg class="i i-14"><use href="#i-warn" /></svg>
+        <span>This replaces the file at <span class="mono">{st.missingPath}</span>, which could not be opened. It is kept as a dated copy in Enfold's folder, never deleted — if it was a vault, the archives it holds the keys to open only with it.</span>
       </div>
-      <label class="check"><input type="checkbox" bind:checked={createEntangle} />Also require a password with this key</label>
-      {#if createEntangle}
-        <p>You choose that password first, before the key is set up. Unlocking then needs both.</p>
-      {/if}
-    {:else}
-      <p>You choose the password in the next step.</p>
+      <label class="check"><input type="checkbox" bind:checked={createConfirm} />Replace the file that could not be opened</label>
+    {:else if replacesVault && st}
+      <div class="bar attention">
+        <svg class="i i-14"><use href="#i-warn" /></svg>
+        <span>This replaces the vault kept here — <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {same(dest, st.path) ? "It is kept as a dated copy in Enfold's folder, never deleted." : "It stays where it is, at " + st.path + "; Enfold switches to the new one, and a file already at " + dest + " is kept as a dated copy."} The archives it holds the keys to open only with it.</span>
+      </div>
+      <label class="check"><input type="checkbox" bind:checked={createConfirm} />Replace the vault kept here ({st.displayName})</label>
+    {:else if createPath}
+      <p>{firstRun ? "" : "The vault kept here stays where it is; Enfold switches to the new one. "}A file already at the chosen place is kept as a dated copy in Enfold's folder.</p>
     {/if}
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (create = false)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!createPath || !createName} onclick={doCreate}>Create</button>
+      <button type="button" class="btn accent" disabled={!createName || (createReplaces && !createConfirm) || openArchives > 0} onclick={doCreate}>Create</button>
     {/snippet}
   </Dialog>
 {/if}
 
+{#if setup}
+  <Dialog title="Finish setting up" onclose={() => (setup = false)}>
+    <p>The vault opens with its recovery key first; then the way in you choose here is added.</p>
+    <FirstWayIn bind:kind={setupKind} bind:label={setupLabel} bind:entangle={setupEntangle} idPrefix="su" />
+    {#snippet actions()}
+      <button type="button" class="btn" onclick={() => (setup = false)}>Cancel</button>
+      <button type="button" class="btn accent" onclick={doSetup}>Continue</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if importing}
+  <ImportDialog prefill={importPrefill} onclose={() => (importing = false)} />
+{/if}
+
 <style>
   .u-strip.first { grid-template-columns: minmax(320px, 520px); justify-content: center; }
+  .path { font-size: 12.5px; color: var(--ink-2); font-family: var(--font-mono); }
   .fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .gap { margin-top: 10px; margin-bottom: 14px; }
   .u-links.tight { margin-top: 0; }

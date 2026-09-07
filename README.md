@@ -15,7 +15,8 @@ application core (`internal/app`), the Wails shell (repository root) and the Sve
 
 Windows, Go 1.26, Node 24 and the `wails3` CLI (v3.0.0-beta.16). `wails3 build` produces
 `bin/enfold.exe` (production: security headers on, no debug logging); `wails3 package` wraps it
-in an installer. `wails3 dev` runs a development build with DevTools and debug logging on —
+in an NSIS installer, the only installer — the executable also runs on its own from anywhere, and
+the vault never lives beside it (`docs/APP.md` §2.1). `wails3 dev` runs a development build with DevTools and debug logging on —
 point it only at a throwaway vault, and set `ENFOLD_DATA_DIR` to keep its settings and WebView2
 profile away from the real ones. The TypeScript bindings under `frontend/bindings` are generated
 and committed; a diff there is a change to the API the page can call.

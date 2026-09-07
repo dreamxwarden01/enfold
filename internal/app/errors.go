@@ -28,6 +28,11 @@ const (
 	CodeVaultStale      Code = "vault.stale"
 	CodeVaultNotFound   Code = "vault.not_found"
 	CodeVaultInvalid    Code = "vault.invalid"
+	CodeVaultExists     Code = "vault.exists"        // a vault is already kept; importing needs replace
+	CodeSetupNeeded     Code = "vault.setup_needed"  // the vault has only a recovery slot: finish setup
+	CodeArchivesOpen    Code = "vault.archives_open" // close the open archives before replacing the vault
+	CodeVaultUnlocked   Code = "vault.unlocked"      // lock the vault first
+	CodeSettingsUnsaved Code = "settings.unsaved"    // warning: the vault's place could not be recorded
 	CodeNeedsUnlock     Code = "vault.needs_unlock"
 	CodeAuth            Code = "vault.auth"
 	CodeNoSlot          Code = "vault.no_slot"

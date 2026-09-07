@@ -751,15 +751,18 @@ func TestCreateVaultShowsRecoveryOnce(t *testing.T) {
 		t.Fatalf("fresh core: %s", st.State)
 	}
 	vault := filepath.Join(dir, "new.eks")
-	if e := c.CreateVault(vault, "Mine", EnrollOptions{Kind: EnrollPassword, Label: "Password"}); e != nil {
+	if e := c.CreateVault(vault, "Mine", EnrollOptions{Kind: EnrollPassword, Label: "Password"}, false); e != nil {
 		t.Fatal(e)
 	}
 	p := rec.waitCeremony(t, StepPassword, true)
 	c.SubmitSecret("password", p.PromptID, "a new password")
 	final := rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateUnlocked)
+	rec.waitState(t, StateLocked) // every create ends locked: the build was installed
 	if !strings.HasPrefix(final.SlotLabel, "http://127.0.0.1:") {
 		t.Fatalf("no one-time URL: %+v", final)
+	}
+	if staged(dir) {
+		t.Fatal("the incoming file was left beside the vault")
 	}
 	if st := c.Status(); st.Ceremony != nil && st.Ceremony.Step != StepRecovery {
 		t.Fatalf("ceremony after create: %+v", st.Ceremony)
@@ -779,8 +782,6 @@ func TestCreateVaultShowsRecoveryOnce(t *testing.T) {
 		t.Fatalf("secret survived the foreign fetch: %d %q", resp.StatusCode, body)
 	}
 	// Fresh vault, fresh secret, fetched properly this time.
-	c.Lock()
-	rec.waitState(t, StateLocked)
 	rec.reset()
 	if e := c.BeginEnroll(EnrollOptions{Kind: EnrollRecovery, Label: "Paper"}); !isCode(e, CodeNeedsUnlock) {
 		t.Fatalf("enroll while locked: %v", e)

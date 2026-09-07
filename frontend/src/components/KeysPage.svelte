@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { CeremonyStep, Keys, Shell, errorOf } from "../lib/api";
-  import type { BackupInfo } from "../lib/api";
+  import { CeremonyStep, Keys, Shell, Vault, errorOf } from "../lib/api";
+  import type { FileInfo } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, warningCopy } from "../lib/strings";
   import { countdown, date, dateTime, leaf } from "../lib/format";
@@ -10,7 +10,7 @@
   const st = $derived(store.status);
   const unlocked = $derived(store.unlocked);
   const tampered = $derived(st?.tampered ?? false);
-  const c = $derived(store.ceremony && store.ceremony.kind !== "unlock" && store.ceremony.kind !== "create" ? store.ceremony : null);
+  const c = $derived(store.ceremony && !["unlock", "create", "import", "setup", "verify"].includes(store.ceremony.kind) ? store.ceremony : null);
 
   let selected = $state<string | null>(null);
   const sel = $derived(store.slots.find((s) => s.recipientId === selected) ?? null);
@@ -21,7 +21,7 @@
   let addEntangle = $state(false);
   let removing = $state(false);
   let rotating = $state(false);
-  let backup = $state<BackupInfo | null>(null);
+  let backup = $state<FileInfo | null>(null);
 
   function fail(e: unknown) {
     store.toast(codeText(errorOf(e).code), "error");
@@ -54,7 +54,7 @@
     const p = (await Shell.PickFiles("Check a backup", false)) ?? [];
     if (!p.length) return;
     try {
-      backup = await Keys.BackupInfo(p[0]);
+      backup = await Vault.InspectFile(p[0]);
     } catch (e) {
       fail(e);
     }
@@ -69,6 +69,8 @@
   {/if}
   {#if !unlocked}
     <div class="bar"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">Changing the ways in needs the vault unlocked.</span><button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button></div>
+  {:else if st?.setupNeeded}
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">This vault has only its recovery key. Add a key — a YubiKey or a password — to finish setting it up; the recovery key is asked for first.</span></div>
   {/if}
 
   <div class="ks-cols">
@@ -101,6 +103,7 @@
         {#if backup}
           <dl class="facts">
             <div class="fact"><dt>File</dt><dd title={backup.path}>{leaf(backup.path)}</dd></div>
+            <div class="fact"><dt>What it is</dt><dd>{backup.kind === "backup" ? "a backup — opens with the recovery key only" : "a full vault"}</dd></div>
             <div class="fact"><dt>Dated</dt><dd>{dateTime(backup.modifiedAt)}</dd></div>
             <div class="fact"><dt>This vault</dt><dd>{backup.vaultMatches ? "yes" : "no — another vault"}</dd></div>
             <div class="fact"><dt>Slots</dt><dd>{backup.slotCount}</dd></div>
@@ -108,8 +111,9 @@
           {#if backup.vaultMatches && !backup.newer && st}
             <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>Older than this vault (changed {dateTime(st.modifiedAt)}).</span></div>
           {:else if backup.vaultMatches && backup.newer}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-info" /></svg><span>Newer than the vault that is open. Open it from the lock screen to use it.</span></div>
+            <div class="bar accent"><svg class="i i-14"><use href="#i-info" /></svg><span>Newer than the vault kept here. Lock, then import it from the lock screen.</span></div>
           {/if}
+          <p class="t-quiet">To prove it opens, lock the vault and use "Check that a backup opens…" on the lock screen: a copy is opened with the recovery key.</p>
         {/if}
       </div>
     </div>
@@ -121,6 +125,9 @@
         <div class="setrow"><div class="lab"><b>File</b><span class="ellipsis" title={st?.path}>{st?.path}</span></div></div>
         <div class="setrow"><div class="lab"><b>Last changed</b><span>{dateTime(st?.modifiedAt ?? 0)}</span></div></div>
         <div class="setrow"><div class="lab"><b>Rotation</b><span>{st?.rotationPending ? "deferred — a way in still holds the old key" : "complete"}</span></div></div>
+        {#if (st?.retiredCopies ?? 0) > 0 && st?.retiredPath}
+          <div class="setrow"><div class="lab"><b>Replaced copies</b><span>{st.retiredCopies} in Enfold's folder, kept when a vault was replaced; yours to delete.</span></div><div class="ctl"><button type="button" class="btn sm" onclick={() => void Shell.Reveal(st?.retiredPath ?? "")}>Show</button></div></div>
+        {/if}
       </div>
     </div>
   </div>

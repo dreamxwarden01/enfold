@@ -2275,6 +2275,160 @@ its outro starts — otherwise a second Escape could dismiss the ceremony behind
 the one-time recovery-key reveal. There are no menus in the frontend yet; the rule is written so
 the first one inherits it.
 
-**Not decided here: one vault per user.** The user proposes disallowing several keystores and
-fixing the location. `DECISIONS.md` 2026-09-01 already says "one per device, default
-`%LOCALAPPDATA%`"; the create dialog's free file picker drifted from that. Recorded when ruled.
+**One vault per user** was raised here and ruled the same day; the next entry has it.
+
+---
+
+## 2026-09-06 — One vault per user, at a fixed place; importing a vault or a backup; NSIS only
+
+**Ruled by the user:** one keystore per Windows user, at `%LOCALAPPDATA%\Enfold\vault.eks`; a
+vault or a backup from elsewhere is imported through the app; copying the file into the folder
+by hand is acceptable but not what the app recommends; a backup is told apart from a full vault,
+and a backup leads into the setup flow after the recovery key; the installer is NSIS only.
+
+**Why one vault.** Beyond the management confusion the user named — several vaults sharing one
+YubiKey — there is a hard reason: the registry is the one index of which archive opens with
+which key, so with two vaults on one token the user opens vault A and is told an archive has no
+key, and that error cannot be explained. `DECISIONS.md` 2026-09-01 already said "one per device,
+default `%LOCALAPPDATA%`"; the create dialog's free file picker had drifted from it.
+
+**Why `%LOCALAPPDATA%`.** Per user, machine-local (no roaming), on the system volume the
+BitLocker warning covers, in the folder that already holds the settings, the log and the
+WebView2 profile. ProgramData is shared by every user of the machine; a per-user secret does not
+belong there. The install folder is read-only for a standard user under Program Files, and it
+would tie the vault's place to the executable's.
+
+**Installed or portable: decoupled.** Where the executable lives and where the vault lives are
+two questions. The executable is one file that runs from anywhere (WebView2 ships with Windows
+10/11); the NSIS installer is a convenience. The vault never sits beside the executable: Program
+Files is not writable; a "green" copy on a USB stick would carry the keystore off the
+BitLocker-protected volume, which is exactly what FORMAT §16 warns against; and two copies of
+the executable would see two vaults, which is the confusion being removed. **MSIX is dropped**:
+a packaged app's AppData writes are virtualised to `%LOCALAPPDATA%\Packages\<id>\LocalCache\`,
+so the MSIX-installed app and a plain executable would see two different vaults.
+
+**Importing.** `Vault.InspectFile` reads a file's plaintext facts and classifies it: a *backup*
+has only recovery slots active (R28's export), a *vault* has at least one other slot.
+`Vault.ImportFile` copies the file into place — read raw, never opened as the vault, temp-then-
+rename — and opens it. With a vault already there, a copy of the same vault replaces it when it
+is newer, or when the current one is Tampered or Broken (R25's one action); anything else is
+refused with `vault.exists` unless the page passes `replace` after a confirmation that names what
+is replaced. Nothing is destroyed: the replaced file is renamed `vault-<unix>.replaced.eks`
+beside the new one and is the user's to delete. The same retirement happens when a vault is
+created over an existing one. "Use it where it is" remains as the advanced choice for a vault
+kept elsewhere (the `settings.vaultPath` override), and an empty override with a `vault.eks`
+already present at start adopts the file — the by-hand copy the user allowed.
+
+**A backup is adopted, not restored.** FORMAT §15 and R28 already say how a backup comes back:
+open it, unlock with the recovery key, enrol new slots. That is the setup ceremony (`kind:
+setup`): the recovery key first, then the first way in exactly as at creation. Until it
+completes the file is a vault with only a recovery slot, which the app never leaves silent:
+`VaultStatus.SetupNeeded` is set, `BeginUnlock` is refused with `vault.setup_needed`, and the
+lock screen's one action is *Finish setting up*, which reruns the ceremony. A backup opens with
+nothing but the recovery key, so the first-run screen says to have it ready. The recovery key
+stays valid afterwards; no new one is minted, since the recovery slot is the one the backup
+carried. Whether the VMK should be rotated after adoption — the backup sat wherever the user
+kept it, protected by the 128-bit recovery key alone — is left as it is: the recovery key is
+the design's stated protection for a backup (FORMAT §15), and a rotation is one click away.
+
+**Not done with this:** restoring one archive record from a backup or another vault
+(`RestoreArchiveRecord`) stays deferred (APP.md §12); the vault file's own name is fixed, the
+display name is the machine-local setting.
+
+**Critiqued before it was built (2026-09-07), and changed.** Three critics over the design as
+first written found 66 items; the confirmed ones reshaped it, and APP.md §2.1 carries the result:
+
+- *Prove before replacing.* As drafted, a file's plaintext — `vault_id`, `modified_at`, a slot
+  region trimmed to a recovery record, none of it authenticated before an unlock (R25, R35) —
+  decided whether the working vault was retired, and "same vault, newer" replaced it with no
+  confirmation. Now the file is staged, the ceremony proves it on the staged copy (a vault
+  unlocks with its own way in, a backup completes setup), and only then is anything retired or
+  installed. Every replacement needs the confirmed `replace`.
+- *Never let the place be empty.* Retirement was a rename, so a crash between two renames left no
+  `vault.eks` and a first-run screen offering to create over the user's real vault under a name
+  the app never mentioned. Retirement is a copy under an `O_EXCL` name with a counter; the staged
+  file is renamed over `vault.eks` in one step; the retired copies are counted on the status and
+  offered on the first-run screen when nothing is kept.
+- *Handles.* A rename cannot pass an open handle (Go opens without `FILE_SHARE_DELETE`), and
+  handles exist in Broken and during a lock's asynchronous close; the install closes the handle
+  and waits on `lockWG` as `openVaultFile` does, and the import ceremony ends Locked because the
+  proving handle must close before the rename — the one cost of the design, paid once per import.
+- *Open archives.* An archive open under the previous vault would have saved into the new
+  registry, or dropped its receipt; an import or a replacement is refused while any archive is
+  open.
+- *Adopting an older backup.* It rolls the registry back to the export's date; the confirmation
+  says so, and the retired copy keeps the newer records for a later `RestoreArchiveRecord`.
+- *Tampered, Broken.* The drafted exemption was unreachable (Tampered is known only after an
+  unlock, which the import never does on the current vault) and moot once every replacement is
+  confirmed; Broken needs `Reopen` first. Both dropped.
+- *`VerifyBackup` is not deferrable.* FORMAT §15 requires a backup to be verifiable before it is
+  needed; deferring it made the only test of a backup a destructive one. It is in, on a staged
+  copy, and inspection uses a staged copy too, so read-only media and files another process
+  holds can be inspected (the draft opened the source read-write and locked it).
+- *A recovery-only vault still opens.* Refusing every unlock on a setup-needed vault would have
+  locked the user out of their archives; the recovery key still unlocks it, only a token or a
+  password is refused, and "finish setting up" is the one action.
+- *Missing vault, override, data folder.* A configured vault that cannot be opened is named on
+  the first-run screen instead of "no vault yet"; an override set wins over a by-hand copy, which
+  is said; `ENFOLD_DATA_DIR` now moves the vault too, and §10 says so.
+- Smaller: the display name defaults to the current one for the same vault; the dialog says
+  "another vault" only when a vault is kept; `FileInfo` counts slots by kind so a confirmation can
+  say what is traded away; `CreateVault` over the vault kept here takes the same `replace` and
+  builds the new vault as the incoming file, so a failed create leaves the old vault untouched.
+
+**Reviewed once built (2026-09-07), 66 agents, 27 confirmed findings on about fifteen causes, all
+fixed.** The one that mattered most: a create from nothing still wrote the keystore at its final
+place before checking the ceremony's latch and cancel, so Cancel or a lock trigger during the
+derive — a second of "deriving" with a live button — left a complete `vault.eks` whose recovery
+key had never been shown, and the by-hand adoption at start then opened it as the user's vault
+with a phantom recovery slot. Every create now builds the incoming file and installs it only after
+the check, so a create cut short leaves nothing; the price is that a create ends Locked like an
+import. Also: `BeginUnlock` refused the recovery key on a setup-needed vault, against §2.1 and
+the lock screen's own button (only a token or a password is refused now); `VerifyBackup` had no
+reachable entry — its button lived on the Keys page, hidden while locked, and disabled while
+unlocked — so it runs from the lock screen; "use it where it is" bypassed the open-archives rule
+(`OpenVaultFile` now refuses too) and its confirmation described a copy that was not made; the
+replacement confirmation promised a dated copy of a vault kept elsewhere, which stays where it is
+(the status says `KeptElsewhere`, the dialogs say so); a file at the vault's place that could not
+be opened made "create a new vault instead" fail with `internal` (it is retired instead); the
+replacing create installed even when cancelled; setup was not a mutation ceremony (shutdown did
+not wait for its commit); an import's reopen failure after the rename left the override pointing
+at the old vault (the settings are written before the reopen); a staged copy had no size bound; a
+failed retirement could leave a half copy the status counted; "try again" on the missing-vault
+screen renamed the vault; the create dialog's replace tick survived a cancel. Refuted: the shared
+staging names (every caller runs under the ceremony gate).
+
+**Verified again (2026-09-07, three agents on the fixes).** The create still lost its recovery key
+when the reopen after the rename failed — install returned the error, the caller took "nothing
+installed" and never minted the URL, while the file and the settings said otherwise. Install is
+now total after the rename (settings first, a failed reopen becomes `MissingPath`, a failed
+settings save a warning), so a create always shows its key and an import never fails after it is
+in place. Also: `replace` guarded the one place only, so a create pointed at the vault's own file
+elsewhere replaced it unconfirmed (any existing destination needs it now, and the dialog says
+which); create and import were not waited for by shutdown (they are, as `commits`); a
+recovery-key session on a setup-needed vault dead-ended every Keys action, since a mutation asked
+for a password the vault could not have (a mutation falls back to the recovery key when no usable
+token and no password exists); a verify started from the first-run screen never showed its result
+(the outcome lives in the page's store, apart from the ceremony); the import dialog stuck in
+in-place mode when the file changed to a backup; a phantom retired copy survived a failed rename;
+garbage at the vault's place was retired and offered as a vault; the staging names could be chosen
+as the vault's path and then removed by the next import; the copy bound was on the stat, not the
+copy; inspections shared one staging name. Tests now cut a create short at its prompt and prove
+the create's own recovery key opens the vault it made.
+
+**And once more (2026-09-07, two agents).** A reopen that failed after an install dropped the
+vault's path and name, so the screen said "nothing has been changed" over a vault just installed
+(the path and name stay; only the facts drop); the tampered warning survived the import that is
+its remedy (a fresh open clears it); a destination that could not be looked at was overwritten
+instead of refused; imports staged under one shared name outside the ceremony gate (every staged
+file has a fresh name now, and nothing of the user's is removed to make room); the Busy branch of
+an open kept the previous vault's facts; the Busy exception in "use it where it is" also
+disarmed the ceremony guard; install failures read as "internal" (a file in use is `vault.busy`,
+with a short rename retry); an export could be written under a staging name and swept at the
+next start (refused, as is any export into the data folder); the retired-copy counter sorted as
+text. On the page: the create dialog asked to replace the missing file while creating at the
+usual place (the destination decides now, in one place); a ceremony that failed without parking
+was shown nowhere on the first-run card; the elsewhere wording named the wrong file; the page's
+path compare was weaker than the core's (it is the same now, `lib/paths.ts`); "try again" kept a
+dead ceremony's error; the strip's wording lagged a frame behind the event (the store derives it
+from the events, `lib/outcome.ts`, with tests for both).

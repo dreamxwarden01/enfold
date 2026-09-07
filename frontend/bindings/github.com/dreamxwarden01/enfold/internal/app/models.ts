@@ -74,28 +74,13 @@ export interface ArchiveSummary {
 }
 
 /**
- * BackupInfo is what a backup file says about itself before any unlock.
- */
-export interface BackupInfo {
-    "path": string;
-    "modifiedAt": number;
-    "vaultMatches": boolean;
-    "slotCount": number;
-
-    /**
-     * than this vault
-     */
-    "newer": boolean;
-}
-
-/**
  * CeremonyState is the ceremony as the panel shows it.
  */
 export interface CeremonyState {
     "seq": number;
 
     /**
-     * unlock | enroll | rewrap | restore
+     * unlock | create | enroll | remove | rotate | export | import | setup | verify
      */
     "kind": string;
     "step": CeremonyStep;
@@ -123,6 +108,11 @@ export interface CeremonyState {
      */
     "removeLabel"?: string;
     "insertLabel"?: string;
+
+    /**
+     * Verify, at Done: how many archives the backup's registry names.
+     */
+    "archives": number;
 }
 
 /**
@@ -176,6 +166,31 @@ export enum Code {
     CodeVaultStale = "vault.stale",
     CodeVaultNotFound = "vault.not_found",
     CodeVaultInvalid = "vault.invalid",
+
+    /**
+     * a vault is already kept; importing needs replace
+     */
+    CodeVaultExists = "vault.exists",
+
+    /**
+     * the vault has only a recovery slot: finish setup
+     */
+    CodeSetupNeeded = "vault.setup_needed",
+
+    /**
+     * close the open archives before replacing the vault
+     */
+    CodeArchivesOpen = "vault.archives_open",
+
+    /**
+     * lock the vault first
+     */
+    CodeVaultUnlocked = "vault.unlocked",
+
+    /**
+     * warning: the vault's place could not be recorded
+     */
+    CodeSettingsUnsaved = "settings.unsaved",
     CodeNeedsUnlock = "vault.needs_unlock",
     CodeAuth = "vault.auth",
     CodeNoSlot = "vault.no_slot",
@@ -257,6 +272,37 @@ export interface Collision {
      */
     "existing": string;
     "pending": boolean;
+}
+
+/**
+ * FileInfo is what a backup file says about itself before any unlock.
+ */
+export interface FileInfo {
+    "path": string;
+
+    /**
+     * vault | backup (recovery slots only, R28)
+     */
+    "kind": string;
+    "modifiedAt": number;
+
+    /**
+     * the same vault as the one kept (plaintext; proven only by an unlock)
+     */
+    "vaultMatches": boolean;
+    "slotCount": number;
+
+    /**
+     * slots by kind, so a confirmation can say what is traded away
+     */
+    "hardware": number;
+    "password": number;
+    "recovery": number;
+
+    /**
+     * than the vault kept (plaintext, R35: dated, not authenticated)
+     */
+    "newer": boolean;
 }
 
 /**
@@ -482,4 +528,34 @@ export interface VaultStatus {
     "dirtyArchives": number;
     "hasPasswordSlot": boolean;
     "hasHardwareSlot": boolean;
+
+    /**
+     * only a recovery slot: FinishSetup is the one action
+     */
+    "setupNeeded": boolean;
+
+    /**
+     * where the vault lives unless kept elsewhere
+     */
+    "defaultPath": string;
+
+    /**
+     * a configured vault that could not be opened at start
+     */
+    "missingPath": string;
+
+    /**
+     * the vault is not at DefaultPath (the override is set)
+     */
+    "keptElsewhere": boolean;
+
+    /**
+     * vault-replaced-*.eks files in the data folder
+     */
+    "retiredCopies": number;
+
+    /**
+     * the newest of them
+     */
+    "retiredPath": string;
 }

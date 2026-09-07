@@ -19,7 +19,7 @@ tasks:
       - task: windows:build
 
   package:
-    summary: Packages a production build (NSIS installer by default, FORMAT=msix for MSIX)
+    summary: Packages a production build as an NSIS installer (the only installer)
     cmds:
       - task: windows:package
 

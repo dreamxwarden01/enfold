@@ -91,7 +91,9 @@
       <div class="ks-actions">
         <button type="button" class="btn accent" disabled={!unlocked || tampered} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Add a key</button>
         <button type="button" class="btn" disabled={!sel || !unlocked || tampered} onclick={() => (removing = true)}>Remove</button>
-        <button type="button" class="btn" disabled={!sel || sel.type !== "recovery" || !sel.escrowed || !unlocked} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>Show recovery key…</button>
+        {#if sel?.type === "recovery"}
+          <button type="button" class="btn" disabled={!sel.escrowed || !unlocked} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>Show recovery key…</button>
+        {/if}
         <button type="button" class="btn" disabled={!unlocked || tampered} onclick={() => (rotating = true)}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate now</button>
       </div>
 

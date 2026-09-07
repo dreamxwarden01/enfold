@@ -329,7 +329,7 @@
             {:else if outcome?.kind === "verify"}
               <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>The backup opens. {outcome.archives} archive{outcome.archives === 1 ? "" : "s"} inside.</span></div>
             {:else if outcome?.kind === "create"}
-              <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>Created. Unlock it with the way in you chose.</span></div>
+              <div class="bar accent u-bar"><svg class="i i-14"><use href="#i-check" /></svg><span>Created, but it did not open on its own. Unlock it with the way in you chose.</span></div>
             {/if}
             <div class="u-links">
               {#if busy}

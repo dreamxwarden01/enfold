@@ -850,10 +850,45 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 			cer.set(func(s *CeremonyState) { s.Step = StepDone })
 			return nil
 		}
+		// And the vault opens now, with the key just made: the user is in
+		// without unlocking again, and the key is shown over the vault.
+		cer.enterCreated(path, rk)
 		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
 		return nil
 	})
 	return nil
+}
+
+// enterCreated opens the vault just installed with the recovery key just
+// made and publishes the session, so that a create ends Unlocked with the
+// key shown over the vault (APP.md §2.1) — no second unlock for a way in
+// the user chose a minute ago. A lock trigger that landed meanwhile, or a
+// file that will not open, leaves it Locked with the key still shown: the
+// vault is in place either way, and the lock screen says so.
+func (cer *ceremony) enterCreated(path string, rk kdf.RecoveryKey) {
+	c := cer.c
+	ks, err := keystore.Open(path)
+	if err != nil {
+		c.log("ceremony %s: created; opening it: %v", cer.kind, err)
+		return
+	}
+	unl, err := ks.Unlock(keystore.RecoveryCredential{Key: rk})
+	if err != nil {
+		c.log("ceremony %s: created; unlocking it: %v", cer.kind, err)
+		ks.Close()
+		return
+	}
+	c.mu.Lock()
+	if cer.latch || cer.ctx.Err() != nil || c.vault.state != StateLocked || !samePath(c.vault.path, path) {
+		c.mu.Unlock()
+		unl.Close()
+		ks.Close()
+		return
+	}
+	c.publishUnlockedLocked(ks, unl)
+	c.applyOwedLocked()
+	c.mu.Unlock()
+	c.emitState()
 }
 
 // decodeHexKey parses a typed management key.

@@ -814,7 +814,7 @@ func TestCreateVaultShowsRecoveryOnce(t *testing.T) {
 	p := rec.waitCeremony(t, StepPassword, true)
 	c.SubmitSecret("password", p.PromptID, "a new password")
 	final := rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked) // every create ends locked: the build was installed
+	rec.waitState(t, StateUnlocked) // a create ends in the vault, the key shown over it
 	if !strings.HasPrefix(final.SlotLabel, "http://127.0.0.1:") {
 		t.Fatalf("no one-time URL: %+v", final)
 	}
@@ -838,7 +838,10 @@ func TestCreateVaultShowsRecoveryOnce(t *testing.T) {
 	if resp.StatusCode != 404 {
 		t.Fatalf("secret survived the foreign fetch: %d %q", resp.StatusCode, body)
 	}
-	// Fresh vault, fresh secret, fetched properly this time.
+	// Fresh vault, fresh secret, fetched properly this time — after a lock
+	// and an unlock with the way in that was chosen.
+	c.Lock()
+	rec.waitState(t, StateLocked)
 	rec.reset()
 	if e := c.BeginEnroll(EnrollOptions{Kind: EnrollRecovery, Label: "Paper"}); !isCode(e, CodeNeedsUnlock) {
 		t.Fatalf("enroll while locked: %v", e)

@@ -2595,3 +2595,42 @@ not the thing that failed. The recovery key is typed into eight plain cells that
 group's checksum as it is finished, take a paste whole, and keep the digits when the core says
 they did not open the vault. The printed sheet has no page margin, so the browser prints no
 header or footer of its own.
+
+---
+
+## 2026-09-07 — After the third test: a create ends in the vault; the show button only on a recovery slot; two questions answered
+
+**A create ends Unlocked.** The user created a vault, proved the key, was shown the recovery
+key — and was then asked to unlock. The 2026-09-06 ruling that "every create ends Locked" was
+the price of building the keystore as an incoming file and installing it after the latch check
+(the handle had to be closed for the rename); it was never a wish. Now the installed file is
+opened with the recovery key just made and the session published, so the user is in with the
+key's dialog over the vault; a lock trigger that landed meanwhile, or a file that will not open,
+leaves it Locked with the key still shown. Imports keep ending Locked: the credential spent on
+proving a file is not reused to publish a session.
+
+**The Keys page shows "Show recovery key…" only while a recovery slot is selected**, rather
+than disabled beside a YubiKey or a password.
+
+**Why rotation is offline for every slot but an entangled one — the user's question.** The
+asymmetric design holds: every slot stores a public key, and a rotation re-wraps the new VMK
+to it with a fresh ephemeral key — no YubiKey needs to be present, no recovery key typed, no
+password known. The one exception is a hardware slot with an *entangled* password: its wrap
+key is derived from the ECDH secret *and* the password (`HardwarePreEntangled`), and the
+password is stored nowhere — that is what entangling is for — so the re-wrap needs the
+password. The slot that unlocked supplies it; any other entangled slot is left *stale* until
+its password is given (`RewrapStale`), and the file cannot check a password without that
+slot's token (there is no verifier for an entangled password, on purpose: a verifier would let
+the password be attacked without the token), so the check that keeps a typo from silently
+breaking the slot needs the token in the reader. `RotateOptions.SharedPassword` re-wraps every
+entangled slot with the typed password, unverified, when the user says the password is shared.
+A hardware slot without an entangled password, a standalone password and a recovery key all
+rotate offline.
+
+**Why the old create could reuse a key in 9d without any ceremony — the user's question.**
+The same asymmetry: enrolling a key needs only its *public* key, which `GET METADATA` gives
+without a PIN, and the keystore wraps the VMK to it with an ephemeral ECDH — the private key
+on the token is used only at unlock. Nothing cryptographic required the key's cooperation to
+enrol it, so nothing asked for it. The proof of possession added on 2026-09-07 is a rule, not a
+requirement of the math: the vault must never depend on a key that was not shown to work, and
+a key must never be enrolled without the hand that holds it.

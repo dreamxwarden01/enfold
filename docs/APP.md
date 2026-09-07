@@ -182,8 +182,12 @@ archive is open (`vault.archives_open`), whose saves would land in the wrong reg
 state but None and Locked (Broken needs `Reopen` first; Busy is another process). **Every create
 is built as the incoming file** beside its destination and installed only after the ceremony's
 latch and cancel are checked — a create cut short (Cancel, a lock trigger, a crash) leaves nothing
-at the vault's place, so nothing is ever adopted whose recovery key was not shown — and therefore
-ends Locked too. A create happens only with no vault kept (§2.1: first run, an absent configured
+at the vault's place, so nothing is ever adopted whose recovery key was not shown. Installed, the
+vault **opens at once** with the recovery key just made (the user chose the way in a minute ago
+and proved it; a second unlock would be ceremony for its own sake): the create ends Unlocked with
+the key shown over the vault, and only a lock trigger that landed meanwhile, or a file that will
+not open, leaves it Locked with the key still shown. A create happens only with no vault kept
+(§2.1: first run, an absent configured
 file, or the rebuild over a damaged one), where `replace` covers whatever already sits at the
 chosen place — a file there that could not be opened is retired rather than fought over — and
 no archive may be open. **Up to the rename nothing has happened; from the
@@ -396,7 +400,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
   arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`.
 - `CreateVault(path, displayName, kind, label, entangle, replace)` (`path` empty = the one place,
   §2.1; the first way in's ceremony, then the keystore built as the incoming file and installed,
-  the recovery key shown, ending Locked; with a vault kept, `vault.kept` — the one create with a
+  the recovery key shown, ending Unlocked — the installed file opened with that key — with a
+  vault kept, `vault.kept` — the one create with a
   vault configured is the rebuild of §2.1, over the damaged file at its own place, with
   `replace`; over any other file already at the chosen place, `replace` too),
   `InspectFile(path) FileInfo`, `ImportFile(path, displayName, method, kind, label, entangle,
@@ -614,7 +619,8 @@ banner, the Tampered state, the status strip with the countdown and Lock). Archi
 projection, paged table with pending markers, preview pane — image, video, audio through the
 loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
 drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
-Remove, Rotate now, Rewrap, *Show recovery key…* on a recovery slot, backups with the R35 date,
+Remove, Rotate now, Rewrap, *Show recovery key…* — shown only while a recovery slot is
+selected — backups with the R35 date,
 the damaged copy when one is kept, session and appearance settings). First run (create, or
 import a vault or a backup; a file that is only a backup leads into *Finish setting up*, and so
 does a vault left half set up; a vault whose file is present and refused offers *try again*,
@@ -638,8 +644,10 @@ form (§2.1) the place is pinned to the damaged file's — no link — and the t
 the damaged file and start a new vault" is the one consent (cleared each time the dialog opens);
 over a file that is simply absent it shows no replacement bar and no tick, since nothing is
 retired; over some other file already at a chosen place it names the dated copy that keeps it.
-A create ends with "Created. Unlock it with the way in you chose" beside the recovery key's
-reveal; a ceremony that fails without parking is shown on the first-run card as well. The
+A create ends in the vault with the recovery key's dialog over it; only when the created vault
+did not open on its own does the lock screen say "Created, but it did not open on its own.
+Unlock it with the way in you chose"; a ceremony that fails without parking is shown on the
+first-run card as well. The
 first-run
 screen says to have the recovery key ready before importing a backup, because a backup opens
 with nothing else; when a configured vault could not be opened it names the file and offers

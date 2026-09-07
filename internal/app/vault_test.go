@@ -137,7 +137,7 @@ func TestCreateVaultTokenEntangled(t *testing.T) {
 	pin := rec.waitCeremony(t, StepPIN, true)
 	c.SubmitSecret("pin", pin.PromptID, "123456")
 	rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked)
+	rec.waitState(t, StateUnlocked) // a create ends in the vault
 	var entangled int
 	for _, s := range c.Slots() {
 		if s.Type == "hardware" && s.Entangled {
@@ -148,6 +148,8 @@ func TestCreateVaultTokenEntangled(t *testing.T) {
 		t.Fatalf("slots after create: %+v", c.Slots())
 	}
 	// The key then unlocks with the password and its PIN.
+	c.Lock()
+	rec.waitState(t, StateLocked)
 	rec.reset()
 	if e := c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
@@ -589,7 +591,7 @@ func TestEnrolledKeyProvesItself(t *testing.T) {
 		t.Fatalf("the note outlived the accepted PIN: %+v", touch)
 	}
 	rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked)
+	rec.waitState(t, StateUnlocked)
 	card.mu.Lock()
 	ops := card.ops
 	card.mu.Unlock()
@@ -663,7 +665,7 @@ func TestGeneratePathWrongPINIsAskedAgain(t *testing.T) {
 	c.SubmitSecret("pin", pin2.PromptID, "123456")
 	rec.waitCeremony(t, StepTouch, false) // the proof, with the PIN still verified
 	rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked)
+	rec.waitState(t, StateUnlocked)
 	if st := c.Status(); !st.HasHardwareSlot {
 		t.Fatalf("after the enrolment: %+v", st)
 	}
@@ -684,10 +686,12 @@ func TestCreateWithVaultKeptIsRefused(t *testing.T) {
 	p := rec.waitCeremony(t, StepPassword, true)
 	c.SubmitSecret("password", p.PromptID, "first password")
 	rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked)
+	rec.waitState(t, StateUnlocked) // a create ends in the vault, the key shown over it
 	if st := c.Status(); st.Path != filepath.Join(data, "vault.eks") || st.KeptElsewhere {
 		t.Fatalf("created at %s: %+v", st.Path, st)
 	}
+	c.Lock()
+	rec.waitState(t, StateLocked)
 	for _, replace := range []bool{false, true} {
 		if e := c.CreateVault("", "Second", EnrollOptions{Kind: EnrollPassword, Label: "pw"}, replace); !isCode(e, CodeVaultKept) {
 			t.Fatalf("over the vault kept (replace=%v): %v", replace, e)
@@ -732,7 +736,7 @@ func TestCreateCutShortLeavesNothing(t *testing.T) {
 	p := rec.waitCeremony(t, StepPassword, true)
 	c.SubmitSecret("password", p.PromptID, "a password")
 	final := rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked)
+	rec.waitState(t, StateUnlocked)
 	req, _ := http.NewRequest("GET", final.SlotLabel, nil)
 	req.Header.Set("Origin", "wails://wails")
 	resp, err := http.DefaultClient.Do(req)
@@ -744,6 +748,9 @@ func TestCreateCutShortLeavesNothing(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("digits: %d", resp.StatusCode)
 	}
+	// And the digits shown open the vault again.
+	c.Lock()
+	rec.waitState(t, StateLocked)
 	rec.reset()
 	c.BeginUnlock(MethodRecovery)
 	r := rec.waitCeremony(t, StepRecovery, true)
@@ -776,7 +783,7 @@ func TestCreateOverUnreadableFile(t *testing.T) {
 	p := rec.waitCeremony(t, StepPassword, true)
 	c.SubmitSecret("password", p.PromptID, "a password")
 	rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked)
+	rec.waitState(t, StateUnlocked)
 	if st := c.Status(); st.MissingPath != "" || st.Damaged || !st.HasPasswordSlot {
 		t.Fatalf("after creating over it: %+v", st)
 	}
@@ -830,7 +837,7 @@ func TestCreateOverUnreadableFile(t *testing.T) {
 	p = rec2.waitCeremony(t, StepPassword, true)
 	c2.SubmitSecret("password", p.PromptID, "a password")
 	rec2.waitCeremony(t, StepRecovery, false)
-	rec2.waitState(t, StateLocked)
+	rec2.waitState(t, StateUnlocked)
 	entries, _ = os.ReadDir(data2)
 	others = 0
 	for _, e := range entries {
@@ -898,7 +905,7 @@ func TestChosenPasswordMinimum(t *testing.T) {
 		t.Fatalf("the prompt did not stand: %v", e)
 	}
 	rec.waitCeremony(t, StepRecovery, false)
-	rec.waitState(t, StateLocked)
+	rec.waitState(t, StateUnlocked)
 	// The existing password, however short the rule would call it, is
 	// what it is: an unlock measures nothing.
 	h := newHarness(t, nil, nil)

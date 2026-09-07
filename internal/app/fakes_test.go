@@ -290,6 +290,9 @@ type fakeCard struct {
 	removed   bool // pulled: every operation answers ErrTokenNoCard
 	verified  bool // PIN-once: a VERIFY stands for this handle, as on the card
 	proofLies bool // the agreement the token computes is not its key's: the proof must refuse it
+	// touchFails: this many ECDH calls answer "not touched in time" first,
+	// as a key nobody touches does when its wait runs out; -1 for ever.
+	touchFails int
 }
 
 // setRemoved pulls the key, or puts it back.
@@ -485,6 +488,16 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 		t.card.mu.Unlock()
 	}
 	t.card.mu.Lock()
+	if t.card.touchFails != 0 {
+		if t.card.touchFails > 0 {
+			t.card.touchFails--
+		}
+		t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: true})
+		t.card.mu.Unlock()
+		t.p.Touch(TouchRequest{N: t.n, PINAsked: true})
+		time.Sleep(300 * time.Millisecond) // the key's own wait, in miniature
+		return nil, ErrTokenTouch
+	}
 	t.card.ops++
 	t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: true})
 	priv := t.card.keys[t.slot]
@@ -577,6 +590,19 @@ func (h *harness) unlockWithPassword() {
 	if e := h.c.SubmitSecret("password", st.PromptID, testPassword); e != nil {
 		h.t.Fatalf("submit: %v", e)
 	}
+	h.rec.waitCeremony(h.t, StepDone, false)
+	h.rec.waitState(h.t, StateUnlocked)
+}
+
+// unlockWithToken unlocks through the fake card's PIN and touch.
+func (h *harness) unlockWithToken() {
+	h.t.Helper()
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		h.t.Fatalf("begin: %v", e)
+	}
+	pin := h.rec.waitCeremony(h.t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
 	h.rec.waitCeremony(h.t, StepDone, false)
 	h.rec.waitState(h.t, StateUnlocked)
 }

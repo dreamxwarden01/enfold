@@ -182,8 +182,20 @@ func (c *Core) CancelUnlock() *Error {
 	}
 	cer.cancelReason = "user"
 	cer.cancel()
+	st := cer.markCancellingLocked()
 	c.mu.Unlock()
+	c.emit(EventVaultCeremony, st)
 	return nil
+}
+
+// markCancellingLocked says on the state that the ceremony is cancelling:
+// a prompt ends at once, but a card call — the touch — answers in its
+// own time, and the page shows that rather than a button that did
+// nothing. Caller holds the state mutex.
+func (cer *ceremony) markCancellingLocked() CeremonyState {
+	cer.state.Cancelling = true
+	cer.state.Seq = cer.c.bump()
+	return cer.state
 }
 
 // SubmitSecret answers the outstanding prompt of the given kind and id.
@@ -454,8 +466,10 @@ func (cer *ceremony) cancelWith(reason string) {
 	if cer.cancelReason == "" {
 		cer.cancelReason = reason
 	}
+	st := cer.markCancellingLocked()
 	cer.c.mu.Unlock()
 	cer.cancel()
+	cer.c.emit(EventVaultCeremony, st)
 }
 
 // wait sleeps d or until cancelled.
@@ -849,6 +863,12 @@ func (cer *ceremony) closeCard(card Card) {
 // touch and password errors the way §2.2 says, on the same open Card.
 func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential, hc *keystore.HardwareCredential) (*keystore.Unlocked, error) {
 	for attempt := 0; ; attempt++ {
+		// A cancel while the card was busy — the touch, which no call can
+		// interrupt — is honoured here, before the card is asked again:
+		// a cancelled ceremony never prompts a second touch.
+		if err := cer.check(); err != nil {
+			return nil, err
+		}
 		if hc != nil {
 			cred = *hc
 		}

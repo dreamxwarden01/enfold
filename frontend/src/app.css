@@ -428,6 +428,9 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
 .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; z-index: 20; }
 .dialog { width: 460px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); overflow: auto; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-window); padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
 .dialog h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; }
+/* Focus moves into a dialog as it opens (Dialog.svelte); the box is not a
+   control and wears no ring — its buttons and fields keep theirs. */
+.dialog:focus, .dialog:focus-visible { outline: none; box-shadow: var(--shadow-window); }
 .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 .dialog p { margin: 0; color: var(--ink-2); font-size: 12.5px; }
 .toasts { position: fixed; right: 20px; bottom: 44px; display: flex; flex-direction: column; gap: 8px; z-index: 30; max-width: 420px; }

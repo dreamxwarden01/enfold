@@ -275,7 +275,7 @@
               <h2 class="u-lead">{stepText(c.step).title}</h2>
               <div class="u-meta">{stepText(c.step).body}</div>
               <div class="u-links">
-                <button type="button" class="btn" onclick={() => void Vault.CancelUnlock()}>Cancel</button>
+                <button type="button" class="btn" disabled={!!c?.cancelling} onclick={() => void Vault.CancelUnlock()}>{c?.cancelling ? "Cancelling…" : "Cancel"}</button>
               </div>
             {:else}
               <div class="keyart" aria-hidden="true">
@@ -301,7 +301,7 @@
                 <div class="bar attention u-bar"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
               {/if}
               <div class="u-links">
-                <button type="button" class="btn sm" onclick={() => void Vault.CancelUnlock()}>Cancel</button>
+                <button type="button" class="btn sm" disabled={!!c?.cancelling} onclick={() => void Vault.CancelUnlock()}>{c?.cancelling ? "Cancelling…" : "Cancel"}</button>
               </div>
             {/if}
           {:else if live === 0}
@@ -396,7 +396,7 @@
             <div class="u-foot">
               <div class="u-links tight">
                 {#if c.step === CeremonyStep.StepPIN}<button type="button" class="btn link" onclick={() => begin("recovery")}>Use recovery key instead</button>{/if}
-                <button type="button" class="btn link" onclick={() => void Vault.CancelUnlock()}>Cancel</button>
+                <button type="button" class="btn link" disabled={!!c?.cancelling} onclick={() => void Vault.CancelUnlock()}>{c?.cancelling ? "Cancelling…" : "Cancel"}</button>
               </div>
             </div>
           {:else}

@@ -90,7 +90,7 @@
       <div class="rule"><svg class="i i-14"><use href="#i-info" /></svg>At least two independent ways in are always kept; a recovery key is one of them.</div>
       <div class="ks-actions">
         <button type="button" class="btn accent" disabled={!unlocked || tampered} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Add a key</button>
-        <button type="button" class="btn" disabled={!sel || !unlocked || tampered} onclick={() => (removing = true)}>Remove</button>
+        <button type="button" class="btn" disabled={!sel || !sel.removable || !unlocked || tampered} title={sel && !sel.removable ? "At least two independent ways in are always kept." : undefined} onclick={() => (removing = true)}>Remove</button>
         {#if sel?.type === "recovery"}
           <button type="button" class="btn" disabled={!sel.escrowed || !unlocked} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>Show recovery key…</button>
         {/if}
@@ -189,7 +189,7 @@
 
 {#if rotating}
   <Dialog title="Rotate the vault key?" onclose={() => (rotating = false)}>
-    <p>Every way in is rewrapped to a fresh key. A hardware key that is not present is marked and rewrapped the next time it unlocks; until then the rotation shows as deferred.</p>
+    <p>Every way in is rewrapped to a fresh key here and now — no YubiKey needs to be present. The one exception is a hardware key with an entangled password other than the one that unlocked: its password is part of its wrap and is kept nowhere, so it is marked and rewrapped the next time it unlocks with that password; until then the rotation shows as deferred.</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (rotating = false)}>Cancel</button>
       <button type="button" class="btn accent" onclick={() => { rotating = false; void begin(Keys.RotateNow()); }}>Rotate</button>

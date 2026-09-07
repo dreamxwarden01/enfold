@@ -2634,3 +2634,24 @@ on the token is used only at unlock. Nothing cryptographic required the key's co
 enrol it, so nothing asked for it. The proof of possession added on 2026-09-07 is a rule, not a
 requirement of the math: the vault must never depend on a key that was not shown to work, and
 a key must never be enrolled without the hand that holds it.
+
+---
+
+## 2026-09-07 — Fourth test's details: a cancel during the touch, Remove greyed by the invariant, the rotate dialog's words, the dialog's ring
+
+The user cancelled while the key waited for a touch and the ceremony sat at "touch your
+YubiKey" until the touch came. Two things were wrong. The card call cannot be interrupted —
+that was known and documented — but when the key gave up on its own the retry loop asked for
+the touch *again*, without looking at the cancellation, so the cancel was never honoured. Every
+retry loop now checks the cancellation before asking the card again, the state says
+`Cancelling` from the click until the card answers, and the panel says so instead of showing a
+button that did nothing. A cancelled ceremony leaves the page at once: no "Cancelled." to close.
+
+Remove is greyed while the invariant would refuse it (`SlotView.Removable`, from
+`keystore.Removable` on the plaintext facts), so nobody runs an unlock only to be told no. The
+rotate dialog said a key not present would be re-wrapped later; the truth (the 2026-09-07 entry
+above): every way in is re-wrapped here and now, and only a hardware key with an entangled
+password other than the one that unlocked waits for its password. The dialog box took the
+theme's focus ring when focus moved into it — a black frame, and one every dialog showed at a
+Shift press; the box is not a control and wears none now, while its buttons and fields keep
+theirs.

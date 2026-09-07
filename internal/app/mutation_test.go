@@ -462,3 +462,90 @@ func TestEnrollPasswordReleasesTheKeyBeforeThePrompt(t *testing.T) {
 		t.Fatalf("ended by something other than the policy: %+v", f)
 	}
 }
+
+// A cancel while the key waits for a touch takes effect when the key
+// gives up — the card call cannot be interrupted — and never leads to a
+// second touch prompt; the state says cancelling meanwhile. The same
+// holds for the proof of an enrolment.
+func TestCancelDuringTouchEndsTheCeremony(t *testing.T) {
+	first := newFakeCard("123456")
+	pub := first.addKey(0x9d, true)
+	first.touchFails = -1 // nobody touches
+	cards := &fakeCards{card: first}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepTouch, false)
+	if e := h.c.CancelUnlock(); e != nil {
+		t.Fatal(e)
+	}
+	c := h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Cancelling
+	}).(CeremonyState)
+	if c.Step != StepTouch {
+		t.Fatalf("cancelling elsewhere than at the touch: %+v", c)
+	}
+	if f := h.rec.waitCeremony(t, StepFailed, false); f.Error != CodeCancelled || !f.Cancelling {
+		t.Fatalf("after the cancel: %+v", f)
+	}
+	h.rec.waitState(t, StateLocked)
+	if n := len(first.touches); n != 1 {
+		t.Fatalf("touch prompts after the cancel: %d", n)
+	}
+
+	// The proof at an enrolment: the same.
+	first.touchFails = 0
+	h.unlockWithToken()
+	first.touchFails = -1
+	h.rec.reset()
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "Second"}); e != nil {
+		t.Fatal(e)
+	}
+	// The unlock half: PIN, then the touch that nobody gives.
+	pin = h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepTouch, false)
+	before := len(first.touches)
+	h.c.CancelUnlock()
+	if f := h.rec.waitCeremony(t, StepFailed, false); f.Error != CodeCancelled {
+		t.Fatalf("after the cancel: %+v", f)
+	}
+	if n := len(first.touches); n != before {
+		t.Fatalf("touch prompts after the cancel: %d", n-before)
+	}
+}
+
+// Whether a slot can go is on the view, from the invariant, so the page
+// greys Remove before any ceremony is run for it.
+func TestRemovableFollowsTheInvariant(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	for _, s := range h.c.Slots() {
+		if s.Removable {
+			t.Fatalf("one of two ways in marked removable: %+v", s)
+		}
+	}
+	h.unlockWithPassword()
+	h.rec.reset()
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollRecovery, Label: "Second paper"}); e != nil {
+		t.Fatal(e)
+	}
+	p := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", p.PromptID, testPassword)
+	h.rec.waitCeremony(t, StepRecovery, false)
+	var removable int
+	for _, s := range h.c.Slots() {
+		if s.Removable {
+			removable++
+		}
+	}
+	// Recovery + recovery are disjoint, and so is either with the
+	// password: every one of the three may go.
+	if removable != 3 {
+		t.Fatalf("removable after a third way in: %d of %+v", removable, h.c.Slots())
+	}
+}

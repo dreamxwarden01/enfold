@@ -30,6 +30,7 @@ func (c *Core) Slots() []SlotView {
 	for _, s := range c.vault.slots {
 		v := slotView(s)
 		v.Escrowed = c.vault.escrowed[s.RecipientID]
+		v.Removable = c.vault.removable[s.RecipientID]
 		out = append(out, v)
 	}
 	return out
@@ -425,6 +426,11 @@ func (cer *ceremony) proveKey(card Card, pub []byte, label string) error {
 		return err
 	}
 	for {
+		// A cancel while the card was busy — the touch — is honoured here,
+		// before the card is asked again.
+		if err := cer.check(); err != nil {
+			return err
+		}
 		got, err := tok.ECDH(eph.PublicKey().Bytes())
 		if err == nil {
 			same := subtle.ConstantTimeCompare(got, want) == 1

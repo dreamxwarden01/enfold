@@ -113,6 +113,12 @@ export interface CeremonyState {
      * Verify, at Done: how many archives the backup's registry names.
      */
     "archives": number;
+
+    /**
+     * Cancelling: the user (or a trigger) cancelled, and the ceremony is
+     * waiting for a card call it cannot interrupt — the touch — to answer.
+     */
+    "cancelling": boolean;
 }
 
 /**
@@ -478,6 +484,11 @@ export interface SlotView {
      * a recovery slot whose key can be shown again (FORMAT R38); known while Unlocked
      */
     "escrowed": boolean;
+
+    /**
+     * the invariant would still hold without it (keystore.Removable)
+     */
+    "removable": boolean;
 }
 
 /**

@@ -40,11 +40,12 @@ type vaultState struct {
 	absTimer       Timer
 	lastGrant      time.Time // last accepted activity reset
 
-	warnings map[Code]bool
-	broken   error
-	missing  string            // a configured vault that could not be opened at start
-	damaged  bool              // the missing file is there and not a keystore: the rebuild of APP.md §2.1 applies
-	escrowed map[[16]byte]bool // the recovery slots that can be shown again (FORMAT R38); Unlocked only
+	warnings  map[Code]bool
+	broken    error
+	missing   string            // a configured vault that could not be opened at start
+	damaged   bool              // the missing file is there and not a keystore: the rebuild of APP.md §2.1 applies
+	escrowed  map[[16]byte]bool // the recovery slots that can be shown again (FORMAT R38); Unlocked only
+	removable map[[16]byte]bool // the slots the invariant lets go of (keystore.Removable)
 }
 
 // LockReason is why a lock trigger fired.
@@ -131,6 +132,10 @@ func (c *Core) cacheFactsLocked(ks *keystore.Keystore) {
 	c.vault.modifiedAt = ks.ModifiedAt()
 	c.vault.rotationPending = ks.RotationPending()
 	c.vault.slots = ks.Slots()
+	c.vault.removable = make(map[[16]byte]bool, len(c.vault.slots))
+	for _, s := range c.vault.slots {
+		c.vault.removable[s.RecipientID] = ks.Removable(s.RecipientID)
+	}
 	c.vault.stale = ks.Stale
 	if ks.Stale != nil {
 		c.vault.warnings[CodeVaultStale] = true

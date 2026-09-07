@@ -2,7 +2,7 @@
 // the little the page adds (route, selection, toasts). Every event is
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
-import { Archive, Archives, Keys, Settings, Vault, errorOf } from "./api";
+import { Archive, Archives, Keys, Settings, Vault, errorOf, Code } from "./api";
 import type { ArchiveStat, ArchiveSummary, CeremonyState, OpView, Page, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, warningCopy } from "./strings";
@@ -161,7 +161,9 @@ class Store {
   private applyCeremony(c: CeremonyState): void {
     if (c.seq <= this.ceremonySeq) return;
     this.ceremonySeq = c.seq;
-    this.ceremony = c;
+    // A cancelled ceremony is over the moment it says so: nothing to
+    // read, nothing to close.
+    this.ceremony = c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled ? null : c;
     this.noteOutcome(c);
     if (c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || (c.step === CeremonyStep.StepRecovery && !c.promptId)) {
       this.recoveryDraft = null;

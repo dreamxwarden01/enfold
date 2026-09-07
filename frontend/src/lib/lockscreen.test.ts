@@ -8,7 +8,7 @@ import type { VaultStatus } from "./api";
 import { VaultState } from "./api";
 
 function ev(kind: string, step: CeremonyStep, promptId = "", archives = 0): CeremonyState {
-  return { seq: 1, kind, step, promptId, choose: false, slotLabel: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives };
+  return { seq: 1, kind, step, promptId, choose: false, slotLabel: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives, cancelling: false };
 }
 
 describe("samePath", () => {

@@ -284,7 +284,13 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   Cancellation is a per-ceremony `context.CancelFunc` (idempotent), never a channel close; the
   prompter selects on the context and returns an error, which `piv` turns into `ErrCancelled`
   at no cost in retries. The deadline is on the *prompt wait* and on `WaitingForKey` — the
-  session's absolute default — never on the card call itself, which cannot be interrupted.
+  session's absolute default — never on the card call itself, which cannot be interrupted. A
+  cancel during a card call — the touch — takes effect when the card answers (a YubiKey gives up
+  waiting for a touch on its own, after a while it does not document; DESIGN trap 23): the state
+  says `Cancelling` meanwhile, the panel's Cancel is spent, and every retry loop checks the
+  cancellation before asking the card again, so a cancelled ceremony never prompts a second
+  touch. A ceremony that ends cancelled is gone from the page at once — nothing to read, nothing
+  to close.
 - Touch: `Prompter.Touch` fires `vault.ceremony {Step: touch, N}`; the panel takes over.
 - **A wrong secret is said, in place.** A refused PIN makes the next PIN prompt carry
   `token.pin` as its note beside the count; a wrong password or mistyped recovery digits
@@ -452,8 +458,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - Events: `archive.changed {ID, Seq}`, `archive.expiring {ID, ClosesAt}`, progress as above.
 
 **Keys**
-- `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Entangled, Stale, Escrowed}` —
-  `Escrowed` says a recovery slot can be shown again (FORMAT R38), known while Unlocked.
+- `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Entangled, Stale, Escrowed,
+  Removable}` — `Escrowed` says a recovery slot can be shown again (FORMAT R38), known while
+  Unlocked; `Removable` says the invariant would still hold without the slot
+  (`keystore.Removable`), so the page greys *Remove* before any ceremony is run for it.
 - `BeginEnroll(kind, label, entangle bool)` runs the ceremony for the VMK and releases the key
   that unlocked, then — when `entangle` — asks for the new password (`Choose`), and only then
   for a YubiKey the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
@@ -619,8 +627,10 @@ banner, the Tampered state, the status strip with the countdown and Lock). Archi
 projection, paged table with pending markers, preview pane — image, video, audio through the
 loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
 drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
-Remove, Rotate now, Rewrap, *Show recovery key…* — shown only while a recovery slot is
-selected — backups with the R35 date,
+Remove — greyed while the invariant would refuse — Rotate now (its dialog says every way in is
+rewrapped here and now, and names the one exception: a hardware key with an entangled password
+other than the one that unlocked), Rewrap, *Show recovery key…* — shown only while a recovery
+slot is selected — backups with the R35 date,
 the damaged copy when one is kept, session and appearance settings). First run (create, or
 import a vault or a backup; a file that is only a backup leads into *Finish setting up*, and so
 does a vault left half set up; a vault whose file is present and refused offers *try again*,

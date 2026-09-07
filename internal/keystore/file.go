@@ -477,3 +477,17 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 // so that a test can write the version-1 registry an older Enfold wrote
 // and watch it come back as version 2 (R38).
 var encodeRegistry = func(g *format.Registry) ([]byte, error) { return g.Encode() }
+
+// Removable reports whether the slot could be removed: the invariant
+// (§6.4) would still hold without it. From the plaintext facts, so that
+// a page can grey the action out before any ceremony is run for it.
+func (k *Keystore) Removable(recipientID [16]byte) bool {
+	slots := cloneSlots(k.slots)
+	for i := range slots {
+		if slots[i].RecipientID == recipientID {
+			slots = append(slots[:i], slots[i+1:]...)
+			return checkInvariant(slots) == nil
+		}
+	}
+	return false
+}

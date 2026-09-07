@@ -89,6 +89,9 @@ type CeremonyState struct {
 	InsertLabel string `json:"insertLabel,omitempty"`
 	// Verify, at Done: how many archives the backup's registry names.
 	Archives int `json:"archives"`
+	// Cancelling: the user (or a trigger) cancelled, and the ceremony is
+	// waiting for a card call it cannot interrupt — the touch — to answer.
+	Cancelling bool `json:"cancelling"`
 }
 
 // Reader is a PC/SC reader that looks like a YubiKey.
@@ -110,7 +113,8 @@ type SlotView struct {
 	CreatedAt   int64  `json:"createdAt"`
 	Entangled   bool   `json:"entangled"`
 	Stale       bool   `json:"stale"`
-	Escrowed    bool   `json:"escrowed"` // a recovery slot whose key can be shown again (FORMAT R38); known while Unlocked
+	Escrowed    bool   `json:"escrowed"`  // a recovery slot whose key can be shown again (FORMAT R38); known while Unlocked
+	Removable   bool   `json:"removable"` // the invariant would still hold without it (keystore.Removable)
 }
 
 // ArchiveSummary is a row of the archives list, from the registry plus

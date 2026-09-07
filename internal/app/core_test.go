@@ -499,7 +499,14 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 	page2, _ := h.c.Page(id, "docs/sub", "name", 0, 100)
 	all = append(all, page2.Rows[0].FileID)
-	out := filepath.Join(h.dir, "out")
+	// Extracted files go under GOTMPDIR when it is set: on the dev machine
+	// that directory is excluded from the antivirus, whose scan of a fresh
+	// file otherwise holds it open while the temp dir is being removed.
+	out, err := os.MkdirTemp(os.Getenv("GOTMPDIR"), "enfold-extract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(out)
 	opID, e = h.c.Extract(id, all, out, ExtractSkip)
 	if e != nil {
 		t.Fatalf("extract: %v", e)

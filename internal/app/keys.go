@@ -388,6 +388,7 @@ func (cer *ceremony) enrollOnce(label string) ([]byte, uint32, error) {
 // ceremony the user performs, never something a key in the reader
 // undergoes by itself.
 func (cer *ceremony) enrollOn(card Card, label string) ([]byte, error) {
+	cer.set(func(s *CeremonyState) { s.SlotLabel = label }) // the chip names this key, not the one that unlocked
 	pub, err := cer.keyToEnroll(card)
 	if err != nil {
 		return nil, err
@@ -476,22 +477,35 @@ func (cer *ceremony) keyToEnroll(card Card) ([]byte, error) {
 	}
 	cer.c.log("ceremony %s: generating in %02x", cer.kind, byte(slot))
 	// The management key: the PIN-protected one first, else typed as hex.
-	st, err := card.PINState()
-	if err != nil {
-		cer.c.log("ceremony %s: PIN state: %v", cer.kind, err)
-		return nil, err
-	}
-	if st.Blocked() {
-		return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
-	}
+	// A refused PIN is said and asked again, in place; only a blocked PIN
+	// parks.
 	var mgmt []byte
-	pin, err := cer.ask("pin", StepPIN, st)
-	if err != nil {
-		return nil, err
-	}
-	mgmt, err = card.ProtectedManagementKey(pin)
-	if err != nil {
-		if errors.Is(err, ErrTokenNoProtectedKey) {
+	var note Code
+	for {
+		st, err := card.PINState()
+		if err != nil {
+			cer.c.log("ceremony %s: PIN state: %v", cer.kind, err)
+			return nil, err
+		}
+		if st.Blocked() {
+			return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
+		}
+		pin, err := cer.askNote("pin", StepPIN, st, note)
+		if err != nil {
+			return nil, err
+		}
+		mgmt, err = card.ProtectedManagementKey(pin)
+		if err == nil {
+			break
+		}
+		var pe *TokenPINError
+		switch {
+		case errors.As(err, &pe):
+			note = CodeTokenPIN
+			continue
+		case errors.Is(err, ErrTokenPINBlocked):
+			return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
+		case errors.Is(err, ErrTokenNoProtectedKey):
 			cer.c.log("ceremony %s: no PIN-protected management key; asking for it", cer.kind)
 			hexKey, aerr := cer.ask("mgmtkey", StepManagementKey, PINStatus{})
 			if aerr != nil {
@@ -501,10 +515,11 @@ func (cer *ceremony) keyToEnroll(card Card) ([]byte, error) {
 			if err != nil {
 				return nil, &parkAt{StepFailed, CodeTokenMgmtKey}
 			}
-		} else {
+		default:
 			cer.c.log("ceremony %s: management key after the PIN: %v", cer.kind, err)
 			return nil, err
 		}
+		break
 	}
 	defer kdf.Zero(mgmt)
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })

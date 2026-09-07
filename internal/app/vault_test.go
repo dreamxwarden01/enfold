@@ -585,7 +585,9 @@ func TestEnrolledKeyProvesItself(t *testing.T) {
 		t.Fatalf("a wrong PIN is not said: %+v", pin2)
 	}
 	c.SubmitSecret("pin", pin2.PromptID, "123456")
-	rec.waitCeremony(t, StepTouch, false)
+	if touch := rec.waitCeremony(t, StepTouch, false); touch.Error != "" {
+		t.Fatalf("the note outlived the accepted PIN: %+v", touch)
+	}
 	rec.waitCeremony(t, StepRecovery, false)
 	rec.waitState(t, StateLocked)
 	card.mu.Lock()
@@ -602,6 +604,68 @@ func TestEnrolledKeyProvesItself(t *testing.T) {
 	}
 	if label != "YubiKey 1234567" {
 		t.Fatalf("the empty label is not the serial: %q", label)
+	}
+
+	// A key whose agreement is not its own is refused, and nothing is made.
+	dir2 := t.TempDir()
+	liar := newFakeCard("123456")
+	liar.addKey(0x9d, true)
+	liar.proofLies = true
+	cards2 := &fakeCards{card: liar}
+	cards2.setReaders("Yubico A")
+	rec2 := &recorder{}
+	c2, _ := New(Deps{Cards: cards2, Events: rec2, Clock: newFakeClock(), DataDir: filepath.Join(dir2, "data")})
+	c2.Start()
+	defer c2.Close()
+	if e := c2.CreateVault("", "Mine", EnrollOptions{Kind: EnrollToken}, false); e != nil {
+		t.Fatal(e)
+	}
+	pin = rec2.waitCeremony(t, StepPIN, true)
+	c2.SubmitSecret("pin", pin.PromptID, "123456")
+	if f := rec2.waitCeremony(t, StepFailed, false); f.Error != CodeTokenProof {
+		t.Fatalf("a lying key: %+v", f)
+	}
+	c2.CancelUnlock()
+	rec2.waitState(t, StateNone)
+	if _, err := os.Stat(filepath.Join(dir2, "data", "vault.eks")); err == nil {
+		t.Fatal("a vault was made with a key that did not prove itself")
+	}
+}
+
+// On the generate path — an empty key — a refused PIN at the management
+// key is said and asked again; the prompt names the key being enrolled.
+func TestGeneratePathWrongPINIsAskedAgain(t *testing.T) {
+	dir := t.TempDir()
+	card := newFakeCard("123456")
+	card.mgmt = []byte("0123456789abcdef0123456789abcdef")
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	rec := &recorder{}
+	c, _ := New(Deps{Cards: cards, Events: rec, Clock: newFakeClock(), DataDir: filepath.Join(dir, "data")})
+	c.Start()
+	defer c.Close()
+	c.SetAppOrigin("wails://wails")
+	if e := c.CreateVault("", "Mine", EnrollOptions{Kind: EnrollToken}, false); e != nil {
+		t.Fatal(e)
+	}
+	pin := rec.waitCeremony(t, StepPIN, true)
+	if pin.SlotLabel != "YubiKey 1234567" {
+		t.Fatalf("the PIN prompt does not name the key being enrolled: %+v", pin)
+	}
+	c.SubmitSecret("pin", pin.PromptID, "nope")
+	pin2 := rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPIN && s.PromptID != "" && s.PromptID != pin.PromptID
+	}).(CeremonyState)
+	if pin2.Error != CodeTokenPIN || pin2.Retries != 2 {
+		t.Fatalf("the refused PIN is not said: %+v", pin2)
+	}
+	c.SubmitSecret("pin", pin2.PromptID, "123456")
+	rec.waitCeremony(t, StepTouch, false) // the proof, with the PIN still verified
+	rec.waitCeremony(t, StepRecovery, false)
+	rec.waitState(t, StateLocked)
+	if st := c.Status(); !st.HasHardwareSlot {
+		t.Fatalf("after the enrolment: %+v", st)
 	}
 }
 

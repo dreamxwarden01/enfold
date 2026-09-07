@@ -276,19 +276,20 @@ func (f *fakeCards) Open(reader string) (Card, error) {
 // fakeCard holds software keys and enforces PIN and touch the way the
 // token does: every operation asks for the PIN, then a touch.
 type fakeCard struct {
-	mu       sync.Mutex
-	keys     map[Slot]*ecdh.PrivateKey
-	usable   map[Slot]bool
-	pin      string
-	retries  int
-	closed   bool
-	closes   int
-	closeErr error
-	mgmt     []byte // the PIN-protected management key; nil when none
-	touches  []TouchRequest
-	ops      int
-	removed  bool // pulled: every operation answers ErrTokenNoCard
-	verified bool // PIN-once: a VERIFY stands for this handle, as on the card
+	mu        sync.Mutex
+	keys      map[Slot]*ecdh.PrivateKey
+	usable    map[Slot]bool
+	pin       string
+	retries   int
+	closed    bool
+	closes    int
+	closeErr  error
+	mgmt      []byte // the PIN-protected management key; nil when none
+	touches   []TouchRequest
+	ops       int
+	removed   bool // pulled: every operation answers ErrTokenNoCard
+	verified  bool // PIN-once: a VERIFY stands for this handle, as on the card
+	proofLies bool // the agreement the token computes is not its key's: the proof must refuse it
 }
 
 // setRemoved pulls the key, or puts it back.
@@ -493,7 +494,17 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return priv.ECDH(pub)
+	h, err := priv.ECDH(pub)
+	if err != nil {
+		return nil, err
+	}
+	t.card.mu.Lock()
+	lies := t.card.proofLies
+	t.card.mu.Unlock()
+	if lies {
+		h[0] ^= 1
+	}
+	return h, nil
 }
 
 // harness is one core with fakes over a fresh vault.

@@ -286,8 +286,10 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   `token.pin` as its note beside the count; a wrong password or mistyped recovery digits
   (`keystore.ErrVerifier`/`ErrAuth` under a typed credential) are asked for again under a fresh
   prompt id with `vault.auth` as the note — the page marks the field, says why, and keeps the
-  recovery digits for correction — never a failure the user has to start over from. Only a
-  token's refusal (a damaged record, a stale slot) parks.
+  recovery digits for correction — never a failure the user has to start over from; the
+  derivation shows again after the corrected answer. A note describes its prompt only: taken,
+  gone or cancelled, the prompt clears it. The management-key PIN of an enrolment follows the
+  same rule. Only a token's refusal (a damaged record, a stale slot) parks.
 - Wrong password (`ErrAuth` from Deriving) returns to `Password` with the Card kept open, so the
   retry costs a touch but no PIN on a PIN-once key; the copy says so. `MaxOperations` exhausted →
   "remove and reinsert the key" (WaitingForKey).
@@ -688,9 +690,11 @@ core ignores — and an existing secret is never measured: it is what it is, so 
 only for what the card itself refuses (more than 8 bytes), never for being short. **The
 recovery key is typed into eight cells**, plain digits — they are read back against paper, not
 hidden — each moving on when its six are in; a paste fills them all with the dashes stripped; a
-click lands on the first cell still to be typed; a finished group that fails BitLocker's
-checksum (divisible by 11, below 720 896) turns red at once, before anything is sent; and when
-the core says the key did not open the vault, the digits stay for correction.
+click lands on the first cell still to be typed, or, once all eight are in, where it was aimed
+with the group selected for retyping; the cells are one tab stop; a finished group that fails
+BitLocker's checksum (divisible by 11, below 720 896) turns red at once, before anything is
+sent; and when the core says the key did not open the vault, the digits come back for
+correction — the store keeps them across the derivation step, which unmounts the field.
 
 **Motion.** Every dialog, menu and popover enters over 140 ms (the box also scales from 97%)
 and leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between

@@ -371,7 +371,9 @@ func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, c
 		if cer.prompt == p {
 			cer.prompt = nil
 		}
-		cer.state.PromptID, cer.state.Choose = "", false
+		// The note describes this prompt only: taken, gone or cancelled,
+		// it does not ride into the next step.
+		cer.state.PromptID, cer.state.Choose, cer.state.Error = "", false, ""
 		c.mu.Unlock()
 	}
 	select {
@@ -868,6 +870,7 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential,
 				return nil, aerr
 			}
 			cred = next
+			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 			continue
 		case hc != nil && errors.Is(err, ErrTokenTouch):
 			continue
@@ -879,11 +882,12 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential,
 			return nil, &parkAt{StepFailed, CodeTokenTooMany}
 		case hc != nil && errors.Is(err, keystore.ErrAuth) && hc.Password != "":
 			// The entangled password was wrong; ask again, same card.
-			pw, aerr := cer.ask("password", StepPassword, PINStatus{})
+			pw, aerr := cer.askNote("password", StepPassword, PINStatus{}, CodeAuth)
 			if aerr != nil {
 				return nil, aerr
 			}
 			hc.Password = pw
+			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 			continue
 		case errors.Is(err, keystore.ErrStale):
 			return nil, &parkAt{StepFailed, CodeVaultStale}

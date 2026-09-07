@@ -2,14 +2,17 @@
   // The recovery key's eight cells (APP.md §6): plain digits, since they
   // are read back against paper, not a password; each cell moves on when
   // its six digits are in, a paste fills them all with the dashes
-  // stripped, a click lands on the first cell still to be typed, and a
-  // finished group that fails its checksum turns red at once. The digits
-  // go over the raw channel on submit and stay when the core says they
-  // did not open the vault, so the user corrects them in place.
+  // stripped, a click lands on the first cell still to be typed — or,
+  // once all eight are in, where it was aimed, the group selected for
+  // retyping — and a finished group that fails its checksum turns red at
+  // once. The digits go over the raw channel on submit; the store keeps
+  // them across the derivation, so that a key the core refused comes back
+  // for correction in place.
   import { untrack } from "svelte";
   import { fade } from "svelte/transition";
   import { submitSecret } from "../lib/api";
   import { motion } from "../lib/motion";
+  import { store } from "../lib/state.svelte";
   import { RECOVERY_GROUPS, RECOVERY_GROUP_LEN, RECOVERY_SEPARATORS, recoveryGroupProblem } from "../lib/validate";
 
   interface Props {
@@ -24,39 +27,47 @@
   let cells: HTMLInputElement[] = $state([]);
   let pressed = $state(false);
   let typedSince = $state(false);
-  let lastPrompt = "";
 
   const complete = $derived(groups.every((g) => g.length === RECOVERY_GROUP_LEN));
+  // open: the first cell still to be typed; -1 once all eight are in.
+  const open = $derived(groups.findIndex((g) => g.length < RECOVERY_GROUP_LEN));
   const mistyped = $derived(groups.map(recoveryGroupProblem));
   const anyMistyped = $derived(mistyped.some(Boolean));
   const refused = $derived(!!error && !typedSince);
   const said = $derived(anyMistyped ? "A group is mistyped: each is six digits, and the last digit checks the other five." : pressed && !complete ? "All 48 digits are needed." : refused ? error : "");
 
   $effect(() => {
-    // A new prompt keeps the digits when the core refused them (the user
-    // corrects in place); a fresh ceremony starts clean.
+    // A prompt that says the key was refused brings the typed groups back
+    // from the store; a fresh ceremony starts clean.
     void promptId;
-    const again = !!error && lastPrompt !== "";
-    lastPrompt = promptId;
-    if (!again) groups = Array(RECOVERY_GROUPS).fill("");
+    const draft = untrack(() => store.recoveryDraft);
+    if (error && draft) {
+      groups = [...draft];
+    } else {
+      groups = Array(RECOVERY_GROUPS).fill("");
+      store.recoveryDraft = null;
+    }
     pressed = false;
     typedSince = false;
     // Untracked: the focus reads the groups, and this effect is about the
     // prompt, not about every keystroke.
-    untrack(focusNext);
+    untrack(focusOpen);
   });
 
-  function firstOpen(): number {
-    const i = groups.findIndex((g) => g.length < RECOVERY_GROUP_LEN);
-    return i < 0 ? RECOVERY_GROUPS - 1 : i;
+  function remember() {
+    store.recoveryDraft = [...groups];
+    typedSince = true;
   }
 
-  function focusNext() {
-    cells[firstOpen()]?.focus();
+  function focusOpen() {
+    const i = open < 0 ? RECOVERY_GROUPS - 1 : open;
+    cells[i]?.focus();
   }
 
+  // fill distributes digits from cell `from` onwards, six per cell, and
+  // resyncs the cell the user is in: Svelte writes a cell only when its
+  // state changed, so a stray non-digit must be undone by hand.
   function fill(from: number, text: string) {
-    // Distribute digits from cell `from` onwards, six per cell.
     const digits = text.replace(RECOVERY_SEPARATORS, "").replace(/\D/g, "");
     const next = [...groups];
     let i = from;
@@ -68,16 +79,16 @@
       if (next[i].length === RECOVERY_GROUP_LEN) i++;
     }
     groups = next;
-    typedSince = true;
-    focusNext();
+    remember();
   }
 
   function input(i: number, e: Event) {
     const el = e.currentTarget as HTMLInputElement;
     const digits = el.value.replace(/\D/g, "");
     groups[i] = "";
-    el.value = "";
     fill(i, digits);
+    el.value = groups[i];
+    if (groups[i].length === RECOVERY_GROUP_LEN) focusOpen();
   }
 
   function paste(i: number, e: ClipboardEvent) {
@@ -92,21 +103,28 @@
       groups[i] = "";
       fill(i, digits);
     }
+    focusOpen();
   }
 
   function key(i: number, e: KeyboardEvent) {
     if (e.key === "Backspace" && groups[i] === "" && i > 0) {
+      // An empty cell: the previous one, at its end.
       e.preventDefault();
-      groups[i - 1] = groups[i - 1].slice(0, -1);
-      typedSince = true;
-      cells[i - 1]?.focus();
-    } else if (e.key === "Backspace") {
-      e.preventDefault();
-      groups[i] = groups[i].slice(0, -1);
-      typedSince = true;
+      const prev = cells[i - 1];
+      prev?.focus();
+      prev?.setSelectionRange(prev.value.length, prev.value.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
       submit();
+    }
+  }
+
+  function click(i: number, e: MouseEvent) {
+    const el = e.currentTarget as HTMLInputElement;
+    if (complete) {
+      el.select(); // aimed at this group: retype it whole
+    } else if (i !== open) {
+      focusOpen();
     }
   }
 
@@ -114,7 +132,7 @@
     e?.preventDefault();
     pressed = true;
     if (!complete || anyMistyped) {
-      focusNext();
+      focusOpen();
       return;
     }
     submitSecret("recovery", promptId, groups.join(""));
@@ -124,7 +142,7 @@
 
 <form class="field" onsubmit={submit} novalidate>
   <div class="field-top"><span class="label">Recovery key</span><span class="hint">48 digits, in eight groups.</span></div>
-  <div class="cells" role="group" aria-label="Recovery key, eight groups of six digits">
+  <div class="cells" role="group" aria-label="Recovery key, eight groups of six digits" aria-describedby={said ? `recovery-${promptId}-said` : undefined}>
     {#each groups as g, i (i)}
       <input
         bind:this={cells[i]}
@@ -136,18 +154,18 @@
         autocapitalize="off"
         spellcheck="false"
         maxlength={RECOVERY_GROUP_LEN}
+        tabindex={complete || i === open ? 0 : -1}
         aria-label={`Group ${i + 1}`}
         aria-invalid={!!mistyped[i] || refused}
         value={g}
-        onclick={focusNext}
-        onfocus={(e) => { if (i !== firstOpen()) { e.preventDefault(); focusNext(); } }}
+        onclick={(e) => click(i, e)}
         oninput={(e) => input(i, e)}
         onpaste={(e) => paste(i, e)}
         onkeydown={(e) => key(i, e)}
       />
     {/each}
   </div>
-  {#if said}<div class="field-error" transition:fade={motion()}>{said}</div>{/if}
+  {#if said}<div id="recovery-{promptId}-said" class="field-error" transition:fade={motion()}>{said}</div>{/if}
   {#if note}<div class="pin-note">{note}</div>{/if}
   <div class="submit"><button type="submit" class="btn accent wide">{button}</button></div>
 </form>

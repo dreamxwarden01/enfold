@@ -32,6 +32,10 @@ export interface Expiring {
 class Store {
   status = $state<VaultStatus | null>(null);
   ceremony = $state<CeremonyState | null>(null);
+  // recoveryDraft: the eight groups as typed, kept across the derivation
+  // step so that a key the core refused comes back for correction
+  // (APP.md §6); dropped when the ceremony ends.
+  recoveryDraft = $state<string[] | null>(null);
   ops = $state<Record<string, OpView>>({});
   archives = $state<ArchiveSummary[]>([]);
   showHidden = $state(false);
@@ -159,6 +163,9 @@ class Store {
     this.ceremonySeq = c.seq;
     this.ceremony = c;
     this.noteOutcome(c);
+    if (c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || (c.step === CeremonyStep.StepRecovery && !c.promptId)) {
+      this.recoveryDraft = null;
+    }
   }
 
   private noteOutcome(c: CeremonyState): void {
@@ -169,6 +176,7 @@ class Store {
   // dismissCeremony clears a finished panel; the core has already forgotten it.
   dismissCeremony(): void {
     this.ceremony = null;
+    this.recoveryDraft = null;
   }
 
   private applyOp(o: OpView, done = false): void {

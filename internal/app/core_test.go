@@ -87,7 +87,11 @@ func TestWrongPasswordIsAskedAgainInPlace(t *testing.T) {
 		t.Fatalf("the ceremony should hold Unlocking, got %s", st.State)
 	}
 	h.c.SubmitSecret("password", again.PromptID, testPassword)
-	h.rec.waitCeremony(t, StepDone, false)
+	// The derivation shows again, and the note does not outlive the prompt.
+	h.rec.waitCeremony(t, StepDeriving, false)
+	if done := h.rec.waitCeremony(t, StepDone, false); done.Error != "" {
+		t.Fatalf("the note outlived the accepted answer: %+v", done)
+	}
 	h.rec.waitState(t, StateUnlocked)
 	h.c.Lock()
 	h.rec.waitState(t, StateLocked)

@@ -805,9 +805,10 @@ Correct in this document, and easy to lose during implementation.
     does nothing to the transmit, and `SCardDisconnect` — with a reset or without — from another
     thread queues behind the transmit and returns with it, when the key gives up. Yubico's .NET
     SDK says of its own touch notification that "there is no cancelling", only the timeout. FIDO
-    cancels at once because CTAPHID has a cancel message; CCID has no counterpart. So a cancel during the
-    touch is honoured when the card answers, and the page tells the user the two ways to make it
-    answer now: touch the key, or pull it out.
+    cancels at once because CTAPHID has a cancel message; CCID has no counterpart. So the wait
+    is not cut short — it is *left*: the call outlives its ceremony as a pending touch that the
+    next ceremony for the same VMK adopts, and that ends on its own when the card answers
+    (APP.md §2.2). Nobody stands still for it, and nothing on the page says "cancelling".
 24. **piv-go's `Open` leaks an exclusive connection** when the card is pulled between connect
     and transaction, or when the PIV SELECT fails (v2.6.0 `piv.go:172–179`) — the handle is
     unexported, and the lock lasts until the process exits, a tray process's lifetime. Every
@@ -835,6 +836,46 @@ Correct in this document, and easy to lose during implementation.
     hold it that instant) where every other entry refuses. A prompter's error keeps its identity
     under `ErrCancelled` (`%w: %w`), and so does the adapter's wrap: the app's "key gone" is
     recognisable at the far end of the round trip.
+26. **A pulled key answers with Win32 codes first.** Seen in the fourth hardware test
+    (2026-09-07, the app's log): a key pulled with a request on the wire fails that request with
+    a Win32 device error from the CCID driver — `SCardTransmit` returned `ERROR_GEN_FAILURE`
+    (0x0000001f, "a device attached to the system is not functioning") to piv-go's VERIFY, and
+    `ERROR_BAD_COMMAND` (0x00000016) to the package's own preflight — and only afterwards does
+    the resource manager notice the reader go, at which point the *next* request answers
+    `SCARD_E_SERVICE_STOPPED`, because the last reader took the Smart Card service down with
+    it. piv-go prints a code it has no text for as "unknown pcsc return code" and the package's
+    message table had no entry, so the ceremony failed as *internal*. Two tables, one per
+    layer, and a rule scoped by call:
+    - The package's own layer (`scError.sentinel`, by number, and it knows the call): the
+      facility's codes as before (`NO_SERVICE`, `SERVICE_STOPPED` → `ErrNoService`;
+      `NO_READERS_AVAILABLE`, `UNKNOWN_READER`, `READER_UNAVAILABLE` → `ErrNoReader`;
+      `SHARING_VIOLATION` → `ErrBusy`; `W_RESET_CARD` → `ErrCardReset`; `NO_SMARTCARD`,
+      `W_REMOVED_CARD`, `W_UNPOWERED_CARD`, `W_UNRESPONSIVE_CARD`, `PROTO_MISMATCH`,
+      `COMM_DATA_LOST` → `ErrNoCard`) plus `NOT_READY` (0x10), `COMM_ERROR` (0x13) and
+      `UNEXPECTED` (0x1F) → `ErrNoCard` and `SYSTEM_CANCELLED` (0x12), `SHUTDOWN` (0x18) →
+      `ErrNoService`; then any code outside the facility (`0x8010xxxx`) from a call that
+      addresses a card or a card handle — connect, begin, transmit, status, end, disconnect — is
+      the device gone, `ErrNoCard`, while the same from `SCardEstablishContext` or
+      `SCardListReaders` is the service or the session, `ErrNoService`: Microsoft's own return
+      table has one non-`SCARD_` entry, `ERROR_BROKEN_PIPE`, "a smart card operation in a remote
+      session" without redirection, and the waiting state treats no service as no reader. The
+      facility's codes that name this program's own mistakes — `INVALID_HANDLE`,
+      `INVALID_PARAMETER`, `INVALID_VALUE`, `NOT_TRANSACTED`, the internal errors — stay
+      unclassified: a bug is not a removal.
+    - piv-go's layer (`mapErr`, by text, since its error type is unexported and it prints the
+      codes it knows by their message): the rows as before plus "not ready to accept commands",
+      "an internal communications error has been detected", "an unexpected card error has
+      occurred" and "a communications error with the smart card has been detected" → `ErrNoCard`,
+      "cancelled by the system, presumably to log off or shut down" and "aborted to allow the
+      server application to exit" → `ErrNoService`; and a message of the form "unknown pcsc
+      return code 0x…" — the number masked to 32 bits, since piv-go prints an `int64` — whose
+      code lies outside the facility is `ErrNoCard`. Every piv-go call runs after the package's
+      own preflight of the reader, so a Win32 code from piv-go's own context or connect is the
+      same moment's failure and the caller waits for the key again; harmless.
+    - A reset on Close that cannot connect because the card, the reader or the service is not
+      there (`ErrNoCard`, `ErrNoReader`, `ErrNoService` from the reset connection) is not a
+      failed reset: an unpowered card holds nothing of ours. A connect refused for any other
+      reason — the card busy with another program — still warns, as before.
 
 ## 12. Deferred
 

@@ -79,7 +79,10 @@ file is held open only while Unlocked.
 
 **Unlocking.** One ceremony at a time (§2.2), on its own goroutine with a top-level `recover`
 that routes to "lock and report". `BeginUnlock` while Unlocking or Releasing returns
-`ceremony.in_progress` / `ceremony.releasing`, and never reaches `piv.Open`.
+`ceremony.in_progress` / `ceremony.releasing`, and never reaches `piv.Open`. A cancel returns
+the vault to Locked at once, even while the key is still answering the ceremony's last card
+call: that call outlives the ceremony as a *pending touch* (§2.2), and the status says so
+(`pendingTouch`) until the card answers.
 
 **Unlocked.** Holds `*keystore.Unlocked` only for the duration of a mutation that needs the VMK
 (enroll, remove, rotate, rewrap, export, backup restore) and otherwise only `*keystore.Session`;
@@ -110,8 +113,10 @@ the primary sleep trigger on Modern Standby machines), classic suspend (Wails'
 → `PowerUserInactive`, optional, one direction only), idle, absolute, manual (tray and
 `Vault.Lock()`), exit (§5). In Unlocked the trigger locks; in Unlocking it cancels the ceremony
 and sets a latch the ceremony checks at its publish point, so a ceremony that completes after
-the trigger does not publish; in Locked it is a no-op. **Zeroing is synchronous on the message
-thread:** the trigger handler calls the core's `lockNow`, which takes a short mutex that no
+the trigger does not publish; in Locked it is a no-op. A pending touch (§2.2) is left
+unadoptable by every trigger and its answer is closed unused when it comes; the lock's close of
+the handle waits for it, as it waits for a cancelled ceremony. **Zeroing is synchronous on the
+message thread:** the trigger handler calls the core's `lockNow`, which takes a short mutex that no
 long operation ever holds, zeroes the keys (`Session.Lock()`), and hands everything unbounded —
 the keystore close, the event, the tray, disk writes — to a goroutine. A logoff or shutdown
 trigger runs `resolveForShutdown` (§5) instead of a bare lock.
@@ -244,7 +249,7 @@ kept.
 ```
 WaitingForKey ──1 reader──▶ Probing ──match, password slot──▶ Password ──▶ PIN ──accepted──▶ Touch ──▶ Deriving ──▶ Unlocked
       │ >1 readers               │ match, no password ─────────────────────▶ PIN               │ 6982 touch      │ ErrAuth (password)
-      ▼                          │ no enrolled key      wrong PIN ◀───────────┘                 └──▶ Touch again  └──▶ Password
+      ▼                          │ no enrolled key      wrong PIN ◀───────────┘                 └──▶ Touch once more, then ends failed (token.touch)  └──▶ Password
    TwoKeys                       ▼                      blocked ──▶ Blocked                ErrTooManyOperations ──▶ WaitingForKey
    (remove one)              NoMatch                    ErrBusy at Open ──▶ Busy (terminal until the user acts)
    any exit ──▶ Releasing (Card.Close in the ceremony goroutine) ──▶ Locked
@@ -284,14 +289,79 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   Cancellation is a per-ceremony `context.CancelFunc` (idempotent), never a channel close; the
   prompter selects on the context and returns an error, which `piv` turns into `ErrCancelled`
   at no cost in retries. The deadline is on the *prompt wait* and on `WaitingForKey` — the
-  session's absolute default — never on the card call itself, which cannot be interrupted. A
-  cancel during a card call — the touch — takes effect when the card answers: measured, no PC/SC
-  call cuts the wait short (DESIGN trap 23), and a YubiKey gives up on its own after about 14 s.
-  The state says `Cancelling` meanwhile, the panel's Cancel is spent, the touch step names the
-  two ways to make the card answer now — touch the key, or pull it out (the cancel wins over the
-  "insert it again" note then) — and every retry loop checks the cancellation before asking the
-  card again, so a cancelled ceremony never prompts a second touch. A ceremony that ends
-  cancelled is gone from the page at once — nothing to read, nothing to close.
+  session's absolute default — never on the card call itself, which cannot be interrupted:
+  measured, no PC/SC call cuts a touch wait short (DESIGN trap 23), and a YubiKey gives up on
+  its own after about 14 s. **A cancel is immediate for the page in every step**, the touch
+  included: the ceremony ends `cancelled` at once and is gone from the page — nothing to read,
+  nothing to close — and the card call it was waiting on goes on without it, as a pending touch
+  (next). Nothing on the page ever says "cancelling".
+- **The pending touch outlives its ceremony.** A token's agreement — the card call that waits
+  for the touch — runs on its own goroutine, the *attempt*, which owns what the call needs: the
+  open Card (the exclusive connection, PIN-verified by this process), the token, the entangled
+  password when the slot has one, the keystore handle when the ceremony opened one (an unlock
+  from Locked; a slot change or a reveal uses the vault's open handle), and its *purpose*: the
+  kind it was started for, the vault file, the slot. The ceremony waits for the attempt's answer
+  or its own cancellation, whichever comes first. Cancelled, the ceremony *disowns* the attempt
+  and ends; the attempt stands as the **pending touch**, the key still blinking, until the card
+  answers: the core holds it (`pending`, beside `cer`) and the vault status says so
+  (`pendingTouch`). Then:
+  - **Only an unlock adopts.** A touch unlock from Locked that begins while the pending touch of
+    an unlock of the same vault stands **adopts** it: the panel opens at the Touch step, the key
+    still waiting, with the touch's ordinal and whether its PIN was asked taken from the
+    attempt, and a prompt the attempt needs after that — an entangled password refused; the PIN,
+    when the key's policy asks for it on every operation — goes to the adopter's panel. Nothing
+    changes but the wait: the same file, the same slot, the same outcome the cancelled unlock
+    would have had, and the PIN was typed seconds earlier on the same exclusive connection. No
+    other kind adopts, and nothing adopts another kind's touch: on an Unlocked vault every slot
+    change, export and reveal costs its own PIN and touch, today and still, because a touch
+    begun for one thing and finished for another — cancel *Add a key*, and one press of the
+    blinking key shows the recovery key to whoever is at the keyboard — would be a way past the
+    PIN. What remains is accepted: a cancelled unlock can be completed by whoever is at the
+    keyboard within the key's own window, at most two of its timeouts, and every lock trigger
+    closes that window (§2.1: the trigger leaves the pending touch unadoptable).
+  - **Two rounds, then a failure.** A *round* is one GENERAL AUTHENTICATE the key gives up on
+    (`ErrTouch`; about 14 s on a 5.7.4). An attempt with an owner asks once more the moment its
+    first round ends — the PIN is still verified on the exclusive connection, so the light is
+    back within a fraction of a second and to the user the wait simply continues; a key whose
+    PIN policy is *always* asks for its PIN first, on the owner's panel, as that policy means —
+    and never a third time: the second round's end **ends** the ceremony, failed with
+    `token.touch` — a finish, not a park: the core forgets the ceremony, the card is released,
+    the panel's Close is right — and the user starts again. The rounds belong to the attempt,
+    not to its owner: a pending touch adopted with two seconds left gets its one continuation,
+    no more. An attempt without an owner never asks again and never prompts: when the card
+    answers it is over — the agreement, if a touch came, is closed unused — and what it holds is
+    released (the handle, then the card with its reset), exactly once, by whichever side ends
+    last.
+  - **A pending touch holds what its ceremony held.** To every guard in the core a pending
+    touch is the ceremony it came from, still running. One born of a slot change or a reveal is
+    inside `keystore.Unlock` on the vault's one handle: while it stands a registry write is
+    refused with `ceremony.in_progress` and the Save owes its receipt (§3), the receipts owed —
+    those the cancelled ceremony would have paid at its end included — are paid when the
+    attempt ends, no slot change or reveal begins before it (their ceremonies wait, below), and
+    the lock's close of the handle waits for it (§2.1). One born of an unlock from Locked holds
+    the file's exclusive lock: `OpenVaultFile`, `Reopen`, an install and a rebuild answer
+    `token.pending` while it stands — never `vault.busy`, which says "another Enfold", and never
+    the Busy state. Exit waits for it (§5).
+  - A ceremony that cannot adopt — every kind but an unlock; an unlock while the pending touch
+    is another kind's, or left unadoptable by a trigger — and a typed-credential unlock that
+    needs the file the attempt holds *wait* for the pending touch to end, with `token.pending`
+    as the note on the step they wait in (WaitingForKey; Deriving, after the password): "the key
+    is still answering the cancelled request — touch it, or pull it out, to end that now". Then
+    they go on as if it had never been there: the card opened afresh, the PIN asked again.
+- **A pulled key answers with Win32 codes first** (DESIGN trap 26). For a moment after the key
+  is pulled — before the resource manager has noticed the reader go — the CCID driver fails the
+  request on the wire with a Win32 device error, `ERROR_GEN_FAILURE` (0x1f) or
+  `ERROR_BAD_COMMAND` (0x16), rather than an `SCARD_` code: the VERIFY that a PIN typed just
+  before the pull lands in, the agreement waiting for the touch, the open's own preflight. A
+  return code outside the `SCARD_` facility from a call that addresses a card or a card handle
+  is the key gone (`ErrNoCard`), in both PC/SC layers, and takes the removal's path: the PIN
+  never reached the card (no retry spent), the strip goes back to *WaitingForKey* with "insert
+  it again" — or the cancel wins — and never to "something went wrong"; the same code from the
+  context or the reader list is the service or the session (`ErrNoService`: a remote session
+  without smart-card redirection answers `ERROR_BROKEN_PIPE`), which the waiting state already
+  treats as no reader. The release of a key that is gone reports nothing: a card without power
+  holds no verified state, so a reset that fails because the card, the reader or the service is
+  not there is not `token.reset`.
 - Touch: `Prompter.Touch` fires `vault.ceremony {Step: touch, N}`; the panel takes over.
 - **A wrong secret is said, in place.** A refused PIN makes the next PIN prompt carry
   `token.pin` as its note beside the count; a wrong password or mistyped recovery digits
@@ -529,8 +599,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - **Slot changes and registry writes never share the handle.** While a slot-change ceremony
   runs, a registry write is refused with `ceremony.in_progress` — a Save still commits its
   archive and owes the receipt, paid when the ceremony ends — and a slot change does not start
-  while a save, verify, compact or rotation is running (`op.in_progress`). A lock trigger in any
-  state latches and cancels the ceremony, and the lock's close of the handle waits for it.
+  while a save, verify, compact or rotation is running (`op.in_progress`). A pending touch left
+  by a cancelled slot change or reveal (§2.2) is that ceremony still running, to this rule and
+  to every other guard, until the card answers. A lock trigger in any state latches and cancels
+  the ceremony, and the lock's close of the handle waits for it — and for the pending touch.
 - **Tampered is a state, not a banner**: every mutating call and Export is disabled with the
   reason; the one action is importing a copy of this vault (§2.1); it is never cleared silently
   (R25). The reveal stays: it changes nothing, and the way out of a tampered vault may be the
@@ -616,13 +688,21 @@ calls `LockNow` synchronously.
 `resolveForShutdown()`: for each dirty archive `Commit` under a fresh ~2 s context, write each
 receipt, close the archives, then lock — bounded to ~3 s in all; on timeout the transaction stays
 unpublished, which the format tolerates. The tray's Quit asks the user first and then runs the
-same function; `WTS_SESSION_LOGOFF` runs it without asking.
+same function; `WTS_SESSION_LOGOFF` runs it without asking. A pending touch (§2.2) is waited for
+after the lock — the card's own answer, about 15 s, then its release — within what the OS
+allows a process at logoff; the tray's Quit has no such bound. A process that ended mid-call
+would leave the card PIN-verified for whoever connects next.
 
 ## 6. Screens (the Native look)
 
 Lock screen (one panel, three-step line, the states of §2.2 including TwoKeys, NoMatch, Busy,
 Blocked, SwapKey; secondary: recovery key, password, open a backup — never a second vault; the
-"workstation-lock detection unavailable" and BitLocker warnings). Archives (list with details
+"workstation-lock detection unavailable" and BitLocker warnings; while the status says
+`pendingTouch` from a cancelled unlock, one quiet line under the key card: the key is still
+waiting for the touch that was cancelled — unlock again to pick it up, or touch it or pull it
+out to end it; that line is the lock screen's only, and on the Keys page and the first-run card
+the pending touch left by a cancelled slot change, reveal or create is said by the next
+ceremony's own `token.pending` note while it waits). Archives (list with details
 pane, commands Open / New archive / Compact / Rotate key / Verify / Hide, the deferred-rotation
 banner, the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
 projection, paged table with pending markers, preview pane — image, video, audio through the

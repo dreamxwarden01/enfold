@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -837,7 +838,19 @@ var pcscTexts = []struct {
 	{"resource manager has shut down", ErrNoService},
 	{"cannot find a smart card reader", ErrNoReader},
 	{"reader is not currently available", ErrNoReader},
+	// The facility's "not talking" codes (DESIGN.md §11 trap 26), by the
+	// text piv-go prints for them.
+	{"not ready to accept commands", ErrNoCard},
+	{"an internal communications error has been detected", ErrNoCard},
+	{"an unexpected card error has occurred", ErrNoCard},
+	{"a communications error with the smart card has been detected", ErrNoCard},
+	{"cancelled by the system, presumably to log off or shut down", ErrNoService},
+	{"aborted to allow the server application to exit", ErrNoService},
 }
+
+// unknownRC is how piv-go prints a return code it has no text for: a
+// Win32 code, when the device stopped answering under a request.
+var unknownRC = regexp.MustCompile(`unknown pcsc return code 0x([0-9a-fA-F]+)`)
 
 // mapErr turns a piv-go error into one of the package's, keeping the
 // original text.
@@ -867,7 +880,24 @@ func mapErr(err error) error {
 			return fmt.Errorf("%w: %v", t.err, err)
 		}
 	}
+	if m := unknownRC.FindStringSubmatch(msg); m != nil {
+		// A code outside the SCARD_ facility is a Win32 system error from
+		// the driver: the key pulled with the request on the wire
+		// (DESIGN.md §11 trap 26). piv-go prints an int64; the low 32
+		// bits are the code. A facility code piv-go has no text for
+		// stays as it is: it names this program's mistake, not a removal.
+		if rc, perr := strconv.ParseUint(m[1], 16, 64); perr == nil && uint32(rc)>>16 != 0x8010 {
+			return fmt.Errorf("%w: %v", ErrNoCard, err)
+		}
+	}
 	return fmt.Errorf("piv: %w", err)
+}
+
+// gone: the card, the reader or the service is not there — as opposed to
+// a card that is there and answering something (a reset, a sharing
+// violation).
+func gone(err error) bool {
+	return errors.Is(err, ErrNoCard) || errors.Is(err, ErrNoReader) || errors.Is(err, ErrNoService)
 }
 
 // isTransport: the card or the reader went away, rather than the card

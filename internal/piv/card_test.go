@@ -714,6 +714,17 @@ func TestErrorMapping(t *testing.T) {
 		{errors.New("transmitting request: power has been removed from the smart card, so that further communication is not possible"), ErrNoCard},
 		{fmt.Errorf("verify pin: %w", pivgo.AuthErr{Retries: 0}), ErrPINBlocked},
 		{fmt.Errorf("x: %w", ErrTouch), ErrTouch},
+		// DESIGN.md §11 trap 26: a pulled key answers with Win32 codes
+		// first, which piv-go prints by number; the facility's own "not
+		// talking" codes it prints by text.
+		{errors.New("command failed: transmitting request: unknown pcsc return code 0x0000001f"), ErrNoCard},
+		{errors.New("transmitting request: unknown pcsc return code 0x00000016"), ErrNoCard},
+		{errors.New("transmitting request: the reader or smart card is not ready to accept commands"), ErrNoCard},
+		{errors.New("transmitting request: an internal communications error has been detected"), ErrNoCard},
+		{errors.New("transmitting request: an unexpected card error has occurred"), ErrNoCard},
+		{errors.New("transmitting request: a communications error with the smart card has been detected. More.."), ErrNoCard},
+		{errors.New("transmitting request: the action was cancelled by the system, presumably to log off or shut down"), ErrNoService},
+		{errors.New("transmitting request: the operation has been aborted to allow the server application to exit"), ErrNoService},
 	}
 	for _, tc := range cases {
 		if got := mapErr(tc.in); !errors.Is(got, tc.want) {
@@ -732,6 +743,11 @@ func TestErrorMapping(t *testing.T) {
 	}
 	if got := mapErr(errors.New("something else")); got == nil || errors.Is(got, ErrNoCard) {
 		t.Errorf("unknown: %v", got)
+	}
+	// A facility code piv-go has no text for names this program's own
+	// mistake (an invalid handle), never a removal.
+	if got := mapErr(errors.New("transmitting request: unknown pcsc return code 0x80100003")); got == nil || errors.Is(got, ErrNoCard) || errors.Is(got, ErrNoService) {
+		t.Errorf("invalid handle classified as a removal: %v", got)
 	}
 }
 

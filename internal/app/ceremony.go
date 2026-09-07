@@ -43,6 +43,14 @@ type ceremony struct {
 	unlockLabel string
 	// held is the card open right now, probed while a prompt stands.
 	held Card
+	// att is the agreement in flight the ceremony waits on (attempt.go);
+	// prompter the piv-facing side of the token the ceremony opened,
+	// which the attempt inherits; slot the vault slot that token is for;
+	// cleanup runs when a disowned attempt ends (an import's staged copy).
+	att      *attempt
+	prompter *ceremonyPrompter
+	slot     keystore.SlotInfo
+	cleanup  func()
 	// restore is the state the vault returns to when the ceremony ends
 	// without publishing: Locked for an unlock, None for a create from
 	// nothing.
@@ -182,20 +190,8 @@ func (c *Core) CancelUnlock() *Error {
 	}
 	cer.cancelReason = "user"
 	cer.cancel()
-	st := cer.markCancellingLocked()
 	c.mu.Unlock()
-	c.emit(EventVaultCeremony, st)
 	return nil
-}
-
-// markCancellingLocked says on the state that the ceremony is cancelling:
-// a prompt ends at once, but a card call — the touch — answers in its
-// own time, and the page shows that rather than a button that did
-// nothing. Caller holds the state mutex.
-func (cer *ceremony) markCancellingLocked() CeremonyState {
-	cer.state.Cancelling = true
-	cer.state.Seq = cer.c.bump()
-	return cer.state
 }
 
 // SubmitSecret answers the outstanding prompt of the given kind and id.
@@ -466,10 +462,8 @@ func (cer *ceremony) cancelWith(reason string) {
 	if cer.cancelReason == "" {
 		cer.cancelReason = reason
 	}
-	st := cer.markCancellingLocked()
 	cer.c.mu.Unlock()
 	cer.cancel()
-	cer.c.emit(EventVaultCeremony, st)
 }
 
 // wait sleeps d or until cancelled.
@@ -491,21 +485,45 @@ func (cer *ceremony) park(step CeremonyStep, code Code) error {
 	return ErrTokenCancelled
 }
 
-// ceremonyPrompter is the piv-facing side: PIN from the mailbox, touch as
-// an event.
+// ceremonyPrompter is the piv-facing side: PIN from the owner's mailbox,
+// touch as an event on the owner's state. The owner is the ceremony the
+// attempt belongs to now — the one that opened the token, or the one
+// that adopted its pending touch — and with none there is no prompt: the
+// answer is a cancel (APP.md §2.2).
 type ceremonyPrompter struct {
-	cer   *ceremony
 	label string
 	mu    sync.Mutex
-	n     int
+	cer   *ceremony
+	att   *attempt
+}
+
+// attach points the prompter at the attempt's owner (nil: nobody).
+func (p *ceremonyPrompter) attach(cer *ceremony, att *attempt) {
+	p.mu.Lock()
+	p.cer, p.att = cer, att
+	p.mu.Unlock()
+}
+
+// owner is the ceremony to prompt, while it is still running.
+func (p *ceremonyPrompter) owner() *ceremony {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cer == nil || p.cer.ctx.Err() != nil {
+		return nil
+	}
+	return p.cer
 }
 
 func (p *ceremonyPrompter) PIN(status PINStatus) (string, error) {
 	if status.Blocked() {
 		return "", ErrTokenPINBlocked
 	}
-	p.cer.set(func(s *CeremonyState) { s.SlotLabel = p.label })
-	return p.cer.askNote("pin", StepPIN, status, p.cer.takePINNote())
+	cer := p.owner()
+	if cer == nil {
+		return "", ErrTokenCancelled
+	}
+	cer.set(func(s *CeremonyState) { s.SlotLabel = p.label })
+	return cer.askNote("pin", StepPIN, status, cer.takePINNote())
 }
 
 // notePINWrong records that the PIN just given was refused, so that the
@@ -530,9 +548,16 @@ func (cer *ceremony) takePINNote() Code {
 
 func (p *ceremonyPrompter) Touch(req TouchRequest) {
 	p.mu.Lock()
-	p.n = req.N
+	att := p.att
 	p.mu.Unlock()
-	p.cer.set(func(s *CeremonyState) {
+	if att != nil {
+		att.noteTouch(req) // for an adopter's panel
+	}
+	cer := p.owner()
+	if cer == nil {
+		return
+	}
+	cer.set(func(s *CeremonyState) {
 		s.Step, s.N, s.PINAsked, s.PromptID = StepTouch, req.N, req.PINAsked, ""
 	})
 }
@@ -804,7 +829,8 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 		}
 		cred.Password = pw
 	}
-	tok, err := card.Token(key.PublicKey, &ceremonyPrompter{cer: cer, label: slot.Label})
+	p := &ceremonyPrompter{cer: cer, label: slot.Label}
+	tok, err := card.Token(key.PublicKey, p)
 	if err != nil {
 		cer.unhold(card)
 		card.Close()
@@ -814,6 +840,9 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
 	cred.Token = tok
+	cer.c.mu.Lock()
+	cer.prompter, cer.slot = p, slot
+	cer.c.mu.Unlock()
 	return cred, card, slot, nil
 }
 
@@ -847,42 +876,23 @@ func (cer *ceremony) closeCard(card Card) {
 		c.vault.state = StateReleasing
 	}
 	c.mu.Unlock()
-	err := card.Close()
-	if err != nil {
-		c.log("ceremony %s: releasing the key: %v", cer.kind, err)
-	}
-	if err != nil && errors.Is(err, ErrTokenResetFailed) {
-		c.mu.Lock()
-		c.vault.warnings[CodeTokenReset] = true
-		c.mu.Unlock()
-		c.emit(EventVaultWarning, Warning{Code: CodeTokenReset})
-	}
+	c.releaseCard(card, cer.kind)
 }
 
-// unlockWith derives the session with the credential, retrying the PIN,
-// touch and password errors the way §2.2 says, on the same open Card.
-func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential, hc *keystore.HardwareCredential) (*keystore.Unlocked, error) {
-	for attempt := 0; ; attempt++ {
-		// A cancel while the card was busy — the touch, which no call can
-		// interrupt — is honoured here, before the card is asked again:
-		// a cancelled ceremony never prompts a second touch.
+// unlockWith derives the session with a typed credential, asking again in
+// place for a wrong one the way §2.2 says. A token's credential goes
+// through agree instead.
+func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential) (*keystore.Unlocked, error) {
+	for {
 		if err := cer.check(); err != nil {
 			return nil, err
-		}
-		if hc != nil {
-			cred = *hc
 		}
 		unl, err := ks.Unlock(cred)
 		if err == nil {
 			return unl, nil
 		}
-		var pe *TokenPINError
 		switch {
-		case hc != nil && errors.As(err, &pe):
-			// ECDH will prompt again, with the count — and the reason.
-			cer.notePINWrong()
-			continue
-		case hc == nil && (errors.Is(err, keystore.ErrVerifier) || errors.Is(err, keystore.ErrAuth)):
+		case errors.Is(err, keystore.ErrVerifier), errors.Is(err, keystore.ErrAuth):
 			// Wrong digits, or a wrong password: asked again in place, with
 			// the reason, never a failure the user has to start over from.
 			next, aerr := cer.credentialAgain(cred)
@@ -892,23 +902,6 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential,
 			cred = next
 			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 			continue
-		case hc != nil && errors.Is(err, ErrTokenTouch):
-			continue
-		case hc != nil && errors.Is(err, ErrTokenPINRequired):
-			continue
-		case hc != nil && errors.Is(err, ErrTokenPINBlocked):
-			return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
-		case hc != nil && errors.Is(err, ErrTokenTooMany):
-			return nil, &parkAt{StepFailed, CodeTokenTooMany}
-		case hc != nil && errors.Is(err, keystore.ErrAuth) && hc.Password != "":
-			// The entangled password was wrong; ask again, same card.
-			pw, aerr := cer.askNote("password", StepPassword, PINStatus{}, CodeAuth)
-			if aerr != nil {
-				return nil, aerr
-			}
-			hc.Password = pw
-			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-			continue
 		case errors.Is(err, keystore.ErrStale):
 			return nil, &parkAt{StepFailed, CodeVaultStale}
 		case errors.Is(err, ErrTokenCancelled), errors.Is(err, context.Canceled):
@@ -916,6 +909,55 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential,
 		}
 		return nil, err
 	}
+}
+
+// agree derives the VMK through a token: the agreement runs as an attempt
+// the ceremony waits on (APP.md §2.2, "The pending touch outlives its
+// ceremony"), on the handle given — the ceremony's own when own, else the
+// vault's — with the card the ceremony holds and the slot it matched, so
+// that a cancel ends the ceremony at once and the call goes on as the
+// pending touch. An adopted attempt is waited on instead of started.
+func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.HardwareCredential) (*keystore.Unlocked, error) {
+	c := cer.c
+	c.mu.Lock()
+	a, p, slot, card, cleanup := cer.att, cer.prompter, cer.slot, cer.held, cer.cleanup
+	cer.prompter = nil
+	c.mu.Unlock()
+	if a == nil {
+		a = &attempt{path: cer.vaultPath(), slot: slot, card: card, ks: ks, ownsKS: own, vaultHandle: !own, hc: hc, prompter: p, cleanup: cleanup}
+		a.op = func() (*keystore.Unlocked, error) { return ks.Unlock(a.credential()) }
+		cer.startAttempt(a)
+	}
+	unl, err := a.await(cer)
+	if err == nil {
+		return unl, nil
+	}
+	switch {
+	case errors.Is(err, errDisowned):
+		return nil, err
+	case errors.Is(err, ErrTokenPINBlocked):
+		return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
+	case errors.Is(err, ErrTokenTooMany):
+		return nil, &parkAt{StepFailed, CodeTokenTooMany}
+	case errors.Is(err, keystore.ErrStale):
+		return nil, &parkAt{StepFailed, CodeVaultStale}
+	}
+	return nil, err
+}
+
+// adopted is the attempt the ceremony took over, before it waits on it.
+func (cer *ceremony) adopted() *attempt {
+	cer.c.mu.Lock()
+	defer cer.c.mu.Unlock()
+	return cer.att
+}
+
+// vaultPath is the vault file's path, the purpose an unlock's attempt
+// carries for the adoption's match.
+func (cer *ceremony) vaultPath() string {
+	cer.c.mu.Lock()
+	defer cer.c.mu.Unlock()
+	return cer.c.vault.path
 }
 
 // openVault opens the vault file for an unlock, parking on what the user
@@ -956,13 +998,27 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 		if err != nil {
 			return err
 		}
-		ks, err = cer.openVault(path)
-		if err != nil {
-			cer.closeCard(card)
-			return err
+		if a := cer.adopted(); a != nil {
+			ks = a.ks // the handle the pending touch holds open
+		} else {
+			if hc == nil {
+				// A typed credential needs the file a pending touch may hold.
+				cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+				if err := cer.settlePending(); err != nil {
+					return err
+				}
+			}
+			ks, err = cer.openVault(path)
+			if err != nil {
+				cer.closeCard(card)
+				return err
+			}
 		}
 		unl, err = cer.unlockFile(ks, cred, hc)
 		if err != nil {
+			if errors.Is(err, errDisowned) {
+				return err // the pending touch holds the file and the card now
+			}
 			ks.Close() // the file is held open only while Unlocked; a park is not that
 			if hc != nil && keyGone(err) {
 				// The key went during the PIN or the touch: back to waiting.
@@ -1085,6 +1141,12 @@ func (cer *ceremony) tokenCredential(slots []keystore.SlotInfo) (keystore.Hardwa
 	defer deadline.Stop()
 	delay := readerPoll
 	for {
+		if a := cer.adoptPending(cer.vaultPath(), slots); a != nil {
+			return a.credential(), a.card, a.slot, nil
+		}
+		if err := cer.settlePending(); err != nil {
+			return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
+		}
 		h, card, slot, err := cer.tokenCredentialFor(slots)
 		if err == nil || !keyGone(err) {
 			return h, card, slot, err
@@ -1121,7 +1183,13 @@ func (cer *ceremony) away(err error) error {
 // park the user must act on. The caller closes ks on error.
 func (cer *ceremony) unlockFile(ks *keystore.Keystore, cred keystore.Credential, hc *keystore.HardwareCredential) (*keystore.Unlocked, error) {
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-	unl, err := cer.unlockWith(ks, cred, hc)
+	var unl *keystore.Unlocked
+	var err error
+	if hc != nil {
+		unl, err = cer.agree(ks, true, *hc)
+	} else {
+		unl, err = cer.unlockWith(ks, cred)
+	}
 	if err != nil {
 		if errors.Is(err, keystore.ErrAuth) || errors.Is(err, keystore.ErrNoSlot) || errors.Is(err, keystore.ErrVerifier) {
 			return nil, &parkAt{StepFailed, CodeAuth}

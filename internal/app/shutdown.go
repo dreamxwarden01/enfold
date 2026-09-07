@@ -68,4 +68,12 @@ func (c *Core) ResolveForShutdown(budget time.Duration) {
 		oa.opMu.Unlock()
 	}
 	c.LockNow(ReasonExit)
+	// A pending touch (APP.md §2.2) holds the card PIN-verified until the
+	// key answers; a process that ends before it would leave the card so
+	// for the next program. The key gives up on its own in about 15 s.
+	c.awaitPending(pendingExitWait)
 }
+
+// pendingExitWait bounds the exit's wait for a pending touch: the key's
+// own timeout, and its release.
+const pendingExitWait = 20 * time.Second

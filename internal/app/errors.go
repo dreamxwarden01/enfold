@@ -69,6 +69,7 @@ const (
 	CodeTokenPINBlocked Code = "token.pin_blocked"
 	CodeTokenPINAgain   Code = "token.pin_required"
 	CodeTokenTouch      Code = "token.touch"
+	CodeTokenPending    Code = "token.pending" // a cancelled ceremony's key call is still answering: the file or the card is held until it does
 	CodeTokenTooMany    Code = "token.too_many_operations"
 	CodeTokenReset      Code = "token.reset_failed"
 	CodeTokenOccupied   Code = "token.slot_occupied"

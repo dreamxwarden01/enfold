@@ -76,6 +76,9 @@ type Core struct {
 	settings settingsFile
 	vault    vaultState
 	cer      *ceremony
+	// pending is the touch a cancelled ceremony left the key waiting for
+	// (APP.md §2.2): the attempt goes on until the card answers.
+	pending *attempt
 
 	archives map[[16]byte]*openArchive
 	retired  []string // vault-replaced-*.eks in the data folder, oldest first

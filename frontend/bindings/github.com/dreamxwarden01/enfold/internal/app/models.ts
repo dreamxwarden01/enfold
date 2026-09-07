@@ -113,12 +113,6 @@ export interface CeremonyState {
      * Verify, at Done: how many archives the backup's registry names.
      */
     "archives": number;
-
-    /**
-     * Cancelling: the user (or a trigger) cancelled, and the ceremony is
-     * waiting for a card call it cannot interrupt — the touch — to answer.
-     */
-    "cancelling": boolean;
 }
 
 /**
@@ -259,6 +253,11 @@ export enum Code {
     CodeTokenPINBlocked = "token.pin_blocked",
     CodeTokenPINAgain = "token.pin_required",
     CodeTokenTouch = "token.touch",
+
+    /**
+     * a cancelled ceremony's key call is still answering: the file or the card is held until it does
+     */
+    CodeTokenPending = "token.pending",
     CodeTokenTooMany = "token.too_many_operations",
     CodeTokenReset = "token.reset_failed",
     CodeTokenOccupied = "token.slot_occupied",
@@ -574,6 +573,12 @@ export interface VaultStatus {
     "dirtyArchives": number;
     "hasPasswordSlot": boolean;
     "hasHardwareSlot": boolean;
+
+    /**
+     * PendingTouch: a cancelled ceremony's key call is still answering —
+     * the key waits for a touch — and an unlock can pick it up (§2.2).
+     */
+    "pendingTouch": boolean;
 
     /**
      * only a recovery slot: FinishSetup is the one action

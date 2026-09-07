@@ -293,6 +293,48 @@ type fakeCard struct {
 	// touchFails: this many ECDH calls answer "not touched in time" first,
 	// as a key nobody touches does when its wait runs out; -1 for ever.
 	touchFails int
+	// holdTouch: the ECDH blocks at the touch until the test answers —
+	// press (the agreement), giveUp (the key's own timeout: ErrTokenTouch)
+	// or pull (the key removed: ErrTokenNoCard) — as the real card call
+	// blocks and cannot be interrupted (DESIGN.md §11 trap 23).
+	holdTouch bool
+	touchCh   chan touchAnswer
+}
+
+// touchAnswer is how a held touch ends.
+type touchAnswer int
+
+const (
+	touchPressed touchAnswer = iota
+	touchGaveUp
+	touchPulled
+)
+
+// press answers the held touch with the touch.
+func (f *fakeCard) press() { f.touchCh <- touchPressed }
+
+// giveUp ends the held touch the way the key does on its own.
+func (f *fakeCard) giveUp() { f.touchCh <- touchGaveUp }
+
+// pull removes the key during the held touch.
+func (f *fakeCard) pull() {
+	f.setRemoved(true)
+	f.touchCh <- touchPulled
+}
+
+// heldTouches is how many ECDH calls have reached the touch and are (or
+// were) held there.
+func (f *fakeCard) touchCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.touches)
+}
+
+// closeCount is how many times the card was closed.
+func (f *fakeCard) closeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closes
 }
 
 // setRemoved pulls the key, or puts it back.
@@ -303,7 +345,7 @@ func (f *fakeCard) setRemoved(gone bool) {
 }
 
 func newFakeCard(pin string) *fakeCard {
-	return &fakeCard{keys: map[Slot]*ecdh.PrivateKey{}, usable: map[Slot]bool{}, pin: pin, retries: 3}
+	return &fakeCard{keys: map[Slot]*ecdh.PrivateKey{}, usable: map[Slot]bool{}, pin: pin, retries: 3, touchCh: make(chan touchAnswer, 1)}
 }
 
 // addKey puts a fresh P-256 key in slot and returns its public point.
@@ -432,8 +474,10 @@ func (f *fakeCard) Close() error {
 	f.verified = false // the close resets the card
 	f.closes++
 	if f.removed && f.closeErr == nil {
-		// The real Close cannot reset a card that is gone, and says so.
-		return ErrTokenResetFailed
+		// The real Close cannot reset a card that is gone — and reports
+		// the card gone, not a failed reset: an unpowered card holds no
+		// verified state (DESIGN.md §11 trap 26).
+		return ErrTokenNoCard
 	}
 	return f.closeErr
 }
@@ -498,11 +542,22 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 		time.Sleep(300 * time.Millisecond) // the key's own wait, in miniature
 		return nil, ErrTokenTouch
 	}
+	hold := t.card.holdTouch
 	t.card.ops++
 	t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: true})
 	priv := t.card.keys[t.slot]
 	t.card.mu.Unlock()
 	t.p.Touch(TouchRequest{N: t.n, PINAsked: true})
+	if hold {
+		// The key waits, and nothing but the touch, its own timeout or
+		// its removal ends the call.
+		switch <-t.card.touchCh {
+		case touchGaveUp:
+			return nil, ErrTokenTouch
+		case touchPulled:
+			return nil, ErrTokenNoCard
+		}
+	}
 	pub, err := ecdh.P256().NewPublicKey(epk)
 	if err != nil {
 		return nil, err

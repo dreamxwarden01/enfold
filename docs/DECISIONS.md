@@ -2683,3 +2683,65 @@ left alone it gives up in about 15 seconds*. Both end the call at once — a tou
 operation, whose result the cancelled ceremony discards; a pull fails it — and the cancel then
 wins over the "insert it again" note. `pivtool touchabort` and `Card.Interrupt` stay in the tree
 as the way to measure this again on other firmware.
+
+---
+
+## 2026-09-07 — The pending touch outlives its ceremony; a pulled key's Win32 codes
+
+The 14:42 build made a cancelled touch step say "touch the key, or pull it out, to end the wait
+now". The user's answer: do not make anyone stand still at all. Cancel should take effect on
+the page at once, and the backend should keep watching the call it cannot interrupt; and since
+the person who typed the PIN seconds ago is the same person, the next request should be able
+to use the touch the key is still waiting for. Their first sketch split it by the clock —
+reuse under seven seconds, otherwise wait for the key to give up and start over — and then
+simplified it: reuse the pending touch for as long as the key has not given up, continue it
+once when it does, never more; a cancel merely sends the pending touch to the background, where
+it ends the moment the key gives up. Two more rulings came with it: a normal unlock is bounded
+too — one continuation after the key's own timeout, then an error, never an open-ended wait —
+and every step must survive the key being pulled, including the case the fourth test hit: a
+PIN typed, the key pulled, the PIN submitted, Windows half a beat behind, and the app showing
+"something went wrong".
+
+**Ruled.** The card call runs on its own goroutine, the *attempt*, owning the card, the token,
+the handle it opened and its purpose (the kind, the file and the slot). A cancel disowns it and
+ends the ceremony for the page immediately; the attempt stands as the pending touch. An unlock
+from Locked that begins meanwhile adopts the pending touch of an unlock — the panel opens at
+Touch, the key still blinking — and an attempt with an owner asks once more when the key gives
+up (the PIN is still verified on the exclusive connection, so the light is back at once) and
+never a third time; an attempt without an owner ends when the key answers, releasing what it
+holds. The clock plays no part: "still pending" is a fact the code observes, "seven seconds"
+would be a guess about the key's timer. Ceremonies that cannot adopt wait for the pending touch
+with a note, and so does exit. The `Cancelling` state and its copy are gone. Rounds are counted
+per attempt, so an adopted touch with two seconds left gets its one continuation and the total
+wait for anyone is at most two of the key's own timeouts.
+
+**Critiqued** (four Opus lenses, each finding refuted or confirmed by a second agent), and
+three rulings changed before a line was written. *Only an unlock adopts.* The first draft let
+any ceremony of the same vault adopt — "the touch authorises deriving the VMK; what is done
+with it is the ceremony's kind" — and the security lens showed the escalation on an Unlocked
+vault: cancel *Add a key*, and within the key's window one press of the blinking key shows the
+recovery key to whoever is at the keyboard, where today the reveal costs its own PIN. An
+unlock adopted by an unlock changes nothing but the wait; what remains — a cancelled unlock
+finished by whoever is at the keyboard within two of the key's timeouts — is accepted, and
+every lock trigger closes it. *A pending touch holds what its ceremony held.* Every guard that
+serialised the one keystore handle keyed on the live ceremony, which the immediate cancel
+clears while the attempt is still inside `keystore.Unlock` on that handle: registry writes,
+the owed receipts a cancel pays at its end, `Reopen`, the next slot change all had to be told
+to wait for the pending touch too — and the unlock's own file lock had to stop turning into
+"the vault is open in another Enfold". *The two-round end is a finish, not a park*: the Keys
+dialog's Close on a failed step forgets the ceremony on the page while a park keeps it in the
+core, and a parked slot change refuses every save receipt until the process restarts. Smaller:
+piv-go prints the facility's codes by text, never by number, so the piv-go table needed six
+rows of text and the numeric parse serves only what piv-go cannot name; the "outside the
+facility" rule is scoped to calls that address a card, since `ERROR_BROKEN_PIPE` from the
+context means a remote session without redirection; a key whose PIN policy is *always* asks
+for its PIN at the continuation, as its policy means; and `pendingTouch` has a line on the
+lock screen only — elsewhere the next ceremony's own note says it.
+
+The "something went wrong" was three return codes the log caught in the pull's half-beat:
+`ERROR_GEN_FAILURE` from piv-go's VERIFY, `ERROR_BAD_COMMAND` from the package's own preflight,
+and `SCARD_E_NO_SERVICE` when the release tried to reset a card whose reader had taken the
+service down. Win32 codes come first, the `SCARD_` ones after; neither layer mapped the former
+(DESIGN trap 26). Now every return code outside the `SCARD_` facility is the key gone, the
+facility's own "not talking" codes likewise, and a reset that fails because the card is not
+there is not a failed reset: a card without power holds no verified state.

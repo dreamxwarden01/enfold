@@ -157,6 +157,11 @@ func (c *Core) OpenVaultFile(path, displayName string) *Error {
 		c.mu.Unlock()
 		return coded(CodeCeremonyRunning)
 	}
+	if c.pending != nil {
+		// A pending touch holds the file: opened again when it ends.
+		c.mu.Unlock()
+		return coded(CodeTokenPending)
+	}
 	if e := c.importGateLocked(false); e != nil && !(c.vault.state == StateBusy && samePath(path, c.vault.path)) {
 		c.mu.Unlock()
 		return e
@@ -246,6 +251,7 @@ func (c *Core) statusLocked() VaultStatus {
 		cs := c.cer.state
 		st.Ceremony = &cs
 	}
+	st.PendingTouch = c.pending != nil
 	for _, o := range c.ops {
 		st.Ops = append(st.Ops, o.view())
 	}
@@ -320,7 +326,7 @@ func (c *Core) updateRegistryLocked(fn func(g *registry) error) *Error {
 	// A slot change commits to the same handle from its own goroutine; the
 	// Keystore is not safe for concurrent use, so registry writes wait
 	// until the ceremony is over (a Save owes its receipt meanwhile).
-	if c.cer != nil && c.cer.mutation {
+	if (c.cer != nil && c.cer.mutation) || (c.pending != nil && c.pending.vaultHandle) {
 		return coded(CodeCeremonyRunning)
 	}
 	if err := sess.UpdateRegistry(fn); err != nil {
@@ -356,6 +362,10 @@ func (c *Core) Reopen() *Error {
 	if c.vault.state == StateUnlocked || c.vault.state == StateUnlocking || c.vault.state == StateReleasing || c.cer != nil {
 		c.mu.Unlock()
 		return coded(CodeCeremonyRunning)
+	}
+	if c.pending != nil {
+		c.mu.Unlock()
+		return coded(CodeTokenPending)
 	}
 	if c.vault.ks != nil {
 		c.vault.ks.Close()
@@ -407,6 +417,8 @@ func (c *Core) LockNow(reason LockReason) {
 		}
 		cer.cancel()
 	}
+	// A pending touch is never adopted after a trigger (§2.2).
+	c.dropPendingLocked()
 	// A recovery key held for a reveal (APP.md §3 Keys) is dropped in every
 	// state: nothing decrypted outlives a trigger.
 	preview := c.preview
@@ -442,6 +454,9 @@ func (c *Core) afterLock(ks *keystore.Keystore, cer *ceremony, reason LockReason
 	defer c.lockWG.Done()
 	if cer != nil {
 		<-cer.done // its deferred Unlocked.Close and card release run first
+	}
+	if done := c.pendingDone(); done != nil {
+		<-done // a pending touch inside keystore.Unlock on the handle: it ends first
 	}
 	if ks != nil {
 		// Refresh the cached facts from the handle we still hold, then

@@ -37,14 +37,17 @@ type VaultStatus struct {
 	DirtyArchives   int            `json:"dirtyArchives"`
 	HasPasswordSlot bool           `json:"hasPasswordSlot"`
 	HasHardwareSlot bool           `json:"hasHardwareSlot"`
-	SetupNeeded     bool           `json:"setupNeeded"`     // only a recovery slot: FinishSetup is the one action
-	DefaultPath     string         `json:"defaultPath"`     // where the vault lives unless kept elsewhere
-	MissingPath     string         `json:"missingPath"`     // a configured vault that could not be opened at start
-	KeptElsewhere   bool           `json:"keptElsewhere"`   // the vault is not at DefaultPath (the override is set)
-	RetiredCopies   int            `json:"retiredCopies"`   // vault-replaced-*.eks files in the data folder
-	RetiredPath     string         `json:"retiredPath"`     // the newest of them
-	Damaged         bool           `json:"damaged"`         // MissingPath is there and not a keystore: the rebuild of APP.md §2.1 applies
-	DamagedCopyPath string         `json:"damagedCopyPath"` // the newest vault-damaged-*.eks kept for salvage
+	// PendingTouch: a cancelled ceremony's key call is still answering —
+	// the key waits for a touch — and an unlock can pick it up (§2.2).
+	PendingTouch    bool   `json:"pendingTouch"`
+	SetupNeeded     bool   `json:"setupNeeded"`     // only a recovery slot: FinishSetup is the one action
+	DefaultPath     string `json:"defaultPath"`     // where the vault lives unless kept elsewhere
+	MissingPath     string `json:"missingPath"`     // a configured vault that could not be opened at start
+	KeptElsewhere   bool   `json:"keptElsewhere"`   // the vault is not at DefaultPath (the override is set)
+	RetiredCopies   int    `json:"retiredCopies"`   // vault-replaced-*.eks files in the data folder
+	RetiredPath     string `json:"retiredPath"`     // the newest of them
+	Damaged         bool   `json:"damaged"`         // MissingPath is there and not a keystore: the rebuild of APP.md §2.1 applies
+	DamagedCopyPath string `json:"damagedCopyPath"` // the newest vault-damaged-*.eks kept for salvage
 }
 
 // CeremonyStep is where the unlock or enrollment ceremony is.
@@ -89,9 +92,6 @@ type CeremonyState struct {
 	InsertLabel string `json:"insertLabel,omitempty"`
 	// Verify, at Done: how many archives the backup's registry names.
 	Archives int `json:"archives"`
-	// Cancelling: the user (or a trigger) cancelled, and the ceremony is
-	// waiting for a card call it cannot interrupt — the touch — to answer.
-	Cancelling bool `json:"cancelling"`
 }
 
 // Reader is a PC/SC reader that looks like a YubiKey.

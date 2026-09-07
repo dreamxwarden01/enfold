@@ -13,7 +13,7 @@ state = {
         "seq": 1, "state": "locked", "path": "D:/Vaults/personal.eks", "displayName": "Personal vault",
         "lastUnlockedAt": NOW - 86400, "locksAt": 0, "absoluteAt": 0, "modifiedAt": NOW - 3600,
         "rotationPending": False, "tampered": False, "warnings": [], "ops": [], "openArchives": 0,
-        "dirtyArchives": 0, "hasPasswordSlot": False, "hasHardwareSlot": True,
+        "dirtyArchives": 0, "hasPasswordSlot": False, "hasHardwareSlot": True, "pendingTouch": False,
         "setupNeeded": False, "defaultPath": "C:/Users/me/AppData/Local/Enfold/vault.eks", "missingPath": "",
         "keptElsewhere": True, "retiredCopies": 0, "retiredPath": "", "damaged": False, "damagedCopyPath": "",
     },

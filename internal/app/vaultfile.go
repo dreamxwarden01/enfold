@@ -419,6 +419,9 @@ func (c *Core) importGateLocked(needArchivesClosed bool) *Error {
 	if c.cer != nil {
 		return coded(CodeCeremonyRunning)
 	}
+	if c.pending != nil {
+		return coded(CodeTokenPending) // it holds the file, or the card
+	}
 	if needArchivesClosed && c.vault.state != StateNone && len(c.archives) > 0 {
 		return coded(CodeArchivesOpen)
 	}
@@ -489,9 +492,9 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 	c.mu.Unlock()
 	c.emitState()
 	go cer.run(func(ctx context.Context) error {
-		installed := false
+		installed, disowned := false, false
 		defer func() {
-			if !installed {
+			if !installed && !disowned {
 				os.Remove(staged)
 			}
 		}()
@@ -499,6 +502,9 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 		if err != nil {
 			return err
 		}
+		// A cancel during the proof's touch leaves the staged copy to the
+		// pending touch, which removes it when it ends (§2.2).
+		cer.cleanup = func() { os.Remove(staged) }
 		var unl *keystore.Unlocked
 		if info.Kind == FileKindBackup {
 			unl, err = cer.adoptBackup(ks, first)
@@ -506,6 +512,10 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 			unl, err = cer.prove(ks, method)
 		}
 		if err != nil {
+			if errors.Is(err, errDisowned) {
+				disowned = true
+				return err
+			}
 			ks.Close()
 			return err
 		}
@@ -539,6 +549,9 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 		unl, err := cer.unlockFile(ks, cred, hc)
 		if hc != nil {
 			hc.Token = nil
+		}
+		if errors.Is(err, errDisowned) {
+			return nil, err // the pending touch holds the file and the card
 		}
 		if err != nil && hc != nil && keyGone(err) {
 			cer.unhold(card)

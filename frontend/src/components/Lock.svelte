@@ -275,7 +275,7 @@
               <h2 class="u-lead">{stepText(c.step).title}</h2>
               <div class="u-meta">{stepText(c.step).body}</div>
               <div class="u-links">
-                <button type="button" class="btn" disabled={!!c?.cancelling} onclick={() => void Vault.CancelUnlock()}>{c?.cancelling ? "Cancelling…" : "Cancel"}</button>
+                <button type="button" class="btn" onclick={() => void Vault.CancelUnlock()}>Cancel</button>
               </div>
             {:else}
               <div class="keyart" aria-hidden="true">
@@ -301,7 +301,7 @@
                 <div class="bar attention u-bar"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
               {/if}
               <div class="u-links">
-                <button type="button" class="btn sm" disabled={!!c?.cancelling} onclick={() => void Vault.CancelUnlock()}>{c?.cancelling ? "Cancelling…" : "Cancel"}</button>
+                <button type="button" class="btn sm" onclick={() => void Vault.CancelUnlock()}>Cancel</button>
               </div>
             {/if}
           {:else if live === 0}
@@ -322,6 +322,7 @@
             {#if setupNeeded}
               <div class="u-meta q">This vault has only its recovery key so far. Choose the first way in; the recovery key is asked for first.</div>
             {:else if st?.lastUnlockedAt}<div class="u-meta q">Last unlocked {dateTime(st.lastUnlockedAt)}</div>{/if}
+            {#if st?.pendingTouch}<div class="u-meta q pending">The key is still waiting for the touch you cancelled. Unlock again to pick it up, or touch it or pull it out to end it.</div>{/if}
             {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
               <div class="bar danger u-bar"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
             {:else if outcome?.kind === "import"}
@@ -396,7 +397,7 @@
             <div class="u-foot">
               <div class="u-links tight">
                 {#if c.step === CeremonyStep.StepPIN}<button type="button" class="btn link" onclick={() => begin("recovery")}>Use recovery key instead</button>{/if}
-                <button type="button" class="btn link" disabled={!!c?.cancelling} onclick={() => void Vault.CancelUnlock()}>{c?.cancelling ? "Cancelling…" : "Cancel"}</button>
+                <button type="button" class="btn link" onclick={() => void Vault.CancelUnlock()}>Cancel</button>
               </div>
             </div>
           {:else}
@@ -417,12 +418,12 @@
               <div class="rings live" aria-hidden="true"><span></span><span></span><span></span><div class="core"><svg viewBox="0 0 20 20"><use href="#i-touchdot" /></svg></div></div>
               <h2 class="touch-lead">{stepText(c.step).title}</h2>
               <p class="touch-sub">{stepText(c.step).body}</p>
-              {#if c.cancelling}<p class="touch-sub">Cancelling. Touch the key, or pull it out, to end the wait now; left alone it gives up in about 15 seconds.</p>{/if}
               <div class="touch-slot"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.pinAsked ? "PIN accepted" : "Touch"}{c.slotLabel ? ` · ${c.slotLabel}` : ""}{c.n > 1 ? ` · touch ${c.n}` : ""}</div>
             {:else}
               <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core"><svg viewBox="0 0 20 20"><use href="#i-check" /></svg></div></div>
               <h2 class="touch-lead quiet">{c.step === CeremonyStep.StepDone ? doneTitle(c.kind) : stepText(c.step).title}</h2>
               <p class="touch-sub quiet">{stepText(c.step).body}</p>
+              {#if c.error && c.step === CeremonyStep.StepDeriving}<p class="touch-sub">{codeText(c.error)}</p>{/if}
             {/if}
           </div>
         {:else}

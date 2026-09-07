@@ -159,6 +159,11 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 	if ks == nil {
 		return nil, nil, coded(CodeNeedsUnlock)
 	}
+	// A pending touch of a cancelled slot change is inside keystore.Unlock
+	// on this very handle: it ends first (§2.2).
+	if err := cer.settlePending(); err != nil {
+		return nil, nil, err
+	}
 	if !hasToken && !hasPassword {
 		cred, _, _, err := cer.credential(MethodRecovery, nil)
 		if err != nil {
@@ -180,9 +185,12 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 			cer.unlockPub, cer.unlockLabel = slot.PublicKey, slot.Label
 			c.mu.Unlock()
 			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-			unl, err := cer.unlockWith(ks, nil, &h)
+			unl, err := cer.agree(ks, false, h)
 			if err == nil {
 				return unl, card, nil
+			}
+			if errors.Is(err, errDisowned) {
+				return nil, nil, err // the pending touch holds the card now
 			}
 			if keyGone(err) {
 				// Pulled during the PIN or the touch: back to waiting.
@@ -202,7 +210,7 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 		return nil, nil, err
 	}
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-	unl, err := cer.unlockWith(ks, keystore.PasswordCredential{Password: pw}, nil)
+	unl, err := cer.unlockWith(ks, keystore.PasswordCredential{Password: pw})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -216,6 +224,7 @@ func (c *Core) afterMutation() {
 		c.cacheFactsLocked(c.vault.ks)
 	}
 	c.refreshEscrowedLocked()
+	c.dropPendingLocked() // a slot change: whatever was pending is not adopted
 	c.mu.Unlock()
 	c.emitState()
 }
@@ -374,6 +383,9 @@ func (cer *ceremony) enrollOnce(label string) ([]byte, uint32, error) {
 	}
 	serial := card.Serial()
 	pub, err := cer.enrollOn(card, mustString(label, keyName(serial)))
+	if errors.Is(err, errDisowned) {
+		return nil, 0, err // the pending touch holds the card now
+	}
 	if keyGone(err) {
 		// The key is not there to reset: a close that reported it would
 		// warn of a verified state the pull took with it.
@@ -419,45 +431,56 @@ func (cer *ceremony) proveKey(card Card, pub []byte, label string) error {
 	if err != nil {
 		return err
 	}
-	defer kdf.Zero(want)
-	tok, err := card.Token(pub, &ceremonyPrompter{cer: cer, label: label})
+	p := &ceremonyPrompter{cer: cer, label: label}
+	tok, err := card.Token(pub, p)
 	if err != nil {
+		kdf.Zero(want)
 		if errors.Is(err, ErrTokenNotUsable) {
 			return &parkAt{StepFailed, CodeTokenNotUsable}
 		}
 		return err
 	}
-	for {
-		// A cancel while the card was busy — the touch — is honoured here,
-		// before the card is asked again.
-		if err := cer.check(); err != nil {
-			return err
+	// The proof runs as an attempt, like an unlock's agreement (APP.md
+	// §2.2): a cancel ends the ceremony at once and the call goes on as
+	// the pending touch. Its purpose is its own ephemeral key, so nothing
+	// ever adopts it; the attempt owns the expected point and zeroes it.
+	epk := eph.PublicKey().Bytes()
+	a := &attempt{slot: keystore.SlotInfo{Label: label}, card: card, hc: keystore.HardwareCredential{Token: tok}, prompter: p}
+	a.op = func() (*keystore.Unlocked, error) {
+		got, err := tok.ECDH(epk)
+		if err != nil {
+			return nil, err
 		}
-		got, err := tok.ECDH(eph.PublicKey().Bytes())
-		if err == nil {
-			same := subtle.ConstantTimeCompare(got, want) == 1
-			kdf.Zero(got)
-			if !same {
-				cer.c.log("ceremony %s: the key's agreement does not match its public key", cer.kind)
-				return &parkAt{StepFailed, CodeTokenProof}
-			}
-			cer.c.log("ceremony %s: the key proved itself", cer.kind)
-			return nil
+		same := subtle.ConstantTimeCompare(got, want) == 1
+		kdf.Zero(got)
+		if !same {
+			return nil, errProof
 		}
-		var pe *TokenPINError
-		switch {
-		case errors.As(err, &pe):
-			cer.notePINWrong()
-			continue
-		case errors.Is(err, ErrTokenTouch), errors.Is(err, ErrTokenPINRequired):
-			continue
-		case errors.Is(err, ErrTokenPINBlocked):
-			return &parkAt{StepBlocked, CodeTokenPINBlocked}
-		case errors.Is(err, ErrTokenTooMany):
-			return &parkAt{StepFailed, CodeTokenTooMany}
-		}
-		return err
+		return nil, nil
 	}
+	a.cleanup = func() { kdf.Zero(want) }
+	cer.startAttempt(a)
+	_, err = a.await(cer)
+	switch {
+	case err == nil:
+		kdf.Zero(want)
+		cer.c.log("ceremony %s: the key proved itself", cer.kind)
+		return nil
+	case errors.Is(err, errDisowned):
+		return err // want is the attempt's to zero
+	case errors.Is(err, errProof):
+		kdf.Zero(want)
+		cer.c.log("ceremony %s: the key's agreement does not match its public key", cer.kind)
+		return &parkAt{StepFailed, CodeTokenProof}
+	}
+	kdf.Zero(want)
+	switch {
+	case errors.Is(err, ErrTokenPINBlocked):
+		return &parkAt{StepBlocked, CodeTokenPINBlocked}
+	case errors.Is(err, ErrTokenTooMany):
+		return &parkAt{StepFailed, CodeTokenTooMany}
+	}
+	return err
 }
 
 // keyToEnroll is the key the card will be enrolled with: a usable key

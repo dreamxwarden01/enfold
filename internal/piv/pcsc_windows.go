@@ -56,6 +56,15 @@ const (
 	scardWUnresponsive     = 0x80100066
 	scardEProtoMismatch    = 0x8010000F
 	scardECommDataLost     = 0x8010002F
+	scardENotReady         = 0x80100010
+	scardESystemCancelled  = 0x80100012
+	scardECommError        = 0x80100013
+	scardEShutdown         = 0x80100018
+	scardEUnexpected       = 0x8010001F
+
+	// scardFacility is the high half of every SCARD_ return code; a code
+	// without it is a Win32 system error (DESIGN.md §11 trap 26).
+	scardFacility = 0x8010
 )
 
 // scError is a winscard return code.
@@ -73,7 +82,7 @@ func (e *scError) Error() string {
 // rather than a number.
 func (e *scError) sentinel() error {
 	switch e.rc {
-	case scardENoService, scardEServiceStopped:
+	case scardENoService, scardEServiceStopped, scardESystemCancelled, scardEShutdown:
 		return ErrNoService
 	case scardENoReadersAvail, scardEUnknownReader, scardEReaderUnavail:
 		return ErrNoReader
@@ -81,7 +90,23 @@ func (e *scError) sentinel() error {
 		return ErrBusy
 	case scardWResetCard:
 		return ErrCardReset
-	case scardENoSmartcard, scardWRemovedCard, scardWUnpoweredCard, scardWUnresponsive, scardEProtoMismatch, scardECommDataLost:
+	case scardENoSmartcard, scardWRemovedCard, scardWUnpoweredCard, scardWUnresponsive, scardEProtoMismatch, scardECommDataLost,
+		scardENotReady, scardECommError, scardEUnexpected:
+		return ErrNoCard
+	}
+	if e.rc>>16 != scardFacility {
+		// A Win32 code rather than one of the facility's (DESIGN.md §11
+		// trap 26): from a call that addresses a card or a card handle
+		// the device is not talking — a key pulled with the request on
+		// the wire answers ERROR_GEN_FAILURE or ERROR_BAD_COMMAND before
+		// the resource manager has noticed — while from the context or
+		// the reader list it is the service or the session
+		// (ERROR_BROKEN_PIPE: a remote session without smart-card
+		// redirection), which the waiting state treats as no reader.
+		switch e.call {
+		case "SCardEstablishContext", "SCardListReadersW":
+			return ErrNoService
+		}
 		return ErrNoCard
 	}
 	return nil
@@ -363,18 +388,30 @@ func Verified(reader string) (bool, error) {
 func prepareResetReal(reader string) func() (done, verified bool, err error) {
 	ctx, err := newSCContext()
 	if err != nil {
+		if gone(err) {
+			return func() (bool, bool, error) { return true, false, nil } // no service: the reader left
+		}
 		return func() (bool, bool, error) { return false, true, fmt.Errorf("%w: %v", ErrResetFailed, err) }
 	}
 	return func() (bool, bool, error) {
 		defer ctx.release()
-		if h, err := ctx.connect(reader, scardShareShared); err == nil {
+		h, err := ctx.connect(reader, scardShareShared)
+		if err == nil {
 			if err := h.disconnect(scardResetCard); err == nil {
 				return true, false, nil
 			}
+		} else if gone(err) {
+			// The card, the reader or the service is not there: an
+			// unpowered card holds nothing of ours, so there is nothing
+			// to reset and nothing to warn of (DESIGN.md §11 trap 26).
+			return true, false, nil
 		}
 		// The reset did not happen. Is the card verified?
-		h, err := ctx.connect(reader, scardShareShared)
+		h, err = ctx.connect(reader, scardShareShared)
 		if err != nil {
+			if gone(err) {
+				return true, false, nil
+			}
 			return false, true, fmt.Errorf("%w: %v", ErrResetFailed, err)
 		}
 		defer h.disconnect(scardLeaveCard)

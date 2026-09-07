@@ -253,7 +253,10 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 				return err
 			}
 			// Shown over the one-time channel; kept once more in the vault.
-			url := c.preview.mintSecret(rk.Digits(), o.Label)
+			url, err := cer.mint(rk.Digits(), o.Label)
+			if err != nil {
+				return err
+			}
 			cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
 			c.afterMutation()
 			return nil
@@ -479,10 +482,17 @@ func (c *Core) RevealRecoveryKey(recipientID string) *Error {
 		}
 		rk, err := unl.RecoveryKey(rid)
 		if err != nil {
+			if errors.Is(err, format.ErrInvalid) {
+				// The record does not open: the vault's problem, not an archive's.
+				return &parkAt{StepFailed, CodeVaultInvalid}
+			}
 			return err
 		}
-		url := c.preview.mintSecret(rk.Digits(), label)
+		url, err := cer.mint(rk.Digits(), label)
 		kdf.Zero(rk[:])
+		if err != nil {
+			return err
+		}
 		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
 		return nil
 	})
@@ -643,15 +653,16 @@ func (c *Core) ExportBackup(path string) *Error {
 
 // CreateVault makes a new keystore with a recovery slot and a first slot
 // of the given kind, both needed for the invariant. The recovery key is
-// handed to the frontend once, over the one-time channel, as the URL in
-// the ceremony state. path is where the vault lives: empty for the one
-// place (APP.md §2.1), else a vault kept elsewhere. The keystore is built
-// as the incoming file beside its destination and installed only after
-// the ceremony's latch and cancel are checked — a create cut short leaves
-// nothing behind, and nothing is ever adopted whose recovery key was not
-// shown — so every create ends Locked. Replacing the vault kept here, or
-// any file already at the destination, needs replace; with a vault kept,
-// no archive may be open.
+// handed to the frontend over the one-time channel, as the URL in the
+// ceremony state — and kept once more in the vault, to be shown again
+// from the Keys page (FORMAT R38). path is where the vault lives: empty
+// for the one place (APP.md §2.1), else a vault kept elsewhere. The
+// keystore is built as the incoming file beside its destination and
+// installed only after the ceremony's latch and cancel are checked — a
+// create cut short leaves nothing behind — so every create ends Locked.
+// With a vault kept there is no second one (vault.kept); the one create
+// with a vault configured is the rebuild over the damaged file at its
+// own place (§2.1); anything already at the chosen place needs replace.
 func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replace bool) *Error {
 	if path == "" {
 		path = c.defaultVaultPath()
@@ -735,8 +746,15 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 			return err
 		}
 		installed = true
-		// Installed: the key is shown whatever happens now.
-		url := c.preview.mintSecret(rk.Digits(), "Recovery key")
+		// Installed: the key is shown now — unless a lock trigger landed
+		// meanwhile, which drops every held key; then it is shown from
+		// the Keys page (FORMAT R38), and the create still succeeded.
+		url, err := cer.mint(rk.Digits(), "Recovery key")
+		if err != nil {
+			c.log("ceremony %s: installed; a lock landed before the key was shown", cer.kind)
+			cer.set(func(s *CeremonyState) { s.Step = StepDone })
+			return nil
+		}
 		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
 		return nil
 	})

@@ -709,7 +709,8 @@ Correct in this document, and easy to lose during implementation.
     The same rule forbids any preview surface that offers a browser-provided save or print:
     the native context menu is disabled and the Edge PDF viewer is not used (`APP.md` §4). The
     recovery key's dialog is the one page surface with a browser output — `window.print()` over
-    a stylesheet that prints the digits and nothing else (`APP.md` §3 Keys): a recovery key is
+    a stylesheet that prints the key's sheet and nothing of the app around it (`APP.md` §3
+    Keys): a recovery key is
     meant to leave the machine; a preview never is.
 14. **The token's PIN-once state outlives our connection.** Measured 2026-09-04 on a YubiKey
     5.7.4 (`DECISIONS.md`): after a VERIFY the card stays verified until Windows powers it down,

@@ -5,6 +5,7 @@
   // the last two confirmed a second time, since the page cannot tell a
   // print from a cancelled one and the first click is a reflex. The URL's
   // token is the handle a save uses; the digits never ride a bound call.
+  import { tick } from "svelte";
   import Dialog from "./Dialog.svelte";
   import { Keys, Shell, errorOf } from "../lib/api";
   import { codeText } from "../lib/strings";
@@ -21,8 +22,8 @@
   let failed = $state(false);
   let ask = $state<"" | "save" | "print" | "written">("");
   let savedTo = $state("");
+  let printedAt = $state("");
   const handle = $derived(url.slice(url.lastIndexOf("/") + 1));
-  const when = new Date().toLocaleString();
 
   $effect(() => {
     let cancelled = false;
@@ -62,13 +63,15 @@
     }
   }
 
-  function print() {
+  async function print() {
+    printedAt = new Date().toLocaleString();
+    await tick(); // the sheet carries the time of this print
     window.print();
     ask = "print";
   }
 </script>
 
-<Dialog title={kind === "reveal" ? "Recovery key" : "Your recovery key"} onclose={() => {}}>
+<Dialog title={kind === "reveal" ? "Recovery key" : "Your recovery key"} onclose={() => {}} covered={ask !== ""}>
   {#if failed}
     <p>The key could not be shown here: its one-time link was already used.</p>
     <div class="bar attention"><svg class="i i-14"><use href="#i-info" /></svg><span>Show it again from the Keys page: unlock, then prove a YubiKey or a password once more.</span></div>
@@ -132,7 +135,7 @@
   <div class="print-sheet" aria-hidden="true">
     <h1>Enfold recovery key</h1>
     <p>Vault: {vaultName}</p>
-    <p>Printed: {when}</p>
+    <p>Printed: {printedAt}</p>
     <div class="print-digits">
       {#each groups as g, i (i)}<span>{g}</span>{/each}
     </div>

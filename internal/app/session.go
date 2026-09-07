@@ -339,6 +339,7 @@ func (c *Core) brokenLocked(err error) {
 		v.sess.Lock()
 		v.sess = nil
 	}
+	v.escrowed = nil
 	v.state = StateBroken
 	c.bump()
 }

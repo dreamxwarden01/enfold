@@ -1036,3 +1036,17 @@ func (cer *ceremony) escrowOpenedKey(unl *keystore.Unlocked, cred keystore.Crede
 		cer.c.log("ceremony %s: keeping the recovery key that opened: %v", cer.kind, err)
 	}
 }
+
+// mint registers a secret for the page, under the ceremony's latch: a lock
+// trigger latches every ceremony and then drops every held secret (APP.md
+// §2.1), so a mint that checked the latch in the same breath can never
+// land after the drop and outlive the lock.
+func (cer *ceremony) mint(value, label string) (string, error) {
+	c := cer.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cer.latch || cer.ctx.Err() != nil {
+		return "", ErrTokenCancelled
+	}
+	return c.preview.mintSecret(value, label), nil
+}

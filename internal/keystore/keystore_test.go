@@ -628,6 +628,26 @@ func TestTamperedRegion(t *testing.T) {
 	if err := u.Export(filepath.Join(t.TempDir(), "x.eks")); !errors.Is(err, ErrTampered) {
 		t.Errorf("export: %v", err)
 	}
+	// The kept recovery key is read, not refused as tampered (R38) — and
+	// here the substituted slot is the recovery slot itself, so what the
+	// reading finds is a key that does not fit the slot: never shown, and
+	// never kept for it either.
+	rid := k.Slots()[1].RecipientID
+	if _, err := u.RecoveryKey(rid); !errors.Is(err, ErrEscrowMismatch) {
+		t.Errorf("recovery key while tampered: %v", err)
+	}
+	if err := u.EscrowOpenedKey(rid, rk); err != nil {
+		t.Errorf("a key already kept, while tampered: %v", err) // the record exists: nothing to do
+	}
+	if err := u.UpdateRegistry(func(g *format.Registry) error {
+		g.Escrows = nil
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.EscrowOpenedKey(rid, rk); !errors.Is(err, ErrEscrowMismatch) {
+		t.Errorf("handing in for the substituted slot: %v", err)
+	}
 	// Reading stays possible, including registry updates — which must not
 	// launder the region: after one, a fresh unlock still sees the tamper
 	// and rotation is still refused (R25's converse rule).
@@ -1374,5 +1394,71 @@ func TestRecoveryKeyEscrow(t *testing.T) {
 	ue.Close()
 	if _, err := ue.RecoveryKey(rid); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed: %v", err)
+	}
+}
+
+// A vault whose registry an older Enfold wrote as version 1 — no escrow
+// records — opens, keeps no recovery key until one is handed in, and is
+// written back as version 2 by its next commit (R38).
+func TestRegistryVersionOneMigrates(t *testing.T) {
+	old := encodeRegistry
+	encodeRegistry = func(g *format.Registry) ([]byte, error) {
+		v1 := *g
+		v1.Escrows = nil
+		b, err := v1.Encode()
+		if err != nil {
+			return nil, err
+		}
+		b = append([]byte(nil), b...)
+		b[0] = 1
+		return b[:len(b)-4], nil // version 1 ends after the peer pin records
+	}
+	path := filepath.Join(t.TempDir(), "v.eks")
+	rk := recoveryKey(t)
+	u := mustCreate(t, path, PasswordSlot{Password: "p", Argon2: fast}, RecoverySlot{Key: rk, Label: "paper"})
+	encodeRegistry = old
+	var rid [16]byte
+	for _, s := range u.k.Slots() {
+		if s.Type == format.SlotRecovery {
+			rid = s.RecipientID
+		}
+	}
+	if len(u.Registry().Escrows) != 0 {
+		t.Fatalf("a version-1 registry decoded with escrow records: %d", len(u.Registry().Escrows))
+	}
+	if _, err := u.RecoveryKey(rid); !errors.Is(err, ErrNoEscrow) {
+		t.Fatalf("before any commit: %v", err)
+	}
+	// The next commit — here a new recovery slot — writes version 2, with
+	// the new slot's record and still none for the old one.
+	if err := u.AddSlot(RecoverySlot{Key: recoveryKey(t), Label: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	u.Close()
+	u.k.Close()
+	k := mustOpen(t, path)
+	u2, err := k.Unlock(PasswordCredential{Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u2.Close()
+	if n := len(u2.Registry().Escrows); n != 1 || u2.Registry().Escrow(rid) != nil {
+		t.Fatalf("after the first commit: %d records, old slot kept=%v", n, u2.Registry().Escrow(rid) != nil)
+	}
+	// Handed in, the old key is kept from then on.
+	if err := u2.EscrowOpenedKey(rid, rk); err != nil {
+		t.Fatal(err)
+	}
+	u2.Close()
+	k.Close()
+	k = mustOpen(t, path)
+	u3, err := k.Unlock(RecoveryCredential{Key: rk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u3.Close()
+	defer k.Close()
+	if got, err := u3.RecoveryKey(rid); err != nil || got != rk || len(u3.Registry().Escrows) != 2 {
+		t.Fatalf("after handing in: %x %v records=%d", got, err, len(u3.Registry().Escrows))
 	}
 }

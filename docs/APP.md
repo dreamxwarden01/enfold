@@ -183,9 +183,10 @@ state but None and Locked (Broken needs `Reopen` first; Busy is another process)
 is built as the incoming file** beside its destination and installed only after the ceremony's
 latch and cancel are checked — a create cut short (Cancel, a lock trigger, a crash) leaves nothing
 at the vault's place, so nothing is ever adopted whose recovery key was not shown — and therefore
-ends Locked too; over the vault kept here — or over any file already at the chosen destination —
-it needs `replace` and, with a vault kept, no open archive; a file at the place that could not be
-opened is retired rather than fought over. **Up to the rename nothing has happened; from the
+ends Locked too. A create happens only with no vault kept (§2.1: first run, an absent configured
+file, or the rebuild over a damaged one), where `replace` covers whatever already sits at the
+chosen place — a file there that could not be opened is retired rather than fought over — and
+no archive may be open. **Up to the rename nothing has happened; from the
 rename on the install has happened whatever follows:** the settings name the file first (a save
 that fails is the `settings.unsaved` warning), a reopen that fails keeps the file's path and
 name with the facts dropped and `MissingPath` set for "try again" (`Reopen` works too), and the
@@ -195,7 +196,7 @@ a fresh file) removes the copy just retired, so no phantom "replaced copy" is co
 reported as `vault.busy` when the file is in use; a file at the place that cannot even be looked
 at is never overwritten. What is retired is inspected: a keystore becomes
 `vault-replaced-…eks`; a file at the vault's own place that does not open becomes
-`vault-damaged-…eks` (`DamagedPath`, offered for nothing); anything else `file-replaced-…bin`,
+`vault-damaged-…eks` (`DamagedCopyPath`, offered for nothing); anything else `file-replaced-…bin`,
 which the status does not count.
 Import and create are *committing* ceremonies (`commits`): shutdown waits for them within its
 budget, as for a slot change, so an install is never half done; a quit that lands inside the
@@ -475,8 +476,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
   it and, for a vault kept elsewhere, the vault's own folder (`vault.recovery_place`); the file
   is synced before the call returns, and the folder the user chose is its protection (the mode
   is asked for where it means something; Windows gives the folder's ACL); **print** —
-  `window.print()` over a print stylesheet that shows the digits, the vault's name and the date
-  and nothing else, the one browser-provided output the page invokes (§4: previews are
+  `window.print()` over a print stylesheet that shows the digits, the vault's name, the date and
+  what the key is for — and nothing of the app around it — the one browser-provided output the
+  page invokes (§4: previews are
   decrypted content and stay without one; a recovery key is meant to leave the machine) — the
   page cannot tell a print from a cancelled one, so a second confirmation follows ("it printed,
   and all 48 digits are legible"); **written down** — a second confirmation ("all 48 digits,
@@ -550,8 +552,8 @@ value stays behind it for `SaveRecoveryKey` until it is dropped, a lock trigger,
 minutes pass — a second, a foreign or a late fetch ends it as well, since the page fetches
 once. **No preview surface may expose a
 browser-provided save or print affordance** — the recovery key's dialog is not a preview surface,
-and its `window.print()` over a stylesheet that prints the digits and nothing else is the one
-browser output the page invokes (§3 Keys): the window is created with
+and its `window.print()` over a stylesheet that prints the key's sheet and nothing of the app
+around it is the one browser output the page invokes (§3 Keys): the window is created with
 `DefaultContextMenuDisabled`, every WebView2 permission kind is set to Deny
 (`WindowsWindow.Permissions`, autoplay excepted if it breaks click-to-play), and the `<iframe>`
 PDF viewer is not used (its toolbar cannot be hidden in beta.16 and there is no download hook):
@@ -641,7 +643,8 @@ a text file…*, which first says what place to choose and then opens the native
 *Print…*; and *I have written it down*. The last two ask once more, in a second dialog over the
 first with a distinct button, never a tick beside the same one: "Did it print, with all 48
 digits legible?" / "Have you written down all 48 digits, checked against the screen?" — *Go
-back*, or *Yes, I have it*; after a save the core acknowledged the button is *Done*. It says the
+back*, or *Yes, I have the page* / *Yes, I have it*; after a save the core acknowledged the
+button is *Done*. It says the
 key can be shown again from the Keys page — unlock, then prove a YubiKey or a password once
 more — and, when the fetch of the one-time URL fails (a window recreated after the one fetch),
 that the key can be shown again from there, with *Done* as the one way out. It is not dismissed

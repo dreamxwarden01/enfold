@@ -296,7 +296,7 @@ func (k *Keystore) commit(tx txn) error {
 		// disk, the mismatch survives the write and is reported again at the
 		// next unlock.
 		tx.reg.ModifiedAt = next.ModifiedAt
-		plain, err := tx.reg.Encode()
+		plain, err := encodeRegistry(tx.reg)
 		if err != nil {
 			return err
 		}
@@ -382,7 +382,7 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 	// prev is the source's modified_at for an export, so that a clock set
 	// back cannot date a backup before the vault it was taken from (R35).
 	reg.ModifiedAt = stamp(prev)
-	plain, err := reg.Encode()
+	plain, err := encodeRegistry(reg)
 	if err != nil {
 		return nil, err
 	}
@@ -472,3 +472,8 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 	failed = false
 	return k, nil
 }
+
+// encodeRegistry is the registry's encoder behind every commit — a seam,
+// so that a test can write the version-1 registry an older Enfold wrote
+// and watch it come back as version 2 (R38).
+var encodeRegistry = func(g *format.Registry) ([]byte, error) { return g.Encode() }

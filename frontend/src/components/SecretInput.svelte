@@ -18,12 +18,16 @@
     note?: string;
     button?: string;
     choose?: boolean;
+    // error: what the core said about the last answer under this prompt
+    // — "Wrong PIN.", say — shown red beneath until the user types again.
+    error?: string;
   }
-  let { kind, promptId, label, hint = "", note = "", button = "Continue", choose = false }: Props = $props();
+  let { kind, promptId, label, hint = "", note = "", button = "Continue", choose = false, error = "" }: Props = $props();
   let value = $state("");
   let el: HTMLInputElement | undefined = $state();
   let left = $state(false); // the field was left with what it holds
   let pressed = $state(false); // the button was pressed with what it holds
+  let typedSince = $state(false); // typed since the core's error arrived
 
   const numeric = $derived(kind === "pin" || kind === "recovery");
   const problem = $derived(secretProblem(kind, value, choose));
@@ -32,7 +36,8 @@
   // The rule itself turns red when it is what is broken; anything else is
   // said beneath it.
   const ruleBroken = $derived(show && problem === rule);
-  const said = $derived(show && problem !== rule ? problem : "");
+  const refused = $derived(!!error && !typedSince);
+  const said = $derived(show && problem !== rule ? problem : refused ? error : "");
 
   $effect(() => {
     // A new prompt: a clean field, focused.
@@ -40,10 +45,12 @@
     value = "";
     left = false;
     pressed = false;
+    typedSince = false;
     el?.focus();
   });
 
   function typed() {
+    typedSince = true;
     if (!secretProblem(kind, value, choose)) {
       left = false;
       pressed = false;
@@ -72,14 +79,14 @@
     bind:this={el}
     bind:value
     class="input secret"
-    class:invalid={show}
+    class:invalid={show || refused}
     type={kind === "mgmtkey" ? "text" : "password"}
     inputmode={numeric ? "numeric" : "text"}
     autocomplete="off"
     autocapitalize="off"
     spellcheck="false"
     aria-label={label}
-    aria-invalid={show}
+    aria-invalid={show || refused}
     aria-describedby={[rule ? `secret-${promptId}-rule` : "", said ? `secret-${promptId}-said` : ""].filter(Boolean).join(" ") || undefined}
     onblur={() => (left = true)}
     oninput={typed}

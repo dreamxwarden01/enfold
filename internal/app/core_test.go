@@ -66,7 +66,7 @@ func TestPasswordUnlockAndLock(t *testing.T) {
 	h.unlockWithPassword()
 }
 
-func TestWrongPasswordParksUntilCancelled(t *testing.T) {
+func TestWrongPasswordIsAskedAgainInPlace(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	if e := h.c.BeginUnlock(MethodPassword); e != nil {
 		t.Fatal(e)
@@ -75,12 +75,65 @@ func TestWrongPasswordParksUntilCancelled(t *testing.T) {
 	if e := h.c.SubmitSecret("password", cs.PromptID, "wrong"); e != nil {
 		t.Fatal(e)
 	}
-	failed := h.rec.waitCeremony(t, StepFailed, false)
-	if failed.Error != CodeAuth {
-		t.Fatalf("error %q, want %q", failed.Error, CodeAuth)
+	// Asked again, with the reason, under a fresh prompt id.
+	again := h.rec.waitFor(t, EventVaultCeremony, func(p any) bool {
+		s, ok := p.(CeremonyState)
+		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != cs.PromptID
+	}).(CeremonyState)
+	if again.Error != CodeAuth {
+		t.Fatalf("second prompt without the reason: %+v", again)
 	}
 	if st := h.status(); st.State != StateUnlocking {
-		t.Fatalf("parked ceremony should hold Unlocking, got %s", st.State)
+		t.Fatalf("the ceremony should hold Unlocking, got %s", st.State)
+	}
+	h.c.SubmitSecret("password", again.PromptID, testPassword)
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	// The same when the recovery key is mistyped: in place, never a failure.
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodRecovery); e != nil {
+		t.Fatal(e)
+	}
+	r := h.rec.waitCeremony(t, StepRecovery, true)
+	h.c.SubmitSecret("recovery", r.PromptID, "000000000000000000000000000000000000000000000000")
+	r2 := h.rec.waitFor(t, EventVaultCeremony, func(p any) bool {
+		s, ok := p.(CeremonyState)
+		return ok && s.Step == StepRecovery && s.PromptID != "" && s.PromptID != r.PromptID
+	}).(CeremonyState)
+	if r2.Error != CodeAuth {
+		t.Fatalf("recovery asked again without the reason: %+v", r2)
+	}
+	h.c.SubmitSecret("recovery", r2.PromptID, "not digits at all")
+	r3 := h.rec.waitFor(t, EventVaultCeremony, func(p any) bool {
+		s, ok := p.(CeremonyState)
+		return ok && s.Step == StepRecovery && s.PromptID != "" && s.PromptID != r2.PromptID
+	}).(CeremonyState)
+	if r3.Error != CodeAuth {
+		t.Fatalf("unparsable digits asked again without the reason: %+v", r3)
+	}
+	h.c.SubmitSecret("recovery", r3.PromptID, h.recovery)
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+	if e := h.c.BeginUnlock(MethodPassword); !isCode(e, CodeVaultUnlocked) && !isCode(e, CodeCeremonyRunning) && e != nil {
+		t.Fatalf("begin while unlocked: %v", e)
+	}
+	// What the rest of this test needs: the ceremony parked by a cancel.
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodPassword); e != nil {
+		t.Fatal(e)
+	}
+	cs = h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", cs.PromptID, "wrong")
+	h.rec.waitFor(t, EventVaultCeremony, func(p any) bool {
+		s, ok := p.(CeremonyState)
+		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != cs.PromptID
+	})
+	if st := h.status(); st.State != StateUnlocking {
+		t.Fatalf("the ceremony should hold Unlocking, got %s", st.State)
 	}
 	if e := h.c.CancelUnlock(); e != nil {
 		t.Fatal(e)

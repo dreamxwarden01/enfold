@@ -84,6 +84,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeTokenNoKey]: "This key is not enrolled in the vault.",
   [Code.CodeTokenNotUsable]: "The enrolled key's policy does not require PIN and touch, so Enfold will not use it.",
   [Code.CodeTokenPIN]: "Wrong PIN.",
+  [Code.CodeTokenProof]: "The key did not prove itself: what it computed does not match its own public key. It was not enrolled.",
   [Code.CodeTokenPINBlocked]: "The PIN is blocked. Use your recovery key.",
   [Code.CodeTokenPINAgain]: "The key wants the PIN again.",
   [Code.CodeTokenTouch]: "The key was not touched in time.",

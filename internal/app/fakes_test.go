@@ -288,6 +288,7 @@ type fakeCard struct {
 	touches  []TouchRequest
 	ops      int
 	removed  bool // pulled: every operation answers ErrTokenNoCard
+	verified bool // PIN-once: a VERIFY stands for this handle, as on the card
 }
 
 // setRemoved pulls the key, or puts it back.
@@ -381,6 +382,7 @@ func (f *fakeCard) ProtectedManagementKey(pin string) ([]byte, error) {
 		}
 		return nil, &TokenPINError{Retries: f.retries}
 	}
+	f.verified = true
 	if f.mgmt == nil {
 		return nil, ErrTokenNoProtectedKey
 	}
@@ -423,6 +425,7 @@ func (f *fakeCard) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closed = true
+	f.verified = false // the close resets the card
 	f.closes++
 	if f.removed && f.closeErr == nil {
 		// The real Close cannot reset a card that is gone, and says so.
@@ -450,7 +453,7 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 		return nil, ErrTokenTooMany
 	}
 	t.card.mu.Lock()
-	closed := t.card.closed
+	closed, verified := t.card.closed, t.card.verified
 	st := PINStatus{Retries: t.card.retries, RetriesKnown: true}
 	t.card.mu.Unlock()
 	if closed {
@@ -459,21 +462,28 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 	if st.Blocked() {
 		return nil, ErrTokenPINBlocked
 	}
-	pin, err := t.p.PIN(st)
-	if err != nil {
-		// As the real Token does: the prompter's error, under a cancel.
-		return nil, fmt.Errorf("%w: %w", ErrTokenCancelled, err)
+	// PIN once, as on the card: a VERIFY that stands is not asked again
+	// on the same handle.
+	if !verified {
+		pin, err := t.p.PIN(st)
+		if err != nil {
+			// As the real Token does: the prompter's error, under a cancel.
+			return nil, fmt.Errorf("%w: %w", ErrTokenCancelled, err)
+		}
+		t.card.mu.Lock()
+		if pin != t.card.pin {
+			t.card.retries--
+			left := t.card.retries
+			t.card.mu.Unlock()
+			if left == 0 {
+				return nil, ErrTokenPINBlocked
+			}
+			return nil, &TokenPINError{Retries: left}
+		}
+		t.card.verified = true
+		t.card.mu.Unlock()
 	}
 	t.card.mu.Lock()
-	if pin != t.card.pin {
-		t.card.retries--
-		left := t.card.retries
-		t.card.mu.Unlock()
-		if left == 0 {
-			return nil, ErrTokenPINBlocked
-		}
-		return nil, &TokenPINError{Retries: left}
-	}
 	t.card.ops++
 	t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: true})
 	priv := t.card.keys[t.slot]

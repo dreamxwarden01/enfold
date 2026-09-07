@@ -59,3 +59,19 @@ export function secretRule(kind: SecretKind, choose = false): string {
 export function requiredProblem(value: string): string {
   return value.trim() ? "" : REQUIRED;
 }
+
+// The recovery key's eight groups (RecoveryInput): each carries 16 bits
+// as a six-digit number divisible by 11 and below 720 896 — BitLocker's
+// checksum, which catches a mistyped group as it is finished. Empty means
+// the group is fine, or not finished yet.
+export const RECOVERY_GROUPS = 8;
+export const RECOVERY_GROUP_LEN = 6;
+export const RECOVERY_GROUP_MAX = 720896;
+export const GROUP_MISTYPED = "This group is mistyped.";
+export function recoveryGroupProblem(group: string): string {
+  if (group.length < RECOVERY_GROUP_LEN) return "";
+  if (!/^\d{6}$/.test(group)) return GROUP_MISTYPED;
+  const n = Number(group);
+  return n < RECOVERY_GROUP_MAX && n % 11 === 0 ? "" : GROUP_MISTYPED;
+}
+

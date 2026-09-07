@@ -355,11 +355,14 @@ func TestImportVaultProvesThenInstalls(t *testing.T) {
 	}
 	p = rec2.waitCeremony(t, StepPassword, true)
 	c2.SubmitSecret("password", p.PromptID, "wrong")
-	f := rec2.waitCeremony(t, StepFailed, false)
-	if f.Error != CodeAuth {
-		t.Fatalf("failed with %s", f.Error)
+	again := rec2.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != p.PromptID
+	}).(CeremonyState)
+	if again.Error != CodeAuth {
+		t.Fatalf("asked again without the reason: %+v", again)
 	}
-	c2.CancelUnlock() // a park stands until the user leaves it
+	c2.CancelUnlock() // the user gives up instead
 	rec2.waitState(t, StateNone)
 	if _, err := os.Stat(filepath.Join(data2, "vault.eks")); err == nil {
 		t.Fatal("an unproven file was installed")
@@ -539,8 +542,66 @@ func TestVerifyBackup(t *testing.T) {
 	}
 	r = h.rec.waitCeremony(t, StepRecovery, true)
 	h.c.SubmitSecret("recovery", r.PromptID, "000000000000000000000000000000000000000000000000")
-	if f := h.rec.waitCeremony(t, StepFailed, false); f.Error != CodeAuth {
-		t.Fatalf("wrong key: %+v", f)
+	again := h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepRecovery && s.PromptID != "" && s.PromptID != r.PromptID
+	}).(CeremonyState)
+	if again.Error != CodeAuth {
+		t.Fatalf("wrong key not asked again in place: %+v", again)
+	}
+	h.c.SubmitSecret("recovery", again.PromptID, digits(h.recovery))
+	if done := h.rec.waitCeremony(t, StepDone, false); done.Archives != 1 {
+		t.Fatalf("after correcting the key: %+v", done)
+	}
+}
+
+// A key already holding a usable key in 9d is not enrolled by merely being
+// in the reader: it proves itself — PIN and touch, the agreement checked —
+// first; a wrong PIN says so; a label left empty is the serial number.
+func TestEnrolledKeyProvesItself(t *testing.T) {
+	dir := t.TempDir()
+	card := newFakeCard("123456")
+	card.addKey(0x9d, true) // a key from before, as a YubiKey used elsewhere holds
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	rec := &recorder{}
+	c, _ := New(Deps{Cards: cards, Events: rec, Clock: newFakeClock(), DataDir: filepath.Join(dir, "data")})
+	c.Start()
+	defer c.Close()
+	c.SetAppOrigin("wails://wails")
+	if e := c.CreateVault("", "Mine", EnrollOptions{Kind: EnrollToken}, false); e != nil {
+		t.Fatal(e)
+	}
+	pin := rec.waitCeremony(t, StepPIN, true)
+	if pin.Error != "" {
+		t.Fatalf("first PIN prompt with a note: %+v", pin)
+	}
+	c.SubmitSecret("pin", pin.PromptID, "wrong!")
+	pin2 := rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPIN && s.PromptID != "" && s.PromptID != pin.PromptID
+	}).(CeremonyState)
+	if pin2.Error != CodeTokenPIN || pin2.Retries != 2 {
+		t.Fatalf("a wrong PIN is not said: %+v", pin2)
+	}
+	c.SubmitSecret("pin", pin2.PromptID, "123456")
+	rec.waitCeremony(t, StepTouch, false)
+	rec.waitCeremony(t, StepRecovery, false)
+	rec.waitState(t, StateLocked)
+	card.mu.Lock()
+	ops := card.ops
+	card.mu.Unlock()
+	if ops != 1 {
+		t.Fatalf("the key did not prove itself: %d agreements", ops)
+	}
+	var label string
+	for _, s := range c.Slots() {
+		if s.Type == "hardware" {
+			label = s.Label
+		}
+	}
+	if label != "YubiKey 1234567" {
+		t.Fatalf("the empty label is not the serial: %q", label)
 	}
 }
 

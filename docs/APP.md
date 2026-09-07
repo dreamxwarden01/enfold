@@ -282,6 +282,12 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   at no cost in retries. The deadline is on the *prompt wait* and on `WaitingForKey` — the
   session's absolute default — never on the card call itself, which cannot be interrupted.
 - Touch: `Prompter.Touch` fires `vault.ceremony {Step: touch, N}`; the panel takes over.
+- **A wrong secret is said, in place.** A refused PIN makes the next PIN prompt carry
+  `token.pin` as its note beside the count; a wrong password or mistyped recovery digits
+  (`keystore.ErrVerifier`/`ErrAuth` under a typed credential) are asked for again under a fresh
+  prompt id with `vault.auth` as the note — the page marks the field, says why, and keeps the
+  recovery digits for correction — never a failure the user has to start over from. Only a
+  token's refusal (a damaged record, a stale slot) parks.
 - Wrong password (`ErrAuth` from Deriving) returns to `Password` with the Card kept open, so the
   retry costs a touch but no PIN on a PIN-once key; the copy says so. `MaxOperations` exhausted →
   "remove and reinsert the key" (WaitingForKey).
@@ -447,7 +453,14 @@ sentinel of every package with a catch-all `internal` — and services are regis
   — the one card present is probed for that key's public key (no PIN, no touch), because the
   swap may already have happened during the prompt and a swap in the same port shows the same
   reader name throughout — then for the key to enrol; `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
-  (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` → `AddSlot`.
+  (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` — and then,
+  reused or generated, **the key proves itself before it is enrolled**: its PIN (not asked again
+  when the management key's VERIFY still stands) and its touch, over an agreement with an
+  ephemeral key checked against its public key (`token.proof` when it does not match) — so a
+  vault never depends on a key that does not work, and a key in the reader is never enrolled
+  by merely being there (ruling 2026-09-07, third hardware test) → `AddSlot`. A key's label left
+  empty is its serial number ("YubiKey 12345678"), which tells one from another; a password's is
+  "Password"; a recovery key needs a name.
   Sub-states mirror §2.2 plus `ManagementKey`. `BeginEnroll(recovery, label)` adds a recovery
   slot and shows its digits: the reveal, below.
 - **The reveal.** Every showing of a recovery key — after a create, after enrolling one, and
@@ -477,8 +490,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
   is synced before the call returns, and the folder the user chose is its protection (the mode
   is asked for where it means something; Windows gives the folder's ACL); **print** —
   `window.print()` over a print stylesheet that shows the digits, the vault's name, the date and
-  what the key is for — and nothing of the app around it — the one browser-provided output the
-  page invokes (§4: previews are
+  what the key is for — and nothing of the app around it, and no page margin, so that the browser
+  prints no header or footer of its own — the one browser-provided output the page invokes (§4:
+  previews are
   decrypted content and stay without one; a recovery key is meant to leave the machine) — the
   page cannot tell a print from a cancelled one, so a second confirmation follows ("it printed,
   and all 48 digits are legible"); **written down** — a second confirmation ("all 48 digits,
@@ -671,7 +685,12 @@ minimum of 8 characters (BitLocker's rule; the core refuses a shorter one at sub
 `vault.password_short` and keeps the prompt), the recovery key's 48 digits with any whitespace or
 dash between them (the set the core ignores), the management key's hex with the whitespace the
 core ignores — and an existing secret is never measured: it is what it is, so a PIN is refused
-only for what the card itself refuses (more than 8 bytes), never for being short.
+only for what the card itself refuses (more than 8 bytes), never for being short. **The
+recovery key is typed into eight cells**, plain digits — they are read back against paper, not
+hidden — each moving on when its six are in; a paste fills them all with the dashes stripped; a
+click lands on the first cell still to be typed; a finished group that fails BitLocker's
+checksum (divisible by 11, below 720 896) turns red at once, before anything is sent; and when
+the core says the key did not open the vault, the digits stay for correction.
 
 **Motion.** Every dialog, menu and popover enters over 140 ms (the box also scales from 97%)
 and leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between

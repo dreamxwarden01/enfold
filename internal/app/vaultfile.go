@@ -594,7 +594,7 @@ func (cer *ceremony) firstSlotSpec(first EnrollOptions) (keystore.SlotSpec, erro
 		}
 		return keystore.PasswordSlot{Password: pw, Argon2: defaultArgon2, Label: mustString(first.Label, "Password")}, nil
 	case EnrollToken:
-		hs := keystore.HardwareSlot{Label: mustString(first.Label, "YubiKey")}
+		hs := keystore.HardwareSlot{}
 		if first.Entangle {
 			pw, err := cer.askNew("password", StepPassword)
 			if err != nil {
@@ -602,11 +602,11 @@ func (cer *ceremony) firstSlotSpec(first EnrollOptions) (keystore.SlotSpec, erro
 			}
 			hs.Password, hs.Argon2 = pw, defaultArgon2
 		}
-		pub, err := cer.enrollToken(nil) // nothing unlocked: no key to wait out
+		pub, serial, err := cer.enrollToken(nil, first.Label) // nothing unlocked: no key to wait out
 		if err != nil {
 			return nil, err
 		}
-		hs.PublicKey = pub
+		hs.PublicKey, hs.Label = pub, mustString(first.Label, keyName(serial))
 		return hs, nil
 	}
 	return nil, coded(CodeParams)

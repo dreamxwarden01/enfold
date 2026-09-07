@@ -438,9 +438,12 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
    one thing a print shows, so a print from any other view shows nothing. */
 .print-sheet { display: none; }
 @media print {
+  /* No page margin: the browser draws its header and footer — title, URL,
+     date, page numbers — in the margin, and a recovery key needs none. */
+  @page { size: auto; margin: 0; }
   body * { visibility: hidden; }
   .print-sheet, .print-sheet * { visibility: visible; }
-  .print-sheet { display: block; position: fixed; inset: 0; padding: 40px; color: #000; background: #fff; font-family: var(--font-sans, "Segoe UI", sans-serif); }
+  .print-sheet { display: block; position: fixed; inset: 0; padding: 20mm; color: #000; background: #fff; font-family: var(--font-sans, "Segoe UI", sans-serif); }
   .print-sheet h1 { font-size: 20px; margin: 0 0 8px; }
   .print-sheet p { font-size: 12px; margin: 0 0 6px; max-width: 60ch; }
   .print-digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; max-width: 480px; }

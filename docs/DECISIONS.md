@@ -2573,3 +2573,25 @@ is kept (`vault.kept`), so the one-vault rule lives where every rule lives.
 **Not done here.** Integrity checks on a damaged copy; an entropy estimate for a chosen
 password; a "replace this recovery key" action in one step (add, show, remove, rotate
 offered); a Rotate dialog that offers to replace the recovery keys on the removal path.
+
+---
+
+## 2026-09-07 — Third hardware test: a key proves itself before it is enrolled; wrong secrets stay in place; the recovery key's eight cells
+
+The user created a vault with a YubiKey whose 9d already held an Enfold key from an earlier
+try, and saw: insert the key, and the recovery key appears. No PIN, no touch. The log agrees —
+"token holds 9d … reusing the key in 9d" — the enrolment reused the usable key and went on.
+Correct by the letter (the vault needs only the public key) and wrong by any other measure: a
+key in the reader was enrolled by being there, and the vault would have depended on a key
+nobody had shown to work.
+
+**Ruled.** Enrolling a key — reused or generated, at creation or later — ends with the key
+proving itself: PIN and touch, over an agreement with an ephemeral key checked against the
+public key that is about to be stored (`token.proof` refuses a mismatch). The PIN is not asked
+twice when the management key's VERIFY still stands. A label left empty is the key's serial
+number, so two keys never look alike. A wrong PIN is said, not only counted; a wrong password
+or mistyped recovery digits are asked for again in place, with the reason — the ceremony is
+not the thing that failed. The recovery key is typed into eight plain cells that check each
+group's checksum as it is finished, take a paste whole, and keep the digits when the core says
+they did not open the vault. The printed sheet has no page margin, so the browser prints no
+header or footer of its own.

@@ -65,6 +65,7 @@ const (
 	CodeTokenNoKey      Code = "token.no_key"
 	CodeTokenNotUsable  Code = "token.not_usable"
 	CodeTokenPIN        Code = "token.pin"
+	CodeTokenProof      Code = "token.proof" // the key's agreement does not match its public key: not enrolled
 	CodeTokenPINBlocked Code = "token.pin_blocked"
 	CodeTokenPINAgain   Code = "token.pin_required"
 	CodeTokenTouch      Code = "token.touch"

@@ -21,7 +21,7 @@
 </div>
 {#if kind === "token"}
   <div class="field">
-    <div class="field-top"><label for="{idPrefix}-label">Name this key</label><span class="hint">Shown in the list of ways in.</span></div>
+    <div class="field-top"><label for="{idPrefix}-label">Name this key</label><span class="hint">Left empty, its serial number names it.</span></div>
     <input id="{idPrefix}-label" class="input" bind:value={label} placeholder="YubiKey 5C — desk" />
   </div>
   <label class="check"><input type="checkbox" bind:checked={entangle} />Also require a password with this key</label>

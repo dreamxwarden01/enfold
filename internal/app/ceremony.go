@@ -31,6 +31,7 @@ type ceremony struct {
 	// mutation: a slot change that commits to the open handle from this
 	// goroutine; registry writes wait while it runs.
 	mutation bool
+	pinWrong bool // the PIN just given was refused: the next prompt says so
 	// commits: an import or a build that installs a file at the vault's
 	// place; shutdown waits for it, so the install is never half done.
 	commits bool
@@ -319,17 +320,23 @@ func (cer *ceremony) set(mut func(s *CeremonyState)) {
 // ask issues a prompt of kind, waits for its answer, the cancellation or
 // the prompt deadline. status is what the panel shows.
 func (cer *ceremony) ask(kind string, step CeremonyStep, status PINStatus) (string, error) {
-	return cer.askWith(kind, step, status, false)
+	return cer.askWith(kind, step, status, false, "")
+}
+
+// askNote asks again after a wrong answer, with the reason on the state
+// (Error) so that the page marks the field and says why, in place.
+func (cer *ceremony) askNote(kind string, step CeremonyStep, status PINStatus, note Code) (string, error) {
+	return cer.askWith(kind, step, status, false, note)
 }
 
 // askNew asks for a secret the user is choosing now — a new password, a
 // new entangled password — rather than one they already hold; the state
 // says so (Choose) so the page can label the field "choose".
 func (cer *ceremony) askNew(kind string, step CeremonyStep) (string, error) {
-	return cer.askWith(kind, step, PINStatus{}, true)
+	return cer.askWith(kind, step, PINStatus{}, true, "")
 }
 
-func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, choose bool) (string, error) {
+func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, choose bool, note Code) (string, error) {
 	c := cer.c
 	p := &prompt{id: randomID(), kind: kind, choose: choose, ch: make(chan string, 1), gone: make(chan error, 1)}
 	c.mu.Lock()
@@ -337,7 +344,7 @@ func (cer *ceremony) askWith(kind string, step CeremonyStep, status PINStatus, c
 	held := cer.held
 	cer.state.Step, cer.state.PromptID, cer.state.Choose = step, p.id, choose
 	cer.state.Retries, cer.state.RetriesKnown, cer.state.Verified = status.Retries, status.RetriesKnown, status.Verified
-	cer.state.Error = ""
+	cer.state.Error = note
 	cer.state.Seq = c.bump()
 	st := cer.state
 	c.mu.Unlock()
@@ -482,7 +489,27 @@ func (p *ceremonyPrompter) PIN(status PINStatus) (string, error) {
 		return "", ErrTokenPINBlocked
 	}
 	p.cer.set(func(s *CeremonyState) { s.SlotLabel = p.label })
-	return p.cer.ask("pin", StepPIN, status)
+	return p.cer.askNote("pin", StepPIN, status, p.cer.takePINNote())
+}
+
+// notePINWrong records that the PIN just given was refused, so that the
+// next PIN prompt says so beside its count (APP.md §2.2).
+func (cer *ceremony) notePINWrong() {
+	cer.c.mu.Lock()
+	cer.pinWrong = true
+	cer.c.mu.Unlock()
+}
+
+// takePINNote is the note the next PIN prompt carries: token.pin after a
+// refused PIN, else nothing.
+func (cer *ceremony) takePINNote() Code {
+	cer.c.mu.Lock()
+	defer cer.c.mu.Unlock()
+	if cer.pinWrong {
+		cer.pinWrong = false
+		return CodeTokenPIN
+	}
+	return ""
 }
 
 func (p *ceremonyPrompter) Touch(req TouchRequest) {
@@ -830,7 +857,17 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential,
 		var pe *TokenPINError
 		switch {
 		case hc != nil && errors.As(err, &pe):
-			// The prompter already showed the count; ECDH will prompt again.
+			// ECDH will prompt again, with the count — and the reason.
+			cer.notePINWrong()
+			continue
+		case hc == nil && (errors.Is(err, keystore.ErrVerifier) || errors.Is(err, keystore.ErrAuth)):
+			// Wrong digits, or a wrong password: asked again in place, with
+			// the reason, never a failure the user has to start over from.
+			next, aerr := cer.credentialAgain(cred)
+			if aerr != nil {
+				return nil, aerr
+			}
+			cred = next
 			continue
 		case hc != nil && errors.Is(err, ErrTokenTouch):
 			continue
@@ -958,17 +995,50 @@ func (cer *ceremony) credential(method UnlockMethod, slots []keystore.SlotInfo) 
 		}
 		return keystore.PasswordCredential{Password: pw}, nil, nil, nil
 	case MethodRecovery:
-		digits, err := cer.ask("recovery", StepRecovery, PINStatus{})
+		rk, err := cer.askRecoveryKey("")
 		if err != nil {
 			return nil, nil, nil, err
-		}
-		rk, perr := kdf.ParseRecoveryDigits(digits)
-		if perr != nil {
-			return nil, nil, nil, cer.park(StepFailed, CodeAuth)
 		}
 		return keystore.RecoveryCredential{Key: rk}, nil, nil, nil
 	}
 	return nil, nil, nil, coded(CodeParams)
+}
+
+// askRecoveryKey asks for the recovery key until the digits parse; a
+// mistyped group is asked about again in place (the page checks each
+// group's checksum first, so this is the backstop).
+func (cer *ceremony) askRecoveryKey(note Code) (kdf.RecoveryKey, error) {
+	for {
+		digits, err := cer.askNote("recovery", StepRecovery, PINStatus{}, note)
+		if err != nil {
+			return kdf.RecoveryKey{}, err
+		}
+		rk, perr := kdf.ParseRecoveryDigits(digits)
+		if perr == nil {
+			return rk, nil
+		}
+		note = CodeAuth
+	}
+}
+
+// credentialAgain asks for the typed credential that was refused, in
+// place and with the reason.
+func (cer *ceremony) credentialAgain(cred keystore.Credential) (keystore.Credential, error) {
+	switch cred.(type) {
+	case keystore.RecoveryCredential:
+		rk, err := cer.askRecoveryKey(CodeAuth)
+		if err != nil {
+			return nil, err
+		}
+		return keystore.RecoveryCredential{Key: rk}, nil
+	case keystore.PasswordCredential:
+		pw, err := cer.askNote("password", StepPassword, PINStatus{}, CodeAuth)
+		if err != nil {
+			return nil, err
+		}
+		return keystore.PasswordCredential{Password: pw}, nil
+	}
+	return nil, coded(CodeParams)
 }
 
 // awayRetryMax bounds the pause between attempts at a key that is gone

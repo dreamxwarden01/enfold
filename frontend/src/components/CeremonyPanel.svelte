@@ -7,6 +7,7 @@
   import { codeText, retriesText, stepText } from "../lib/strings";
   import { motion } from "../lib/motion";
   import SecretInput from "./SecretInput.svelte";
+  import RecoveryInput from "./RecoveryInput.svelte";
 
   interface Props {
     c: CeremonyState;
@@ -46,11 +47,11 @@
     </div>
   {:else if c.step === CeremonyStep.StepPIN && c.promptId}
     {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-    <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={copy.body} />
+    <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={copy.body} error={c.error === "token.pin" ? "Wrong PIN." : ""} />
   {:else if c.step === CeremonyStep.StepPassword && c.promptId}
-    <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : c.slotLabel ? "Password for this key" : "Vault password"} choose={c.choose} note={c.choose ? "The new way in's password. Longer is better; a passphrase of several words is best." : ""} />
+    <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : c.slotLabel ? "Password for this key" : "Vault password"} choose={c.choose} note={c.choose ? "The new way in's password. Longer is better; a passphrase of several words is best." : ""} error={c.error === "vault.auth" ? "Wrong password." : ""} />
   {:else if c.step === CeremonyStep.StepRecovery && c.promptId}
-    <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : ""} />
+    <RecoveryInput promptId={c.promptId} note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : ""} error={c.error === "vault.auth" ? "That is not this vault's recovery key. Check the digits against the paper." : ""} />
   {:else if c.step === CeremonyStep.StepManagementKey && c.promptId}
     <SecretInput kind="mgmtkey" promptId={c.promptId} label="Management key (hex)" note={copy.body} />
   {:else if c.step === CeremonyStep.StepBlocked}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, requiredProblem, secretProblem, secretRule } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem } from "./validate";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -33,5 +33,18 @@ describe("secretProblem", () => {
   it("requires a name once whitespace is gone", () => {
     expect(requiredProblem("   ")).toBe(REQUIRED);
     expect(requiredProblem("Mine")).toBe("");
+  });
+});
+
+describe("recoveryGroupProblem", () => {
+  it("passes a finished group only when its checksum holds", () => {
+    expect(recoveryGroupProblem("")).toBe("");
+    expect(recoveryGroupProblem("12345")).toBe("");
+    expect(recoveryGroupProblem("000000")).toBe("");
+    expect(recoveryGroupProblem("000011")).toBe("");
+    expect(recoveryGroupProblem("720885")).toBe("");
+    expect(recoveryGroupProblem("000001")).toBe(GROUP_MISTYPED);
+    expect(recoveryGroupProblem("720896")).toBe(GROUP_MISTYPED);
+    expect(recoveryGroupProblem("12a456")).toBe(GROUP_MISTYPED);
   });
 });

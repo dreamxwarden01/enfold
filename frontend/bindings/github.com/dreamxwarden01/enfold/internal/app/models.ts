@@ -245,6 +245,11 @@ export enum Code {
     CodeTokenNoKey = "token.no_key",
     CodeTokenNotUsable = "token.not_usable",
     CodeTokenPIN = "token.pin",
+
+    /**
+     * the key's agreement does not match its public key: not enrolled
+     */
+    CodeTokenProof = "token.proof",
     CodeTokenPINBlocked = "token.pin_blocked",
     CodeTokenPINAgain = "token.pin_required",
     CodeTokenTouch = "token.touch",

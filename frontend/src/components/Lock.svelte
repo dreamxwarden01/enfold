@@ -10,6 +10,7 @@
   import { samePath } from "../lib/paths";
   import { firstRunCard } from "../lib/firstrun";
   import SecretInput from "./SecretInput.svelte";
+  import RecoveryInput from "./RecoveryInput.svelte";
   import Dialog from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
   import ImportDialog from "./ImportDialog.svelte";
@@ -184,7 +185,8 @@
       // before the kind was switched; entangling is a token's option only.
       // Elsewhere, a file already at the chosen place is retired as a
       // dated copy — the save dialog asked about it; here, the tick.
-      await Vault.CreateVault(rebuild ? dest : createPath, createName, createKind, createKind === "token" ? createLabel || "YubiKey" : "Password", createKind === "token" && createEntangle, createReplaces ? createConfirm : !!createPath);
+      // A key's label left empty becomes its serial number in the core.
+      await Vault.CreateVault(rebuild ? dest : createPath, createName, createKind, createKind === "token" ? createLabel : "Password", createKind === "token" && createEntangle, createReplaces ? createConfirm : !!createPath);
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }
@@ -382,12 +384,12 @@
             {#if c.step === CeremonyStep.StepPIN}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
               <div class="u-meta q gap">Matched a slot in this keystore.</div>
-              <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={stepText(c.step).body} button="Unlock" />
+              <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={stepText(c.step).body} button="Unlock" error={c.error === "token.pin" ? "Wrong PIN." : ""} />
             {:else if c.step === CeremonyStep.StepPassword}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} choose={c.choose} note={c.choose ? "Longer is better; a passphrase of several words is best." : ""} button={c.choose || c.kind !== "unlock" ? "Continue" : "Unlock"} />
+              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} choose={c.choose} note={c.choose ? "Longer is better; a passphrase of several words is best." : ""} button={c.choose || c.kind !== "unlock" ? "Continue" : "Unlock"} error={c.error === "vault.auth" ? "Wrong password." : ""} />
             {:else if c.step === CeremonyStep.StepRecovery}
-              <SecretInput kind="recovery" promptId={c.promptId} label="Recovery key" note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : ""} button={c.kind === "verify" ? "Check" : c.kind === "unlock" ? "Unlock" : "Continue"} />
+              <RecoveryInput promptId={c.promptId} note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : ""} button={c.kind === "verify" ? "Check" : c.kind === "unlock" ? "Unlock" : "Continue"} error={c.error === "vault.auth" ? "That is not this vault's recovery key. Check the digits against the paper." : ""} />
             {:else if c.step === CeremonyStep.StepManagementKey}
               <SecretInput kind="mgmtkey" promptId={c.promptId} label="Management key (hex)" note={stepText(c.step).body} />
             {/if}

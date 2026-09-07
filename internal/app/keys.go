@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/subtle"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -195,7 +199,7 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 		return nil, nil, err
 	}
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-	unl, err := ks.Unlock(keystore.PasswordCredential{Password: pw})
+	unl, err := cer.unlockWith(ks, keystore.PasswordCredential{Password: pw}, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -216,8 +220,8 @@ func (c *Core) afterMutation() {
 // BeginEnroll adds a slot after a ceremony for the VMK; for a token, the
 // token flow follows (APP.md §3, Keys).
 func (c *Core) BeginEnroll(o EnrollOptions) *Error {
-	if o.Label == "" {
-		return coded(CodeParams)
+	if o.Label == "" && o.Kind == EnrollRecovery {
+		return coded(CodeParams) // a key's label defaults to its serial, a password's to "Password"
 	}
 	switch o.Kind {
 	case EnrollToken:
@@ -239,7 +243,7 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 			if err != nil {
 				return err
 			}
-			spec = keystore.PasswordSlot{Password: pw, Argon2: defaultArgon2, Label: o.Label}
+			spec = keystore.PasswordSlot{Password: pw, Argon2: defaultArgon2, Label: mustString(o.Label, "Password")}
 		case EnrollRecovery:
 			rk, err := kdf.NewRecoveryKey()
 			if err != nil {
@@ -274,11 +278,11 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 				}
 				hs.Password, hs.Argon2 = pw, defaultArgon2
 			}
-			pub, err := cer.enrollToken(unlockPub)
+			pub, serial, err := cer.enrollToken(unlockPub, o.Label)
 			if err != nil {
 				return err
 			}
-			hs.PublicKey = pub
+			hs.PublicKey, hs.Label = pub, mustString(o.Label, keyName(serial))
 			spec = hs
 		}
 		if err := cer.check(); err != nil {
@@ -316,7 +320,7 @@ func (cer *ceremony) releaseUnlocking() []byte {
 // 9d or generate one in the first empty slot. Waiting for the unlocking
 // key to leave is what keeps it from being re-opened and enrolled twice by
 // accident.
-func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
+func (cer *ceremony) enrollToken(unlockPub []byte, label string) ([]byte, uint32, error) {
 	cer.c.mu.Lock()
 	remove := cer.unlockLabel
 	cer.c.mu.Unlock()
@@ -328,7 +332,7 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 	})
 	if unlockPub != nil {
 		if err := cer.waitForOtherKey(unlockPub); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		cer.set(func(s *CeremonyState) { s.Step, s.RemoveLabel = StepSwapKey, "" })
 	}
@@ -336,44 +340,120 @@ func (cer *ceremony) enrollToken(unlockPub []byte) ([]byte, error) {
 	defer deadline.Stop()
 	delay := readerPoll
 	for {
-		pub, err := cer.enrollOnce()
+		pub, serial, err := cer.enrollOnce(label)
 		if err == nil || !keyGone(err) {
-			return pub, err
+			return pub, serial, err
 		}
-		// Pulled during the PIN or the management key: waited for again.
+		// Pulled during the PIN, the management key or the proof: waited
+		// for again.
 		if err := cer.awayAndWait(err, delay); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		delay = min(delay*2, awayRetryMax)
 	}
 }
 
+// keyName is a token's label when the user gave none: its serial number,
+// which tells one YubiKey from another.
+func keyName(serial uint32) string { return fmt.Sprintf("YubiKey %d", serial) }
+
 // enrollOnce is one attempt at the key to enrol: wait for it, open it,
-// reuse or generate.
-func (cer *ceremony) enrollOnce() ([]byte, error) {
+// reuse or generate, and have it prove itself. The serial comes back with
+// the key, to name it.
+func (cer *ceremony) enrollOnce(label string) ([]byte, uint32, error) {
 	reader, err := cer.waitForOneReader()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	card, err := cer.openCard(reader)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	pub, err := cer.enrollOn(card)
+	serial := card.Serial()
+	pub, err := cer.enrollOn(card, mustString(label, keyName(serial)))
 	if keyGone(err) {
 		// The key is not there to reset: a close that reported it would
 		// warn of a verified state the pull took with it.
 		cer.unhold(card)
 		card.Close()
-		return nil, err
+		return nil, 0, err
 	}
 	cer.closeCard(card)
-	return pub, err
+	return pub, serial, err
 }
 
 // enrollOn is enrollOnce's work on the open card: reuse a usable key in
-// 9d, else generate one in the first empty slot.
-func (cer *ceremony) enrollOn(card Card) ([]byte, error) {
+// 9d, else generate one in the first empty slot — and then the key
+// proves itself, whichever it was (proveKey): enrolling a key is a
+// ceremony the user performs, never something a key in the reader
+// undergoes by itself.
+func (cer *ceremony) enrollOn(card Card, label string) ([]byte, error) {
+	pub, err := cer.keyToEnroll(card)
+	if err != nil {
+		return nil, err
+	}
+	if err := cer.proveKey(card, pub, label); err != nil {
+		return nil, err
+	}
+	return pub, nil
+}
+
+// proveKey has the key prove itself before the vault depends on it (APP.md
+// §3 Keys): its PIN and its touch, and an agreement checked against its
+// public key — so a key that does not work is never enrolled, and a key
+// is never enrolled without the hand that holds it.
+func (cer *ceremony) proveKey(card Card, pub []byte, label string) error {
+	peer, err := ecdh.P256().NewPublicKey(pub)
+	if err != nil {
+		return fmt.Errorf("%w: the key's public key: %v", ErrTokenUnsupported, err)
+	}
+	eph, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	want, err := eph.ECDH(peer)
+	if err != nil {
+		return err
+	}
+	defer kdf.Zero(want)
+	tok, err := card.Token(pub, &ceremonyPrompter{cer: cer, label: label})
+	if err != nil {
+		if errors.Is(err, ErrTokenNotUsable) {
+			return &parkAt{StepFailed, CodeTokenNotUsable}
+		}
+		return err
+	}
+	for {
+		got, err := tok.ECDH(eph.PublicKey().Bytes())
+		if err == nil {
+			same := subtle.ConstantTimeCompare(got, want) == 1
+			kdf.Zero(got)
+			if !same {
+				cer.c.log("ceremony %s: the key's agreement does not match its public key", cer.kind)
+				return &parkAt{StepFailed, CodeTokenProof}
+			}
+			cer.c.log("ceremony %s: the key proved itself", cer.kind)
+			return nil
+		}
+		var pe *TokenPINError
+		switch {
+		case errors.As(err, &pe):
+			cer.notePINWrong()
+			continue
+		case errors.Is(err, ErrTokenTouch), errors.Is(err, ErrTokenPINRequired):
+			continue
+		case errors.Is(err, ErrTokenPINBlocked):
+			return &parkAt{StepBlocked, CodeTokenPINBlocked}
+		case errors.Is(err, ErrTokenTooMany):
+			return &parkAt{StepFailed, CodeTokenTooMany}
+		}
+		return err
+	}
+}
+
+// keyToEnroll is the key the card will be enrolled with: a usable key
+// already in 9d, else one generated in the first empty slot.
+func (cer *ceremony) keyToEnroll(card Card) ([]byte, error) {
 	keys, err := card.Keys()
 	if err != nil {
 		cer.c.log("ceremony %s: reading the keys: %v", cer.kind, err)

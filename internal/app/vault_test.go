@@ -92,7 +92,11 @@ func TestNothingStagedIsClean(t *testing.T) {
 		t.Fatalf("un-staging the last add left the archive dirty: %+v", st)
 	}
 	// Verify is allowed again on a clean archive.
-	if _, e := h.c.Verify(id); e != nil {
+	opID, e := h.c.Verify(id)
+	if e != nil {
 		t.Fatalf("verify: %v", e)
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != "" {
+		t.Fatalf("verify op: %+v", o)
 	}
 }

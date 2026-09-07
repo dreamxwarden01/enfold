@@ -15,7 +15,7 @@ state = {
         "rotationPending": False, "tampered": False, "warnings": [], "ops": [], "openArchives": 0,
         "dirtyArchives": 0, "hasPasswordSlot": False, "hasHardwareSlot": True,
         "setupNeeded": False, "defaultPath": "C:/Users/me/AppData/Local/Enfold/vault.eks", "missingPath": "",
-        "keptElsewhere": True, "retiredCopies": 0, "retiredPath": "",
+        "keptElsewhere": True, "retiredCopies": 0, "retiredPath": "", "damaged": False, "damagedCopyPath": "",
     },
     "archives": [
         {"id": "a1" * 16, "name": "Photos 2024", "path": "D:/Archives/photos-2024.efd", "storedSize": 51_700_000_000,
@@ -48,7 +48,8 @@ state = {
     "slots": [
         {"recipientId": "01" * 16, "type": "hardware", "label": "YubiKey 5C — desk", "createdAt": NOW - 600000, "entangled": False, "stale": False},
         {"recipientId": "02" * 16, "type": "hardware", "label": "YubiKey 5 NFC — travel", "createdAt": NOW - 500000, "entangled": True, "stale": True},
-        {"recipientId": "03" * 16, "type": "recovery", "label": "Recovery key — printed, in the safe", "createdAt": NOW - 600000, "entangled": False, "stale": False},
+        {"recipientId": "03" * 16, "type": "recovery", "label": "Recovery key — printed, in the safe", "createdAt": NOW - 600000, "entangled": False, "stale": False, "escrowed": True},
+        {"recipientId": "04" * 16, "type": "recovery", "label": "Recovery key — the first one", "createdAt": NOW - 900000, "entangled": False, "stale": False, "escrowed": False},
     ],
     "settings": {"vaultPath": "D:/Vaults/personal.eks", "displayName": "Personal vault", "closeToTray": "destroy", "theme": "system",
                  "look": "native", "recoveryRecordPct": 3, "dictionaryBelow": 262144, "idleMinutes": 0, "absoluteMinutes": 0,

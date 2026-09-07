@@ -2738,6 +2738,26 @@ context means a remote session without redirection; a key whose PIN policy is *a
 for its PIN at the continuation, as its policy means; and `pendingTouch` has a line on the
 lock screen only — elsewhere the next ceremony's own note says it.
 
+**Verified** (four Opus lenses over the commit, each finding refuted or confirmed by a second
+agent; the ownership, security and piv lenses found the handover race-free, the release
+exactly-once and the tables right). Three things fixed after it. *The exit missed a touch it
+had itself cancelled:* the shutdown waited for a ceremony's goroutine only when it held the
+handle or was installing, but an unlock's card call becomes the pending touch only when the
+cancelled ceremony disowns it, so a quit while the key blinked returned before there was
+anything to wait for — measured 25 of 25 runs — and the card was left PIN-verified after all;
+the exit now waits for any live ceremony's end first (microseconds, since a cancel is
+immediate), then for the pending touch. *The adopted panel said "deriving":* the unlock's
+Deriving step was set after the adoption as for any credential, and the adopted attempt, already
+inside its card call, fires no touch prompt again, so the page showed a static ring where the
+docs promise the touch; the Deriving step is skipped for an adopted attempt. *A backup import
+whose enrolment proof was cancelled at its touch leaked the staged copy and its exclusive
+handle:* the proof's attempt was built by hand without the ceremony's cleanup and holds no
+handle, so nobody closed the copy or removed it; the ceremony's cleanup now rides on every
+attempt it starts, run only when the attempt ends unowned, and the import closes the handle a
+proof's attempt does not hold. Smaller: the lock screen's quiet line had taken the global
+`.pending` banner class; §6 said a create waits where it is in fact answered with
+`token.pending`.
+
 The "something went wrong" was three return codes the log caught in the pull's half-beat:
 `ERROR_GEN_FAILURE` from piv-go's VERIFY, `ERROR_BAD_COMMAND` from the package's own preflight,
 and `SCARD_E_NO_SERVICE` when the release tried to reset a card whose reader had taken the

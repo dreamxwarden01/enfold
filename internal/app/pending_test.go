@@ -106,6 +106,12 @@ func TestPendingTouchIsAdoptedByAnUnlock(t *testing.T) {
 	if h.status().PendingTouch {
 		t.Fatal("still pending after the adoption")
 	}
+	// The panel stays at the touch while the key blinks: nothing after the
+	// adoption says "deriving".
+	time.Sleep(100 * time.Millisecond)
+	if cs := h.status().Ceremony; cs == nil || cs.Step != StepTouch || cs.N != 1 {
+		t.Fatalf("the adopted panel left the touch: %+v", cs)
+	}
 	card.press()
 	h.rec.waitCeremony(t, StepDone, false)
 	h.rec.waitState(t, StateUnlocked)
@@ -346,6 +352,73 @@ func TestExitWaitsForThePendingTouch(t *testing.T) {
 	h.c.ResolveForShutdown(time.Second)
 	if card.closeCount() != 1 {
 		t.Fatalf("the exit did not wait for the card's release: %d closes after %v", card.closeCount(), time.Since(started))
+	}
+}
+
+// The exit cancels a ceremony whose touch nobody had cancelled — the
+// common case: quit from the tray while the key blinks — and still
+// waits for the card's answer and release.
+func TestExitWaitsForAnOwnedTouch(t *testing.T) {
+	h, card := heldUnlock(t)
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		card.giveUp()
+	}()
+	h.c.ResolveForShutdown(time.Second)
+	if card.closeCount() != 1 || h.status().PendingTouch {
+		t.Fatalf("after the exit: closes=%d pending=%v", card.closeCount(), h.status().PendingTouch)
+	}
+}
+
+// A backup import whose enrolment proof is cancelled at its touch: the
+// ceremony ends at once, the staged copy's handle is closed by whoever
+// still holds it, and the copy is removed when the pending touch ends.
+func TestDisownedProofLeavesNoStagedCopy(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	backup := h.dir + "/backup.eks"
+	exportBackup(t, h.vault, backup)
+	card := newFakeCard("123456")
+	card.addKey(0x9d, true)
+	card.holdTouch = true
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	data := t.TempDir()
+	rec := &recorder{}
+	c, err := New(Deps{Cards: cards, Events: rec, Clock: newFakeClock(), DataDir: data, Log: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Start()
+	t.Cleanup(c.Close)
+	if e := c.ImportFile(backup, "Restored", MethodRecovery, EnrollOptions{Kind: EnrollToken}, false); e != nil {
+		t.Fatal(e)
+	}
+	r := rec.waitCeremony(t, StepRecovery, true)
+	c.SubmitSecret("recovery", r.PromptID, digits(h.recovery))
+	pin := rec.waitCeremony(t, StepPIN, true)
+	c.SubmitSecret("pin", pin.PromptID, "123456")
+	rec.waitCeremony(t, StepTouch, false)
+	c.CancelUnlock()
+	if f := rec.waitCeremony(t, StepFailed, false); f.Error != CodeCancelled {
+		t.Fatalf("after the cancel: %+v", f)
+	}
+	rec.waitState(t, StateNone)
+	if !c.Status().PendingTouch {
+		t.Fatal("no pending touch")
+	}
+	card.giveUp()
+	deadline := time.Now().Add(5 * time.Second)
+	for c.Status().PendingTouch && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if c.Status().PendingTouch {
+		t.Fatal("the pending touch did not end")
+	}
+	if staged(data) {
+		t.Fatal("the staged copy was left behind")
+	}
+	if card.closeCount() != 1 {
+		t.Fatalf("closes: %d", card.closeCount())
 	}
 }
 

@@ -700,9 +700,10 @@ Blocked, SwapKey; secondary: recovery key, password, open a backup — never a s
 "workstation-lock detection unavailable" and BitLocker warnings; while the status says
 `pendingTouch` from a cancelled unlock, one quiet line under the key card: the key is still
 waiting for the touch that was cancelled — unlock again to pick it up, or touch it or pull it
-out to end it; that line is the lock screen's only, and on the Keys page and the first-run card
-the pending touch left by a cancelled slot change, reveal or create is said by the next
-ceremony's own `token.pending` note while it waits). Archives (list with details
+out to end it; that line is the lock screen's only: on the Keys page the pending touch left by a
+cancelled slot change or reveal is said by the next ceremony's own `token.pending` note while it
+waits, and on the first-run card a create or an import begun while a cancelled create's touch
+stands is answered with `token.pending`, a toast). Archives (list with details
 pane, commands Open / New archive / Compact / Rotate key / Verify / Hide, the deferred-rotation
 banner, the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
 projection, paged table with pending markers, preview pane — image, video, audio through the

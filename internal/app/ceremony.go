@@ -920,11 +920,11 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential)
 func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.HardwareCredential) (*keystore.Unlocked, error) {
 	c := cer.c
 	c.mu.Lock()
-	a, p, slot, card, cleanup := cer.att, cer.prompter, cer.slot, cer.held, cer.cleanup
+	a, p, slot, card := cer.att, cer.prompter, cer.slot, cer.held
 	cer.prompter = nil
 	c.mu.Unlock()
 	if a == nil {
-		a = &attempt{path: cer.vaultPath(), slot: slot, card: card, ks: ks, ownsKS: own, vaultHandle: !own, hc: hc, prompter: p, cleanup: cleanup}
+		a = &attempt{path: cer.vaultPath(), slot: slot, card: card, ks: ks, ownsKS: own, vaultHandle: !own, hc: hc, prompter: p}
 		a.op = func() (*keystore.Unlocked, error) { return ks.Unlock(a.credential()) }
 		cer.startAttempt(a)
 	}
@@ -1182,7 +1182,11 @@ func (cer *ceremony) away(err error) error {
 // unlockFile derives the VMK from an open file, mapping a refusal to the
 // park the user must act on. The caller closes ks on error.
 func (cer *ceremony) unlockFile(ks *keystore.Keystore, cred keystore.Credential, hc *keystore.HardwareCredential) (*keystore.Unlocked, error) {
-	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+	if cer.adopted() == nil {
+		// An adopted attempt is at its touch already, and the panel says
+		// so; the derivation is not begun until the card answers.
+		cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+	}
 	var unl *keystore.Unlocked
 	var err error
 	if hc != nil {

@@ -513,7 +513,13 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 		}
 		if err != nil {
 			if errors.Is(err, errDisowned) {
+				// An unlock's attempt holds the handle and removes the copy
+				// at its end; a proof's holds only the card, so the handle
+				// is closed here and the attempt removes the copy after.
 				disowned = true
+				if !cer.pendingOwns(ks) {
+					ks.Close()
+				}
 				return err
 			}
 			ks.Close()

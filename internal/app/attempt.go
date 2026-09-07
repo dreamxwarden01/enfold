@@ -77,9 +77,31 @@ func (cer *ceremony) startAttempt(a *attempt) *attempt {
 	if a.prompter != nil {
 		a.prompter.attach(cer, a)
 	}
+	// What the ceremony would clean up at its end — an import's staged
+	// copy — is the attempt's to do instead when the attempt outlives
+	// the ceremony; an attempt that ends owned runs no cleanup, and the
+	// ceremony's own runs as before.
+	if own, prev := cer.cleanup, a.cleanup; own != nil {
+		a.cleanup = func() {
+			if prev != nil {
+				prev()
+			}
+			own()
+		}
+	}
 	cer.c.mu.Unlock()
 	go a.run()
 	return a
+}
+
+// pendingOwns says whether the pending touch holds ks — an unlock's
+// attempt owns the handle it was given; a proof's holds only the card —
+// so that a ceremony ending disowned closes exactly what is still its own.
+func (cer *ceremony) pendingOwns(ks *keystore.Keystore) bool {
+	c := cer.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pending != nil && c.pending.ownsKS && c.pending.ks == ks
 }
 
 // run is the attempt's goroutine: the agreement until it succeeds or

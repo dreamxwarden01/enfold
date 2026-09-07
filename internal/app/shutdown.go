@@ -21,10 +21,14 @@ func (c *Core) ResolveForShutdown(budget time.Duration) {
 		cer.cancel()
 	}
 	c.mu.Unlock()
-	if cer != nil && (cer.mutation || cer.commits) {
+	if cer != nil {
 		// A slot change holds the handle; the receipts below would be
 		// refused while it exists. An install must finish or not start.
-		// It is cancelled: wait for its end, within the budget.
+		// And any ceremony's card call becomes the pending touch only when
+		// the cancelled ceremony disowns it (APP.md §2.2), which the wait
+		// for that touch below must come after. It is cancelled: wait for
+		// its end, within the budget — a cancel is immediate in every
+		// step, so this is microseconds unless a derivation is running.
 		select {
 		case <-cer.done:
 		case <-time.After(budget / 2):

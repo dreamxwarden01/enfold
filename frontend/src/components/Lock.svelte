@@ -322,7 +322,7 @@
             {#if setupNeeded}
               <div class="u-meta q">This vault has only its recovery key so far. Choose the first way in; the recovery key is asked for first.</div>
             {:else if st?.lastUnlockedAt}<div class="u-meta q">Last unlocked {dateTime(st.lastUnlockedAt)}</div>{/if}
-            {#if st?.pendingTouch}<div class="u-meta q pending">The key is still waiting for the touch you cancelled. Unlock again to pick it up, or touch it or pull it out to end it.</div>{/if}
+            {#if st?.pendingTouch}<div class="u-meta q pendingline">The key is still waiting for the touch you cancelled. Unlock again to pick it up, or touch it or pull it out to end it.</div>{/if}
             {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
               <div class="bar danger u-bar"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
             {:else if outcome?.kind === "import"}
@@ -504,4 +504,5 @@
   .k-ring { fill: var(--accent-wash); stroke: var(--accent); }
   .k-dot { fill: var(--accent); }
   .k-lines { stroke: var(--ink-3); }
+  .pendingline { margin-top: 6px; max-width: 34em; }
 </style>

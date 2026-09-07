@@ -799,7 +799,15 @@ Correct in this document, and easy to lose during implementation.
     and on the ECDH path it asks the card afterwards with the retry-free empty VERIFY: still
     verified means the touch (`ErrTouch`), not verified means the PIN (`ErrPINRequired`). Do not
     quote a touch timeout: Yubico documents 15 s only for the *cached* touch window; the wait for
-    a touch is observed, not specified.
+    a touch is observed, not specified — 14.3 s on a 5.7.4 (2026-09-07). **A touch wait cannot be
+    cut short from the host.** Measured with `tools/pivtool touchabort` on the test key: while
+    the GENERAL AUTHENTICATE waits for the touch, `SCardCancel` on the context is accepted and
+    does nothing to the transmit, and `SCardDisconnect` — with a reset or without — from another
+    thread queues behind the transmit and returns with it, when the key gives up. Yubico's .NET
+    SDK says of its own touch notification that "there is no cancelling", only the timeout. FIDO
+    cancels at once because CTAPHID has a cancel message; CCID has no counterpart. So a cancel during the
+    touch is honoured when the card answers, and the page tells the user the two ways to make it
+    answer now: touch the key, or pull it out.
 24. **piv-go's `Open` leaks an exclusive connection** when the card is pulled between connect
     and transaction, or when the PIV SELECT fails (v2.6.0 `piv.go:172–179`) — the handle is
     unexported, and the lock lasts until the process exits, a tray process's lifetime. Every

@@ -15,6 +15,7 @@
 //	pivtool resetcheck [-reader NAME]
 //	pivtool idle [-seconds N] [-keepalive S] [-verify] [-verify-after] [-default-pin]
 //	pivtool busy [-rounds N] [-verify]
+//	pivtool touchabort [-mode cancel|reset|close] [-after N] [-default-pin]
 //
 // -default-pin answers a test key's factory PIN (and management key) without
 // asking; it is for a key the user has handed over as a test key, never for
@@ -61,6 +62,8 @@ func main() {
 		err = cmdIdle(os.Args[2:])
 	case "busy":
 		err = cmdBusy(os.Args[2:])
+	case "touchabort":
+		err = cmdTouchAbort(os.Args[2:])
 	default:
 		usage()
 	}
@@ -71,7 +74,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME] | idle [-seconds N] [-keepalive S] [-verify] [-default-pin] | busy [-rounds N]")
+	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME] | idle [-seconds N] [-keepalive S] [-verify] [-default-pin] | busy [-rounds N] | touchabort [-mode cancel|reset|close] [-after N] [-default-pin]")
 	os.Exit(2)
 }
 
@@ -335,6 +338,9 @@ type terminalPrompter struct {
 	// without asking: a test key only.
 	slow       time.Duration
 	defaultPIN bool
+	// noTouch: the experiment wants the touch wait to run out, or to be
+	// interrupted — the prompt says so.
+	noTouch bool
 }
 
 func (p terminalPrompter) PIN(st piv.PINStatus) (string, error) {
@@ -353,7 +359,11 @@ func (p terminalPrompter) PIN(st piv.PINStatus) (string, error) {
 	}
 }
 
-func (terminalPrompter) Touch(req piv.TouchRequest) {
+func (p terminalPrompter) Touch(req piv.TouchRequest) {
+	if p.noTouch {
+		fmt.Fprintf(os.Stderr, ">>> the key is waiting for a touch: do NOT touch it (operation %d on slot %s)\n", req.N, req.Slot)
+		return
+	}
 	fmt.Fprintf(os.Stderr, ">>> touch the YubiKey now (operation %d on slot %s)\n", req.N, req.Slot)
 }
 
@@ -606,4 +616,90 @@ func readSecretOr(useDefault bool, value, prompt string) (string, error) {
 		return value, nil
 	}
 	return readSecret(prompt)
+}
+
+// testKeySerial is the one key touchabort may run on: the user's test key,
+// whose PIV module is free to experiment with (DECISIONS 2026-09-07).
+const testKeySerial = 35678166
+
+// cmdTouchAbort measures whether a touch wait can be cut short from another
+// goroutine (DESIGN.md §11 trap 23): the ECDH on the slot is started, the
+// key blinks for a touch nobody gives, and after -after seconds the
+// connection under it is interrupted the -mode way. Reported: when the
+// blocked ECDH returned and with what, and whether the key reopens.
+func cmdTouchAbort(args []string) error {
+	fs := flag.NewFlagSet("touchabort", flag.ExitOnError)
+	reader := fs.String("reader", "", "reader name (default: the only one)")
+	slotArg := fs.String("slot", "9d", "slot in hex")
+	mode := fs.String("mode", "cancel", "cancel (SCardCancel on the context) | reset (SCardDisconnect with a reset, from another thread) | close (piv-go's Close)")
+	after := fs.Int("after", 2, "seconds into the touch wait before interrupting")
+	defaultPIN := fs.Bool("default-pin", false, "answer the factory PIN 123456 without asking (a test key only)")
+	fs.Parse(args)
+	slot, err := parseSlot(*slotArg)
+	if err != nil {
+		return err
+	}
+	c, err := open(*reader)
+	if err != nil {
+		return err
+	}
+	if c.Serial() != testKeySerial {
+		closeCard(c)
+		return fmt.Errorf("serial %d is not the test key (%d): refusing to experiment on it", c.Serial(), testKeySerial)
+	}
+	info, err := c.Inspect(slot)
+	if err != nil {
+		closeCard(c)
+		return err
+	}
+	printKey(info)
+	tok, err := c.Token(info.PublicKey, terminalPrompter{defaultPIN: *defaultPIN, noTouch: true})
+	if err != nil {
+		closeCard(c)
+		return err
+	}
+	eph, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		closeCard(c)
+		return err
+	}
+	type result struct {
+		at  time.Duration
+		err error
+	}
+	t0 := time.Now()
+	done := make(chan result, 1)
+	go func() {
+		_, err := tok.ECDH(eph.PublicKey().Bytes())
+		done <- result{time.Since(t0), err}
+	}()
+	select {
+	case r := <-done:
+		fmt.Printf("t=%v ECDH returned before the interrupt: err=%v\n", r.at.Round(time.Millisecond), r.err)
+		closeCard(c)
+		return nil
+	case <-time.After(time.Duration(*after) * time.Second):
+	}
+	fmt.Printf("t=%v interrupting: %s\n", time.Since(t0).Round(time.Millisecond), *mode)
+	ierr := c.Interrupt(piv.InterruptMode(*mode))
+	fmt.Printf("t=%v interrupt returned: err=%v\n", time.Since(t0).Round(time.Millisecond), ierr)
+	select {
+	case r := <-done:
+		fmt.Printf("t=%v ECDH returned %v after the interrupt: err=%v\n", r.at.Round(time.Millisecond), (r.at - time.Duration(*after)*time.Second).Round(time.Millisecond), r.err)
+	case <-time.After(40 * time.Second):
+		fmt.Println("ECDH still blocked 40 s after the interrupt")
+	}
+	if *mode != string(piv.InterruptClose) {
+		fmt.Printf("releasing piv-go's connection: err=%v\n", c.Interrupt(piv.InterruptClose))
+	}
+	// Does the key come back, and in what state?
+	time.Sleep(500 * time.Millisecond)
+	c2, err := open(*reader)
+	if err != nil {
+		return fmt.Errorf("reopen after the interrupt: %w", err)
+	}
+	defer closeCard(c2)
+	st, err := printPINState(c2)
+	fmt.Printf("reopened: verified=%v retries=%d err=%v\n", st.Verified, st.Retries, err)
+	return nil
 }

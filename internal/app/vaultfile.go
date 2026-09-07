@@ -543,7 +543,9 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 		if err != nil && hc != nil && keyGone(err) {
 			cer.unhold(card)
 			card.Close()
-			cer.awayNote(err)
+			if err := cer.away(err); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		cer.closeCard(card)

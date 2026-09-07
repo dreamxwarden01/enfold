@@ -968,7 +968,9 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 				// The key went during the PIN or the touch: back to waiting.
 				cer.unhold(card)
 				card.Close()
-				cer.awayNote(err)
+				if err := cer.away(err); err != nil {
+					return err
+				}
 				continue
 			}
 			cer.closeCard(card)
@@ -1097,8 +1099,22 @@ func (cer *ceremony) tokenCredential(slots []keystore.SlotInfo) (keystore.Hardwa
 // awayAndWait notes that the key went away and pauses before the next
 // attempt; ErrTokenCancelled when the ceremony ended meanwhile.
 func (cer *ceremony) awayAndWait(err error, delay time.Duration) error {
-	cer.awayNote(err)
+	if err := cer.away(err); err != nil {
+		return err
+	}
 	return cer.wait(delay)
+}
+
+// away notes that the key went away — unless the ceremony was cancelled
+// meanwhile, in which case the cancel wins: pulling the key is one way to
+// end a touch wait that a cancel cannot cut short (DESIGN.md §11 trap
+// 23), and the strip must not say "insert it again" then.
+func (cer *ceremony) away(err error) error {
+	if e := cer.check(); e != nil {
+		return e
+	}
+	cer.awayNote(err)
+	return nil
 }
 
 // unlockFile derives the VMK from an open file, mapping a refusal to the

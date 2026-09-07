@@ -417,6 +417,7 @@
               <div class="rings live" aria-hidden="true"><span></span><span></span><span></span><div class="core"><svg viewBox="0 0 20 20"><use href="#i-touchdot" /></svg></div></div>
               <h2 class="touch-lead">{stepText(c.step).title}</h2>
               <p class="touch-sub">{stepText(c.step).body}</p>
+              {#if c.cancelling}<p class="touch-sub">Cancelling. Touch the key, or pull it out, to end the wait now; left alone it gives up in about 15 seconds.</p>{/if}
               <div class="touch-slot"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.pinAsked ? "PIN accepted" : "Touch"}{c.slotLabel ? ` · ${c.slotLabel}` : ""}{c.n > 1 ? ` · touch ${c.n}` : ""}</div>
             {:else}
               <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core"><svg viewBox="0 0 20 20"><use href="#i-check" /></svg></div></div>

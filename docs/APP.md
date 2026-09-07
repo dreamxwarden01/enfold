@@ -285,12 +285,13 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   prompter selects on the context and returns an error, which `piv` turns into `ErrCancelled`
   at no cost in retries. The deadline is on the *prompt wait* and on `WaitingForKey` — the
   session's absolute default — never on the card call itself, which cannot be interrupted. A
-  cancel during a card call — the touch — takes effect when the card answers (a YubiKey gives up
-  waiting for a touch on its own, after a while it does not document; DESIGN trap 23): the state
-  says `Cancelling` meanwhile, the panel's Cancel is spent, and every retry loop checks the
-  cancellation before asking the card again, so a cancelled ceremony never prompts a second
-  touch. A ceremony that ends cancelled is gone from the page at once — nothing to read, nothing
-  to close.
+  cancel during a card call — the touch — takes effect when the card answers: measured, no PC/SC
+  call cuts the wait short (DESIGN trap 23), and a YubiKey gives up on its own after about 14 s.
+  The state says `Cancelling` meanwhile, the panel's Cancel is spent, the touch step names the
+  two ways to make the card answer now — touch the key, or pull it out (the cancel wins over the
+  "insert it again" note then) — and every retry loop checks the cancellation before asking the
+  card again, so a cancelled ceremony never prompts a second touch. A ceremony that ends
+  cancelled is gone from the page at once — nothing to read, nothing to close.
 - Touch: `Prompter.Touch` fires `vault.ceremony {Step: touch, N}`; the panel takes over.
 - **A wrong secret is said, in place.** A refused PIN makes the next PIN prompt carry
   `token.pin` as its note beside the count; a wrong password or mistyped recovery digits

@@ -188,7 +188,9 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 				// Pulled during the PIN or the touch: back to waiting.
 				cer.unhold(card)
 				card.Close()
-				cer.awayNote(err)
+				if err := cer.away(err); err != nil {
+					return nil, nil, err
+				}
 				continue
 			}
 			cer.closeCard(card) // released before any park

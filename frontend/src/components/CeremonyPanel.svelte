@@ -44,7 +44,7 @@
       <h3 class="touch-lead">{copy.title}</h3>
       <p class="touch-sub">{copy.body}</p>
       {#if c.n > 1}<p class="touch-sub num">Touch {c.n} of this key handle</p>{/if}
-      {#if c.cancelling}<p class="touch-sub">Cancelling — the key gives up waiting for a touch on its own, in a moment.</p>{/if}
+      {#if c.cancelling}<p class="touch-sub">Cancelling. Touch the key, or pull it out, to end the wait now; left alone it gives up in about 15 seconds.</p>{/if}
     </div>
   {:else if c.step === CeremonyStep.StepPIN && c.promptId}
     {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}

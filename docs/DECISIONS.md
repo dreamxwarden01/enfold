@@ -2655,3 +2655,31 @@ password other than the one that unlocked waits for its password. The dialog box
 theme's focus ring when focus moved into it — a black frame, and one every dialog showed at a
 Shift press; the box is not a control and wears none now, while its buttons and fields keep
 theirs.
+
+---
+
+## 2026-09-07 — Measured: a PIV touch wait cannot be cut short from the host
+
+The user cancelled Windows' own FIDO prompt mid-touch and the key's light stopped at once, and
+asked whether PIV could do the same — and, if no command interrupts the wait, whether a power or
+session reset could. Measured on the test key (`tools/pivtool touchabort`, YubiKey 5.7.4), with
+the GENERAL AUTHENTICATE blocked on a touch nobody gave: `SCardCancel` on piv-go's context —
+accepted, no effect, the transmit returned with the key's own 6982 at 14.3 s; `SCardDisconnect`
+with `SCARD_RESET_CARD` from another thread — the resource manager queued it behind the
+transmit, and both returned at 14.3 s; piv-go's own `Close` (disconnect and release) — the
+same. FIDO's instant cancel is `CTAPHID_CANCEL`, a message of the HID transport; CCID carries an
+APDU and waits for its answer, and PC/SC gives the caller nothing to send meanwhile. A USB-level
+power cycle would need the device to be disabled and re-enabled through PnP, which is an
+administrator's action and against the least-privilege ruling. Yubico's own SDK says the same
+of its touch notification: "this call is informative only, there is no cancelling", and an
+operation nobody touches for "times out" — the .NET SDK's KeyCollector guide
+(docs.yubico.com/yesdk, *The KeyCollector's touch notification*, read 2026-09-07); Microsoft's
+`SCardCancel` page limits it to "requests that require waiting for external action by the smart
+card or user", which in practice is `SCardGetStatusChange`.
+
+**Ruled.** The cancel is honoured when the card answers, and the page stops making the user
+stand still for it: the touch step says *touch the key, or pull it out, to end the wait now;
+left alone it gives up in about 15 seconds*. Both end the call at once — a touch completes the
+operation, whose result the cancelled ceremony discards; a pull fails it — and the cancel then
+wins over the "insert it again" note. `pivtool touchabort` and `Card.Interrupt` stay in the tree
+as the way to measure this again on other firmware.

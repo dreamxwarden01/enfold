@@ -29,6 +29,11 @@
   function str(e: Event): string {
     return (e.currentTarget as HTMLSelectElement | HTMLInputElement).value;
   }
+
+  // The foot's note (LayerFoot).
+  $effect(() => {
+    store.footNote = "Settings are machine-local; the session timeouts live in the vault.";
+  });
 </script>
 
 <div class="layer-head"><h1 class="t-title">Settings</h1></div>
@@ -106,7 +111,6 @@
   {/if}
 </div>
 
-<div class="layer-foot"><span>Settings are machine-local; the session timeouts live in the vault.</span></div>
 
 <style>
   .ks-head.top { margin-top: 12px; }

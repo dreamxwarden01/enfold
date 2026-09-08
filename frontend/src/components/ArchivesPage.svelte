@@ -3,7 +3,7 @@
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, warningCopy } from "../lib/strings";
-  import { bytes, count, countdown, dateTime, leaf } from "../lib/format";
+  import { bytes, count, dateTime, leaf } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import OpsBar from "./OpsBar.svelte";
 
@@ -88,6 +88,11 @@
     if (a.open && a.storedSize > 0 && a.freeSpace > a.storedSize * 0.3) parts.push("compact when convenient");
     return parts.join(" · ") || "—";
   }
+
+  // The foot's note (LayerFoot): what is selected, else how many there are.
+  $effect(() => {
+    store.footNote = sel ? `${sel.name} selected` : `${store.archives.length} archive(s)`;
+  });
 </script>
 
 <div class="layer-head">
@@ -186,12 +191,6 @@
   </div>
 </div>
 
-<div class="layer-foot">
-  <span>{sel ? `${sel.name} selected` : `${store.archives.length} archive(s)`}</span>
-  {#if unlocked && st}
-    <span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(st.locksAt, store.now)}<button type="button" class="btn link" onclick={() => void Vault.Lock()}>Lock now</button></span>
-  {/if}
-</div>
 
 {#if creating}
   <Dialog title="New archive" onclose={() => (creating = false)}>

@@ -300,6 +300,10 @@ class Store {
     this.setRoute(route);
   }
 
+  // footNote is what the layer's foot says on the left: the page sets it
+  // (APP.md §6).
+  footNote = $state("");
+
   // settling: the vault is Unlocked and the lock screen is still showing
   // the ceremony's end (APP.md §6, Motion).
   settling = $state(false);

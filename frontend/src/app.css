@@ -327,10 +327,12 @@ select.input { border-bottom-color: var(--ctl-bottom); border-bottom-width: 1px;
 .rail-foot { padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 8px; }
 .layer {
   background: var(--layer); border-top: 1px solid var(--stroke); border-left: 1px solid var(--stroke);
-  border-top-left-radius: var(--r-card); display: grid; min-width: 0; overflow: hidden;
+  border-top-left-radius: var(--r-card); display: grid; grid-template-rows: 1fr auto; min-width: 0; overflow: hidden;
 }
-/* Pages share the layer's one cell, so an outgoing page fades under the incoming one. */
+/* Pages share the layer's first row, so an outgoing page fades under the incoming one; the foot
+   is the second row, outside the crossfade (LayerFoot). */
 .page { grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.layer > .layer-foot { grid-row: 2; }
 .layer-head { display: flex; align-items: center; gap: 12px; padding: 18px 24px 12px; flex: none; }
 .layer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 24px; gap: 12px; overflow: auto; }
 .layer-foot {

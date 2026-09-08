@@ -3,7 +3,7 @@
   import type { FileInfo } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, warningCopy } from "../lib/strings";
-  import { countdown, date, dateTime, leaf } from "../lib/format";
+  import { date, dateTime, leaf } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
 
@@ -59,6 +59,12 @@
       fail(e);
     }
   }
+
+  // The foot's note (LayerFoot): the vault and its ways in.
+  $effect(() => {
+    const n = store.slots.length;
+    store.footNote = `${st?.displayName ?? ""} · ${n} way${n === 1 ? "" : "s"} in`;
+  });
 </script>
 
 <div class="layer-head"><h1 class="t-title">Keystore</h1>{#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>Locked</span>{/if}</div>
@@ -140,10 +146,6 @@
   </div>
 </div>
 
-<div class="layer-foot">
-  <span>{st?.displayName} · keystore {unlocked ? "unlocked" : "locked"}</span>
-  {#if unlocked && st}<span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(st.locksAt, store.now)}</span>{/if}
-</div>
 
 {#if adding}
   <Dialog title="Add a key" onclose={() => (adding = false)}>

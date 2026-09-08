@@ -240,6 +240,14 @@
   // selectedRows are the files in the selection; folders are containers
   // here, not things to extract or delete.
   const selectedRows = $derived(rows.filter((r) => !r.isFolder && selected.has(rowKey(r))));
+
+  // The foot's note (LayerFoot): the archive's figures; while the vault is
+  // locked and the archive still open, when it closes.
+  $effect(() => {
+    let note = stat ? `${count(stat.files)} files · ${bytes(stat.size)} · key v${stat.keyVersion}${stat.lastSavedAt ? ` · last saved ${dateTime(stat.lastSavedAt)}` : ""}` : "";
+    if (!alive && stat?.expiresAt) note += ` · archive closes in ${countdown(stat.expiresAt, store.now)}`;
+    store.footNote = note;
+  });
 </script>
 
 <div class="layer-head">
@@ -360,14 +368,6 @@
   </div>
 </div>
 
-<div class="layer-foot">
-  <span class="num">{stat ? `${count(stat.files)} files · ${bytes(stat.size)} · key v${stat.keyVersion}${stat.lastSavedAt ? ` · last saved ${dateTime(stat.lastSavedAt)}` : ""}` : ""}</span>
-  {#if alive && store.status}
-    <span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(store.status.locksAt, store.now)}</span>
-  {:else if stat?.expiresAt}
-    <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>Archive closes in {countdown(stat.expiresAt, store.now)}</span>
-  {/if}
-</div>
 
 {#if renaming}
   <Dialog title="Rename" onclose={() => (renaming = null)}>

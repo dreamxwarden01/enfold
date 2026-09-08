@@ -13,6 +13,7 @@
   import SettingsPage from "./components/SettingsPage.svelte";
   import RecoveryReveal from "./components/RecoveryReveal.svelte";
   import Dialog from "./components/Dialog.svelte";
+  import LayerFoot from "./components/LayerFoot.svelte";
   import { fade, fly } from "svelte/transition";
   import { motion, delay, enter, GAP, OUT, MOVE } from "./lib/motion";
 
@@ -111,6 +112,7 @@
               {/if}
             </div>
           {/key}
+          <LayerFoot {pageKey} />
         </div>
       </div>
     {/if}

@@ -833,7 +833,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
 - *Pages.* The outgoing page fades in place, fast first (80 ms); a gap later the incoming
   fades and travels 160 ms — from the right 10 px going into an archive, from the left 10 px
   coming back, up 6 px for a rail switch — in the old one's place, the layer being a grid so
-  nothing jumps.
+  nothing jumps. The layer's foot is not part of the page and does not travel with it: one bar
+  below the pages (`LayerFoot`), the page's note on the left — set by the page
+  (`store.footNote`), faded in when the page changes and updated in place otherwise — and the
+  lock state on the right, always: the open padlock, *Locks in m:ss* and *Lock now* while
+  unlocked; the closed padlock and *Unlock* while locked with archives still open.
 - *Rail.* Hover tints in over 120 ms and out over 160 ms; a press is instant (`--ctl-press`,
   the text to `--ink-2`); the current item's accent bar grows from its middle (180 ms) and the
   previous one's shrinks.

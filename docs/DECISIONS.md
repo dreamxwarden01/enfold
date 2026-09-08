@@ -2908,3 +2908,17 @@ the confirmation. *Toasts*, for whatever comes next: only for what the page cann
 place, at the top of the window and centred on it — not on the content layer — dropping in a
 few pixels as they fade and rising as they leave; the bottom-right ones of today move when next
 touched.
+
+---
+
+## 2026-09-07 — Quit goes out of sight before it waits for the key
+
+The retest: the pending touch works, and quitting from the tray while the key blinked froze
+the whole window for the key's timeout — the exit's wait for the pending touch ran inside the
+shutdown hook, with the window up. Killing the process instead left the key unreachable for
+every program for the same fifteen seconds, which is not ours to fix: the card is executing
+the GENERAL AUTHENTICATE, and the resource manager holds the dead client's connection until
+it answers (trap 27's measurement). Ruled: Quit hides the window and the tray first, then
+resolves, then waits unseen (`AwaitPendingTouch`), then ends — the process lingers invisibly
+for at most the key's timeout, releasing and resetting the card itself. Logoff does not wait:
+Windows resets the card at cleanup, measured, and gives a process only seconds anyway.

@@ -423,6 +423,19 @@ func (s *shell) quit() {
 			return
 		}
 	}
+	// Out of sight first, then the ordered end: a pending touch (§2.2)
+	// may keep the card busy for the key's own timeout, and nobody stands
+	// at a frozen window for that — the window and the tray go, the
+	// process lingers unseen until the card answers and is released, then
+	// ends. onShutdown's second ResolveForShutdown finds nothing left.
+	if w := s.window(); w != nil {
+		w.Hide()
+	}
+	if s.tray != nil {
+		s.tray.t.Hide()
+	}
+	s.core.ResolveForShutdown(shutdownBudget)
+	s.core.AwaitPendingTouch()
 	s.app.Quit()
 }
 

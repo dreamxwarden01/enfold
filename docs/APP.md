@@ -697,11 +697,15 @@ calls `LockNow` synchronously.
 **Shutdown.** `Options.ShouldQuit` never shows UI. `Options.OnShutdown` runs
 `resolveForShutdown()`: for each dirty archive `Commit` under a fresh ~2 s context, write each
 receipt, close the archives, then lock — bounded to ~3 s in all; on timeout the transaction stays
-unpublished, which the format tolerates. The tray's Quit asks the user first and then runs the
-same function; `WTS_SESSION_LOGOFF` runs it without asking. A pending touch (§2.2) is waited for
-after the lock — the card's own answer, about 15 s, then its release — within what the OS
-allows a process at logoff; the tray's Quit has no such bound. A process that ended mid-call
-would leave the card PIN-verified for whoever connects next.
+unpublished, which the format tolerates. The tray's Quit asks the user first, then takes the
+window and the tray away, runs the same function, and waits — unseen — for a pending touch
+(§2.2) to end (`AwaitPendingTouch`: the card's own answer, about 15 s, then its release), so
+the card is released and reset by this process; only then does the process end. The wait was
+once inside the shutdown hook, with the window still up: fifteen frozen seconds, which is what
+the hiding is for. `WTS_SESSION_LOGOFF` runs the resolution without asking and does not wait
+for a touch: the OS gives a process seconds at logoff, and Windows resets a dead client's card
+at the cleanup of its connection (DESIGN trap 27) — after the in-flight command has run out,
+during which no program can reach the card anyway.
 
 ## 6. Screens (the Native look)
 

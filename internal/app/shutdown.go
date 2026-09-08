@@ -72,9 +72,16 @@ func (c *Core) ResolveForShutdown(budget time.Duration) {
 		oa.opMu.Unlock()
 	}
 	c.LockNow(ReasonExit)
-	// A pending touch (APP.md §2.2) holds the card PIN-verified until the
-	// key answers; a process that ends before it would leave the card so
-	// for the next program. The key gives up on its own in about 15 s.
+}
+
+// AwaitPendingTouch waits for a pending touch (APP.md §2.2) to end, so
+// that the card is released — and reset — by this process rather than
+// by Windows at the cleanup of a dead client's connection. The shell
+// calls it from the tray's Quit after the window and the tray are gone,
+// so nobody stands at a frozen window for it; the key gives up on its
+// own in about 15 s. Logoff does not wait: the OS's own reset was
+// measured (DESIGN.md §11 trap 27).
+func (c *Core) AwaitPendingTouch() {
 	c.awaitPending(pendingExitWait)
 }
 

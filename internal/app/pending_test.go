@@ -423,6 +423,7 @@ func TestExitWaitsForThePendingTouch(t *testing.T) {
 	}()
 	started := time.Now()
 	h.c.ResolveForShutdown(time.Second)
+	h.c.AwaitPendingTouch()
 	if card.closeCount() != 1 {
 		t.Fatalf("the exit did not wait for the card's release: %d closes after %v", card.closeCount(), time.Since(started))
 	}
@@ -438,6 +439,7 @@ func TestExitWaitsForAnOwnedTouch(t *testing.T) {
 		card.giveUp()
 	}()
 	h.c.ResolveForShutdown(time.Second)
+	h.c.AwaitPendingTouch()
 	if card.closeCount() != 1 || h.status().PendingTouch {
 		t.Fatalf("after the exit: closes=%d pending=%v", card.closeCount(), h.status().PendingTouch)
 	}

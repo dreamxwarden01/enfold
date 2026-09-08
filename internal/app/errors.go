@@ -20,33 +20,42 @@ const (
 	CodeInternal Code = "internal"
 
 	// Vault and session.
-	CodeNoVault         Code = "vault.none"
-	CodeVaultLocked     Code = "vault.locked"
-	CodeVaultBroken     Code = "vault.broken"
-	CodeVaultBusy       Code = "vault.busy"
-	CodeVaultTampered   Code = "vault.tampered"
-	CodeVaultStale      Code = "vault.stale"
-	CodeVaultNotFound   Code = "vault.not_found"
-	CodeVaultInvalid    Code = "vault.invalid"
-	CodeVaultExists     Code = "vault.exists"        // a vault is already kept; importing needs replace
-	CodeSetupNeeded     Code = "vault.setup_needed"  // the vault has only a recovery slot: finish setup
-	CodeArchivesOpen    Code = "vault.archives_open" // close the open archives before replacing the vault
-	CodeVaultUnlocked   Code = "vault.unlocked"      // lock the vault first
-	CodeSettingsUnsaved Code = "settings.unsaved"    // warning: the vault's place could not be recorded
-	CodeNeedsUnlock     Code = "vault.needs_unlock"
-	CodeAuth            Code = "vault.auth"
-	CodeNoSlot          Code = "vault.no_slot"
-	CodePasswordNeeded  Code = "vault.password_required"
-	CodePasswordShort   Code = "vault.password_short" // a chosen password under the minimum
-	CodeInvariant       Code = "vault.invariant"
-	CodeSlotPolicy      Code = "vault.slot_policy"
-	CodeDuplicateSlot   Code = "vault.duplicate_slot"
-	CodeNoRecoverySlot  Code = "vault.no_recovery_slot"
-	CodeSlotNotFound    Code = "vault.slot_not_found"
-	CodeNoEscrow        Code = "vault.no_escrow"       // the recovery slot predates escrow: its key cannot be shown again
-	CodeEscrowMismatch  Code = "vault.escrow_mismatch" // the kept recovery key does not open its slot: never shown
-	CodeRecoveryPlace   Code = "vault.recovery_place"  // a recovery key is not saved into the data folder, the vault's folder or under a staging name
-	CodeVaultKept       Code = "vault.kept"            // a vault is kept: a second one is never made; only a damaged one is rebuilt
+	CodeNoVault       Code = "vault.none"
+	CodeVaultLocked   Code = "vault.locked"
+	CodeVaultBroken   Code = "vault.broken"
+	CodeVaultBusy     Code = "vault.busy"
+	CodeVaultTampered Code = "vault.tampered"
+	// The two causes, for VaultStatus.TamperedReason and the park a
+	// mismatch leaves: the slot region does not match the registry (R25),
+	// or it does not belong with the superblock (FORMAT.md §6.2).
+	CodeTamperedHash       Code = "vault.tampered_hash"
+	CodeTamperedGeneration Code = "vault.tampered_generation"
+	CodeVaultStale         Code = "vault.stale"
+	CodeVaultNotFound      Code = "vault.not_found"
+	CodeVaultInvalid       Code = "vault.invalid"
+	CodeVaultExists        Code = "vault.exists"        // a vault is already kept; importing needs replace
+	CodeSetupNeeded        Code = "vault.setup_needed"  // the vault has only a recovery slot: finish setup
+	CodeArchivesOpen       Code = "vault.archives_open" // close the open archives before replacing the vault
+	CodeVaultUnlocked      Code = "vault.unlocked"      // lock the vault first
+	CodeSettingsUnsaved    Code = "settings.unsaved"    // warning: the vault's place could not be recorded
+	CodeNeedsUnlock        Code = "vault.needs_unlock"
+	CodeAuth               Code = "vault.auth"
+	CodeNoSlot             Code = "vault.no_slot"
+	CodePasswordNeeded     Code = "vault.password_required"
+	CodePasswordShort      Code = "vault.password_short" // a chosen password under the minimum
+	CodeInvariant          Code = "vault.invariant"
+	CodeSlotPolicy         Code = "vault.slot_policy"
+	CodeDuplicateSlot      Code = "vault.duplicate_slot"
+	CodeNoRecoverySlot     Code = "vault.no_recovery_slot"
+	CodeSlotNotFound       Code = "vault.slot_not_found"
+	CodeEscrowMissing      Code = "vault.escrow_missing"  // the vault keeps no copy of this recovery key: add a new one, then remove this
+	CodeEscrowMismatch     Code = "vault.escrow_mismatch" // the kept recovery key does not open its slot: never shown
+	CodeRecoveryPlace      Code = "vault.recovery_place"  // a recovery key is not saved into the data folder, the vault's folder or under a staging name
+	CodeVaultKept          Code = "vault.kept"            // a vault is kept: a second one is never made; only a damaged one is rebuilt
+	// CodeNotThisVault: no VMK of this vault and no key given opened the
+	// incoming registry — another vault, or a backup from a generation this
+	// vault no longer keeps. Never corruption (FORMAT.md §18.2, APP.md §13).
+	CodeNotThisVault    Code = "vault.not_this_vault"
 	CodeConflict        Code = "vault.conflict"
 	CodeIndeterminate   Code = "vault.indeterminate"
 	CodeCeremonyRunning Code = "ceremony.in_progress"
@@ -91,17 +100,38 @@ const (
 	CodeArchiveInvalid      Code = "archive.invalid"
 	CodeArchiveMissing      Code = "archive.file_missing"
 	CodeArchiveCopyMismatch Code = "archive.copy_mismatch"
-	CodeFileExists          Code = "file.exists"
-	CodeFileNotFound        Code = "file.not_found"
-	CodeFileName            Code = "file.name"
-	CodeSourceChanged       Code = "file.source_changed"
-	CodeContentHash         Code = "file.content_hash"
-	CodeNoSpace             Code = "archive.no_space"
-	CodeDictInUse           Code = "archive.dictionary_in_use"
-	CodeOpNotFound          Code = "op.not_found"
-	CodeOpCancelled         Code = "op.cancelled"
-	CodeOpRunning           Code = "op.in_progress"
-	CodeTooSlow             Code = "op.too_slow_for_session"
+	// Forget, restore and delete (APP.md §13). A forgotten record still
+	// holds its keys, so every other operation on it says so rather than
+	// archive.not_found, which stays the answer for a record already purged.
+	CodeArchiveForgotten Code = "archive.forgotten"
+	// CodeArchiveNotThisOne: the parent folder was opened and the leaf was
+	// not in it, or the envelope holds another archive_id. Nothing removed;
+	// the page asks once more before forgetting.
+	CodeArchiveNotThisOne Code = "archive.not_this_archive"
+	// CodeArchiveUnreachable: the volume, share or folder is not there.
+	// Nothing removed and nothing forgotten.
+	CodeArchiveUnreachable Code = "archive.file_unreachable"
+	// CodeArchiveDeleteFailed: the archive_id matched and the removal still
+	// failed. The record is kept, since its keys open a file that is there.
+	CodeArchiveDeleteFailed Code = "archive.delete_failed"
+	// CodeDescriptionLong: over MaxDescriptionLen bytes, or not UTF-8
+	// (FORMAT.md §7.1).
+	CodeDescriptionLong Code = "archive.description_long"
+	// CodeArchiveName: an empty name, one over 1 024 bytes or one that is
+	// not UTF-8. Bounded app-side only: the confirmation for Forget and
+	// Delete is the archive's name typed (APP.md §13, FORMAT.md §7.4).
+	CodeArchiveName   Code = "archive.name_invalid"
+	CodeFileExists    Code = "file.exists"
+	CodeFileNotFound  Code = "file.not_found"
+	CodeFileName      Code = "file.name"
+	CodeSourceChanged Code = "file.source_changed"
+	CodeContentHash   Code = "file.content_hash"
+	CodeNoSpace       Code = "archive.no_space"
+	CodeDictInUse     Code = "archive.dictionary_in_use"
+	CodeOpNotFound    Code = "op.not_found"
+	CodeOpCancelled   Code = "op.cancelled"
+	CodeOpRunning     Code = "op.in_progress"
+	CodeTooSlow       Code = "op.too_slow_for_session"
 
 	CodeParams Code = "params"
 	CodeIO     Code = "io"
@@ -194,7 +224,8 @@ var classifyTable = []struct {
 	{keystore.ErrDuplicate, CodeDuplicateSlot},
 	{keystore.ErrNoRecoverySlot, CodeNoRecoverySlot},
 	{keystore.ErrNotFound, CodeSlotNotFound},
-	{keystore.ErrNoEscrow, CodeNoEscrow},
+	{keystore.ErrForeign, CodeNotThisVault},
+	{keystore.ErrEscrowMissing, CodeEscrowMissing},
 	{keystore.ErrEscrowMismatch, CodeEscrowMismatch},
 	{keystore.ErrClosed, CodeVaultLocked},
 	{keystore.ErrParams, CodeParams},

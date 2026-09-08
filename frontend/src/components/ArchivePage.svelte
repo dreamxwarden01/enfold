@@ -14,6 +14,7 @@
   const crumbs = $derived(store.folder ? store.folder.split("/") : []);
   const alive = $derived(stat?.sessionAlive ?? false);
   const dirty = $derived(stat?.dirty ?? 0);
+  const tampered = $derived(store.status?.tampered ?? false);
 
   // Rows are keyed by kind and path: folder rows carry no file id.
   function rowKey(r: FileRow): string {
@@ -237,6 +238,37 @@
     }
   }
 
+  // Delete archive… is the same act as the Archives page's, on the archive
+  // this page shows (APP.md §13): the archive is closed first — unsaved
+  // changes asked about — and, since closing leaves this page, the id is
+  // handed to the Archives page, which opens the one dialog. It is
+  // disabled while the vault is locked with the archive open (§2.3): the
+  // registry write needs the session's key.
+  let deleteAsk = $state(false);
+
+  async function askDelete() {
+    if (dirty > 0) {
+      deleteAsk = true;
+      return;
+    }
+    await closeThenDelete();
+  }
+
+  async function closeThenDelete(saveFirst = false) {
+    deleteAsk = false;
+    const archiveId = id;
+    try {
+      if (saveFirst) await Archive.Save(archiveId);
+      await Archives.Close(archiveId);
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    store.deleteAfterClose = archiveId;
+    store.leaveArchive();
+    await store.refreshArchives();
+  }
+
   // selectedRows are the files in the selection; folders are containers
   // here, not things to extract or delete.
   const selectedRows = $derived(rows.filter((r) => !r.isFolder && selected.has(rowKey(r))));
@@ -271,6 +303,12 @@
     <button type="button" class="btn subtle" disabled={selectedRows.length === 0} onclick={() => startExtract(selectedRows)}><svg class="i i-14"><use href="#i-extract" /></svg>Extract</button>
     <button type="button" class="btn subtle" disabled={!one || one.isFolder || !alive} onclick={() => { if (one) { renaming = one; renameTo = one.name; } }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename</button>
     <button type="button" class="btn subtle danger" disabled={selectedRows.length === 0 || !alive} onclick={() => (deleting = selectedRows)}><svg class="i i-14"><use href="#i-trash" /></svg>Delete</button>
+    <div class="grow"></div>
+    <!-- Tampered disables it here as it does on the Archives page (APP.md
+         §13, R25): the flow closes the archive before the write is even
+         attempted, so a refusal at the end would have shut the user's
+         archive for nothing. -->
+    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? "Unlock the vault first: the record is the vault's." : tampered ? "The vault's slot region does not verify; every change is disabled." : undefined} onclick={askDelete}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
   </div>
 
   {#if !alive}
@@ -385,6 +423,17 @@
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (deleting = [])}>Cancel</button>
       <button type="button" class="btn accent" onclick={doDelete}>Delete</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if deleteAsk}
+  <Dialog title="Save the unsaved changes first?" onclose={() => (deleteAsk = false)}>
+    <p>{stat?.name ?? "This archive"} has {dirty} unsaved change{dirty === 1 ? "" : "s"}. Deleting the archive removes the file, so anything not saved goes with it either way — saving first only puts the changes into the file that is about to be removed.</p>
+    {#snippet actions()}
+      <button type="button" class="btn" onclick={() => (deleteAsk = false)}>Cancel</button>
+      <button type="button" class="btn" onclick={() => void closeThenDelete(true)}>Save, then continue</button>
+      <button type="button" class="btn accent" onclick={() => void closeThenDelete(false)}>Discard and continue</button>
     {/snippet}
   </Dialog>
 {/if}

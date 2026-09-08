@@ -314,9 +314,10 @@ func (cer *ceremony) finish(e *Error) {
 	cer.cancel()
 	if e != nil {
 		cer.state.Step, cer.state.Error = StepFailed, e.Code
-	} else if cer.state.Step != StepDone && cer.state.Step != StepRecovery {
-		// StepRecovery stays: the final event is the one-time URL the
-		// panel shows after the flow has ended.
+	} else if cer.state.Step != StepDone && cer.state.Step != StepRecovery && cer.state.Step != StepRecords {
+		// StepRecovery and StepRecords stay: the final event is the handle
+		// the panel reads after the flow has ended — the reveal's one-time
+		// URL, or the merge's record list (APP.md §3 Keys, §13).
 		cer.state.Step = StepDone
 	}
 	final := cer.state
@@ -794,11 +795,12 @@ func (cer *ceremony) matchSlot(card Card, slots []keystore.SlotInfo) (keystore.S
 	return keystore.SlotInfo{}, KeyInfo{}, keys, false, nil
 }
 
-// credential runs the token part of the flow and returns a credential the
-// keystore can take, with the Card to close afterwards. The password of an
-// entangled slot is collected before the PIN (the credential is assembled
-// whole; the PIN prompt fires inside ECDH).
-func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
+// tokenCredentialFor runs the token part of the flow and returns a
+// credential the keystore can take, with the Card to close afterwards. The
+// vault's password — entangled is the file's own switch, never a slot's
+// (FORMAT.md §6, §18.1) — is collected before the PIN: the credential is
+// assembled whole, and the PIN prompt fires inside ECDH.
+func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled bool) (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
 	reader, err := cer.waitForOneReader()
 	if err != nil {
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
@@ -826,13 +828,8 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo) (keystore.Har
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepNoMatch, CodeTokenNoKey)
 	}
-	if slot.Stale {
-		cer.unhold(card)
-		card.Close()
-		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepFailed, CodeVaultStale)
-	}
 	cred := keystore.HardwareCredential{}
-	if slot.EntangledPassword {
+	if entangled {
 		pw, err := cer.ask("password", StepPassword, PINStatus{})
 		if err != nil {
 			cer.unhold(card)
@@ -914,8 +911,12 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential)
 			cred = next
 			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 			continue
-		case errors.Is(err, keystore.ErrStale):
-			return nil, &parkAt{StepFailed, CodeVaultStale}
+		case errors.Is(err, keystore.ErrTampered):
+			// No slot is behind any more (FORMAT.md §8): a generation the
+			// superblock does not know means the region and the superblock
+			// do not belong together, which is tampering and never an
+			// invitation to unlock another way (§6.2).
+			return nil, &parkAt{StepFailed, CodeTamperedGeneration}
 		case errors.Is(err, ErrTokenCancelled), errors.Is(err, context.Canceled):
 			return nil, err
 		}
@@ -956,8 +957,8 @@ func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.Hardware
 		return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
 	case errors.Is(err, ErrTokenTooMany):
 		return nil, &parkAt{StepFailed, CodeTokenTooMany}
-	case errors.Is(err, keystore.ErrStale):
-		return nil, &parkAt{StepFailed, CodeVaultStale}
+	case errors.Is(err, keystore.ErrTampered):
+		return nil, &parkAt{StepFailed, CodeTamperedGeneration}
 	}
 	return nil, err
 }
@@ -999,7 +1000,7 @@ func (cer *ceremony) openVault(path string) (*keystore.Keystore, error) {
 func (cer *ceremony) unlock(method UnlockMethod) error {
 	c := cer.c
 	c.mu.Lock()
-	path, slots := c.vault.path, c.vault.slots
+	path, slots, entangled := c.vault.path, c.vault.slots, c.vault.entangled
 	c.mu.Unlock()
 
 	var (
@@ -1011,7 +1012,7 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 		err  error
 	)
 	for {
-		cred, hc, card, err = cer.credential(method, slots)
+		cred, hc, card, err = cer.credential(method, slots, entangled)
 		if err != nil {
 			return err
 		}
@@ -1033,6 +1034,7 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 		}
 		unl, err = cer.unlockFile(ks, cred, hc)
 		if err != nil {
+			c.noteTampered(err)
 			if errors.Is(err, errDisowned) {
 				return err // the pending touch holds the file and the card now
 			}
@@ -1049,7 +1051,6 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 			cer.closeCard(card)
 			return err
 		}
-		cer.escrowOpenedKey(unl, cred)
 		break
 	}
 	if card != nil {
@@ -1064,8 +1065,7 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 		ks.Close()
 		return ErrTokenCancelled
 	}
-	c.publishUnlockedLocked(ks, unl)
-	c.applyOwedLocked()
+	c.publishUnlockedLocked(ks, unl) // settles the owed receipts
 	c.mu.Unlock()
 	cer.set(func(s *CeremonyState) { s.Step = StepDone })
 	if hc != nil {
@@ -1076,13 +1076,16 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 
 // credential collects the way in for method against slots — the vault's,
 // or an incoming file's: the token flow (the Card returned is the
-// caller's to close), a password, or the recovery digits. A key that goes
-// away while the token flow runs — pulled during the PIN, reset under a
-// probe that could not heal it — is waited for again, not a failure.
-func (cer *ceremony) credential(method UnlockMethod, slots []keystore.SlotInfo) (keystore.Credential, *keystore.HardwareCredential, Card, error) {
+// caller's to close), a password, or the recovery digits. entangled is the
+// switch of the file being opened, never of the vault kept here, so
+// importing an entangled vault asks for that file's password. A key that
+// goes away while the token flow runs — pulled during the PIN, reset under
+// a probe that could not heal it — is waited for again, not a failure.
+func (cer *ceremony) credential(method UnlockMethod, slots []keystore.SlotInfo, entangled bool) (keystore.Credential, *keystore.HardwareCredential, Card, error) {
+	cer.setMethod(method)
 	switch method {
 	case MethodToken:
-		h, card, _, err := cer.tokenCredential(slots)
+		h, card, _, err := cer.tokenCredential(slots, entangled)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -1150,7 +1153,7 @@ const awayRetryMax = 2 * time.Second
 // reason other than the key going away: a key pulled during the PIN, or
 // reset under a probe that could not heal it, is waited for again (APP.md
 // §2.2), after a pause.
-func (cer *ceremony) tokenCredential(slots []keystore.SlotInfo) (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
+func (cer *ceremony) tokenCredential(slots []keystore.SlotInfo, entangled bool) (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
 	// One deadline for the whole wait: the per-call one inside
 	// waitForOneReader would be re-armed by every attempt at a reader
 	// whose card never answers.
@@ -1164,7 +1167,7 @@ func (cer *ceremony) tokenCredential(slots []keystore.SlotInfo) (keystore.Hardwa
 		if err := cer.settlePending(); err != nil {
 			return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 		}
-		h, card, slot, err := cer.tokenCredentialFor(slots)
+		h, card, slot, err := cer.tokenCredentialFor(slots, entangled)
 		if err == nil || !keyGone(err) {
 			return h, card, slot, err
 		}
@@ -1220,32 +1223,41 @@ func (cer *ceremony) unlockFile(ks *keystore.Keystore, cred keystore.Credential,
 	return unl, nil
 }
 
-var _ = fmt.Sprintf
+// setMethod records which way in this ceremony took, so the lock screen's
+// wording follows the way in chosen rather than whether a secret was asked
+// (APP.md §2.2): with the vault's password on, a token unlock asks for one
+// too, and a ceremony that adopted a pending touch was never given a method
+// on the page at all.
+func (cer *ceremony) setMethod(m UnlockMethod) {
+	cer.set(func(s *CeremonyState) { s.Method = string(m) })
+}
 
-// escrowOpenedKey keeps the recovery key that just opened the vault once
-// more when its slot has no record yet (FORMAT R38): a vault from before
-// escrow comes under it the first time its key is typed. Best effort — a
-// registry-only write; a failure is logged, never a failed unlock.
-func (cer *ceremony) escrowOpenedKey(unl *keystore.Unlocked, cred keystore.Credential) {
-	rc, ok := cred.(keystore.RecoveryCredential)
-	if !ok {
+// noteTampered records a generation mismatch met while unlocking the vault
+// kept here. FORMAT.md §6.2 makes it a statement about the file and not
+// about the credential, so it outlives the ceremony: the lock screen says
+// the vault has been tampered with, and R25's freeze applies from then
+// (APP.md §2.2, §13).
+func (c *Core) noteTampered(err error) {
+	var pk *parkAt
+	if !errors.As(err, &pk) || pk.code != CodeTamperedGeneration {
 		return
 	}
-	if err := unl.EscrowOpenedKey(unl.OpenedBy(), rc.Key); err != nil {
-		cer.c.log("ceremony %s: keeping the recovery key that opened: %v", cer.kind, err)
-	}
+	c.mu.Lock()
+	c.vault.tampered, c.vault.tamperedReason = keystore.ErrTampered, CodeTamperedGeneration
+	c.vault.warnings[CodeVaultTampered] = true
+	c.mu.Unlock()
 }
 
 // mint registers a secret for the page, under the ceremony's latch: a lock
 // trigger latches every ceremony and then drops every held secret (APP.md
 // §2.1), so a mint that checked the latch in the same breath can never
 // land after the drop and outlive the lock.
-func (cer *ceremony) mint(value, label string) (string, error) {
+func (cer *ceremony) mint(value, label, id string) (string, error) {
 	c := cer.c
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if cer.latch || cer.ctx.Err() != nil {
 		return "", ErrTokenCancelled
 	}
-	return c.preview.mintSecret(value, label), nil
+	return c.preview.mintSecret(value, label, id), nil
 }

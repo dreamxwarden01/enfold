@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { CeremonyStep } from "./api";
 import type { CeremonyState } from "./api";
-import { outcomeAfter, secretAskedAfter } from "./outcome";
+import { methodAfter, outcomeAfter, wordedForToken } from "./outcome";
 import { samePath } from "./paths";
 import { firstRunCard } from "./firstrun";
 import type { VaultStatus } from "./api";
 import { VaultState } from "./api";
 
-function ev(kind: string, step: CeremonyStep, promptId = "", archives = 0): CeremonyState {
-  return { seq: 1, kind, step, promptId, choose: false, slotLabel: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives };
+function ev(kind: string, step: CeremonyStep, promptId = "", archives = 0, method = ""): CeremonyState {
+  return { seq: 1, kind, method, step, promptId, choose: false, slotLabel: "", recoveryId: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives };
 }
 
 describe("samePath", () => {
@@ -38,18 +38,42 @@ describe("outcomeAfter", () => {
   });
 });
 
-describe("secretAskedAfter", () => {
-  it("is set by a password or recovery prompt, not by a reveal, and forgotten at the next opening", () => {
-    let s = secretAskedAfter(false, ev("unlock", CeremonyStep.StepWaitingForKey));
-    expect(s).toBe(false);
-    s = secretAskedAfter(s, ev("unlock", CeremonyStep.StepPassword, "p1"));
-    expect(s).toBe(true);
-    s = secretAskedAfter(s, ev("unlock", CeremonyStep.StepDeriving));
-    expect(s).toBe(true);
-    s = secretAskedAfter(s, ev("create", CeremonyStep.StepWaitingForKey));
-    expect(s).toBe(false);
-    s = secretAskedAfter(s, ev("create", CeremonyStep.StepRecovery));
-    expect(s).toBe(false);
+describe("tokenWording", () => {
+  it("keeps the method the core named for the rest of the ceremony, and forgets it at the next opening", () => {
+    let m = methodAfter("", ev("unlock", CeremonyStep.StepWaitingForKey));
+    expect(m).toBe("");
+    m = methodAfter(m, ev("unlock", CeremonyStep.StepProbing, "", 0, "token"));
+    expect(m).toBe("token");
+    m = methodAfter(m, ev("unlock", CeremonyStep.StepPassword, "p1")); // no method on this event
+    expect(m).toBe("token");
+    m = methodAfter(m, ev("unlock", CeremonyStep.StepWaitingForKey)); // a new ceremony
+    expect(m).toBe("");
+    m = methodAfter(m, ev("unlock", CeremonyStep.StepPassword, "p2", 0, "password"));
+    expect(m).toBe("password");
+  });
+
+  it("words the strip for the key through an entangled vault's password prompt", () => {
+    // The silent breakage this replaces: with VaultStatus.Entangled on, a
+    // token unlock hits StepPassword first, and the old rule read that as
+    // "a secret was asked" and stopped describing the flow the user is in.
+    const c = ev("unlock", CeremonyStep.StepPassword, "p1", 0, "token");
+    expect(wordedForToken(methodAfter("token", c), c)).toBe(true);
+    const pin = ev("unlock", CeremonyStep.StepPIN, "p2", 0, "token");
+    expect(wordedForToken("token", pin)).toBe(true);
+  });
+
+  it("never words a password or recovery way in, a check or a setup for the key", () => {
+    expect(wordedForToken("password", ev("unlock", CeremonyStep.StepPassword, "p1", 0, "password"))).toBe(false);
+    expect(wordedForToken("recovery", ev("unlock", CeremonyStep.StepRecovery, "p1", 0, "recovery"))).toBe(false);
+    expect(wordedForToken("token", ev("verify", CeremonyStep.StepRecovery, "p1", 0, "token"))).toBe(false);
+    expect(wordedForToken("token", ev("setup", CeremonyStep.StepRecovery, "p1", 0, "token"))).toBe(false);
+  });
+
+  it("falls back to the step until the core names a method, and to the key with no ceremony at all", () => {
+    expect(wordedForToken("", ev("unlock", CeremonyStep.StepWaitingForKey))).toBe(true);
+    expect(wordedForToken("", ev("unlock", CeremonyStep.StepPassword, "p1"))).toBe(false);
+    expect(wordedForToken("", ev("unlock", CeremonyStep.StepRecovery, "p1"))).toBe(false);
+    expect(wordedForToken("", null)).toBe(true);
   });
 });
 

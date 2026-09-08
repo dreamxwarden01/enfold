@@ -41,6 +41,13 @@ export function CreateVault(path: string, displayName: string, kind: string, lab
 }
 
 /**
+ * DiscardRecords ends a merge handle: the dialog closed.
+ */
+export function DiscardRecords(handle: string): $CancellablePromise<void> {
+    return $Call.ByID(3468826983, handle);
+}
+
+/**
  * FinishSetup gives a vault that has only its recovery key its first way
  * in.
  */
@@ -60,6 +67,13 @@ export function ImportFile(path: string, displayName: string, method: string, ki
 }
 
 /**
+ * IncomingRecords is the record list behind a merge handle.
+ */
+export function IncomingRecords(handle: string): $CancellablePromise<app$0.IncomingRecord[] | null> {
+    return $Call.ByID(2398325755, handle);
+}
+
+/**
  * InspectFile says what a keystore file is — a vault or a backup — and
  * whether it is this vault and newer, without a credential.
  */
@@ -67,8 +81,35 @@ export function InspectFile(path: string): $CancellablePromise<app$0.FileInfo> {
     return $Call.ByID(3319062579, path);
 }
 
+/**
+ * InspectRecords opens a backup or a vault over a staged copy for a merge:
+ * a ceremony for this vault's VMK, ending with a handle in the ceremony
+ * state's slotLabel. Nothing of that file is installed.
+ */
+export function InspectRecords(path: string): $CancellablePromise<void> {
+    return $Call.ByID(1148297629, path);
+}
+
+/**
+ * LastExportAt is when a backup of the vault kept here was last written,
+ * in Unix seconds; 0 means never. It words the confirmations of Forget and
+ * Delete and pre-selects the rotate dialog's backup checkbox, and gates
+ * nothing (APP.md §13).
+ */
+export function LastExportAt(): $CancellablePromise<number> {
+    return $Call.ByID(3774546620);
+}
+
 export function Lock(): $CancellablePromise<void> {
     return $Call.ByID(951839700);
+}
+
+/**
+ * MergeRecords takes the ticked records into this vault's registry: a
+ * registry write, no ceremony.
+ */
+export function MergeRecords(handle: string, ids: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(1344102321, handle, ids);
 }
 
 export function OpenVaultFile(path: string, displayName: string): $CancellablePromise<void> {

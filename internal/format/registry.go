@@ -1,10 +1,14 @@
 package format
 
-import "crypto/sha256"
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+)
 
 // Registry is the plaintext of the keystore registry (docs/FORMAT.md §7): the
 // device's own sync identity, one record per archive with all of its versions,
-// and the pinned peers.
+// the pinned peers, and the secrets section.
 type Registry struct {
 	DeviceID           [16]byte
 	ModifiedAt         int64
@@ -22,17 +26,79 @@ type Registry struct {
 	AbsoluteMinutes uint16
 	Archives        []ArchiveRecord
 	Peers           []PeerPin
-	// Escrows keeps every recovery key once more, under KWK_recovery (R38,
-	// §7.6): one record per active recovery slot, keyed by its recipient
-	// ID. Registry version 2; a version-1 registry decodes with none.
-	Escrows []EscrowRecord
+	// Secrets is the secrets section (§7.6, R38): every escrowed recovery
+	// key, K_P, and every retired VMK, all under one KWK_secrets. Sorted
+	// strictly ascending by (Kind, ID), which is what keeps decode and
+	// re-encode byte-exact (R21).
+	Secrets []SecretRecord
 }
 
-// EscrowRecord is one recovery key kept under the VMK (§7.6).
-type EscrowRecord struct {
-	RecipientID        [16]byte // the recovery slot this key belongs to
-	WrapNonce          [NonceSize]byte
-	WrappedRecoveryKey [WrappedRecoveryKeySize]byte // AES-256-GCM(KWK_recovery, R), AAD of R22
+// SecretRecord is one record of the secrets section (§7.6, R38): a 32-byte
+// secret under KWK_secrets, sealed with the AAD of SecretAAD. What the
+// plaintext means is the kind's: K_P, a retired VMK, or a 16-byte recovery key
+// followed by sixteen zero bytes.
+type SecretRecord struct {
+	Kind       SecretKind
+	ID         [16]byte
+	Nonce      [NonceSize]byte
+	Ciphertext [WrappedSecretSize]byte
+}
+
+// VMKHistoryID is the id of a vmk_history record (§7.6): the retired
+// generation as a little-endian u64 in bytes 0–7, bytes 8–15 zero.
+func VMKHistoryID(generation uint64) [16]byte {
+	var id [16]byte
+	binary.LittleEndian.PutUint64(id[:8], generation)
+	return id
+}
+
+// HistoryGeneration reports the generation a vmk_history record's id encodes.
+// ok is false for any other kind, so a caller cannot read a recovery slot's
+// recipient_id as a number by accident.
+func (s *SecretRecord) HistoryGeneration() (generation uint64, ok bool) {
+	if s.Kind != SecretVMKHistory {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint64(s.ID[:8]), true
+}
+
+// validate applies §7.6's shape rules per kind. A kind outside 1–3 fails
+// closed (§1); an entangled_key record's id is all zero; a vmk_history
+// record's tail is zero and the generation it carries is non-zero, since
+// generation 0 never exists (§5). A recovery_escrow record's id is its slot's
+// recipient_id and has no shape.
+func (s *SecretRecord) validate() error {
+	switch s.Kind {
+	case SecretRecoveryEscrow:
+		return nil
+	case SecretEntangledKey:
+		if s.ID != zero16 {
+			return invalidf("entangled_key secret carries a non-zero id %x", s.ID)
+		}
+		return nil
+	case SecretVMKHistory:
+		if !bytes.Equal(s.ID[8:], zero16[8:]) {
+			return invalidf("vmk_history secret %x has a non-zero id tail", s.ID)
+		}
+		if binary.LittleEndian.Uint64(s.ID[:8]) == 0 {
+			return invalidf("vmk_history secret encodes generation 0, which never exists")
+		}
+		return nil
+	default:
+		return invalidf("secret kind %d unknown", s.Kind)
+	}
+}
+
+// secretOrder compares two records the way §7.6 orders the section: kind
+// first, then id as unsigned bytes.
+func secretOrder(a, b *SecretRecord) int {
+	switch {
+	case a.Kind < b.Kind:
+		return -1
+	case a.Kind > b.Kind:
+		return 1
+	}
+	return bytes.Compare(a.ID[:], b.ID[:])
 }
 
 // ArchiveRecord is one archive with all of its versions (§7.1).
@@ -54,8 +120,19 @@ type ArchiveRecord struct {
 	// the hash is current, lower means it is behind by that many commits.
 	LastSeq   uint64
 	HashAtSeq uint64
-	Versions  []VersionRecord
+	// Description is optional and empty when none: at most MaxDescriptionLen
+	// bytes of UTF-8, longer is invalid (§7.1).
+	Description string
+	// ForgottenAt is zero unless the record was forgotten, in which case it is
+	// the modified_at of the write that forgot it — never the raw clock
+	// (§7.1, §18.2). A restore sets it back to zero.
+	ForgottenAt int64
+	Versions    []VersionRecord
 }
+
+// Forgotten reports whether this record has been forgotten (§18.2). A
+// forgotten record keeps its keys and is listed only on request.
+func (a *ArchiveRecord) Forgotten() bool { return a.ForgottenAt != 0 }
 
 // VersionRecord is a key, not a snapshot (§7.2).
 type VersionRecord struct {
@@ -78,15 +155,19 @@ type PeerPin struct {
 }
 
 const (
-	// registryVersion is what Encode writes. registryVersionV1 is read too:
-	// it ends after the peer pin records and carries no escrow records, and
-	// is written back as the current version at its next commit (R38).
-	registryVersion   = 2
-	registryVersionV1 = 1
-	minArchiveRecord  = 16 + 2 + 2 + 4 + 8 + 16 + 32 + 8 + 8 + 8 + 16 + 8 + 8 + 4
-	minVersionRecord  = 16 + WrappedKeySize + NonceSize + 8 + 8 + 1
-	minPeerRecord     = 2 + X25519PubSize + 2 + 8 + 8 + 4 + 1
-	minEscrowRecord   = 16 + NonceSize + WrappedRecoveryKeySize
+	// registryVersion is the only version read or written since Revision 2
+	// (§7, §18.2): the version-1 and version-2 readers are gone, so every
+	// accepted encoding is canonical (R21).
+	registryVersion  = 3
+	minArchiveRecord = 16 + 2 + 2 + 4 + 8 + 16 + 32 + 8 + 8 + 8 + 16 + 8 + 8 + 2 + 8 + 4
+	minVersionRecord = 16 + WrappedKeySize + NonceSize + 8 + 8 + 1
+	minPeerRecord    = 2 + X25519PubSize + 2 + 8 + 8 + 4 + 1
+	// minSecretRecord is kind, id, nonce and ciphertext. secret_count has no
+	// ceiling of its own: R19's 64 MiB registry and the reader's count() guard
+	// already bound what a hostile section can allocate, and a fixed ceiling
+	// would eventually make a long-lived vault — one vmk_history record per
+	// rotation — unreadable by its own writer.
+	minSecretRecord = 1 + 16 + NonceSize + WrappedSecretSize
 )
 
 func (v *VersionRecord) validate() error {
@@ -114,6 +195,14 @@ func (a *ArchiveRecord) validate(kids map[[16]byte]struct{}) error {
 	}
 	if a.HashAtSeq > a.LastSeq {
 		return invalidf("archive %x hash_at_seq %d is ahead of last_seq %d", a.ArchiveID, a.HashAtSeq, a.LastSeq)
+	}
+	if len(a.Description) > MaxDescriptionLen {
+		return invalidf("archive %x description is %d bytes, the limit is %d", a.ArchiveID, len(a.Description), MaxDescriptionLen)
+	}
+	// §18.2 gives the app the retention arithmetic; the format layer only
+	// keeps the subtraction from wrapping, as modified_at ≥ 0 does in §5.
+	if a.ForgottenAt < 0 {
+		return invalidf("archive %x forgotten_at %d is negative", a.ArchiveID, a.ForgottenAt)
 	}
 	current := 0
 	found := false
@@ -157,9 +246,10 @@ func (p *PeerPin) validate() error {
 	return nil
 }
 
-// Validate checks every record: unknown bits, version consistency, and that
+// Validate checks every record: unknown bits, version consistency, that
 // archive identities and KIDs are unique across the whole registry (§7.2 leans
-// on KID uniqueness; a duplicate would make key lookup order-dependent).
+// on KID uniqueness; a duplicate would make key lookup order-dependent), and
+// that the secrets section is strictly ascending by (kind, id).
 func (g *Registry) Validate() error {
 	archives := make(map[[16]byte]struct{}, len(g.Archives))
 	kids := make(map[[16]byte]struct{}, len(g.Archives))
@@ -177,24 +267,115 @@ func (g *Registry) Validate() error {
 			return err
 		}
 	}
-	escrows := make(map[[16]byte]struct{}, len(g.Escrows))
-	for i := range g.Escrows {
-		if _, dup := escrows[g.Escrows[i].RecipientID]; dup {
-			return invalidf("recovery key escrow for slot %x appears twice", g.Escrows[i].RecipientID)
+	// §7.6: sorted ascending by kind then by id as unsigned bytes, and no two
+	// records sharing a (kind, id). Strictness delivers both in one pass and
+	// keeps decode and re-encode byte-exact (R21); with the zero id required
+	// of kind 2 it also gives "at most one entangled_key" for free.
+	for i := range g.Secrets {
+		if err := g.Secrets[i].validate(); err != nil {
+			return err
 		}
-		escrows[g.Escrows[i].RecipientID] = struct{}{}
+		if i > 0 && secretOrder(&g.Secrets[i-1], &g.Secrets[i]) >= 0 {
+			return invalidf("secrets section is not strictly ascending by (kind, id) at record %d", i)
+		}
 	}
 	return nil
 }
 
-// Escrow returns the escrow record for a recovery slot, or nil.
-func (g *Registry) Escrow(recipientID [16]byte) *EscrowRecord {
-	for i := range g.Escrows {
-		if g.Escrows[i].RecipientID == recipientID {
-			return &g.Escrows[i]
+// Secret returns the record with this kind and id, or nil.
+func (g *Registry) Secret(kind SecretKind, id [16]byte) *SecretRecord {
+	for i := range g.Secrets {
+		if g.Secrets[i].Kind == kind && g.Secrets[i].ID == id {
+			return &g.Secrets[i]
 		}
 	}
 	return nil
+}
+
+// SecretsOfKind returns every record of one kind, in section order.
+func (g *Registry) SecretsOfKind(kind SecretKind) []SecretRecord {
+	var out []SecretRecord
+	for i := range g.Secrets {
+		if g.Secrets[i].Kind == kind {
+			out = append(out, g.Secrets[i])
+		}
+	}
+	return out
+}
+
+// SetSecret inserts or replaces a record, keeping the section in (kind, id)
+// order so that Encode never has to sort and the writer cannot produce a
+// section a reader would refuse.
+func (g *Registry) SetSecret(rec SecretRecord) {
+	for i := range g.Secrets {
+		switch c := secretOrder(&g.Secrets[i], &rec); {
+		case c == 0:
+			g.Secrets[i] = rec
+			return
+		case c > 0:
+			g.Secrets = append(g.Secrets, SecretRecord{})
+			copy(g.Secrets[i+1:], g.Secrets[i:])
+			g.Secrets[i] = rec
+			return
+		}
+	}
+	g.Secrets = append(g.Secrets, rec)
+}
+
+// DeleteSecret removes a record and reports whether one was there.
+func (g *Registry) DeleteSecret(kind SecretKind, id [16]byte) bool {
+	for i := range g.Secrets {
+		if g.Secrets[i].Kind == kind && g.Secrets[i].ID == id {
+			g.Secrets = append(g.Secrets[:i], g.Secrets[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// CheckEntangleAgreement applies §7.6's cross-check against the slot region
+// header: exactly one entangled_key record when the header's entangle is 1,
+// none when it is 0. DecodeRegistry does not call it — the format layer never
+// sees the slot region — so internal/keystore calls it beside VerifySlotRegion
+// (R25, R38), at unlock and on every write that lands a header.
+func (g *Registry) CheckEntangleAgreement(entangle bool) error {
+	n := 0
+	for i := range g.Secrets {
+		if g.Secrets[i].Kind == SecretEntangledKey {
+			n++
+		}
+	}
+	switch {
+	case entangle && n != 1:
+		return invalidf("slot region header says entangle 1 yet the registry keeps %d entangled_key records", n)
+	case !entangle && n != 0:
+		return invalidf("slot region header says entangle 0 yet the registry keeps %d entangled_key records", n)
+	}
+	return nil
+}
+
+// PurgeForgotten drops every forgotten archive record whose retention has run
+// out and returns what went. modifiedAt is the modified_at of the write doing
+// the dropping, never the raw clock (§18.2): a record forgotten at T is
+// dropped only by a write whose own modified_at exceeds T by more than
+// ForgottenRetentionSeconds, and a forgotten_at ahead of modifiedAt — a stamp
+// from a faster clock — is treated as freshly forgotten rather than as
+// overdue. Pure: the trigger and the confirmation before it are the app's
+// (APP.md §13).
+func (g *Registry) PurgeForgotten(modifiedAt int64) []ArchiveRecord {
+	var dropped []ArchiveRecord
+	kept := g.Archives[:0]
+	for _, a := range g.Archives {
+		if a.Forgotten() && modifiedAt > a.ForgottenAt && modifiedAt-a.ForgottenAt > ForgottenRetentionSeconds {
+			dropped = append(dropped, a)
+			continue
+		}
+		kept = append(kept, a)
+	}
+	if len(dropped) > 0 {
+		g.Archives = kept
+	}
+	return dropped
 }
 
 // Encode returns the registry plaintext.
@@ -227,6 +408,8 @@ func (g *Registry) Encode() ([]byte, error) {
 		w.fixed(a.LastWriter[:])
 		w.u64(a.LastSeq)
 		w.u64(a.HashAtSeq)
+		w.str(a.Description)
+		w.i64(a.ForgottenAt)
 		w.u32(uint32(len(a.Versions)))
 		for j := range a.Versions {
 			v := &a.Versions[j]
@@ -248,12 +431,13 @@ func (g *Registry) Encode() ([]byte, error) {
 		w.u32(p.Capabilities)
 		w.u8(uint8(p.DeviceClass))
 	}
-	w.u32(uint32(len(g.Escrows)))
-	for i := range g.Escrows {
-		e := &g.Escrows[i]
-		w.fixed(e.RecipientID[:])
-		w.fixed(e.WrapNonce[:])
-		w.fixed(e.WrappedRecoveryKey[:])
+	w.u32(uint32(len(g.Secrets)))
+	for i := range g.Secrets {
+		s := &g.Secrets[i]
+		w.u8(uint8(s.Kind))
+		w.fixed(s.ID[:])
+		w.fixed(s.Nonce[:])
+		w.fixed(s.Ciphertext[:])
 	}
 	return w.done()
 }
@@ -264,9 +448,9 @@ func SlotRegionHash(encodedRegion []byte) [32]byte { return sha256.Sum256(encode
 
 // VerifySlotRegion compares the live slot region against the registry's
 // authenticated hash. A mismatch means the region was modified by someone
-// without the Metadata key — a substituted public key, an added record, or a
-// spliced-in old region — and must be reported, never silently repaired, and
-// never re-wrapped into.
+// without the Metadata key — a substituted public key, an added record, an
+// edited header, or a spliced-in old region — and must be reported, never
+// silently repaired, and never re-wrapped into.
 func (g *Registry) VerifySlotRegion(encodedRegion []byte) error {
 	if sha256.Sum256(encodedRegion) != g.SlotRegionHash {
 		return invalidf("slot region does not match the registry's authenticated hash: the slot region was modified outside the unlocked vault")
@@ -278,7 +462,7 @@ func (g *Registry) VerifySlotRegion(encodedRegion []byte) error {
 func DecodeRegistry(b []byte) (*Registry, error) {
 	r := newReader(b, "registry")
 	version := r.u32()
-	if r.err == nil && version != registryVersion && version != registryVersionV1 {
+	if r.err == nil && version != registryVersion {
 		return nil, invalidf("registry_version %d unsupported", version)
 	}
 	g := &Registry{}
@@ -306,6 +490,8 @@ func DecodeRegistry(b []byte) (*Registry, error) {
 		r.fixed(a.LastWriter[:])
 		a.LastSeq = r.u64()
 		a.HashAtSeq = r.u64()
+		a.Description = r.str()
+		a.ForgottenAt = r.i64()
 		nv := r.count(r.u32(), minVersionRecord)
 		a.Versions = make([]VersionRecord, 0, nv)
 		for j := 0; j < nv && r.err == nil; j++ {
@@ -336,18 +522,17 @@ func DecodeRegistry(b []byte) (*Registry, error) {
 		p.DeviceClass = DeviceClass(r.u8())
 		g.Peers = append(g.Peers, p)
 	}
-	if version >= 2 {
-		ne := r.count(r.u32(), minEscrowRecord)
-		if ne > 0 {
-			g.Escrows = make([]EscrowRecord, 0, ne) // nil when none, as a version-1 registry decodes
-		}
-		for i := 0; i < ne && r.err == nil; i++ {
-			var e EscrowRecord
-			r.fixed(e.RecipientID[:])
-			r.fixed(e.WrapNonce[:])
-			r.fixed(e.WrappedRecoveryKey[:])
-			g.Escrows = append(g.Escrows, e)
-		}
+	ns := r.count(r.u32(), minSecretRecord)
+	if ns > 0 {
+		g.Secrets = make([]SecretRecord, 0, ns) // nil when the section is empty
+	}
+	for i := 0; i < ns && r.err == nil; i++ {
+		var s SecretRecord
+		s.Kind = SecretKind(r.u8())
+		r.fixed(s.ID[:])
+		r.fixed(s.Nonce[:])
+		r.fixed(s.Ciphertext[:])
+		g.Secrets = append(g.Secrets, s)
 	}
 	if err := r.done(); err != nil {
 		return nil, err

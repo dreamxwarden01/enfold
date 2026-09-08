@@ -7,7 +7,7 @@
   import { fade } from "svelte/transition";
   import { submitSecret } from "../lib/api";
   import { motion } from "../lib/motion";
-  import { RECOVERY_SEPARATORS, secretProblem, secretRule } from "../lib/validate";
+  import { RECOVERY_SEPARATORS, confirmSecretProblem, secretProblem, secretRule } from "../lib/validate";
   import type { SecretKind } from "../lib/validate";
 
   interface Props {
@@ -26,8 +26,22 @@
   let value = $state("");
   let el: HTMLInputElement | undefined = $state();
   let left = $state(false); // the field was left with what it holds
+  // Pressing the button marks every field that would refuse, and a mark
+  // clears when *that* field is corrected (APP.md §6): the flag is per
+  // field, so correcting one never un-marks the other while it still
+  // refuses.
   let pressed = $state(false); // the button was pressed with what it holds
   let typedSince = $state(false); // typed since the core's error arrived
+
+  // A chosen password is typed twice (APP.md §13, the ruling of
+  // 2026-09-07): one core prompt, two fields under its id, one
+  // submission — the secret crosses the boundary once.
+  let confirm = $state("");
+  let confirmLeft = $state(false);
+  let confirmPressed = $state(false);
+  const twice = $derived(kind === "password" && choose);
+  const confirmProblem = $derived(twice ? confirmSecretProblem(value, confirm) : "");
+  const confirmSaid = $derived((confirmLeft || confirmPressed) && confirmProblem ? confirmProblem : "");
 
   const numeric = $derived(kind === "pin" || kind === "recovery");
   const problem = $derived(secretProblem(kind, value, choose));
@@ -43,8 +57,11 @@
     // A new prompt: a clean field, focused.
     void promptId;
     value = "";
+    confirm = "";
     left = false;
+    confirmLeft = false;
     pressed = false;
+    confirmPressed = false;
     typedSince = false;
     el?.focus();
   });
@@ -57,15 +74,26 @@
     }
   }
 
+  function typedConfirm() {
+    if (!confirmSecretProblem(value, confirm)) {
+      confirmLeft = false;
+      confirmPressed = false;
+    }
+  }
+
   function submit(e: Event) {
     e.preventDefault();
     pressed = true;
-    if (problem) return;
+    confirmPressed = true;
+    if (problem || confirmProblem) return;
     const v = kind === "recovery" ? value.replace(RECOVERY_SEPARATORS, "") : value;
     submitSecret(kind, promptId, v);
     value = "";
+    confirm = "";
     left = false;
+    confirmLeft = false;
     pressed = false;
+    confirmPressed = false;
   }
 </script>
 
@@ -93,10 +121,32 @@
   />
   {#if rule}<div id="secret-{promptId}-rule" class="pin-note" class:danger={ruleBroken}>{rule}</div>{/if}
   {#if said}<div id="secret-{promptId}-said" class="field-error" transition:fade={motion()}>{said}</div>{/if}
+  {#if twice}
+    <div class="again">
+      <div class="field-top"><label for="secret-{promptId}-again">Type it again</label></div>
+      <input
+        id="secret-{promptId}-again"
+        bind:value={confirm}
+        class="input secret"
+        class:invalid={!!confirmSaid}
+        type="password"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        aria-label="Type the password again"
+        aria-invalid={!!confirmSaid}
+        aria-describedby={confirmSaid ? `secret-${promptId}-again-said` : undefined}
+        onblur={() => (confirmLeft = true)}
+        oninput={typedConfirm}
+      />
+      {#if confirmSaid}<div id="secret-{promptId}-again-said" class="field-error" transition:fade={motion()}>{confirmSaid}</div>{/if}
+    </div>
+  {/if}
   {#if note}<div class="pin-note">{note}</div>{/if}
   <div class="submit"><button type="submit" class="btn accent wide">{button}</button></div>
 </form>
 
 <style>
   .submit { margin-top: 12px; }
+  .again { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
 </style>

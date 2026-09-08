@@ -60,6 +60,45 @@ export function requiredProblem(value: string): string {
   return value.trim() ? "" : REQUIRED;
 }
 
+// An archive's description is bounded in BYTES of UTF-8, not characters
+// (FORMAT.md §7.1): 1 024 ASCII letters fit, 400 four-byte emoji do not
+// although they are 400 characters. Empty clears the description and is
+// always fine.
+export const DESCRIPTION_MAX = 1024;
+export const DESCRIPTION_RULE = "At most 1 024 bytes — fewer characters with accents or emoji.";
+export function descriptionProblem(text: string): string {
+  return new TextEncoder().encode(text).length > DESCRIPTION_MAX ? DESCRIPTION_RULE : "";
+}
+
+// confirmNameProblem judges the archive's name typed to confirm a Forget
+// or a Delete (APP.md §13): compared trimmed and exactly, case and all —
+// the typed name is the brake, so a near miss is a miss.
+export const CONFIRM_NAME = "Type the archive's name exactly as it is shown.";
+export function confirmNameProblem(typed: string, name: string): string {
+  if (!typed.trim()) return REQUIRED;
+  return typed.trim() === name.trim() ? "" : CONFIRM_NAME;
+}
+
+// An archive's name is bounded app-side only, at the same 1 024 bytes as
+// the description, and is never empty (APP.md §13, the ruling of
+// 2026-09-07): the confirmation for Forget and Delete is the name typed,
+// so an unbounded name would defeat its own brake. FORMAT.md §7.1 puts no
+// rule on the wire, and the core answers archive.name_invalid.
+export const NAME_MAX = 1024;
+export const NAME_RULE = "A name is required, at most 1 024 bytes.";
+export function nameProblem(text: string): string {
+  if (!text.trim()) return REQUIRED;
+  return new TextEncoder().encode(text).length > NAME_MAX ? NAME_RULE : "";
+}
+
+// confirmSecretProblem judges the second field of a chosen secret: one
+// core prompt, two fields on the page, one submission (APP.md §13).
+export const CONFIRM_SECRET = "The two do not match.";
+export function confirmSecretProblem(a: string, b: string): string {
+  if (!b) return REQUIRED;
+  return a === b ? "" : CONFIRM_SECRET;
+}
+
 // The recovery key's eight groups (RecoveryInput): each carries 16 bits
 // as a six-digit number divisible by 11 and below 720 896 — BitLocker's
 // checksum, which catches a mistyped group as it is finished. Empty means

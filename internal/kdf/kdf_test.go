@@ -2,7 +2,9 @@ package kdf
 
 import (
 	"bytes"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -44,10 +46,10 @@ func TestArgon2Params(t *testing.T) {
 			t.Errorf("%+v rejected: %v", p, err)
 		}
 	}
-	// A hostile record's parameters never reach Argon2id: the derivation refuses first.
-	h := make([]byte, KeySize)
+	// A hostile slot region header's parameters never reach Argon2id: the one
+	// derivation that reads them refuses first (R24, FORMAT §6).
 	pw, _ := NormalizePassword("x")
-	if _, err := HardwarePreEntangled(h, pw, Salt{}, [IDSize]byte{}, [IDSize]byte{}, Argon2Params{MemKiB: 0xFFFFFFFF, Time: 1, Threads: 4}); !errors.Is(err, ErrParams) {
+	if _, err := EntangledKey(pw, EntangleSalt{}, [IDSize]byte{}, Argon2Params{MemKiB: 0xFFFFFFFF, Time: 1, Threads: 4}); !errors.Is(err, ErrParams) {
 		t.Fatalf("4 TiB argon2_m reached the derivation: %v", err)
 	}
 	// Work is bounded as well as memory (R24): 2 GiB × 32 passes is refused.
@@ -80,10 +82,11 @@ func TestNormalizePassword(t *testing.T) {
 	}
 }
 
-func TestHardwarePre(t *testing.T) {
+// TestHardwarePreToken covers the branch the slot region header's entangle = 0
+// selects: pre is H itself, and nothing else enters (§3.1, R5).
+func TestHardwarePreToken(t *testing.T) {
 	h := make([]byte, KeySize)
 	rand.Read(h)
-	vault, recip, salt := randomID(t), randomID(t), Salt(random32(t))
 	pre, err := HardwarePreToken(h)
 	if err != nil || !bytes.Equal(pre[:], h) {
 		t.Fatalf("no password: %v", err)
@@ -91,36 +94,122 @@ func TestHardwarePre(t *testing.T) {
 	if _, err := HardwarePreToken(h[:31]); !errors.Is(err, ErrKeySize) {
 		t.Fatal("31-byte H accepted")
 	}
+}
+
+// TestEntangledKey covers K_P (§3.1): the vault's password and the vault's
+// salt, with no token and no slot in it.
+func TestEntangledKey(t *testing.T) {
+	es := EntangleSalt(randomID(t))
+	vault := randomID(t)
 	pw, _ := NormalizePassword("hunter2")
-	if _, err := HardwarePreEntangled(h, pw, salt, vault, recip, Argon2Params{}); !errors.Is(err, ErrParams) {
-		t.Fatal("password with zero params accepted")
+
+	kp, err := EntangledKey(pw, es, vault, tiny)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := HardwarePreEntangled(h[:31], pw, salt, vault, recip, tiny); !errors.Is(err, ErrKeySize) {
-		t.Fatal("31-byte H accepted")
-	}
-	// The entangled derivation never degrades to the token-only one (R4): an
-	// absent password is an error, whether nil or empty.
-	for _, empty := range [][]byte{nil, {}} {
-		if _, err := HardwarePreEntangled(h, empty, salt, vault, recip, tiny); !errors.Is(err, ErrEmptyPassword) {
-			t.Fatal("entangled derivation without a password accepted")
-		}
-	}
-	p1, _ := HardwarePreEntangled(h, pw, salt, vault, recip, tiny)
-	p2, _ := HardwarePreEntangled(h, pw, salt, vault, recip, tiny)
-	if p1 != p2 {
+	again, _ := EntangledKey(pw, es, vault, tiny)
+	if kp != again {
 		t.Fatal("not deterministic")
 	}
-	if p1 == pre {
-		t.Fatal("entangled pre equals the token-only pre")
-	}
 	other, _ := NormalizePassword("hunter3")
-	p3, _ := HardwarePreEntangled(h, other, salt, vault, recip, tiny)
-	if p1 == p3 {
-		t.Fatal("password does not influence pre")
+	if k, _ := EntangledKey(other, es, vault, tiny); k == kp {
+		t.Fatal("the password does not influence K_P")
 	}
-	swapped, _ := HardwarePreEntangled(h, pw, Salt(random32(t)), vault, recip, tiny)
-	if swapped == p1 {
-		t.Fatal("salt does not influence pre")
+	if k, _ := EntangledKey(pw, EntangleSalt(randomID(t)), vault, tiny); k == kp {
+		t.Fatal("entangle_salt does not influence K_P")
+	}
+	if k, _ := EntangledKey(pw, es, randomID(t), tiny); k == kp {
+		t.Fatal("vault_id does not influence K_P")
+	}
+	if k, _ := EntangledKey(pw, es, vault, Argon2Params{MemKiB: 8192, Time: 2, Threads: 4}); k == kp {
+		t.Fatal("the parameters do not influence K_P")
+	}
+
+	// One K_P serves every hardware slot of the vault — the property §8 step 4
+	// rests on. There is no recipient_id to pass; the same value wraps two
+	// slots, and only the IK derivation below separates them.
+	h := make([]byte, KeySize)
+	rand.Read(h)
+	a, err := HardwarePreEntangled(h, kp, vault, randomID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := HardwarePreEntangled(h, kp, vault, randomID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("two slots of one vault share a pre")
+	}
+
+	// R4: an absent password is an error, never a degradation to the
+	// token-only branch, which the header alone selects.
+	for _, empty := range [][]byte{nil, {}} {
+		if _, err := EntangledKey(empty, es, vault, tiny); !errors.Is(err, ErrEmptyPassword) {
+			t.Fatal("empty password accepted")
+		}
+	}
+	if _, err := EntangledKey(pw, es, vault, Argon2Params{}); !errors.Is(err, ErrParams) {
+		t.Fatal("zero params accepted")
+	}
+	// R24 again, at the one call site that reads the header's parameters: the
+	// 4 TiB argon2_m that took the development machine down is refused before
+	// Argon2id allocates anything.
+	if _, err := EntangledKey(pw, es, vault, Argon2Params{MemKiB: 0xFFFFFFFF, Time: 1, Threads: 4}); !errors.Is(err, ErrParams) {
+		t.Fatal("4 TiB argon2_m reached Argon2id")
+	}
+}
+
+// TestHardwarePreEntangled covers the branch entangle = 1 selects: the token
+// enters after the KDF, as IKM = H ‖ K_P (§3.1, R3).
+func TestHardwarePreEntangled(t *testing.T) {
+	h := make([]byte, KeySize)
+	rand.Read(h)
+	vault, recip := randomID(t), randomID(t)
+	kp := random32(t)
+
+	pre, err := HardwarePreEntangled(h, kp, vault, recip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := HardwarePreEntangled(h, kp, vault, recip); again != pre {
+		t.Fatal("not deterministic")
+	}
+	token, _ := HardwarePreToken(h)
+	if pre == token {
+		t.Fatal("the entangled pre equals the token-only pre")
+	}
+	if p, _ := HardwarePreEntangled(h, kp, vault, randomID(t)); p == pre {
+		t.Fatal("recipient_id does not influence pre")
+	}
+	if p, _ := HardwarePreEntangled(h, kp, randomID(t), recip); p == pre {
+		t.Fatal("vault_id does not influence pre")
+	}
+	flipped := kp
+	flipped[0] ^= 1
+	if p, _ := HardwarePreEntangled(h, flipped, vault, recip); p == pre {
+		t.Fatal("a one-bit change in K_P leaves pre unchanged")
+	}
+	if _, err := HardwarePreEntangled(h[:31], kp, vault, recip); !errors.Is(err, ErrKeySize) {
+		t.Fatal("31-byte H accepted")
+	}
+
+	// The IKM order is H ‖ K_P and not the transposition, computed here from
+	// the rule rather than from the package.
+	info := append(append([]byte(InfoEntangle), vault[:]...), recip[:]...)
+	want, err := hkdf.Key(sha256.New, append(append([]byte{}, h...), kp[:]...), nil, string(info), KeySize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(pre[:], want) {
+		t.Fatalf("pre is not HKDF over H ‖ K_P:\n got  %x\n want %x", pre, want)
+	}
+	transposed, err := hkdf.Key(sha256.New, append(append([]byte{}, kp[:]...), h...), nil, string(info), KeySize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(pre[:], transposed) {
+		t.Fatal("K_P ‖ H gives the same pre")
 	}
 }
 
@@ -386,7 +475,7 @@ func TestWrapAuthentication(t *testing.T) {
 func TestSubordinateKeysAreDistinct(t *testing.T) {
 	vmk := random32(t)
 	vault := randomID(t)
-	keys := [][]byte{MetadataKey(vmk, vault), DBKey(vmk, vault), KWK(vmk, vault), KWKIdentity(vmk, vault), KWKRecovery(vmk, vault)}
+	keys := [][]byte{MetadataKey(vmk, vault), DBKey(vmk, vault), KWK(vmk, vault), KWKIdentity(vmk, vault), KWKSecrets(vmk, vault)}
 	for i := range keys {
 		for j := i + 1; j < len(keys); j++ {
 			if bytes.Equal(keys[i], keys[j]) {
@@ -399,34 +488,142 @@ func TestSubordinateKeysAreDistinct(t *testing.T) {
 	}
 }
 
-func TestRecoveryKeyWrap(t *testing.T) {
-	vmk := random32(t)
-	vault := randomID(t)
-	kek := KWKRecovery(vmk, vault)
+// TestRecoveryKeyPadding covers §7.6's padding rule for the one secret that is
+// shorter than 32 bytes.
+func TestRecoveryKeyPadding(t *testing.T) {
+	var allOnes RecoveryKey
+	for i := range allOnes {
+		allOnes[i] = 0xFF
+	}
+	random, err := NewRecoveryKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, r := range map[string]RecoveryKey{"random": random, "zero": {}, "ones": allOnes} {
+		pt := r.Padded()
+		if !bytes.Equal(pt[:RecoveryKeySize], r[:]) {
+			t.Fatalf("%s: R is not the first sixteen bytes", name)
+		}
+		if !bytes.Equal(pt[RecoveryKeySize:], make([]byte, KeySize-RecoveryKeySize)) {
+			t.Fatalf("%s: the pad is not sixteen zero bytes", name)
+		}
+		back, err := RecoveryKeyFromPadded(pt)
+		if err != nil || back != r {
+			t.Fatalf("%s: round trip: %v", name, err)
+		}
+	}
+	// A reader rejects the record if the tail is not zero — each of the sixteen
+	// pad bytes alone.
+	for i := RecoveryKeySize; i < KeySize; i++ {
+		pt := random.Padded()
+		pt[i] = 1
+		if _, err := RecoveryKeyFromPadded(pt); !errors.Is(err, ErrSecretPadding) {
+			t.Fatalf("pad byte %d accepted", i)
+		}
+	}
+}
+
+// TestSecretsRecords covers the secrets section (§7.6, R22, R38): one wrapping
+// domain, three kinds, and an AAD built here from the rule as written rather
+// than from internal/format, so the 53 bytes have two independent
+// constructions.
+func TestSecretsRecords(t *testing.T) {
+	vmk, vault := random32(t), randomID(t)
+	kek := KWKSecrets(vmk, vault)
+	recipient := randomID(t)
+
 	r, err := NewRecoveryKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	aad := []byte("Enfold/v1/aad/recovery-escrow-test")
-	w, n, err := WrapRecoveryKey(kek, r, aad)
+	escrowAAD := secretsAAD(t, vault, 1, recipient)
+	w, nonce, err := WrapKey(kek, r.Padded(), escrowAAD)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := UnwrapRecoveryKey(kek, w, n, aad)
+	if len(w) != KeyWrapSize {
+		t.Fatalf("a secrets ciphertext is %d bytes, want %d", len(w), KeyWrapSize)
+	}
+	pt, err := UnwrapKey(kek, w, nonce, escrowAAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := RecoveryKeyFromPadded(pt)
 	if err != nil || got != r {
-		t.Fatalf("round trip: %v %x", err, got)
+		t.Fatalf("escrow round trip: %v", err)
 	}
-	if _, err := UnwrapRecoveryKey(KWKIdentity(vmk, vault), w, n, aad); !errors.Is(err, ErrAuth) {
-		t.Fatalf("another domain's key opened it: %v", err)
+
+	// A plaintext whose pad is not zero authenticates and is still refused.
+	bad := r.Padded()
+	bad[KeySize-1] = 0x01
+	wBad, nBad, err := WrapKey(kek, bad, escrowAAD)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := UnwrapRecoveryKey(kek, w, n, []byte("other")); !errors.Is(err, ErrAuth) {
-		t.Fatalf("another AAD opened it: %v", err)
+	ptBad, err := UnwrapKey(kek, wBad, nBad, escrowAAD)
+	if err != nil {
+		t.Fatal(err)
 	}
-	w2, n2, _ := WrapRecoveryKey(kek, r, aad)
-	if n == n2 || w == w2 {
+	if _, err := RecoveryKeyFromPadded(ptBad); !errors.Is(err, ErrSecretPadding) {
+		t.Fatalf("a non-zero pad opened as a recovery key: %v", err)
+	}
+
+	// The AAD separates the kinds and the ids: a record sealed for one does not
+	// open as another, inside a registry that authenticates as a whole.
+	var zeroID [IDSize]byte
+	var historyID [IDSize]byte
+	historyID[0] = 7
+	for name, aad := range map[string][]byte{
+		"kind 2":      secretsAAD(t, vault, 2, recipient),
+		"kind 3":      secretsAAD(t, vault, 3, recipient),
+		"another id":  secretsAAD(t, vault, 1, randomID(t)),
+		"zero id":     secretsAAD(t, vault, 1, zeroID),
+		"other vault": secretsAAD(t, randomID(t), 1, recipient),
+		"history id":  secretsAAD(t, vault, 1, historyID),
+		"empty":       nil,
+	} {
+		if _, err := UnwrapKey(kek, w, nonce, aad); !errors.Is(err, ErrAuth) {
+			t.Errorf("%s opened a kind 1 record", name)
+		}
+	}
+	// Nor does any other wrapping domain below the VMK open it (§3.2).
+	for name, other := range map[string][]byte{
+		"KWK":          KWK(vmk, vault),
+		"KWK_identity": KWKIdentity(vmk, vault),
+		"metadata key": MetadataKey(vmk, vault),
+		"another VMK":  KWKSecrets(random32(t), vault),
+	} {
+		if _, err := UnwrapKey(other, w, nonce, escrowAAD); !errors.Is(err, ErrAuth) {
+			t.Errorf("%s opened a secrets record", name)
+		}
+	}
+
+	// K_P and a retired VMK are 32 bytes already: they wrap with no padding.
+	for name, rec := range map[string]struct {
+		kind uint8
+		id   [IDSize]byte
+		key  [KeySize]byte
+	}{
+		"entangled_key": {2, zeroID, random32(t)},
+		"vmk_history":   {3, historyID, random32(t)},
+	} {
+		aad := secretsAAD(t, vault, rec.kind, rec.id)
+		sealed, n, err := WrapKey(kek, rec.key, aad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := UnwrapKey(kek, sealed, n, aad)
+		if err != nil || back != rec.key {
+			t.Fatalf("%s round trip: %v", name, err)
+		}
+	}
+
+	// Every write of a record draws a fresh nonce (R22).
+	w2, nonce2, err := WrapKey(kek, r.Padded(), escrowAAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nonce == nonce2 || w == w2 {
 		t.Fatal("a re-wrap reused a nonce")
-	}
-	if _, _, err := WrapRecoveryKey(kek[:16], r, aad); !errors.Is(err, ErrKeySize) {
-		t.Fatalf("short KEK: %v", err)
 	}
 }

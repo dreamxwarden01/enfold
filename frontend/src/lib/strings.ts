@@ -26,6 +26,9 @@ export const stepCopy: Record<StepKey, StepCopy> = {
   [CeremonyStep.StepDeriving]: { title: "Unlocking", body: "Deriving the session keys." },
   [CeremonyStep.StepManagementKey]: { title: "Management key", body: "This key has no PIN-protected management key. Type it as hex to generate a new key." },
   [CeremonyStep.StepRecovery]: { title: "Recovery key", body: "" },
+  // The records ceremony ends here, with the incoming registry read on a
+  // staged copy and nothing written to either file (APP.md §13).
+  [CeremonyStep.StepRecords]: { title: "Records read", body: "Choose which to bring into this vault." },
   [CeremonyStep.StepSwapKey]: { title: "Swap keys", body: "Remove the key that unlocked, insert the key to enroll." },
   [CeremonyStep.StepReleasing]: { title: "Releasing the key", body: "The key forgets the PIN." },
   [CeremonyStep.StepDone]: { title: "Done", body: "" },
@@ -45,8 +48,12 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeVaultLocked]: "The vault is locked.",
   [Code.CodeVaultBroken]: "A write's outcome is unknown. Reopen the vault to continue.",
   [Code.CodeVaultBusy]: "The vault file is open in another Enfold. Close it first.",
-  [Code.CodeVaultTampered]: "The vault's slot region does not verify. Import a copy of this vault from the lock screen.",
-  [Code.CodeVaultStale]: "This way in holds an old key. Unlock with another and rewrap it.",
+  [Code.CodeVaultTampered]: "The vault's slot region does not verify: it does not match the registry, or it does not belong with the superblock. Import a copy of this vault from the lock screen.",
+  [Code.CodeTamperedHash]: "The vault's slot region does not match its registry. Import a copy of this vault from the lock screen.",
+  [Code.CodeTamperedGeneration]: "The vault's slot region does not belong with its superblock: it holds a key from another generation. Import a copy of this vault from the lock screen.",
+  // Since Revision 2 no way in is left holding an old key: this is the
+  // vault file's second superblock copy, damaged (FORMAT.md §5).
+  [Code.CodeVaultStale]: "One of the vault file's two superblock copies is damaged. Enfold opened the good one; the next write repairs the other.",
   [Code.CodeVaultNotFound]: "The vault file was not found.",
   [Code.CodeVaultInvalid]: "This is not a vault file, or it is damaged.",
   [Code.CodeVaultExists]: "A vault, or a file, is already at that place. Replacing it must be confirmed first.",
@@ -64,10 +71,11 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeDuplicateSlot]: "This key is already enrolled.",
   [Code.CodeNoRecoverySlot]: "A vault always keeps a recovery key.",
   [Code.CodeSlotNotFound]: "That way in no longer exists.",
-  [Code.CodeNoEscrow]: "This recovery key was made before Enfold kept recovery keys, so it cannot be shown again. Add a new recovery key, then remove this one — or unlock with it once, which keeps it.",
+  [Code.CodeEscrowMissing]: "The vault keeps no copy of this recovery key. Add a new recovery key, then remove this one.",
   [Code.CodeEscrowMismatch]: "The kept copy of this recovery key does not match its way in, so it is not shown.",
   [Code.CodeRecoveryPlace]: "Not there: keep the recovery key out of Enfold's own folder and the vault's, and give it a file name of its own.",
   [Code.CodeVaultKept]: "A vault is already kept. A second one is never made from here: importing replaces it, and only a damaged one is rebuilt.",
+  [Code.CodeNotThisVault]: "No key of this vault opens that file: it is another vault's, or a backup from a generation this vault no longer keeps. Its own recovery key opens it.",
   [Code.CodeConflict]: "The vault changed under Enfold. Reopen it.",
   [Code.CodeIndeterminate]: "A write's outcome is unknown. Reopen the vault.",
   [Code.CodeCeremonyRunning]: "An unlock is already in progress.",
@@ -108,6 +116,12 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeArchiveInvalid]: "The file is not an archive, or it is damaged.",
   [Code.CodeArchiveMissing]: "The archive file is not where the vault last saw it.",
   [Code.CodeArchiveCopyMismatch]: "This file is not the copy the vault last saved: an older backup, or one written elsewhere. Saving records this copy.",
+  [Code.CodeArchiveForgotten]: "This archive was forgotten. Restore it to use it again; its key is dropped thirty days after it was forgotten.",
+  [Code.CodeArchiveNotThisOne]: "The file there is not this archive — another archive, or a copy someone made. Nothing was removed.",
+  [Code.CodeArchiveUnreachable]: "The folder that file is in could not be reached. Nothing was removed and nothing was forgotten.",
+  [Code.CodeArchiveDeleteFailed]: "The file is this archive, and it could not be removed. The record is kept: its keys open a file that is still there.",
+  [Code.CodeDescriptionLong]: "The description is too long: at most 1 024 bytes.",
+  [Code.CodeArchiveName]: "That name cannot be used: a name is needed, and at most 1 024 bytes of text.",
   [Code.CodeFileExists]: "A file with that name already exists.",
   [Code.CodeFileNotFound]: "The file is not in the archive.",
   [Code.CodeFileName]: "That name cannot be stored.",
@@ -146,13 +160,28 @@ export function retriesText(s: Pick<CeremonyState, "retries" | "retriesKnown" | 
   return s.retries === 1 ? "1 attempt left — the last one" : `${s.retries} attempts left`;
 }
 
+// tamperedCopy is the Tampered banner, worded from VaultStatus.TamperedReason
+// (APP.md §13): the slot region does not match the registry (FORMAT.md R25),
+// or it does not belong with the superblock (§6.2). With no reason to hand —
+// a status from before the cause was known — both causes are named, because
+// the remedy is the same and guessing one would be a claim.
+export function tamperedCopy(reason?: string): string {
+  const why =
+    reason === Code.CodeTamperedHash
+      ? "does not match its registry"
+      : reason === Code.CodeTamperedGeneration
+        ? "does not belong with its superblock — it holds a key from another generation"
+        : "does not match its registry, or does not belong with its superblock";
+  return `The vault's slot region ${why}. Every change is disabled until a copy of this vault is imported from the lock screen.`;
+}
+
 // warningCopy is what a status warning says in the banner.
-export function warningCopy(code: string): string {
+export function warningCopy(code: string, reason?: string): string {
   switch (code) {
     case Code.CodeVaultTampered:
-      return "The vault's slot region does not verify. Every change is disabled until a copy of this vault is imported from the lock screen.";
+      return tamperedCopy(reason);
     case Code.CodeVaultStale:
-      return "A way in holds an old key after a rotation. Unlock with a current one and rewrap it.";
+      return "One of the vault file's two superblock copies is damaged. Enfold opened the good one and repairs the other on the next write.";
     case Code.CodeTokenReset:
       return "Your YubiKey may stay PIN-verified for a few seconds after release.";
   }

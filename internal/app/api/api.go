@@ -94,6 +94,36 @@ func (v *Vault) FinishSetup(kind, label string, entangle bool) error {
 	return asErr(v.c.FinishSetup(app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label, Entangle: entangle}))
 }
 
+// InspectRecords opens a backup or a vault over a staged copy for a merge:
+// a ceremony for this vault's VMK, ending with a handle in the ceremony
+// state's slotLabel. Nothing of that file is installed.
+func (v *Vault) InspectRecords(path string) error {
+	return asErr(v.c.InspectRecords(path))
+}
+
+// IncomingRecords is the record list behind a merge handle.
+func (v *Vault) IncomingRecords(handle string) ([]app.IncomingRecord, error) {
+	r, e := v.c.IncomingRecords(handle)
+	return r, asErr(e)
+}
+
+// MergeRecords takes the ticked records into this vault's registry: a
+// registry write, no ceremony.
+func (v *Vault) MergeRecords(handle string, ids []string) error {
+	return asErr(v.c.MergeRecords(handle, ids))
+}
+
+// DiscardRecords ends a merge handle: the dialog closed.
+func (v *Vault) DiscardRecords(handle string) error {
+	return asErr(v.c.DiscardRecords(handle))
+}
+
+// LastExportAt is when a backup of the vault kept here was last written,
+// in Unix seconds; 0 means never. It words the confirmations of Forget and
+// Delete and pre-selects the rotate dialog's backup checkbox, and gates
+// nothing (APP.md §13).
+func (v *Vault) LastExportAt() int64 { return v.c.LastExportAt() }
+
 // Archives is the registry's list and the per-archive operations that do
 // not need it open.
 type Archives struct {
@@ -135,6 +165,37 @@ func (a *Archives) Verify(id string) (string, error) {
 	op, e := a.c.Verify(id)
 	return op, asErr(e)
 }
+
+// Rename writes the registry's trusted name (FORMAT.md §7.4); no ceremony.
+func (a *Archives) Rename(id, name string) error { return asErr(a.c.RenameArchive(id, name)) }
+
+// SetDescription writes the record's description: at most 1 024 bytes of
+// UTF-8, empty clears it (FORMAT.md §7.1).
+func (a *Archives) SetDescription(id, text string) error {
+	return asErr(a.c.SetArchiveDescription(id, text))
+}
+
+// Details is one registry record read whole, for the details pane and its
+// modal: no key material, and refused while the vault is locked.
+func (a *Archives) Details(id string) (app.ArchiveDetails, error) {
+	d, e := a.c.ArchiveDetails(id)
+	return d, asErr(e)
+}
+
+// Forget drops the record softly: its keys stay until the purge at an unlock
+// more than thirty days later, and Restore brings it back.
+func (a *Archives) Forget(id string) error  { return asErr(a.c.ForgetArchive(id)) }
+func (a *Archives) Restore(id string) error { return asErr(a.c.RestoreArchive(id)) }
+
+// Delete is Forget plus the file when alsoFile is set: the file is removed
+// first and only then is the record forgotten.
+func (a *Archives) Delete(id string, alsoFile bool) error {
+	return asErr(a.c.DeleteArchive(id, alsoFile))
+}
+
+// CheckFiles refreshes the presence of every record's last_path; the list's
+// Status column follows on archives.changed.
+func (a *Archives) CheckFiles() error { return asErr(a.c.CheckFiles()) }
 
 // Archive is an open archive.
 type Archive struct {
@@ -217,9 +278,25 @@ type Keys struct {
 
 func (k *Keys) Slots() []app.SlotView { return k.c.Slots() }
 
-func (k *Keys) BeginEnroll(kind, label string, entangle bool) error {
-	return asErr(k.c.BeginEnroll(app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label, Entangle: entangle}))
+// BeginEnroll adds a way in: "token", "password" or "recovery". An
+// enrolled key inherits the vault's entangled password and is wrapped from
+// the kept K_P, so no password is chosen here (APP.md §13).
+func (k *Keys) BeginEnroll(kind, label string) error {
+	return asErr(k.c.BeginEnroll(app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label}))
 }
+
+// EntangledState is the Keys page's row for the vault's password: whether
+// it is on, and whether the invariant would let it be turned on.
+func (k *Keys) EntangledState() app.EntangledState { return k.c.EntangledState() }
+
+// SetEntangled turns the vault's password on or off; turning it on asks
+// for the new password, turning it off asks for nothing. Both are
+// ceremonies, and neither ever asks the old password.
+func (k *Keys) SetEntangled(on bool) error { return asErr(k.c.SetEntangled(on)) }
+
+// ChangeEntangledPassword replaces the vault's password; a ceremony, and
+// the old password is never a field.
+func (k *Keys) ChangeEntangledPassword() error { return asErr(k.c.ChangeEntangledPassword()) }
 
 func (k *Keys) RemoveSlot(recipientID string) error { return asErr(k.c.RemoveSlot(recipientID)) }
 func (k *Keys) RotateNow() error                    { return asErr(k.c.RotateNow()) }

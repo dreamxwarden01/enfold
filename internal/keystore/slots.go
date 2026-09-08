@@ -45,8 +45,11 @@ type RecoveryCredential struct {
 	Key kdf.RecoveryKey
 }
 
-// HardwareCredential opens the hardware slot enrolled for Token, with its
-// entangled password when the slot has one (ignored when it does not).
+// HardwareCredential opens the hardware slot enrolled for Token, with the
+// vault's entangled password when the slot region header's entangle is 1
+// (§6, §18.1). A password handed in while the switch is off is ignored, not
+// refused: R4's "never inferred from length" is about the file, not about
+// what a caller offers.
 type HardwareCredential struct {
 	Token    Token
 	Password string
@@ -77,14 +80,13 @@ type RecoverySlot struct {
 }
 
 // HardwareSlot is a hardware slot (§3.1, slot_type 1) for the token whose
-// public key this is; the token itself need not be present. Password, when
-// set, is entangled with the token (DESIGN.md §4) and Argon2 must then be
-// set too.
+// public key this is; the token itself need not be present. It carries no
+// password and no Argon2 parameters since Revision 2 (§18.1): an enrolled key
+// inherits the vault's switch from the slot region header and is wrapped from
+// the K_P the vault already keeps.
 type HardwareSlot struct {
 	PublicKey []byte
 	Source    format.KeySource // 0 means KeySourceYubiKeyPIV
-	Password  string
-	Argon2    kdf.Argon2Params
 	Label     string
 }
 
@@ -92,28 +94,24 @@ func (PasswordSlot) spec() {}
 func (RecoverySlot) spec() {}
 func (HardwareSlot) spec() {}
 
-// SlotInfo describes a slot without revealing anything secret.
+// SlotInfo describes a slot without revealing anything secret. Whether a
+// hardware slot needs the vault password is not a slot fact since Revision 2:
+// it is Keystore.Entangled (§6, §18.1).
 type SlotInfo struct {
-	RecipientID       [16]byte
-	Type              format.SlotType
-	Label             string
-	CreatedAt         int64
-	EntangledPassword bool
-	// Stale: a rotation could not re-wrap this slot; it still holds the
-	// previous VMK (§8).
-	Stale bool
+	RecipientID [16]byte
+	Type        format.SlotType
+	Label       string
+	CreatedAt   int64
 	// PublicKey is the token's key for a hardware slot, nil otherwise.
 	PublicKey []byte
 }
 
 func infoOf(s *format.SlotRecord) SlotInfo {
 	info := SlotInfo{
-		RecipientID:       s.RecipientID,
-		Type:              s.Type,
-		Label:             s.Label,
-		CreatedAt:         s.CreatedAt,
-		EntangledPassword: s.Flags&format.FlagEntangledPassword != 0,
-		Stale:             s.Flags&format.FlagRewrapStale != 0,
+		RecipientID: s.RecipientID,
+		Type:        s.Type,
+		Label:       s.Label,
+		CreatedAt:   s.CreatedAt,
 	}
 	if s.Type == format.SlotExternalECDH {
 		info.PublicKey = bytes.Clone(s.SlotPubkey)
@@ -122,13 +120,16 @@ func infoOf(s *format.SlotRecord) SlotInfo {
 }
 
 // secrets is a slot's required-secret set (§6.4): the names of everything
-// needed to open it. Every entangled password is the one name "pwd", since
-// the file cannot tell two apart.
-func secrets(s *format.SlotRecord) []string {
+// needed to open it, under the header hdr. While the vault is entangled every
+// active hardware slot also needs the vault's password — the one name "pwd"
+// for all of them, since there is one password. Slots of type 2 and 3 are
+// never entangled, which is what keeps a recovery slot disjoint from every
+// token.
+func secrets(hdr format.SlotRegionHeader, s *format.SlotRecord) []string {
 	switch s.Type {
 	case format.SlotExternalECDH:
 		set := []string{"token:" + string(s.SlotPubkey)}
-		if s.Flags&format.FlagEntangledPassword != 0 {
+		if hdr.Entangle {
 			set = append(set, "pwd")
 		}
 		return set
@@ -153,8 +154,11 @@ func disjoint(a, b []string) bool {
 
 // checkInvariant applies §6.4 and DESIGN.md §5 to a proposed slot set: two
 // active slots with disjoint secret sets must exist, and a standalone
-// password slot may not coexist with a hardware slot.
-func checkInvariant(slots []format.SlotRecord) error {
+// password slot may not coexist with a hardware slot. Its inputs are the
+// records and the header, so every caller passes the header the commit would
+// write: a 0→1 switch of entangle is evaluated over the sets the new value
+// would make, before the header is written and before any slot is re-wrapped.
+func checkInvariant(hdr format.SlotRegionHeader, slots []format.SlotRecord) error {
 	var active []*format.SlotRecord
 	hardware, password := false, false
 	for i := range slots {
@@ -184,7 +188,7 @@ func checkInvariant(slots []format.SlotRecord) error {
 	}
 	for i := range active {
 		for j := i + 1; j < len(active); j++ {
-			if disjoint(secrets(active[i]), secrets(active[j])) {
+			if disjoint(secrets(hdr, active[i]), secrets(hdr, active[j])) {
 				return nil
 			}
 		}
@@ -192,9 +196,23 @@ func checkInvariant(slots []format.SlotRecord) error {
 	return ErrInvariant
 }
 
+// requireEntangleKey refuses a wrap that would need K_P and does not have it.
+// Since Revision 2 no wrap can ask for a password (§8, "No rotation is
+// deferred"): reaching one with the header's entangle 1 and no K_P is an
+// internal invariant violation, never a prompt. That is what "no rotation is
+// deferred" rests on.
+func requireEntangleKey(hdr format.SlotRegionHeader, kp *[32]byte) error {
+	if hdr.Entangle && kp == nil {
+		return fmt.Errorf("%w: the vault is entangled and K_P is not held", ErrParams)
+	}
+	return nil
+}
+
 // newRecord builds a slot record for spec, wrapping vmk at generation gen
-// into it.
-func newRecord(spec SlotSpec, vaultID [16]byte, vmk [32]byte, gen uint64) (format.SlotRecord, error) {
+// into it. kp is the vault's K_P, nil while the header's entangle is 0; a
+// hardware slot inherits the vault's switch and reads nothing about it from
+// its own record (§18.1).
+func newRecord(spec SlotSpec, vaultID [16]byte, kp *[32]byte, vmk [32]byte, gen uint64) (format.SlotRecord, error) {
 	s := format.SlotRecord{State: format.SlotActive, CreatedAt: now()}
 	if _, err := rand.Read(s.RecipientID[:]); err != nil {
 		return s, err
@@ -246,27 +264,9 @@ func newRecord(spec SlotSpec, vaultID [16]byte, vmk [32]byte, gen uint64) (forma
 			s.KeySource = format.KeySourceYubiKeyPIV
 		}
 		s.SlotPubkey = bytes.Clone(sp.PublicKey)
-		var pw []byte
-		if sp.Password == "" && sp.Argon2 != (kdf.Argon2Params{}) {
-			return s, fmt.Errorf("%w: Argon2 parameters without an entangled password", ErrParams)
-		}
-		if sp.Password != "" {
-			var err error
-			if pw, err = kdf.NormalizePassword(sp.Password); err != nil {
-				return s, fmt.Errorf("%w: %v", ErrParams, err)
-			}
-			if err := sp.Argon2.Validate(); err != nil {
-				return s, fmt.Errorf("%w: %v", ErrParams, err)
-			}
-			s.Flags |= format.FlagEntangledPassword
-			s.Argon2M, s.Argon2T, s.Argon2P = sp.Argon2.MemKiB, sp.Argon2.Time, sp.Argon2.Threads
-			if _, err := rand.Read(s.Salt[:]); err != nil {
-				return s, err
-			}
-		}
-		err := wrapHardware(&s, pw, vaultID, vmk, gen)
-		kdf.Zero(pw)
-		return s, err
+		// salt and argon2_m/t/p stay zero on a hardware slot (R13, R24): the
+		// vault's are the slot region header's.
+		return s, wrapHardware(&s, kp, vaultID, vmk, gen)
 	}
 	return s, fmt.Errorf("%w: unknown slot spec %T", ErrParams, spec)
 }
@@ -325,15 +325,12 @@ func wrapHybrid(s *format.SlotRecord, kind kdf.HybridKind, vaultID [16]byte, vmk
 
 // wrapHardware wraps vmk into a hardware slot from the token's public key:
 // a fresh ephemeral P-256 pair, ECDH against slot_pubkey, then the
-// token-only or entangled derivation. pw is the normalised entangled
-// password, nil when the slot has none; a slot that needs one and gets none
-// is ErrPasswordRequired, decided before anything is computed. The record is
-// changed only once everything succeeded, so a refused re-wrap leaves the
-// slot exactly as it was (§8).
-func wrapHardware(s *format.SlotRecord, pw []byte, vaultID [16]byte, vmk [32]byte, gen uint64) error {
-	if s.Flags&format.FlagEntangledPassword != 0 && len(pw) == 0 {
-		return ErrPasswordRequired
-	}
+// token-only or entangled derivation. kp is the vault's K_P, nil while the
+// header's entangle is 0. No token need be present and no password typed,
+// which is what makes enrolment, the switch and every rotation offline
+// (§18.1). The record is changed only once everything succeeded, so a refused
+// re-wrap leaves the slot exactly as it was (§8).
+func wrapHardware(s *format.SlotRecord, kp *[32]byte, vaultID [16]byte, vmk [32]byte, gen uint64) error {
 	pub, err := ecdh.P256().NewPublicKey(s.SlotPubkey)
 	if err != nil {
 		return corrupt("slot_pubkey: %v", err)
@@ -349,7 +346,7 @@ func wrapHardware(s *format.SlotRecord, pw []byte, vaultID [16]byte, vmk [32]byt
 	defer kdf.Zero(h)
 	next := *s
 	next.EPK = e.PublicKey().Bytes()
-	pre, err := hardwarePre(&next, h, pw, vaultID)
+	pre, err := hardwarePre(&next, h, kp, vaultID)
 	if err != nil {
 		return err
 	}
@@ -363,18 +360,16 @@ func wrapHardware(s *format.SlotRecord, pw []byte, vaultID [16]byte, vmk [32]byt
 	return nil
 }
 
-// hardwarePre is the hardware slot's pre for shared secret h: token-only, or
-// entangled with pw when the record says so (§3.1). A record that requires a
-// password and a call without one is ErrPasswordRequired, never a downgrade.
-func hardwarePre(s *format.SlotRecord, h, pw []byte, vaultID [16]byte) ([32]byte, error) {
-	if s.Flags&format.FlagEntangledPassword == 0 {
+// hardwarePre is the hardware slot's pre for shared secret h: pre = H while
+// kp is nil, else HKDF(H ‖ K_P, …) (§3.1, R3, R5). Which one is decided by the
+// caller from the slot region header, never from the record: the record's own
+// salt and Argon2 fields are zero on a hardware slot since Revision 2 and are
+// never read (R13, R24).
+func hardwarePre(s *format.SlotRecord, h []byte, kp *[32]byte, vaultID [16]byte) ([32]byte, error) {
+	if kp == nil {
 		return kdf.HardwarePreToken(h)
 	}
-	if len(pw) == 0 {
-		return [32]byte{}, ErrPasswordRequired
-	}
-	p := kdf.Argon2Params{MemKiB: s.Argon2M, Time: s.Argon2T, Threads: s.Argon2P}
-	return kdf.HardwarePreEntangled(h, pw, kdf.Salt(s.Salt), vaultID, s.RecipientID, p)
+	return kdf.HardwarePreEntangled(h, *kp, vaultID, s.RecipientID)
 }
 
 // wrapVMK draws the record's wrap_nonce, computes the AAD over the record as
@@ -412,8 +407,10 @@ func unwrapVMK(s *format.SlotRecord, ik []byte, vaultID [16]byte) ([32]byte, uin
 // openSlot derives a slot's IK from the credential and unwraps its VMK. A
 // credential that does not fit the record is ErrNoSlot; one that fits but
 // does not produce its key is ErrVerifier; a key that does not open the
-// record is ErrAuth.
-func openSlot(s *format.SlotRecord, c Credential, vaultID [16]byte) ([32]byte, uint64, error) {
+// record is ErrAuth. kp is the vault's K_P, derived once per unlock from the
+// header and the password before the slot loop (§3.1), nil while entangle is
+// 0; nothing here reads a record for entanglement.
+func openSlot(s *format.SlotRecord, c Credential, kp *[32]byte, vaultID [16]byte) ([32]byte, uint64, error) {
 	var zero [32]byte
 	switch cr := c.(type) {
 	case PasswordCredential:
@@ -445,17 +442,6 @@ func openSlot(s *format.SlotRecord, c Credential, vaultID [16]byte) ([32]byte, u
 		if s.Type != format.SlotExternalECDH || cr.Token == nil || !bytes.Equal(s.SlotPubkey, cr.Token.PublicKey()) {
 			return zero, 0, ErrNoSlot
 		}
-		var pw []byte
-		if s.Flags&format.FlagEntangledPassword != 0 {
-			if cr.Password == "" {
-				return zero, 0, ErrPasswordRequired
-			}
-			var err error
-			if pw, err = kdf.NormalizePassword(cr.Password); err != nil {
-				return zero, 0, fmt.Errorf("%w: %v", ErrParams, err)
-			}
-			defer kdf.Zero(pw)
-		}
 		// Trap 2: the epk comes from the file; validate it before it reaches
 		// the token. format.SlotRecord.Validate did so on decode; do it here
 		// too, so this function cannot be reached with an unvalidated point.
@@ -467,7 +453,7 @@ func openSlot(s *format.SlotRecord, c Credential, vaultID [16]byte) ([32]byte, u
 			return zero, 0, err
 		}
 		defer kdf.Zero(h)
-		pre, err := hardwarePre(s, h, pw, vaultID)
+		pre, err := hardwarePre(s, h, kp, vaultID)
 		if err != nil {
 			return zero, 0, err
 		}

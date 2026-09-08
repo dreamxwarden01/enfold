@@ -3009,3 +3009,78 @@ before a change or a switch-off, since a recovery-sheet holder can otherwise cle
 check is now one Argon2id run; it stays unasked, because whoever holds the VMK can enrol a way
 in of their own already, so the check is friction and not a guard. The alternative is written
 into APP.md §13 should the ruling be revisited.
+
+## 2026-09-08 — Revision 2 implemented: kdf → format → keystore → app → frontend, the contract, the second clean-room check
+
+The critiqued docs (ea0bc71) were implemented in one pass, layer by layer, without the user in
+the loop: five Opus readers mapped what each layer had to change; one synthesis wrote a
+cross-layer contract (exact Go and TS signatures, the order of work, per-layer acceptance tests,
+the removals, sixteen open questions with rulings); two checks — one against the docs, one
+against the code — found six blockers and ten majors in that contract before any code was
+written (the merge had no way to re-wrap an incoming archive key; the forgotten-record write
+guard blocked Restore; the rotation step omitted the identity re-wrap; the entangle mutations
+took no R25 freeze; an export from an entangled vault would not have opened; `BeginEnroll`'s
+real signature; `Keystore.size` already existed; `EncodeSlotRegion` and `Create`'s `u.kp`), all
+folded into a binding amendments file. Then ten implementers in sequence (kdf and format in
+parallel), each followed — at keystore, app and frontend — by an adversarial reviewer and a
+fixer: 72 files, +8 197 / −2 053, every layer green under `-short`, `-race` for keystore and
+app, `tsc`, `svelte-check` and the production build; `wails3 build` produces the exe.
+
+What the reviews changed after the fact, worth knowing when reading the code:
+
+- `AddSlot` no longer wraps from the handle's cached `K_P`: it re-reads the kind-2 record under
+  the live registry (`entangleKey`), because a change on another `Unlocked` over the same file
+  replaces the record without moving the generation. `Rotate` lost its entry guard for the same
+  reason (step 3 recovers `K_P` from the section anyway). `AddFirstWayIn` refuses a vault whose
+  header already carries an entanglement.
+- A token unlock now sets `CeremonyState.Method` on every mutation ceremony, not only at the
+  lock screen; the presence probe is bounded to one in flight (a global slot, reaped when the
+  abandoned probe answers); a `DeleteArchive` claims its record under the mutex before the file
+  work (`archive.busy` for anyone else); a merge whose incoming version KID this vault already
+  holds under another archive drops that version rather than aborting; registry writes that
+  change nothing no longer commit, so an unlock or a repeated Forget never restamps
+  `modified_at` (R35).
+- The Forget/Delete dialog works from a snapshot of the row (a forgotten record leaves the list
+  the instant the write lands); both actions close an open archive first, asking about unsaved
+  changes; the inspector's draft carries its baseline and re-stages when the record changes
+  under it; the lock screen names the tampering cause.
+
+Deviations from the contract the implementers recorded and that stand: the purge is its own
+registry write beside the receipts' (the two fail differently), skipped when nothing would drop;
+`archive.name_invalid` was minted (the only name code was a file's); a Delete of a record with no
+`last_path` answers `archive.file_unreachable`; a record forgotten in the *other* vault merges as
+an ordinary row (only this vault's forgotten records are unticked); `SetEntangled(true)` on a
+vault already on behaves as a change; `HistoryGenerations` sorts numerically (section order is
+by little-endian bytes); `ForeignRegistry.Tampered` is logged, not yet shown in the merge dialog
+(no view type carries it — a 1.1 item); the rotate dialog's pre-selected backup performs the
+export and then the rotation in one press. Two doc lists were widened by the code and are
+recorded here as amendments: `CeremonyState` gained `Method` and `RecoveryID`, `FileInfo` gained
+`RecoverySlots` and `Generation`, `VaultStatus` gained `TamperedReason`; APP §6's lock-screen
+list lost `SwapKey`; `Keys.Export` of APP §3 is the shipped `Keys.ExportBackup`; FORMAT §6's
+"the app's settings" became "the app's defaults" (no Argon2 knob exists). The merge's trial order
+is APP §13's literal one — the current VMK first, then the history descending — over the
+contract's "the file's generation first". A pre-existing form quirk was found and left: when one
+prompt directly follows another, the new field shows "This field is required." before anything
+is typed (`SecretInput`'s blur handling; not R2's).
+
+**The second clean-room check** (SCOPE "Before the format is frozen" item 1, reopened by R2):
+`tools/kdfvec` was rewritten for the new chain and the vectors regenerated; a test pins that
+every unchanged subtree — the hybrid slots, the subordinate keys, the archive keys, the wrapped
+VMK — is byte-identical to the pre-R2 file, so the regeneration touched only what R2 claimed. A
+second implementer, given FORMAT §1, §3, §3.3 and §7.6 and `kdf-inputs.json` alone, re-derived
+the changed subtree in its own Go module: **39 of 39 values identical**, including the 512 MiB
+anchor. Its eight recorded ambiguities produced two sentences and one vector fix: (1) no
+sentence said how a P-256 private scalar's bytes map onto the integer — §1's blanket
+little-endian rule pointed one way, `crypto/ecdh` the other, and a wrong choice still yields 32
+plausible bytes; R5 now says big-endian, as `NewPrivateKey` takes it. (2) `entangle_salt`'s width
+was stated only in §6, which the implementer was not allowed to read; §3.1 now says 16 bytes.
+(3) The vector file sealed its three secrets records under one key with one pinned nonce — the
+exact GCM nonce reuse R22 forbids, modelled in the reference file; each record now has its own
+pinned nonce and the vector test refuses a file where two coincide. The other five were
+conventions of the vector file (which scalar is the slot's, the bare 65-byte public key, which
+password the kind-2 record holds, what "retired generation" the single-generation file pins) and
+one implementation constraint (NFC without `x/text`), all resolved by the inputs' own note.
+
+Not yet done: the hardware test on the test key (the existing test vault is a registry-v2 file
+with the old header and will be refused; it is recreated), and the user's pass over the new
+screens.

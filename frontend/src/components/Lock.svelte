@@ -10,6 +10,7 @@
   import { motion, delay, LEAVE, OUT } from "../lib/motion";
   import { samePath } from "../lib/paths";
   import { firstRunCard } from "../lib/firstrun";
+  import { wordedForToken } from "../lib/outcome";
   import SecretInput from "./SecretInput.svelte";
   import RecoveryInput from "./RecoveryInput.svelte";
   import Dialog from "./Dialog.svelte";
@@ -46,13 +47,29 @@
     return 1;
   });
 
-  // tokenOnly is a fact about the ceremony, not the step: once a secret
-  // was asked for, the strip stays worded for a secret until the ceremony
-  // ends (the store tracks it from the events), and a check or a setup is
-  // never worded for a token.
-  const tokenOnly = $derived(!c || (!store.secretAsked && c.kind !== "verify" && c.kind !== "setup" && c.step !== CeremonyStep.StepPassword && c.step !== CeremonyStep.StepRecovery));
+  // tokenOnly is a fact about the ceremony's way in, not about the step:
+  // the strip stays worded for the key from the moment the core names the
+  // method until the ceremony ends. With the vault's entangled password
+  // on, a token unlock asks for a password before the PIN and is still a
+  // token flow (APP.md §13); a check or a setup is never worded for a
+  // token.
+  const tokenOnly = $derived(wordedForToken(store.unlockMethod, c));
   const outcome = $derived(store.outcome);
   const same = samePath;
+  // entangled: this vault asks for its own password before the key's PIN.
+  // Known while Locked (APP.md §2.1) and said before the button is
+  // pressed; the standalone password and the recovery key never ask for
+  // it, whatever the switch says.
+  const entangled = $derived(!!st?.entangled);
+  // The vault's recovery slots, as the prompt lists them so the right
+  // sheet is picked before a digit is typed (APP.md §13, FORMAT.md §18.4).
+  // Only where the key asked for is this vault's: an import's and a
+  // check's is the incoming file's own.
+  const recoverySlots = $derived(
+    c && (c.kind === "unlock" || c.kind === "setup")
+      ? store.slots.filter((s) => s.type === "recovery").map((s) => ({ label: s.label, id: s.recoveryId ?? "", createdAt: s.createdAt }))
+      : [],
+  );
 
   // Each card's body fades in when what it shows changes (APP.md §6): a
   // dim card shows a line that depends on tokenOnly alone, so it is keyed
@@ -195,7 +212,7 @@
     }
   }
 
-  const warnings = $derived((st?.warnings ?? []).filter((w) => w !== "vault.stale" || true));
+  const warnings = $derived(st?.warnings ?? []);
 
   // The header's padlock closes over the first moment the lock screen
   // shows (APP.md §6, Motion): open on arrival, shut after the settle.
@@ -357,7 +374,7 @@
                 <button type="button" class="btn sm" onclick={() => begin("recovery")}>Unlock with the recovery key only</button>
               {:else if !firstRun}
                 {#if st?.hasHardwareSlot}
-                  <button type="button" class="btn accent" onclick={() => begin("token")}><svg class="i i-14"><use href="#i-yubi" /></svg>Unlock with YubiKey</button>
+                  <button type="button" class="btn accent" title={entangled ? "This vault asks for its password before the key's PIN." : undefined} onclick={() => begin("token")}><svg class="i i-14"><use href="#i-yubi" /></svg>{entangled ? "Unlock with YubiKey — the vault's password first" : "Unlock with YubiKey"}</button>
                 {/if}
                 {#if st?.hasPasswordSlot}
                   <button type="button" class="btn" class:accent={!st?.hasHardwareSlot} onclick={() => begin("password")}><svg class="i i-14"><use href="#i-password" /></svg>Unlock with password</button>
@@ -371,7 +388,9 @@
             </div>
             <div class="u-foot">
               {#each warnings as w (w)}
-                <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy(w)}</span></div>
+                <!-- The reason names which cause the status carries; every
+                     other code ignores it (APP.md §13, VaultStatus.TamperedReason). -->
+                <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy(w, st?.tamperedReason)}</span></div>
               {/each}
               {#if (st?.openArchives ?? 0) > 0}
                 <div class="bar">
@@ -401,9 +420,9 @@
               <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={stepText(c.step).body} button="Unlock" error={c.error === "token.pin" ? "Wrong PIN." : ""} />
             {:else if c.step === CeremonyStep.StepPassword}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : "Password"} choose={c.choose} note={c.choose ? "Longer is better; a passphrase of several words is best." : ""} button={c.choose || c.kind !== "unlock" ? "Continue" : "Unlock"} error={c.error === "vault.auth" ? "Wrong password." : ""} />
+              <SecretInput kind="password" promptId={c.promptId} label={c.choose ? "Choose a password" : tokenOnly ? "The vault's password" : "Password"} choose={c.choose} note={c.choose ? "Longer is better; a passphrase of several words is best." : tokenOnly ? "This vault asks for its password before the key's PIN." : ""} button={c.choose || c.kind !== "unlock" ? "Continue" : "Unlock"} error={c.error === "vault.auth" ? "Wrong password." : ""} />
             {:else if c.step === CeremonyStep.StepRecovery}
-              <RecoveryInput promptId={c.promptId} note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : ""} button={c.kind === "verify" ? "Check" : c.kind === "unlock" ? "Unlock" : "Continue"} error={c.error === "vault.auth" ? "That is not this vault's recovery key. Check the digits against the paper." : ""} />
+              <RecoveryInput promptId={c.promptId} slots={recoverySlots} note={c.kind === "verify" ? "The backup's recovery key. Nothing here changes." : ""} button={c.kind === "verify" ? "Check" : c.kind === "unlock" ? "Unlock" : "Continue"} error={c.error === "vault.auth" ? "That is not this vault's recovery key. Check the digits against the paper." : ""} />
             {:else if c.step === CeremonyStep.StepManagementKey}
               <SecretInput kind="mgmtkey" promptId={c.promptId} label="Management key (hex)" note={stepText(c.step).body} />
             {/if}
@@ -414,7 +433,7 @@
               </div>
             </div>
           {:else}
-            <div class="u-meta q">{tokenOnly ? "The key's PIN, once it is matched." : "The secret this way in needs."}</div>
+            <div class="u-meta q">{tokenOnly ? (entangled ? "The vault's password, then the key's PIN." : "The key's PIN, once it is matched.") : "The secret this way in needs."}</div>
           {/if}
         </div>
         {/key}

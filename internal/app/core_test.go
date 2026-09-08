@@ -746,6 +746,28 @@ func TestSettingsAndTimeouts(t *testing.T) {
 	if strings.Contains(string(b), "idle") || !strings.Contains(string(b), `"theme": "dark"`) {
 		t.Fatalf("settings file: %s", b)
 	}
+	// lastExportAt is the settings file's too (APP.md §13): absent until an
+	// export, written as {vaultId, at}, and read back with the rest.
+	if strings.Contains(string(b), "lastExportAt") {
+		t.Fatalf("a stamp before any export: %s", b)
+	}
+	data := filepath.Join(h.dir, "data")
+	file := loadSettings(data)
+	file.LastExport = &lastExport{VaultID: "00112233445566778899aabbccddeeff", At: 1700000000}
+	if err := saveSettings(data, file); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(data, "settings.json"))
+	if !strings.Contains(string(b), `"lastExportAt"`) || !strings.Contains(string(b), `"vaultId"`) {
+		t.Fatalf("the stamp was not written: %s", b)
+	}
+	back := loadSettings(data)
+	if back.LastExport == nil || back.LastExport.At != 1700000000 || back.LastExport.VaultID != "00112233445566778899aabbccddeeff" {
+		t.Fatalf("the stamp did not read back: %+v", back.LastExport)
+	}
+	if back.Theme != "dark" || back.RecoveryRecordPct != file.RecoveryRecordPct {
+		t.Fatalf("the rest of the file changed: %+v", back)
+	}
 }
 
 func TestEnrollPasswordAndRemove(t *testing.T) {

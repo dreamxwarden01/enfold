@@ -132,31 +132,35 @@ func (c *Core) findArchive(id string) (*openArchive, *Error) {
 }
 
 // ListArchives lists the registry's archives — the session's registry when
-// unlocked, the open ones alone when locked.
+// unlocked, the open ones alone when locked. Hidden and forgotten records
+// are listed together under showHidden and the Status column separates them
+// (APP.md §13). Nothing here touches the file system: file missing is the
+// presence map's, refreshed by the pass after an unlock and by CheckFiles,
+// and a record no pass has measured has no Note at all.
 func (c *Core) ListArchives(showHidden bool) ([]ArchiveSummary, *Error) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	out := []ArchiveSummary{}
 	seen := map[[16]byte]bool{}
-	var check []int // rows whose file is looked for, outside the mutex
 	if sess, e := c.sessionLocked(); e == nil {
 		g := sess.Registry()
 		for i := range g.Archives {
 			a := &g.Archives[i]
-			if a.Policy&format.PolicyHidden != 0 && !showHidden {
+			if (a.Policy&format.PolicyHidden != 0 || a.Forgotten()) && !showHidden {
 				continue
 			}
 			s := ArchiveSummary{
 				ID: hexID(a.ArchiveID), Name: a.Name, Path: a.LastPath, StoredSize: a.LastStoredSize,
 				LastWrittenAt: a.LastWrittenAt, KeyVersion: len(a.Versions),
 				NoCompression: a.Policy&format.PolicyNoCompression != 0, Hidden: a.Policy&format.PolicyHidden != 0,
-				HashBehind: a.LastSeq - a.HashAtSeq,
+				HashBehind: a.LastSeq - a.HashAtSeq, Description: a.Description, ForgottenAt: a.ForgottenAt,
 			}
 			if _, owed := c.owed[a.ArchiveID]; owed {
 				s.ReceiptOwed = true
 			}
 			c.decorateLocked(&s, a.ArchiveID)
-			if !s.Open && a.LastPath != "" {
-				check = append(check, len(out))
+			if !s.Open && c.vault.presenceKnown[a.ArchiveID] && !c.vault.presence[a.ArchiveID] {
+				s.Note = CodeArchiveMissing
 			}
 			seen[a.ArchiveID] = true
 			out = append(out, s)
@@ -169,14 +173,6 @@ func (c *Core) ListArchives(showHidden bool) ([]ArchiveSummary, *Error) {
 		s := ArchiveSummary{ID: hexID(id), Name: oa.name, Path: oa.path, KeyVersion: oa.keyVersion, NoCompression: oa.noCompression, LastWrittenAt: oa.lastSavedAt}
 		c.decorateLocked(&s, id)
 		out = append(out, s)
-	}
-	c.mu.Unlock()
-	// The file system is asked with the state mutex released: an
-	// unreachable network path must not hold up a lock trigger.
-	for _, i := range check {
-		if _, err := os.Stat(out[i].Path); err != nil {
-			out[i].Note = CodeArchiveMissing
-		}
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	return out, nil
@@ -200,8 +196,11 @@ func (c *Core) decorateLocked(s *ArchiveSummary, id [16]byte) {
 	}
 }
 
-// emitArchivesChanged tells the frontend to re-fetch the list.
-func (c *Core) emitArchivesChanged() { c.emit(EventArchivesChanged, struct{}{}) }
+// emitArchivesChanged tells the frontend to re-fetch the list. Purged is
+// empty on every change but the purge's own (APP.md §13).
+func (c *Core) emitArchivesChanged() {
+	c.emit(EventArchivesChanged, ArchivesChanged{Purged: []string{}})
+}
 
 // emitArchiveChanged bumps and announces one archive's sequence.
 func (c *Core) emitArchiveChanged(oa *openArchive) {
@@ -281,6 +280,12 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 		c.mu.Unlock()
 		return st, nil
 	}
+	if c.deleting[aid] {
+		// A delete has claimed this record and its file is going: it is not
+		// opened between that claim and the write (APP.md §13).
+		c.mu.Unlock()
+		return ArchiveStat{}, coded(CodeArchiveBusy)
+	}
 	sess, e := c.sessionLocked()
 	if e != nil {
 		c.mu.Unlock()
@@ -290,6 +295,12 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 	if rec == nil {
 		c.mu.Unlock()
 		return ArchiveStat{}, coded(CodeArchiveNotFound)
+	}
+	if rec.Forgotten() {
+		// The keys are still there: the record is restored, not found again
+		// (APP.md §13).
+		c.mu.Unlock()
+		return ArchiveStat{}, coded(CodeArchiveForgotten)
 	}
 	keys, e := c.archiveKeysLocked(rec)
 	if e != nil {
@@ -316,6 +327,13 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 		c.mu.Unlock()
 		a.Close()
 		return c.OpenArchive(id)
+	}
+	if c.deleting[aid] {
+		// A delete claimed the record while the file was being opened: the
+		// handle is dropped rather than installed over a file that is going.
+		c.mu.Unlock()
+		a.Close()
+		return ArchiveStat{}, coded(CodeArchiveBusy)
 	}
 	c.archives[aid] = oa
 	oa.state = "open"

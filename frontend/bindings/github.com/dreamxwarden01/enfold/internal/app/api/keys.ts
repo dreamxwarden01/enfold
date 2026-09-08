@@ -14,8 +14,21 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as app$0 from "../models.js";
 
-export function BeginEnroll(kind: string, label: string, entangle: boolean): $CancellablePromise<void> {
-    return $Call.ByID(309727738, kind, label, entangle);
+/**
+ * BeginEnroll adds a way in: "token", "password" or "recovery". An
+ * enrolled key inherits the vault's entangled password and is wrapped from
+ * the kept K_P, so no password is chosen here (APP.md §13).
+ */
+export function BeginEnroll(kind: string, label: string): $CancellablePromise<void> {
+    return $Call.ByID(309727738, kind, label);
+}
+
+/**
+ * ChangeEntangledPassword replaces the vault's password; a ceremony, and
+ * the old password is never a field.
+ */
+export function ChangeEntangledPassword(): $CancellablePromise<void> {
+    return $Call.ByID(3747209322);
 }
 
 /**
@@ -23,6 +36,14 @@ export function BeginEnroll(kind: string, label: string, entangle: boolean): $Ca
  */
 export function DropRecoveryKey(handle: string): $CancellablePromise<void> {
     return $Call.ByID(3166408438, handle);
+}
+
+/**
+ * EntangledState is the Keys page's row for the vault's password: whether
+ * it is on, and whether the invariant would let it be turned on.
+ */
+export function EntangledState(): $CancellablePromise<app$0.EntangledState> {
+    return $Call.ByID(898464716);
 }
 
 export function ExportBackup(path: string): $CancellablePromise<void> {
@@ -51,6 +72,15 @@ export function RotateNow(): $CancellablePromise<void> {
  */
 export function SaveRecoveryKey(handle: string, path: string): $CancellablePromise<void> {
     return $Call.ByID(3463005426, handle, path);
+}
+
+/**
+ * SetEntangled turns the vault's password on or off; turning it on asks
+ * for the new password, turning it off asks for nothing. Both are
+ * ceremonies, and neither ever asks the old password.
+ */
+export function SetEntangled(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(2247223905, on);
 }
 
 export function Slots(): $CancellablePromise<app$0.SlotView[] | null> {

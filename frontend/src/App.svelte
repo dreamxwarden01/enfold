@@ -121,7 +121,7 @@
 
 {#if reveal}
   {#key reveal}
-    <RecoveryReveal url={reveal} kind={store.ceremony?.kind ?? ""} vaultName={store.status?.displayName ?? ""} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
+    <RecoveryReveal url={reveal} kind={store.ceremony?.kind ?? ""} vaultName={store.status?.displayName ?? ""} recoveryId={store.ceremony?.recoveryId ?? ""} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
   {/key}
 {/if}
 

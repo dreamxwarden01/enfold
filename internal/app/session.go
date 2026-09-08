@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
@@ -19,19 +20,30 @@ type vaultState struct {
 	path        string
 	displayName string
 
-	// Plaintext facts, cached at lock so the lock screen needs no handle.
-	vaultID         [16]byte
-	modifiedAt      int64
-	rotationPending bool
-	slots           []keystore.SlotInfo
-	stale           error
+	// Plaintext facts, cached at lock so the lock screen needs no handle
+	// (APP.md §2.1: vault id, modified_at, the entangle switch, the slots).
+	vaultID    [16]byte
+	modifiedAt int64
+	// entangled is the slot region header's switch and canEnable the §6.4
+	// verdict for turning it on: both are read from the open handle, which
+	// is nil while Locked, so both are cached like removable (FORMAT.md §6).
+	entangled     bool
+	canEnable     bool
+	vaultFileSize uint64
+	slots         []keystore.SlotInfo
+	stale         error
 
 	// Unlocked only.
-	ks       *keystore.Keystore
-	sess     *keystore.Session
-	tampered error
-	idle     time.Duration
-	absolute time.Duration
+	ks   *keystore.Keystore
+	sess *keystore.Session
+	// tampered is why the vault is frozen and tamperedReason which check
+	// said so (FORMAT.md §6.2, R25). A generation mismatch is met while
+	// unlocking and is the file's verdict, so it outlives the ceremony that
+	// met it: the lock screen names it rather than inviting another way in.
+	tampered       error
+	tamperedReason Code
+	idle           time.Duration
+	absolute       time.Duration
 
 	lastUnlockedAt time.Time
 	locksAt        time.Time
@@ -44,8 +56,16 @@ type vaultState struct {
 	broken    error
 	missing   string            // a configured vault that could not be opened at start
 	damaged   bool              // the missing file is there and not a keystore: the rebuild of APP.md §2.1 applies
-	escrowed  map[[16]byte]bool // the recovery slots that can be shown again (FORMAT R38); Unlocked only
 	removable map[[16]byte]bool // the slots the invariant lets go of (keystore.Removable)
+
+	// presence is what the last pass found for a record's last_path and
+	// presenceKnown which records were measured at all: a record absent from
+	// presenceKnown has an empty Status cell, never "missing" (APP.md §13).
+	presence      map[[16]byte]bool
+	presenceKnown map[[16]byte]bool
+	// incoming are the merge handles a records ceremony left: converted
+	// records, held until merged, discarded or dropped by a lock trigger.
+	incoming map[string]*incomingSet
 }
 
 // LockReason is why a lock trigger fired.
@@ -86,7 +106,10 @@ func (c *Core) openVaultFile(path, displayName string) error {
 			// Busy needs the path, so that "try again" can retry it; the
 			// facts are the file's, of which nothing is known yet.
 			c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
-			c.vault.vaultID, c.vault.modifiedAt, c.vault.rotationPending, c.vault.slots, c.vault.stale = [16]byte{}, 0, false, nil, nil
+			c.vault.vaultID, c.vault.modifiedAt, c.vault.slots, c.vault.stale = [16]byte{}, 0, nil, nil
+			c.vault.entangled, c.vault.canEnable, c.vault.vaultFileSize = false, false, 0
+			c.vault.tampered, c.vault.tamperedReason = nil, ""
+			c.dropMeasurementsLocked()
 			delete(c.vault.warnings, CodeVaultStale)
 			delete(c.vault.warnings, CodeVaultTampered)
 			c.vault.state = StateBusy
@@ -99,18 +122,30 @@ func (c *Core) openVaultFile(path, displayName string) error {
 	}
 	if ks.VaultID() != c.vault.vaultID {
 		// Another vault: receipts owed to the previous one do not carry
-		// over, and its clean archives are closed.
+		// over, its clean archives are closed, and what was measured or
+		// read for its records is another vault's.
 		c.owed = map[[16]byte]owedReceipt{}
 		c.closeCleanArchivesLocked()
+		c.dropMeasurementsLocked()
 	}
 	c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
 	c.cacheFactsLocked(ks)
-	delete(c.vault.warnings, CodeVaultTampered) // known only after an unlock; a fresh file starts clean
+	// Tampering is known only after an unlock, and a generation mismatch is
+	// a verdict on the file just closed: a fresh open starts clean.
+	c.vault.tampered, c.vault.tamperedReason = nil, ""
+	delete(c.vault.warnings, CodeVaultTampered)
 	ks.Close()
 	c.vault.state = StateLocked
 	c.vault.broken = nil
 	c.bump()
 	return nil
+}
+
+// dropMeasurementsLocked forgets what was measured or read about this
+// vault's records: the file-presence pass's results and every merge handle.
+// Caller holds the state mutex.
+func (c *Core) dropMeasurementsLocked() {
+	c.vault.presence, c.vault.presenceKnown, c.vault.incoming = nil, nil, nil
 }
 
 // closeCleanArchivesLocked closes the open archives that hold no staged
@@ -130,7 +165,9 @@ func (c *Core) closeCleanArchivesLocked() {
 func (c *Core) cacheFactsLocked(ks *keystore.Keystore) {
 	c.vault.vaultID = ks.VaultID()
 	c.vault.modifiedAt = ks.ModifiedAt()
-	c.vault.rotationPending = ks.RotationPending()
+	c.vault.entangled = ks.Entangled()
+	c.vault.canEnable = ks.CanEnableEntangled() == nil
+	c.vault.vaultFileSize = ks.FileSize()
 	c.vault.slots = ks.Slots()
 	c.vault.removable = make(map[[16]byte]bool, len(c.vault.slots))
 	for _, s := range c.vault.slots {
@@ -215,7 +252,8 @@ func (c *Core) statusLocked() VaultStatus {
 	v := &c.vault
 	st := VaultStatus{
 		Seq: c.seq, State: v.state, Path: v.path, DisplayName: v.displayName,
-		ModifiedAt: v.modifiedAt, RotationPending: v.rotationPending, Tampered: v.tampered != nil,
+		ModifiedAt: v.modifiedAt, Entangled: v.entangled, VaultFileSize: v.vaultFileSize,
+		Tampered: v.tampered != nil, TamperedReason: v.tamperedReason,
 		Warnings: []Code{}, Ops: []OpView{},
 	}
 	if !v.lastUnlockedAt.IsZero() {
@@ -319,6 +357,20 @@ func (c *Core) updateRegistry(fn func(g *registry) error) *Error {
 }
 
 func (c *Core) updateRegistryLocked(fn func(g *registry) error) *Error {
+	return c.updateRegistryAtLocked(false, func(g *registry, _ int64) error { return fn(g) })
+}
+
+// updateRegistryAtLocked is the one registry write, with the commit's own
+// modified_at handed to fn (FORMAT.md §18.2: a decision that depends on it is
+// made against the value that lands, never against a second clock reading).
+//
+// allowForgotten is the intent of APP.md §13's rule "no registry write updates
+// a forgotten record": only Restore, a merge tick that restores one, Delete's
+// own forget and the purge set it, and every other write is refused if it
+// changed a record the registry held as forgotten. The guard is the backstop
+// behind the per-call refusals, not a substitute for them. Caller holds the
+// state mutex.
+func (c *Core) updateRegistryAtLocked(allowForgotten bool, fn func(g *registry, modifiedAt int64) error) *Error {
 	sess, e := c.sessionLocked()
 	if e != nil {
 		return e
@@ -329,15 +381,73 @@ func (c *Core) updateRegistryLocked(fn func(g *registry) error) *Error {
 	if (c.cer != nil && c.cer.mutation) || (c.pending != nil && c.pending.vaultHandle) {
 		return coded(CodeCeremonyRunning)
 	}
-	if err := sess.UpdateRegistry(fn); err != nil {
+	err := sess.UpdateRegistryAt(func(g *registry, at int64) error {
+		var before map[[16]byte]format.ArchiveRecord
+		if !allowForgotten {
+			before = forgottenRecords(g)
+		}
+		if err := fn(g, at); err != nil {
+			return err
+		}
+		if !allowForgotten {
+			if id, ok := forgottenTouched(before, g); ok {
+				return fmt.Errorf("%w: archive %x is forgotten", coded(CodeArchiveForgotten), id)
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errNoChange) {
+		// fn found nothing to write. The commit is abandoned rather than
+		// made, so a write that changed nothing does not restamp the
+		// vault's modified_at (FORMAT.md R35, §18.2) — the value the lock
+		// screen shows and InspectFile compares.
+		return nil
+	}
+	if err != nil {
 		if errors.Is(err, keystore.ErrIndeterminate) || errors.Is(err, keystore.ErrConflict) {
 			c.brokenLocked(err)
 		}
 		return classify(err)
 	}
 	c.vault.modifiedAt = c.vault.ks.ModifiedAt()
-	c.vault.rotationPending = c.vault.ks.RotationPending()
+	c.vault.vaultFileSize = c.vault.ks.FileSize()
 	return nil
+}
+
+// forgottenRecords copies the forgotten records of g, versions included, so
+// that a write can be held to leaving them alone.
+func forgottenRecords(g *registry) map[[16]byte]format.ArchiveRecord {
+	var m map[[16]byte]format.ArchiveRecord
+	for i := range g.Archives {
+		a := &g.Archives[i]
+		if !a.Forgotten() {
+			continue
+		}
+		if m == nil {
+			m = map[[16]byte]format.ArchiveRecord{}
+		}
+		cp := *a
+		cp.Versions = append([]format.VersionRecord(nil), a.Versions...)
+		m[a.ArchiveID] = cp
+	}
+	return m
+}
+
+// forgottenTouched reports the first record that was forgotten before the
+// write and is not byte-for-byte what it was. A record that went entirely is
+// the purge's doing and is checked by its caller's intent, not here.
+func forgottenTouched(before map[[16]byte]format.ArchiveRecord, g *registry) ([16]byte, bool) {
+	for i := range g.Archives {
+		a := &g.Archives[i]
+		was, had := before[a.ArchiveID]
+		if !had {
+			continue
+		}
+		if !reflect.DeepEqual(was, *a) {
+			return a.ArchiveID, true
+		}
+	}
+	return [16]byte{}, false
 }
 
 // brokenLocked enters Broken: keys zeroed, timers stopped, archives left
@@ -350,7 +460,6 @@ func (c *Core) brokenLocked(err error) {
 		v.sess.Lock()
 		v.sess = nil
 	}
-	v.escrowed = nil
 	v.state = StateBroken
 	c.bump()
 }
@@ -419,6 +528,9 @@ func (c *Core) LockNow(reason LockReason) {
 	}
 	// A pending touch is never adopted after a trigger (§2.2).
 	c.dropPendingLocked()
+	// A merge's converted records hold this vault's archive keys: dropped in
+	// every state, like the recovery key a reveal holds (APP.md §13).
+	c.vault.incoming = nil
 	// A recovery key held for a reveal (APP.md §3 Keys) is dropped in every
 	// state: nothing decrypted outlives a trigger.
 	preview := c.preview
@@ -435,8 +547,7 @@ func (c *Core) LockNow(reason LockReason) {
 	}
 	ks := v.ks
 	v.sess, v.ks = nil, nil
-	v.tampered = nil
-	v.escrowed = nil
+	v.tampered, v.tamperedReason = nil, ""
 	v.state = StateLocked
 	c.bump()
 	c.lockWG.Add(1)
@@ -602,6 +713,11 @@ func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlock
 		return
 	}
 	v.tampered = unl.Tampered()
+	if v.tampered != nil {
+		v.tamperedReason = CodeTamperedHash
+	} else {
+		v.tamperedReason = ""
+	}
 	unl.Close()
 	if v.ks != nil && v.ks != ks {
 		v.ks.Close()
@@ -611,7 +727,6 @@ func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlock
 	}
 	v.ks, v.sess = ks, sess
 	c.cacheFactsLocked(ks)
-	c.refreshEscrowedLocked()
 	now := c.now()
 	v.lastUnlockedAt = now
 	v.absoluteAt = time.Time{}
@@ -624,8 +739,81 @@ func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlock
 		delete(v.warnings, CodeVaultTampered)
 	}
 	c.armTimersLocked()
+	c.settleAfterUnlockLocked()
 	c.bump()
 }
+
+// settleAfterUnlockLocked is everything a successful unlock of the vault
+// kept here settles before any archive is opened (APP.md §13): the receipts
+// a lock stranded, then the purge of forgotten records whose retention has
+// run out, then the file-presence pass. One site, reached from the one place
+// that publishes the vault, so the ordering is structural rather than
+// remembered — and the unlock of a staged copy (VerifyBackup, InspectFile,
+// InspectRecords) never publishes, so it never purges. Caller holds the
+// state mutex.
+func (c *Core) settleAfterUnlockLocked() {
+	c.applyOwedLocked()
+	c.purgeForgottenLocked()
+	if rows, vaultID, ok := c.presenceRowsLocked(); ok {
+		go c.runPresencePass(rows, vaultID)
+	}
+}
+
+// purgeForgottenLocked drops the forgotten records whose retention has run
+// out, in one registry write whose own modified_at decides (FORMAT.md §18.2),
+// and announces what went. It is skipped entirely while the vault is
+// Tampered — every record is left to the next unlock — and a write refused
+// because a mutation ceremony holds the handle loses nothing: the records
+// stand and the next unlock purges them. Caller holds the state mutex.
+func (c *Core) purgeForgottenLocked() {
+	if c.vault.tampered != nil {
+		return
+	}
+	sess, e := c.sessionLocked()
+	if e != nil {
+		return
+	}
+	any := false
+	for i := range sess.Registry().Archives {
+		if sess.Registry().Archives[i].Forgotten() {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return
+	}
+	var purged []string
+	e = c.updateRegistryAtLocked(true, func(g *registry, modifiedAt int64) error {
+		for _, a := range g.PurgeForgotten(modifiedAt) {
+			purged = append(purged, a.Name)
+		}
+		if len(purged) == 0 {
+			// Nothing is due: the write is abandoned rather than committed,
+			// so a vault that opens every day does not restamp its
+			// modified_at for a purge that dropped nothing (R35).
+			return errNoChange
+		}
+		return nil
+	})
+	switch {
+	case len(purged) == 0:
+		return
+	case e != nil:
+		c.log("purge of forgotten records: %s", e.Code)
+		return
+	}
+	c.log("purge: %d forgotten record(s) dropped", len(purged))
+	go c.emit(EventArchivesChanged, ArchivesChanged{Purged: purged})
+}
+
+// errNoChange abandons a registry write that would change nothing, so the
+// commit — and with it modified_at — never records a write that wrote
+// nothing (FORMAT.md R35, §18.2). updateRegistryAtLocked answers the caller
+// with success. One view of the rule for the purge, a second Forget, a
+// Restore of a record that is not forgotten, and a rename or a description
+// set to the value already held.
+var errNoChange = errors.New("app: the registry write changes nothing")
 
 // applyOwedLocked writes receipts stranded by a lock before any archive is
 // opened under the new session. Caller holds the state mutex.
@@ -640,6 +828,12 @@ func (c *Core) applyOwedLocked() {
 			for i := range g.Archives {
 				a := &g.Archives[i]
 				if a.ArchiveID != id || a.CurrentKID != r.kid {
+					continue
+				}
+				if a.Forgotten() {
+					// The record was forgotten while the receipt was owed:
+					// its bookkeeping is moot, and no write but Restore's
+					// updates a forgotten record (APP.md §13).
 					continue
 				}
 				a.LastStoredSize, a.LastWrittenAt, a.LastSeq = r.size, r.writtenAt, r.seq

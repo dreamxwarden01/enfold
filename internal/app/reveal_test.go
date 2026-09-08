@@ -8,9 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/dreamxwarden01/enfold/internal/format"
-	"github.com/dreamxwarden01/enfold/internal/keystore"
 )
 
 // recoverySlotID finds the vault's recovery slot on the Keys view.
@@ -78,12 +75,23 @@ func TestRevealRecoveryKey(t *testing.T) {
 	if e := h.c.RevealRecoveryKey(pwID); !isCode(e, CodeSlotNotFound) {
 		t.Fatalf("a password slot: %v", e)
 	}
+	// The key's ID is on the view, derived once for the view, the reveal
+	// and the saved file (FORMAT.md §18.4).
+	var wantID string
 	for _, s := range h.c.Slots() {
-		if (s.Type == "recovery") != s.Escrowed {
-			t.Fatalf("escrowed on the view: %+v", s)
+		if s.Type == "recovery" {
+			wantID = s.RecoveryID
+		} else if s.RecoveryID != "" {
+			t.Fatalf("a slot that is not a recovery slot carries a key ID: %+v", s)
 		}
 	}
+	if len(wantID) != 9 || wantID[4] != '-' {
+		t.Fatalf("the recovery slot's ID: %q", wantID)
+	}
 	shown := reveal(t, h, rid)
+	if shown.RecoveryID != wantID {
+		t.Fatalf("the reveal shows %q, the view %q", shown.RecoveryID, wantID)
+	}
 	if st := h.status(); st.State != StateUnlocked {
 		t.Fatalf("a reveal changes the state: %s", st.State)
 	}
@@ -101,7 +109,7 @@ func TestRevealRecoveryKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{h.recovery, "Test vault", "Recovery key", "\r\n"} {
+	for _, want := range []string{h.recovery, "Test vault", "Recovery key", wantID, "\r\n"} {
 		if !strings.Contains(string(text), want) {
 			t.Fatalf("saved file lacks %q: %q", want, text)
 		}
@@ -160,69 +168,12 @@ func TestRevealRecoveryKey(t *testing.T) {
 	if code, _ := fetchSecret(t, shown.SlotLabel); code != 404 {
 		t.Fatalf("fetch after a lock: %d", code)
 	}
-	// Locked, the view does not claim to know.
+	// The ID is plaintext (FORMAT.md §18.4): the view has it while locked
+	// too, which is what lets the unlock prompt list the sheets.
 	for _, s := range h.c.Slots() {
-		if s.Escrowed {
-			t.Fatalf("escrowed while locked: %+v", s)
+		if s.Type == "recovery" && s.RecoveryID != wantID {
+			t.Fatalf("the key ID is not readable while locked: %+v", s)
 		}
-	}
-}
-
-// A recovery slot made before escrow has no record: the reveal says so
-// before asking anything, the view says so, and an unlock through the
-// key hands it in, after which it can be shown.
-func TestRevealOfKeyKeptBeforeEscrow(t *testing.T) {
-	h := newHarness(t, nil, nil)
-	h.c.SetAppOrigin("wails://wails")
-	// While the vault is locked no handle is open: strip the record.
-	ks, err := keystore.Open(h.vault)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unl, err := ks.Unlock(keystore.PasswordCredential{Password: testPassword})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := unl.UpdateRegistry(func(g *format.Registry) error {
-		g.Escrows = nil
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	unl.Close()
-	ks.Close()
-
-	h.unlockWithPassword()
-	rid, _ := recoverySlotID(t, h)
-	for _, s := range h.c.Slots() {
-		if s.Escrowed {
-			t.Fatalf("escrowed without a record: %+v", s)
-		}
-	}
-	if e := h.c.RevealRecoveryKey(rid); !isCode(e, CodeNoEscrow) {
-		t.Fatalf("no escrow: %v", e)
-	}
-	// Typed once, the key is kept: an unlock through it writes the record.
-	h.c.Lock()
-	h.rec.waitState(t, StateLocked)
-	h.rec.reset()
-	if e := h.c.BeginUnlock(MethodRecovery); e != nil {
-		t.Fatal(e)
-	}
-	p := h.rec.waitCeremony(t, StepRecovery, true)
-	h.c.SubmitSecret("recovery", p.PromptID, h.recovery)
-	h.rec.waitCeremony(t, StepDone, false)
-	h.rec.waitState(t, StateUnlocked)
-	escrowed := false
-	for _, s := range h.c.Slots() {
-		escrowed = escrowed || (s.RecipientID == rid && s.Escrowed)
-	}
-	if !escrowed {
-		t.Fatalf("the key that opened was not kept: %+v", h.c.Slots())
-	}
-	shown := reveal(t, h, rid)
-	if code, body := fetchSecret(t, shown.SlotLabel); code != 200 || body != h.recovery {
-		t.Fatalf("digits after handing in: %d %q", code, body)
 	}
 }
 

@@ -49,6 +49,17 @@ export function minutesLabel(min: number): string {
   return `${min} minutes`;
 }
 
+// keyId is a recovery key's ID (FORMAT.md §18.4): the recovery slot's
+// recipient_id, its first eight hex digits upper-cased and grouped
+// "3F7A-9C21". The digits' checksum catches a mistyped group; the ID
+// catches the wrong sheet. An id that is short or not hex has none, and
+// the page shows the label alone rather than a half-derived string.
+export function keyId(recipientId: string): string {
+  if (recipientId.length < 8 || !/^[0-9a-fA-F]+$/.test(recipientId)) return "";
+  const h = recipientId.slice(0, 8).toUpperCase();
+  return `${h.slice(0, 4)}-${h.slice(4)}`;
+}
+
 // leaf is the last segment of a stored name or a path.
 export function leaf(p: string): string {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));

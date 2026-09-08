@@ -47,15 +47,43 @@ func TestReplaceOfStagedAddStaysOne(t *testing.T) {
 }
 
 // A file that is not the copy the registry last saw is flagged, never
-// adopted silently; the next save records this copy and clears it.
+// adopted silently; the next save records this copy and clears it. The row's
+// Note is the presence map's until a pass has run: an unmeasured record is
+// blank, never "missing", so nothing takes the slot the mismatch needs
+// (APP.md §13).
 func TestCopyMismatchIsShown(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
+	h.waitPresencePass()
 	ap := filepath.Join(h.dir, "a.enf")
 	id, _ := h.c.CreateArchive(ap, "A", false)
 	older, err := os.ReadFile(ap)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The file is gone and no pass has run: the row says nothing about it.
+	if err := os.Remove(ap); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := h.c.ListArchives(false); list[0].Note != "" {
+		t.Fatalf("an unmeasured record: %+v", list[0])
+	}
+	if e := h.c.CheckFiles(); e != nil {
+		t.Fatal(e)
+	}
+	h.waitPresencePass()
+	if list, _ := h.c.ListArchives(false); list[0].Note != CodeArchiveMissing {
+		t.Fatalf("after a pass over an absent file: %+v", list[0])
+	}
+	if err := os.WriteFile(ap, older, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if e := h.c.CheckFiles(); e != nil {
+		t.Fatal(e)
+	}
+	h.waitPresencePass()
+	if list, _ := h.c.ListArchives(false); list[0].Note != "" {
+		t.Fatalf("after a pass over a file that is there: %+v", list[0])
 	}
 	h.c.OpenArchive(id)
 	f := filepath.Join(h.dir, "f.txt")

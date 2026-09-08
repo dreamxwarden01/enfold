@@ -29,30 +29,111 @@ func (c *Core) Slots() []SlotView {
 	out := make([]SlotView, 0, len(c.vault.slots))
 	for _, s := range c.vault.slots {
 		v := slotView(s)
-		v.Escrowed = c.vault.escrowed[s.RecipientID]
 		v.Removable = c.vault.removable[s.RecipientID]
 		out = append(out, v)
 	}
 	return out
 }
 
-// refreshEscrowedLocked reads which recovery slots have an escrow record
-// (FORMAT R38) from the session's registry: after an unlock and after a
-// slot change, never during one. Caller holds the state mutex.
-func (c *Core) refreshEscrowedLocked() {
-	v := &c.vault
-	v.escrowed = nil
-	if v.sess == nil {
-		return
+// EntangledState is the Keys page's row for the vault's password (APP.md
+// §13): the header's switch, and whether §6.4 would let it be turned on —
+// the same predicate that greys Remove, evaluated with no ceremony and no
+// VMK. Both come from the facts cached at lock, since the handle is closed
+// while Locked; CanEnable is false there, where no ceremony can start.
+func (c *Core) EntangledState() EntangledState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := EntangledState{On: c.vault.entangled}
+	if c.vault.state != StateUnlocked {
+		return st
 	}
-	reg := v.sess.Registry()
-	if reg == nil {
-		return
+	st.CanEnable = c.vault.canEnable
+	if !st.CanEnable {
+		st.Reason = CodeInvariant
 	}
-	v.escrowed = make(map[[16]byte]bool, len(reg.Escrows))
-	for _, e := range reg.Escrows {
-		v.escrowed[e.RecipientID] = true
+	return st
+}
+
+// SetEntangled turns the vault's password on or off (APP.md §13): a
+// ceremony for the VMK by any way in, then one offline write that draws a
+// fresh entangle_salt, re-wraps every active hardware slot from the kept
+// K_P and moves the header's switch (FORMAT.md §6, §18.1). Turning it on
+// asks for the new password — the page confirms it in two fields under the
+// one prompt — and is refused for the invariant before the ceremony starts
+// and before a password is typed; turning it off asks for nothing and is
+// never refused. The old password is not asked in either direction: whoever
+// reaches the VMK can already enrol a way in of their own.
+func (c *Core) SetEntangled(on bool) *Error {
+	if on {
+		c.mu.Lock()
+		unlocked, can := c.vault.state == StateUnlocked, c.vault.canEnable
+		frozen := c.vault.tampered != nil
+		c.mu.Unlock()
+		// R25's freeze is read here as well as in beginWithVMK: a
+		// pre-check that answered first would hide the reason behind an
+		// invariant the user cannot act on (APP.md §13).
+		if unlocked && frozen {
+			return coded(CodeVaultTampered)
+		}
+		if unlocked && !can {
+			return coded(CodeInvariant)
+		}
 	}
+	return c.beginMutation("entangle", func(cer *ceremony, unl *keystore.Unlocked) error {
+		// The key that unlocked is not needed any more: K_P is reached
+		// through the VMK, so it is released before any prompt.
+		cer.releaseCard()
+		var e *keystore.Entangle
+		if on {
+			pw, err := cer.askNew("password", StepPassword)
+			if err != nil {
+				return err
+			}
+			e = &keystore.Entangle{Password: pw, Argon2: defaultArgon2}
+		}
+		if err := cer.check(); err != nil {
+			return err
+		}
+		if err := unl.SetEntangled(on, e); err != nil {
+			return err
+		}
+		c.afterMutation()
+		return nil
+	})
+}
+
+// ChangeEntangledPassword replaces the vault's password (APP.md §13): the
+// same one-write shape as SetEntangled, and the old password is never a
+// field. Refused before any prompt while the switch is off, so a salt
+// redraw cannot happen by the wrong button.
+func (c *Core) ChangeEntangledPassword() *Error {
+	c.mu.Lock()
+	on, unlocked := c.vault.entangled, c.vault.state == StateUnlocked
+	frozen := c.vault.tampered != nil
+	c.mu.Unlock()
+	// The freeze answers before the switch-off refusal, for the same
+	// reason as in SetEntangled: the reason must be the one to act on.
+	if unlocked && frozen {
+		return coded(CodeVaultTampered)
+	}
+	if unlocked && !on {
+		return coded(CodeParams)
+	}
+	return c.beginMutation("entangle", func(cer *ceremony, unl *keystore.Unlocked) error {
+		cer.releaseCard()
+		pw, err := cer.askNew("password", StepPassword)
+		if err != nil {
+			return err
+		}
+		if err := cer.check(); err != nil {
+			return err
+		}
+		if err := unl.ChangeEntangledPassword(keystore.Entangle{Password: pw, Argon2: defaultArgon2}); err != nil {
+			return err
+		}
+		c.afterMutation()
+		return nil
+	})
 }
 
 // EnrollKind is which kind of slot an enrollment adds.
@@ -64,11 +145,35 @@ const (
 	EnrollRecovery EnrollKind = "recovery"
 )
 
-// EnrollOptions describes the slot to add.
+// EnrollOptions describes the slot to add. Entangle is the vault's switch
+// and belongs to the moments a vault's entanglement is chosen rather than
+// inherited — a create, an import's adopted backup, FinishSetup — never to
+// BeginEnroll, where an enrolled key takes the vault's setting (APP.md §13).
 type EnrollOptions struct {
 	Kind     EnrollKind
 	Label    string
-	Entangle bool // token slot with an entangled password
+	Entangle bool
+}
+
+// recipientSet is the ids a handle's slots hold right now, so that the slot
+// a mutation added can be told from the ones that were there.
+func recipientSet(slots []keystore.SlotInfo) map[[16]byte]bool {
+	m := make(map[[16]byte]bool, len(slots))
+	for _, s := range slots {
+		m[s.RecipientID] = true
+	}
+	return m
+}
+
+// newRecoveryID is the ID (FORMAT.md §18.4) of the recovery slot in slots
+// that before did not hold.
+func newRecoveryID(slots []keystore.SlotInfo, before map[[16]byte]bool) string {
+	for _, s := range slots {
+		if !before[s.RecipientID] && s.Type == format.SlotRecovery {
+			return recoveryID(s.RecipientID)
+		}
+	}
+	return ""
 }
 
 // beginMutation is a slot change that needs the VMK: the ceremony re-runs to
@@ -146,9 +251,10 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 	c.mu.Lock()
 	ks := c.vault.ks
 	slots := c.vault.slots
+	entangled := c.vault.entangled
 	var hasToken, hasPassword bool
 	for _, s := range slots {
-		if s.PublicKey != nil && !s.Stale {
+		if s.PublicKey != nil {
 			hasToken = true
 		}
 		if s.Type == format.SlotStandalonePassword {
@@ -166,7 +272,7 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 		if err := cer.settlePending(); err != nil {
 			return nil, nil, err
 		}
-		cred, _, _, err := cer.credential(MethodRecovery, nil)
+		cred, _, _, err := cer.credential(MethodRecovery, nil, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -177,8 +283,12 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 		return unl, nil, nil
 	}
 	if hasToken && c.deps.Cards != nil {
+		// The way in, recorded before the first prompt: on an entangled
+		// vault this branch asks for the password first, so nothing else
+		// distinguishes it from a standalone-password way in (§5.1).
+		cer.setMethod(MethodToken)
 		for {
-			h, card, slot, err := cer.tokenCredential(slots)
+			h, card, slot, err := cer.tokenCredential(slots, entangled)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -209,6 +319,7 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 			return nil, nil, err
 		}
 	}
+	cer.setMethod(MethodPassword)
 	pw, err := cer.ask("password", StepPassword, PINStatus{})
 	if err != nil {
 		return nil, nil, err
@@ -230,7 +341,6 @@ func (c *Core) afterMutation() {
 	if c.vault.ks != nil {
 		c.cacheFactsLocked(c.vault.ks)
 	}
-	c.refreshEscrowedLocked()
 	c.dropPendingLocked() // a slot change: whatever was pending is not adopted
 	c.mu.Unlock()
 	c.emitState()
@@ -272,31 +382,27 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 			if err := cer.check(); err != nil {
 				return err
 			}
+			before := recipientSet(unl.Keystore().Slots())
 			if err := unl.AddSlot(spec); err != nil {
 				return err
 			}
-			// Shown over the one-time channel; kept once more in the vault.
-			url, err := cer.mint(rk.Digits(), o.Label)
+			// Shown over the one-time channel with its ID, and kept once
+			// more in the vault (FORMAT R38, §18.4).
+			id := newRecoveryID(unl.Keystore().Slots(), before)
+			url, err := cer.mint(rk.Digits(), o.Label, id)
 			if err != nil {
 				return err
 			}
-			cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
+			cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel, s.RecoveryID = StepRecovery, url, id })
 			c.afterMutation()
 			return nil
 		case EnrollToken:
 			// The key that unlocked is released first — a verified card is
-			// not held across a prompt — then the entangled password is
-			// chosen before the key to enrol is touched: a cancel here
-			// leaves nothing generated on the token.
+			// not held across a prompt. An enrolled key inherits the vault's
+			// switch and is wrapped from the kept K_P, so no password is
+			// asked here (APP.md §13).
 			unlockPub := cer.releaseUnlocking()
 			hs := keystore.HardwareSlot{Label: o.Label}
-			if o.Entangle {
-				pw, err := cer.askNew("password", StepPassword)
-				if err != nil {
-					return err
-				}
-				hs.Password, hs.Argon2 = pw, defaultArgon2
-			}
 			pub, serial, err := cer.enrollToken(unlockPub, o.Label)
 			if err != nil {
 				return err
@@ -594,17 +700,14 @@ func (c *Core) RevealRecoveryKey(recipientID string) *Error {
 		if s.RecipientID == rid && s.Type == format.SlotRecovery {
 			found, label = true, s.Label
 		}
-		if (s.PublicKey != nil && !s.Stale) || s.Type == format.SlotStandalonePassword {
+		if s.PublicKey != nil || s.Type == format.SlotStandalonePassword {
 			protector = true
 		}
 	}
-	escrowed := v.escrowed[rid]
 	c.mu.Unlock()
 	switch {
 	case !found:
 		return coded(CodeSlotNotFound)
-	case !escrowed:
-		return coded(CodeNoEscrow)
 	case !protector:
 		return coded(CodeSetupNeeded)
 	}
@@ -615,18 +718,25 @@ func (c *Core) RevealRecoveryKey(recipientID string) *Error {
 		}
 		rk, err := unl.RecoveryKey(rid)
 		if err != nil {
+			if errors.Is(err, keystore.ErrEscrowMissing) {
+				// Bookkeeping, not damage: there is nothing to repair, since
+				// the key exists only on paper. Said after the unlock, which
+				// is never refused over it (FORMAT R38).
+				return &parkAt{StepFailed, CodeEscrowMissing}
+			}
 			if errors.Is(err, format.ErrInvalid) {
 				// The record does not open: the vault's problem, not an archive's.
 				return &parkAt{StepFailed, CodeVaultInvalid}
 			}
 			return err
 		}
-		url, err := cer.mint(rk.Digits(), label)
+		id := recoveryID(rid)
+		url, err := cer.mint(rk.Digits(), label, id)
 		kdf.Zero(rk[:])
 		if err != nil {
 			return err
 		}
-		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
+		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel, s.RecoveryID = StepRecovery, url, id })
 		return nil
 	})
 }
@@ -654,7 +764,7 @@ func (c *Core) SaveRecoveryKey(handle, path string) *Error {
 	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
 		return coded(CodeRecoveryPlace)
 	}
-	digits, label, ok := c.preview.secretValue(handle)
+	digits, label, id, ok := c.preview.secretValue(handle)
 	if !ok {
 		return coded(CodeStalePrompt)
 	}
@@ -662,7 +772,7 @@ func (c *Core) SaveRecoveryKey(handle, path string) *Error {
 	if err != nil {
 		return c.fail("save recovery key", err)
 	}
-	_, err = f.WriteString(recoveryKeyText(name, label, c.now(), digits))
+	_, err = f.WriteString(recoveryKeyText(name, label, id, c.now(), digits))
 	if err == nil {
 		err = f.Sync()
 	}
@@ -693,11 +803,12 @@ func (c *Core) DropRecoveryKey(handle string) *Error {
 
 // recoveryKeyText is the saved file: the digits, what they are for, and
 // what they are not. Windows line endings, for Notepad.
-func recoveryKeyText(name, label string, at time.Time, digits string) string {
+func recoveryKeyText(name, label, id string, at time.Time, digits string) string {
 	lines := []string{
 		"Enfold recovery key",
 		"Vault: " + name,
 		"Way in: " + label,
+		"Key ID: " + id, // FORMAT.md §18.4: what tells one sheet from another
 		"Saved: " + at.Format("2006-01-02 15:04"),
 		"",
 		digits,
@@ -742,7 +853,7 @@ func (c *Core) rotateWith(cer *ceremony, unl *keystore.Unlocked) error {
 	if err := cer.check(); err != nil {
 		return err
 	}
-	if _, err := unl.Rotate(keystore.RotateOptions{}); err != nil {
+	if err := unl.Rotate(); err != nil {
 		return err // run() enters Broken on an indeterminate outcome
 	}
 	next, err := unl.Session()
@@ -780,8 +891,48 @@ func (c *Core) ExportBackup(path string) *Error {
 		if err := cer.check(); err != nil {
 			return err
 		}
-		return unl.Export(path)
+		if err := unl.Export(path); err != nil {
+			return err
+		}
+		c.recordExport()
+		return nil
 	})
+}
+
+// recordExport stamps the settings file with this vault's last backup
+// (APP.md §13): a local, unauthenticated convenience that words the
+// confirmations of Forget and Delete and pre-selects the rotate dialog's
+// backup checkbox. It gates nothing cryptographic, so a failed write is
+// logged and nothing else.
+func (c *Core) recordExport() {
+	c.mu.Lock()
+	c.settings.LastExport = &lastExport{VaultID: hexID(c.vault.vaultID), At: c.now().Unix()}
+	file := c.settings
+	c.mu.Unlock()
+	if err := saveSettings(c.deps.DataDir, file); err != nil {
+		c.log("settings: %v", err)
+	}
+}
+
+// LastExportAt is when a backup of the vault kept here was last written,
+// in Unix seconds, and 0 for never (APP.md §13). The four checks are made
+// here rather than on the page: absent, zero, another vault's id, or a
+// stamp ahead of this clock all read as never, so no page ever holds
+// another vault's id or compares clocks for a value that words a
+// destructive confirmation.
+func (c *Core) LastExportAt() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	le := c.settings.LastExport
+	switch {
+	case le == nil || le.At <= 0:
+		return 0
+	case c.vault.state == StateNone || le.VaultID != hexID(c.vault.vaultID):
+		return 0
+	case le.At > c.now().Unix():
+		return 0
+	}
+	return le.At
 }
 
 // CreateVault makes a new keystore with a recovery slot and a first slot
@@ -853,7 +1004,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 		if err != nil {
 			return err
 		}
-		spec, err := cer.firstSlotSpec(first)
+		spec, ent, err := cer.firstWayIn(first)
 		if err != nil {
 			return err
 		}
@@ -861,11 +1012,15 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 			return err
 		}
 		cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-		unl, err := keystore.Create(staged, keystore.CreateOptions{Slots: []keystore.SlotSpec{keystore.RecoverySlot{Key: rk, Label: "Recovery key"}, spec}})
+		unl, err := keystore.Create(staged, keystore.CreateOptions{
+			Slots:    []keystore.SlotSpec{keystore.RecoverySlot{Key: rk, Label: "Recovery key"}, spec},
+			Entangle: ent, // the one moment a vault's switch is chosen (APP.md §13)
+		})
 		if err != nil {
 			return err
 		}
 		ks := unl.Keystore()
+		rid := newRecoveryID(ks.Slots(), nil)
 		unl.Close()
 		ks.Close()
 		// Built; installed only if nothing cut the ceremony short meanwhile.
@@ -882,7 +1037,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 		// Installed: the key is shown now — unless a lock trigger landed
 		// meanwhile, which drops every held key; then it is shown from
 		// the Keys page (FORMAT R38), and the create still succeeded.
-		url, err := cer.mint(rk.Digits(), "Recovery key")
+		url, err := cer.mint(rk.Digits(), "Recovery key", rid)
 		if err != nil {
 			c.log("ceremony %s: installed; a lock landed before the key was shown", cer.kind)
 			cer.set(func(s *CeremonyState) { s.Step = StepDone })
@@ -891,7 +1046,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 		// And the vault opens now, with the key just made: the user is in
 		// without unlocking again, and the key is shown over the vault.
 		cer.enterCreated(path, rk)
-		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel = StepRecovery, url })
+		cer.set(func(s *CeremonyState) { s.Step, s.SlotLabel, s.RecoveryID = StepRecovery, url, rid })
 		return nil
 	})
 	return nil
@@ -923,8 +1078,7 @@ func (cer *ceremony) enterCreated(path string, rk kdf.RecoveryKey) {
 		ks.Close()
 		return
 	}
-	c.publishUnlockedLocked(ks, unl)
-	c.applyOwedLocked()
+	c.publishUnlockedLocked(ks, unl) // settles the owed receipts
 	c.mu.Unlock()
 	c.emitState()
 }

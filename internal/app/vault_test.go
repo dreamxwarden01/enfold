@@ -109,8 +109,10 @@ func TestNothingStagedIsClean(t *testing.T) {
 	}
 }
 
-// Creating a vault with a token and an entangled password asks for the
-// password first, before anything is generated on the key.
+// Creating a vault with the entangled password on asks for the password
+// first, before anything is generated on the key; the switch is the
+// vault's, so it is on the status and readable while Locked, not on any
+// slot (FORMAT.md §6, §18.1).
 func TestCreateVaultTokenEntangled(t *testing.T) {
 	dir := t.TempDir()
 	card := newFakeCard("123456")
@@ -138,18 +140,17 @@ func TestCreateVaultTokenEntangled(t *testing.T) {
 	c.SubmitSecret("pin", pin.PromptID, "123456")
 	rec.waitCeremony(t, StepRecovery, false)
 	rec.waitState(t, StateUnlocked) // a create ends in the vault
-	var entangled int
-	for _, s := range c.Slots() {
-		if s.Type == "hardware" && s.Entangled {
-			entangled++
-		}
-	}
-	if entangled != 1 {
-		t.Fatalf("slots after create: %+v", c.Slots())
+	if st := c.Status(); !st.Entangled {
+		t.Fatalf("the vault's switch is not on the status: %+v", st)
 	}
 	// The key then unlocks with the password and its PIN.
 	c.Lock()
 	rec.waitState(t, StateLocked)
+	// And the switch is a plaintext fact: the lock screen has it with no
+	// handle open, which is what lets it ask for the password first.
+	if st := c.Status(); !st.Entangled || st.State != StateLocked {
+		t.Fatalf("the switch is not readable while locked: %+v", st)
+	}
 	rec.reset()
 	if e := c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
@@ -289,10 +290,69 @@ func makeVault(t *testing.T, path, password string) {
 	ks.Close()
 }
 
+// makeEntangledVault writes a vault with a hardware slot for pub and a
+// recovery slot, its entangled password on (FORMAT.md §6): the switch is
+// the file's, so a reader of it asks for that password whatever the vault
+// kept here does. The recovery key's digits come back for the tests that
+// need another way in.
+func makeEntangledVault(t *testing.T, path string, pub []byte, password string) string {
+	t.Helper()
+	rk, err := kdf.NewRecoveryKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unl, err := keystore.Create(path, keystore.CreateOptions{
+		Slots: []keystore.SlotSpec{
+			keystore.RecoverySlot{Key: rk, Label: "Recovery key"},
+			keystore.HardwareSlot{PublicKey: pub, Label: "Their key"},
+		},
+		Entangle: &keystore.Entangle{Password: password, Argon2: fast},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := unl.Keystore()
+	unl.Close()
+	ks.Close()
+	return rk.Digits()
+}
+
+// exportBackupWithRecovery writes a backup of a vault that has no password
+// slot, opening it with its own recovery key.
+func exportBackupWithRecovery(t *testing.T, vault, to, recovery string) {
+	t.Helper()
+	rk, err := kdf.ParseRecoveryDigits(recovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks, err := keystore.Open(vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ks.Close()
+	unl, err := ks.Unlock(keystore.RecoveryCredential{Key: rk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unl.Close()
+	if err := unl.Export(to); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func freshCore(t *testing.T, data string) (*Core, *recorder) {
 	t.Helper()
+	return freshCoreWithCards(t, data, nil)
+}
+
+func freshCoreWithCards(t *testing.T, data string, cards *fakeCards) (*Core, *recorder) {
+	t.Helper()
 	rec := &recorder{}
-	c, err := New(Deps{Events: rec, Clock: newFakeClock(), DataDir: data})
+	var cs Cards
+	if cards != nil {
+		cs = cards
+	}
+	c, err := New(Deps{Cards: cs, Events: rec, Clock: newFakeClock(), DataDir: data, Log: t.Logf})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,6 +432,36 @@ func TestImportVaultProvesThenInstalls(t *testing.T) {
 	if staged(data2) {
 		t.Fatal("the staged file was left behind")
 	}
+
+	// The proof takes the INCOMING file's switch, not the kept vault's: a
+	// machine whose own vault is not entangled still has to type the
+	// incoming vault's password (FORMAT.md §6, APP.md §13).
+	card := newFakeCard("123456")
+	pub := card.addKey(0x9d, true)
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	src := filepath.Join(t.TempDir(), "entangled.eks")
+	makeEntangledVault(t, src, pub, "the incoming vault password")
+	data3 := t.TempDir()
+	c3, rec3 := freshCoreWithCards(t, data3, cards)
+	if st := c3.Status(); st.Entangled {
+		t.Fatalf("a machine with no vault claims a switch: %+v", st)
+	}
+	if e := c3.ImportFile(src, "Theirs", MethodToken, EnrollOptions{}, false); e != nil {
+		t.Fatal(e)
+	}
+	pw := rec3.waitCeremony(t, StepPassword, true)
+	if pw.Choose {
+		t.Fatalf("the incoming vault's own password marked choose: %+v", pw)
+	}
+	c3.SubmitSecret("password", pw.PromptID, "the incoming vault password")
+	pin := rec3.waitCeremony(t, StepPIN, true)
+	c3.SubmitSecret("pin", pin.PromptID, "123456")
+	rec3.waitCeremony(t, StepDone, false)
+	rec3.waitState(t, StateLocked)
+	if st := c3.Status(); !st.Entangled {
+		t.Fatalf("the imported vault's switch was not carried: %+v", st)
+	}
 }
 
 // Importing a backup asks for its recovery key, then the first way in,
@@ -408,6 +498,12 @@ func TestImportBackupAdopts(t *testing.T) {
 	if n := len(c.Slots()); n != 2 {
 		t.Fatalf("slots: %+v", c.Slots())
 	}
+	// A backup's header carries entangle 0 (R28), and the first way in
+	// chose no password, so the adopted vault's switch is off whatever the
+	// source had.
+	if st.Entangled {
+		t.Fatalf("an adopted backup inherited a switch: %+v", st)
+	}
 	c.BeginUnlock(MethodPassword)
 	p = rec.waitCeremony(t, StepPassword, true)
 	c.SubmitSecret("password", p.PromptID, "a new password")
@@ -418,6 +514,61 @@ func TestImportBackupAdopts(t *testing.T) {
 	c.BeginUnlock(MethodRecovery)
 	r = rec.waitCeremony(t, StepRecovery, true)
 	c.SubmitSecret("recovery", r.PromptID, digits(h.recovery))
+	rec.waitState(t, StateUnlocked)
+}
+
+// An adopted backup's first way in is the moment its entanglement is
+// chosen, and the slot and the header land in one commit (FORMAT.md §15):
+// the source vault's own password does not open the adopted one, and the
+// new one does.
+func TestImportBackupChoosesTheEntanglementAfresh(t *testing.T) {
+	card := newFakeCard("123456")
+	pub := card.addKey(0x9d, true)
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	h := newHarnessEntangled(t, cards, pub, "the source vault password")
+	backup := filepath.Join(h.dir, "backup.eks")
+	exportBackupWithRecovery(t, h.vault, backup, h.recovery)
+
+	second := newFakeCard("654321")
+	second.mgmt = []byte("0123456789abcdef0123456789abcdef")
+	cards2 := &fakeCards{card: second}
+	cards2.setReaders("Yubico B")
+	data := t.TempDir()
+	c, rec := freshCoreWithCards(t, data, cards2)
+	if e := c.ImportFile(backup, "Restored", MethodRecovery, EnrollOptions{Kind: EnrollToken, Label: "New key", Entangle: true}, false); e != nil {
+		t.Fatal(e)
+	}
+	r := rec.waitCeremony(t, StepRecovery, true)
+	c.SubmitSecret("recovery", r.PromptID, digits(h.recovery))
+	p := rec.waitCeremony(t, StepPassword, true)
+	if !p.Choose {
+		t.Fatalf("the adopted vault's new password is not marked choose: %+v", p)
+	}
+	c.SubmitSecret("password", p.PromptID, "the adopted vault password")
+	pin := rec.waitCeremony(t, StepPIN, true)
+	c.SubmitSecret("pin", pin.PromptID, "654321")
+	rec.waitCeremony(t, StepDone, false)
+	rec.waitState(t, StateLocked)
+	if st := c.Status(); !st.Entangled || !st.HasHardwareSlot {
+		t.Fatalf("after adopting: %+v", st)
+	}
+	// The source vault's password does not open it: it is said and asked
+	// again in place, and the password chosen at adoption opens it.
+	rec.reset()
+	c.BeginUnlock(MethodToken)
+	pw := rec.waitCeremony(t, StepPassword, true)
+	c.SubmitSecret("password", pw.PromptID, "the source vault password")
+	pin = rec.waitCeremony(t, StepPIN, true)
+	c.SubmitSecret("pin", pin.PromptID, "654321")
+	again := rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != pw.PromptID
+	}).(CeremonyState)
+	if again.Error != CodeAuth {
+		t.Fatalf("the source vault's password opened the adopted one: %+v", again)
+	}
+	c.SubmitSecret("password", again.PromptID, "the adopted vault password")
 	rec.waitState(t, StateUnlocked)
 }
 
@@ -509,6 +660,11 @@ func TestFinishSetup(t *testing.T) {
 	}
 	if e := c.FinishSetup(EnrollOptions{Kind: EnrollPassword, Label: "pw"}); !isCode(e, CodeVaultUnlocked) {
 		t.Fatalf("setup again while unlocked: %v", e)
+	}
+	// A standalone password slot is never entangled, and the setup chose
+	// no vault password: the switch stays off.
+	if st := c.Status(); st.Entangled {
+		t.Fatalf("a switch appeared from a password setup: %+v", st)
 	}
 }
 

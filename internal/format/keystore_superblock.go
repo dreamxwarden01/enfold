@@ -12,17 +12,24 @@ const MaxRegistryLen = 64 << 20
 
 // KeystoreSuperblock is the 4 KiB keystore superblock (§5). Two copies
 // alternate; the valid one with the higher Seq is live.
+//
+// rotation_pending, on the wire between vmk_generation and modified_at, has no
+// field here: it is reserved since Revision 2 (§5, §18.3), so Encode writes
+// zero and Decode skips it. A non-zero byte on disk therefore decodes without
+// error and re-encodes as zero — failing on a checksummed plaintext byte would
+// hand anyone with write access a one-byte denial of service.
 type KeystoreSuperblock struct {
-	Seq             uint64
-	VaultID         [16]byte
-	SlotRegionOff   uint64 // SlotRegionAOff or SlotRegionBOff
-	SlotRegionLen   uint64 // encoded length of the live slot region, in [8, SlotRegionSize]
-	RegistryOff     uint64 // ≥ RegistryMinOff
-	RegistryLen     uint64 // ciphertext length, excluding the tag; ≤ MaxRegistryLen
-	RegistryNonce   [NonceSize]byte
-	RegistryTag     [TagSize]byte
-	VMKGeneration   uint64
-	RotationPending uint8
+	Seq           uint64
+	VaultID       [16]byte
+	SlotRegionOff uint64 // SlotRegionAOff or SlotRegionBOff
+	SlotRegionLen uint64 // encoded length of the live slot region, in [MinSlotRegionLen, SlotRegionSize]
+	RegistryOff   uint64 // ≥ RegistryMinOff
+	RegistryLen   uint64 // ciphertext length, excluding the tag; ≤ MaxRegistryLen
+	RegistryNonce [NonceSize]byte
+	RegistryTag   [TagSize]byte
+	// VMKGeneration is 1 at creation and incremented on each rotation, so 0
+	// never exists (§5) and is rejected here in both directions.
+	VMKGeneration uint64
 	// ModifiedAt is the wall-clock time (Unix seconds) of the commit that
 	// sealed the registry this superblock points at; never decreases
 	// across commits; an export's is the time of the export. Readable
@@ -35,8 +42,11 @@ func (s *KeystoreSuperblock) validate() error {
 	if _, ok := SlotRegionCopy(s.SlotRegionOff); !ok {
 		return invalidf("keystore superblock: slot_region_off 0x%x is neither copy A nor copy B", s.SlotRegionOff)
 	}
-	if s.SlotRegionLen < 8 || s.SlotRegionLen > SlotRegionSize {
-		return invalidf("keystore superblock: slot_region_len %d outside [8, %d]", s.SlotRegionLen, SlotRegionSize)
+	if s.SlotRegionLen < MinSlotRegionLen || s.SlotRegionLen > SlotRegionSize {
+		return invalidf("keystore superblock: slot_region_len %d outside [%d, %d]", s.SlotRegionLen, MinSlotRegionLen, SlotRegionSize)
+	}
+	if s.VMKGeneration == 0 {
+		return invalidf("keystore superblock: vmk_generation 0 never exists")
 	}
 	if s.RegistryOff < RegistryMinOff {
 		return invalidf("keystore superblock: registry_off 0x%x is inside the fixed regions", s.RegistryOff)
@@ -87,7 +97,7 @@ func (s *KeystoreSuperblock) Encode() ([]byte, error) {
 	w.fixed(s.RegistryNonce[:])
 	w.fixed(s.RegistryTag[:])
 	w.u64(s.VMKGeneration)
-	w.u8(s.RotationPending)
+	w.u8(0) // rotation_pending: reserved since Revision 2 (§5, §18.3)
 	w.i64(s.ModifiedAt)
 	w.zeros(checksumOffset - len(w.b)) // reserved1
 	sum := sha256.Sum256(w.b)
@@ -122,7 +132,7 @@ func DecodeKeystoreSuperblock(b []byte) (*KeystoreSuperblock, error) {
 	r.fixed(s.RegistryNonce[:])
 	r.fixed(s.RegistryTag[:])
 	s.VMKGeneration = r.u64()
-	s.RotationPending = r.u8()
+	r.skip(1) // rotation_pending: reserved, ignored on read (§1, §5)
 	s.ModifiedAt = r.i64()
 	if r.err != nil { // cannot happen with a fixed-size input, kept for symmetry
 		return nil, r.err

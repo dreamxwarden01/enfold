@@ -20,16 +20,27 @@ const (
 // VaultStatus is the whole state the frontend renders from; every field is
 // safe to show.
 type VaultStatus struct {
-	Seq             uint64         `json:"seq"`
-	State           VaultState     `json:"state"`
-	Path            string         `json:"path"`
-	DisplayName     string         `json:"displayName"`
-	LastUnlockedAt  int64          `json:"lastUnlockedAt"`
-	LocksAt         int64          `json:"locksAt"`    // idle deadline, 0 when locked
-	AbsoluteAt      int64          `json:"absoluteAt"` // absolute deadline, 0 when locked
-	ModifiedAt      int64          `json:"modifiedAt"` // the keystore's own date (R35)
-	RotationPending bool           `json:"rotationPending"`
-	Tampered        bool           `json:"tampered"`
+	Seq            uint64     `json:"seq"`
+	State          VaultState `json:"state"`
+	Path           string     `json:"path"`
+	DisplayName    string     `json:"displayName"`
+	LastUnlockedAt int64      `json:"lastUnlockedAt"`
+	LocksAt        int64      `json:"locksAt"`    // idle deadline, 0 when locked
+	AbsoluteAt     int64      `json:"absoluteAt"` // absolute deadline, 0 when locked
+	ModifiedAt     int64      `json:"modifiedAt"` // the keystore's own date (R35)
+	// Entangled is the slot region header's switch (FORMAT.md §6, §18.1):
+	// the vault's password, not a slot's, and a plaintext fact the lock
+	// screen has while Locked.
+	Entangled bool `json:"entangled"`
+	// VaultFileSize is the vault file's own size, for the Archives header
+	// line (APP.md §13).
+	VaultFileSize uint64 `json:"vaultFileSize"`
+	Tampered      bool   `json:"tampered"`
+	// TamperedReason names which check said so: vault.tampered_hash (the
+	// slot region does not match the registry, R25) or
+	// vault.tampered_generation (the slot region and the superblock do not
+	// belong together, FORMAT.md §6.2).
+	TamperedReason  Code           `json:"tamperedReason,omitempty"`
 	Warnings        []Code         `json:"warnings"`
 	Ceremony        *CeremonyState `json:"ceremony,omitempty"`
 	Ops             []OpView       `json:"ops"`
@@ -66,6 +77,7 @@ const (
 	StepDeriving      CeremonyStep = "deriving"
 	StepManagementKey CeremonyStep = "management_key"
 	StepRecovery      CeremonyStep = "recovery"
+	StepRecords       CeremonyStep = "records"
 	StepSwapKey       CeremonyStep = "swap_key"
 	StepReleasing     CeremonyStep = "releasing"
 	StepDone          CeremonyStep = "done"
@@ -74,19 +86,27 @@ const (
 
 // CeremonyState is the ceremony as the panel shows it.
 type CeremonyState struct {
-	Seq          uint64       `json:"seq"`
-	Kind         string       `json:"kind"` // unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal
-	Step         CeremonyStep `json:"step"`
-	PromptID     string       `json:"promptId,omitempty"`
-	Choose       bool         `json:"choose"` // the prompt asks for a new secret (create, enrol), not an existing one
-	SlotLabel    string       `json:"slotLabel,omitempty"`
-	Retries      int          `json:"retries"`
-	RetriesKnown bool         `json:"retriesKnown"`
-	Verified     bool         `json:"verified"`
-	ReaderCount  int          `json:"readerCount"`
-	N            int          `json:"n"` // touch ordinal on this token handle
-	PINAsked     bool         `json:"pinAsked"`
-	Error        Code         `json:"error,omitempty"`
+	Seq  uint64 `json:"seq"`
+	Kind string `json:"kind"` // unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal | entangle
+	// Method is the way in this ceremony took: token | password | recovery.
+	// The lock screen's wording follows the way in chosen, not whether a
+	// secret was asked — with the vault's password on, a token unlock asks
+	// for one too (APP.md §2.2, §13).
+	Method    string       `json:"method,omitempty"`
+	Step      CeremonyStep `json:"step"`
+	PromptID  string       `json:"promptId,omitempty"`
+	Choose    bool         `json:"choose"` // the prompt asks for a new secret (create, enrol), not an existing one
+	SlotLabel string       `json:"slotLabel,omitempty"`
+	// RecoveryID is the recovery key's ID at StepRecovery, XXXX-XXXX
+	// (FORMAT.md §18.4): the sheet the digits belong to.
+	RecoveryID   string `json:"recoveryId,omitempty"`
+	Retries      int    `json:"retries"`
+	RetriesKnown bool   `json:"retriesKnown"`
+	Verified     bool   `json:"verified"`
+	ReaderCount  int    `json:"readerCount"`
+	N            int    `json:"n"` // touch ordinal on this token handle
+	PINAsked     bool   `json:"pinAsked"`
+	Error        Code   `json:"error,omitempty"`
 	// SwapKey: the labels involved.
 	RemoveLabel string `json:"removeLabel,omitempty"`
 	InsertLabel string `json:"insertLabel,omitempty"`
@@ -105,16 +125,27 @@ type TextPreview struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// SlotView describes a way to unlock.
+// SlotView describes a way to unlock. Whether a hardware slot needs the
+// vault's password is not a slot fact since Revision 2 — it is
+// VaultStatus.Entangled — and every recovery slot has its kept key from the
+// commit that made it (FORMAT R38), so neither is on the view.
 type SlotView struct {
 	RecipientID string `json:"recipientId"`
 	Type        string `json:"type"` // hardware | password | recovery
 	Label       string `json:"label"`
 	CreatedAt   int64  `json:"createdAt"`
-	Entangled   bool   `json:"entangled"`
-	Stale       bool   `json:"stale"`
-	Escrowed    bool   `json:"escrowed"`  // a recovery slot whose key can be shown again (FORMAT R38); known while Unlocked
-	Removable   bool   `json:"removable"` // the invariant would still hold without it (keystore.Removable)
+	// RecoveryID is the key's ID, XXXX-XXXX, on recovery slots only
+	// (FORMAT.md §18.4): it catches the wrong sheet before a digit is typed.
+	RecoveryID string `json:"recoveryId,omitempty"`
+	Removable  bool   `json:"removable"` // the invariant would still hold without it (keystore.Removable)
+}
+
+// EntangledState is the Keys page's row for the vault's password (APP.md
+// §13): whether the switch is on, and whether it could be turned on at all.
+type EntangledState struct {
+	On        bool `json:"on"`
+	CanEnable bool `json:"canEnable"`
+	Reason    Code `json:"reason,omitempty"` // vault.invariant when CanEnable is false
 }
 
 // ArchiveSummary is a row of the archives list, from the registry plus
@@ -133,10 +164,76 @@ type ArchiveSummary struct {
 	Hidden        bool   `json:"hidden"`
 	HashBehind    uint64 `json:"hashBehind"` // commits since the hash was refreshed
 	Note          Code   `json:"note,omitempty"`
+	// Description is the record's own second line and ForgottenAt is zero
+	// unless the record was forgotten, in which case it is the modified_at
+	// of the write that forgot it (FORMAT.md §7.1, §18.2; APP.md §13).
+	Description string `json:"description,omitempty"`
+	ForgottenAt int64  `json:"forgottenAt"`
 	// For open archives only.
 	Files     int    `json:"files"`
 	FreeSpace uint64 `json:"freeSpace"`
 	State     string `json:"state,omitempty"` // open | dirty | compacting | needs_reopen
+}
+
+// VersionView is one key version of an archive record (FORMAT.md §7.2), for
+// the details modal: a key, never a snapshot, and never the key itself.
+type VersionView struct {
+	KID       string `json:"kid"`
+	CreatedAt int64  `json:"createdAt"`
+	RetiredAt int64  `json:"retiredAt"`
+	State     string `json:"state"` // current | retired
+}
+
+// ArchiveDetails is one registry record read whole (APP.md §13): hex strings
+// for ids and hashes, Unix seconds for times, the policy as named booleans.
+// It carries no wrapped_archive_key, no nonce and no offset, so §1's boundary
+// holds.
+type ArchiveDetails struct {
+	ArchiveID             string        `json:"archiveId"`
+	Name                  string        `json:"name"`
+	Description           string        `json:"description"`
+	CreatedAt             int64         `json:"createdAt"`
+	LastPath              string        `json:"lastPath"`
+	CurrentKID            string        `json:"currentKid"`
+	Revision              uint64        `json:"revision"`
+	LastWriter            string        `json:"lastWriter"`
+	LastSeq               uint64        `json:"lastSeq"`
+	HashAtSeq             uint64        `json:"hashAtSeq"`
+	LastCiphertextHash    string        `json:"lastCiphertextHash"`
+	LastStoredSize        uint64        `json:"lastStoredSize"`
+	LastWrittenAt         int64         `json:"lastWrittenAt"`
+	ForgottenAt           int64         `json:"forgottenAt"`
+	AlwaysRequireFullAuth bool          `json:"alwaysRequireFullAuth"`
+	Hidden                bool          `json:"hidden"`
+	NoCompression         bool          `json:"noCompression"`
+	Versions              []VersionView `json:"versions"`
+}
+
+// Difference is one field an incoming record holds differently: the local
+// value is kept and the row says what the other vault had (APP.md §13).
+type Difference struct {
+	Field  string `json:"field"`  // name | description | policy
+	Theirs string `json:"theirs"` // rendered for display only
+}
+
+// IncomingRecord is one row of a merge's checklist (APP.md §13). Action is
+// what ticking it would do; Ticked is the default.
+type IncomingRecord struct {
+	ArchiveID   string       `json:"archiveId"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	CreatedAt   int64        `json:"createdAt"`
+	Versions    int          `json:"versions"` // key versions the incoming record holds
+	Action      string       `json:"action"`   // skip | version | add | forgotten
+	ForgottenAt int64        `json:"forgottenAt"`
+	Differs     []Difference `json:"differs"`
+	Ticked      bool         `json:"ticked"`
+}
+
+// ArchivesChanged is the payload of EventArchivesChanged: the names the
+// purge dropped, empty on every other change (APP.md §13).
+type ArchivesChanged struct {
+	Purged []string `json:"purged"`
 }
 
 // ArchiveStat is the open archive's status strip.
@@ -209,6 +306,14 @@ type OpView struct {
 	Results   []FileOutcome `json:"results,omitempty"`
 }
 
+// SlotBrief names one recovery slot of an incoming file, so that a dialog
+// can say which key it will want before the button is pressed (APP.md §13).
+type SlotBrief struct {
+	RecipientID string `json:"recipientId"`
+	Label       string `json:"label"`
+	CreatedAt   int64  `json:"createdAt"`
+}
+
 // FileInfo is what a backup file says about itself before any unlock.
 type FileInfo struct {
 	Path         string `json:"path"`
@@ -220,6 +325,11 @@ type FileInfo struct {
 	Password     int    `json:"password"`
 	Recovery     int    `json:"recovery"`
 	Newer        bool   `json:"newer"` // than the vault kept (plaintext, R35: dated, not authenticated)
+	// RecoverySlots names the file's recovery slots and Generation is its
+	// plaintext vmk_generation (FORMAT.md §5): both inform a dialog and
+	// decide nothing (APP.md §13, FORMAT.md §18.2).
+	RecoverySlots []SlotBrief `json:"recoverySlots"`
+	Generation    uint64      `json:"generation"`
 }
 
 const (

@@ -83,8 +83,11 @@ func UnwrapVMK(ik []byte, wrapped [VMKWrapSize]byte, nonce [NonceSize]byte, aad 
 
 // WrapKey seals a 32-byte key under a 32-byte key-encryption key with a fresh
 // nonce: an archive key under KWK, a per-file DEK under the archive wrap key,
-// the identity key under KWK_identity. 32 bytes in, 48 out. The AAD for each
-// is fixed by FORMAT.md R22 and built by the format package.
+// the identity key under KWK_identity, and every record of the secrets section
+// under KWK_secrets (§7.6) — a recovery key reaching it through
+// RecoveryKey.Padded, since a secrets plaintext shorter than 32 bytes is
+// zero-padded. 32 bytes in, 48 out. The AAD for each is fixed by FORMAT.md R22
+// and built by the format package.
 func WrapKey(kek []byte, key [KeySize]byte, aad []byte) (wrapped [KeyWrapSize]byte, nonce [NonceSize]byte, err error) {
 	nonce, err = newNonce()
 	if err != nil {
@@ -118,37 +121,4 @@ func UnwrapKey(kek []byte, wrapped [KeyWrapSize]byte, nonce [NonceSize]byte, aad
 	copy(key[:], pt)
 	Zero(pt)
 	return key, nil
-}
-
-// WrapRecoveryKey seals a recovery key under KWK_recovery with a fresh nonce
-// (R38): 16 bytes in, 32 out. The AAD is FORMAT.md R22's, built by the
-// format package.
-func WrapRecoveryKey(kek []byte, r RecoveryKey, aad []byte) (wrapped [RecoveryWrapSize]byte, nonce [NonceSize]byte, err error) {
-	nonce, err = newNonce()
-	if err != nil {
-		return wrapped, nonce, err
-	}
-	g, err := gcm(kek)
-	if err != nil {
-		return wrapped, nonce, err
-	}
-	copy(wrapped[:], g.Seal(nil, nonce[:], r[:], aad))
-	return wrapped, nonce, nil
-}
-
-// UnwrapRecoveryKey is the inverse of WrapRecoveryKey; ErrAuth when the
-// record does not open under this key and AAD.
-func UnwrapRecoveryKey(kek []byte, wrapped [RecoveryWrapSize]byte, nonce [NonceSize]byte, aad []byte) (RecoveryKey, error) {
-	var r RecoveryKey
-	g, err := gcm(kek)
-	if err != nil {
-		return r, err
-	}
-	pt, err := g.Open(nil, nonce[:], wrapped[:], aad)
-	if err != nil {
-		return r, ErrAuth
-	}
-	copy(r[:], pt)
-	Zero(pt)
-	return r, nil
 }

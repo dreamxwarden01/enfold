@@ -581,18 +581,31 @@ type harness struct {
 	dir      string
 	vault    string
 	recovery string // the recovery key's digits
-	c        *Core
-	clk      *fakeClock
-	rec      *recorder
-	cards    *fakeCards
+	// entangled is the vault's password when its switch is on (FORMAT.md
+	// §6), empty when it is off: what a token unlock is asked for first.
+	entangled string
+	c         *Core
+	clk       *fakeClock
+	rec       *recorder
+	cards     *fakeCards
 }
 
 const testPassword = "correct horse battery staple"
 
 // newHarness makes a vault with a recovery slot and either a password slot
 // or, when hwPub is given, a hardware slot (the keystore invariant keeps
-// the two apart), and a core over it, locked.
+// the two apart), and a core over it, locked. The vault's switch is off.
 func newHarness(t *testing.T, cards *fakeCards, hwPub []byte) *harness {
+	t.Helper()
+	return newHarnessEntangled(t, cards, hwPub, "")
+}
+
+// newHarnessEntangled is newHarness with the vault's entangled password
+// chosen: the switch lives in the slot region header and belongs to the
+// vault, not to a slot (FORMAT.md §6, §18.1). An empty password leaves it
+// off. A password vault cannot be entangled usefully — the standalone slot
+// is never entangled — so it is the hardware harness this is for.
+func newHarnessEntangled(t *testing.T, cards *fakeCards, hwPub []byte, password string) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	vault := filepath.Join(dir, "vault.eks")
@@ -606,7 +619,11 @@ func newHarness(t *testing.T, cards *fakeCards, hwPub []byte) *harness {
 	} else {
 		specs = append(specs, keystore.PasswordSlot{Password: testPassword, Argon2: fast, Label: "Password"})
 	}
-	unl, err := keystore.Create(vault, keystore.CreateOptions{Slots: specs})
+	opts := keystore.CreateOptions{Slots: specs}
+	if password != "" {
+		opts.Entangle = &keystore.Entangle{Password: password, Argon2: fast}
+	}
+	unl, err := keystore.Create(vault, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +631,7 @@ func newHarness(t *testing.T, cards *fakeCards, hwPub []byte) *harness {
 	unl.Close()
 	ks.Close()
 
-	h := &harness{t: t, dir: dir, vault: vault, recovery: rk.Digits(), clk: newFakeClock(), rec: &recorder{}, cards: cards}
+	h := &harness{t: t, dir: dir, vault: vault, recovery: rk.Digits(), entangled: password, clk: newFakeClock(), rec: &recorder{}, cards: cards}
 	var cs Cards
 	if cards != nil {
 		cs = cards
@@ -649,17 +666,37 @@ func (h *harness) unlockWithPassword() {
 	h.rec.waitState(h.t, StateUnlocked)
 }
 
-// unlockWithToken unlocks through the fake card's PIN and touch.
+// unlockWithToken unlocks through the fake card's PIN and touch, answering
+// the vault's password first when its switch is on.
 func (h *harness) unlockWithToken() {
 	h.t.Helper()
 	h.rec.reset()
 	if e := h.c.BeginUnlock(MethodToken); e != nil {
 		h.t.Fatalf("begin: %v", e)
 	}
-	pin := h.rec.waitCeremony(h.t, StepPIN, true)
-	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.answerTokenUnlock("123456")
 	h.rec.waitCeremony(h.t, StepDone, false)
 	h.rec.waitState(h.t, StateUnlocked)
+}
+
+// answerTokenUnlock answers the unlock half of any ceremony that opens a
+// hardware vault: the vault's password first when its switch is on
+// (FORMAT.md §6), then the key's PIN.
+func (h *harness) answerTokenUnlock(pin string) {
+	h.t.Helper()
+	if h.entangled != "" {
+		pw := h.rec.waitCeremony(h.t, StepPassword, true)
+		if pw.Choose {
+			h.t.Fatalf("the vault's own password marked choose: %+v", pw)
+		}
+		if e := h.c.SubmitSecret("password", pw.PromptID, h.entangled); e != nil {
+			h.t.Fatalf("submit the vault's password: %v", e)
+		}
+	}
+	p := h.rec.waitCeremony(h.t, StepPIN, true)
+	if e := h.c.SubmitSecret("pin", p.PromptID, pin); e != nil {
+		h.t.Fatalf("submit the PIN: %v", e)
+	}
 }
 
 func (h *harness) status() VaultStatus { return h.c.Status() }

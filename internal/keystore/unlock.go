@@ -1,6 +1,7 @@
 package keystore
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 
@@ -16,26 +17,69 @@ import (
 // its own or another handle's — every mutation and Session refuses with
 // ErrStale, because its VMK no longer wraps anything in the file.
 type Unlocked struct {
-	k        *Keystore
-	vmk      [32]byte
-	gen      uint64   // the generation this VMK belongs to
-	slot     [16]byte // the recipient ID of the slot that opened the vault
-	password []byte   // the entangled password used, normalised; nil otherwise
-	tampered error    // ErrTampered when the slot region failed R25
+	k    *Keystore
+	vmk  [32]byte
+	gen  uint64   // the generation this VMK belongs to
+	slot [16]byte // the recipient ID of the slot that opened the vault
+	// kp is the vault's K_P as this handle read it from the kind-2 secrets
+	// record, nil while the header's entangle is 0. It is present whatever
+	// credential opened the vault — which is what lets a key be enrolled, the
+	// password changed and the VMK rotated from a recovery-key or standalone
+	// password way in, with no token and no password typed (§3.1, §18.1). It is
+	// this handle's copy and no more: a change on another handle over the same
+	// file replaces the record without moving the generation, so every wrap
+	// re-reads the record (Unlocked.entangleKey) instead of trusting this.
+	kp       *[32]byte
+	tampered error // ErrTampered when the slot region failed R25
 	closed   bool
 }
 
+// entangledKey is kdf.EntangledKey behind a variable so that a test can count
+// how often the package runs Argon2id. K_P depends on the password and the slot
+// region header alone (§3.1), so it is derived once per unlock, outside the
+// slot loop, and never once per slot — and once per set or change, in newHeader,
+// which is the only other site. Every K_P derivation in the package goes
+// through it, so a count of it is a count of them.
+var entangledKey = kdf.EntangledKey
+
 // Unlock opens the vault with c. It tries every active slot the credential
 // fits; a slot that opens wins. Errors, in the order they are decided:
-// ErrNoSlot when nothing fits; ErrPasswordRequired; ErrVerifier or ErrAuth
-// when the slot does not open; ErrStale when it opened to a VMK behind the
-// superblock's generation (§6.2); a corruption error when the registry does
-// not decrypt under the recovered VMK. A slot region that fails R25 does not
-// stop the unlock: see Unlocked.Tampered.
+// ErrPasswordRequired, decided from the slot region header before any token is
+// touched (§6); ErrNoSlot when nothing fits; ErrVerifier or ErrAuth when the
+// slot does not open; ErrTampered when the slot opened to a generation that is
+// not the superblock's, in either direction (§6.2); a corruption error when
+// the registry does not decrypt under the recovered VMK. A slot region that
+// fails R25 does not stop the unlock: see Unlocked.Tampered.
 func (k *Keystore) Unlock(c Credential) (*Unlocked, error) {
 	if err := k.usable(); err != nil {
 		return nil, err
 	}
+	vaultID := k.sb.VaultID
+
+	// K_P first, once: it depends on the password and the header, not on the
+	// slot, so deriving it inside the loop would run Argon2id once per slot
+	// (§3.1). The header's parameters were checked against R24 when the region
+	// decoded, so no hostile header reaches the allocation.
+	var kp *[32]byte
+	if hc, ok := c.(HardwareCredential); ok && k.hdr.Entangle {
+		// NormalizePassword's only error is the empty result (R4), and a
+		// password that normalises away is as absent as one never typed.
+		pw, err := kdf.NormalizePassword(hc.Password)
+		if err != nil {
+			return nil, ErrPasswordRequired
+		}
+		derived, err := entangledKey(pw, kdf.EntangleSalt(k.hdr.EntangleSalt), vaultID,
+			kdf.Argon2Params{MemKiB: k.hdr.Argon2M, Time: k.hdr.Argon2T, Threads: k.hdr.Argon2P})
+		kdf.Zero(pw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrParams, err)
+		}
+		// The kept copy is the authoritative one; this one is only compared
+		// with it and then gone.
+		defer kdf.Zero(derived[:])
+		kp = &derived
+	}
+
 	var (
 		vmk     [32]byte
 		gen     uint64
@@ -48,7 +92,7 @@ func (k *Keystore) Unlock(c Credential) (*Unlocked, error) {
 		if s.State != format.SlotActive {
 			continue
 		}
-		v, g, err := openSlot(s, c, k.sb.VaultID)
+		v, g, err := openSlot(s, c, kp, vaultID)
 		if err == nil {
 			vmk, gen, opened = v, g, s
 			break
@@ -60,13 +104,17 @@ func (k *Keystore) Unlock(c Credential) (*Unlocked, error) {
 	if opened == nil {
 		return nil, lastErr
 	}
+	// Both directions are a verdict, not a diagnosis (§6.2, §18.1): no slot
+	// can be behind a rotation any more, so a recovered generation that is not
+	// the superblock's means the region and the superblock do not belong
+	// together — a spliced or rolled-back region.
 	switch {
 	case gen < k.sb.VMKGeneration:
-		return nil, fmt.Errorf("%w: slot holds generation %d, vault is at %d", ErrStale, gen, k.sb.VMKGeneration)
+		return nil, fmt.Errorf("%w: the slot holds generation %d, the superblock %d: a rolled-back or spliced slot region", ErrTampered, gen, k.sb.VMKGeneration)
 	case gen > k.sb.VMKGeneration:
-		return nil, corrupt("slot holds generation %d, ahead of the superblock's %d", gen, k.sb.VMKGeneration)
+		return nil, fmt.Errorf("%w: the slot holds generation %d, ahead of the superblock's %d: a spliced slot region", ErrTampered, gen, k.sb.VMKGeneration)
 	}
-	meta := kdf.MetadataKey(vmk, k.sb.VaultID)
+	meta := kdf.MetadataKey(vmk, vaultID)
 	reg, err := k.openRegistry(meta)
 	kdf.Zero(meta)
 	if err != nil {
@@ -75,13 +123,57 @@ func (k *Keystore) Unlock(c Credential) (*Unlocked, error) {
 		}
 		return nil, err
 	}
+
+	// Four fail-closed checks the format layer cannot make: it sees one
+	// structure at a time and never the slot region beside the registry.
+	//
+	// 1. The registry agrees with the header it was written beside (§7.6).
+	// The header is the unauthenticated side, so a disagreement is a
+	// statement about it.
+	if err := reg.CheckEntangleAgreement(k.hdr.Entangle); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrTampered, err)
+	}
+	// 2 and 3. No vmk_history record carries the current generation, and
+	// none carries one above it (§18.2): the history is what the vault has
+	// retired, and a record at or ahead of the live generation is a registry
+	// this writer could not have produced.
+	for i := range reg.Secrets {
+		g, ok := reg.Secrets[i].HistoryGeneration()
+		if !ok {
+			continue
+		}
+		if g >= k.sb.VMKGeneration {
+			return nil, corrupt("the secrets section keeps a vmk_history record for generation %d, at or above the vault's %d", g, k.sb.VMKGeneration)
+		}
+	}
+	// 4. The kept K_P is authoritative; a derived one must equal it. They can
+	// differ only if the header and the authenticated registry disagree, so a
+	// mismatch is a statement about the header (§3.1, §18.1).
+	var kept *[32]byte
+	if k.hdr.Entangle {
+		rec := reg.Secret(format.SecretEntangledKey, [16]byte{})
+		if rec == nil { // CheckEntangleAgreement above already refused this
+			return nil, corrupt("the registry keeps no entangled_key record")
+		}
+		kwks := kdf.KWKSecrets(vmk, vaultID)
+		pt, err := openSecretWith(kwks, vaultID, rec)
+		kdf.Zero(kwks)
+		if err != nil {
+			return nil, corrupt("the entangled_key record does not open under KWK_secrets")
+		}
+		kept = &pt
+	}
+	if kp != nil && (kept == nil || subtle.ConstantTimeCompare(kp[:], kept[:]) != 1) {
+		if kept != nil {
+			kdf.Zero(kept[:])
+		}
+		return nil, fmt.Errorf("%w: the K_P the header derives is not the one the registry keeps", ErrTampered)
+	}
+
 	k.reg = reg
-	u := &Unlocked{k: k, vmk: vmk, gen: gen, slot: opened.RecipientID}
+	u := &Unlocked{k: k, vmk: vmk, gen: gen, slot: opened.RecipientID, kp: kept}
 	if err := reg.VerifySlotRegion(k.region); err != nil {
 		u.tampered = fmt.Errorf("%w: %v", ErrTampered, err)
-	}
-	if hc, ok := c.(HardwareCredential); ok && opened.Flags&format.FlagEntangledPassword != 0 {
-		u.password, _ = kdf.NormalizePassword(hc.Password)
 	}
 	return u, nil
 }
@@ -94,8 +186,8 @@ func (u *Unlocked) Keystore() *Keystore { return u.k }
 // the hash the registry authenticates (R25). The vault is readable through
 // the slot that opened it, and the registry can still be updated — a
 // registry write carries the authenticated hash forward, never a fresh one
-// over the unverified region; AddSlot, RemoveSlot, Rotate, RewrapStale and
-// Export refuse until the region is repaired.
+// over the unverified region; AddSlot, RemoveSlot, Rotate, Export and every
+// change to the header's entangle byte refuse until the region is repaired.
 func (u *Unlocked) Tampered() error { return u.tampered }
 
 // Registry is the decrypted registry, shared with every handle over the same
@@ -139,15 +231,17 @@ func (u *Unlocked) Session() (*Session, error) {
 	}, nil
 }
 
-// Close destroys the VMK and the entangled password.
+// Close destroys the VMK and the vault's K_P.
 func (u *Unlocked) Close() {
 	if u.closed {
 		return
 	}
 	u.closed = true
 	kdf.Zero(u.vmk[:])
-	kdf.Zero(u.password)
-	u.password = nil
+	if u.kp != nil {
+		kdf.Zero(u.kp[:])
+		u.kp = nil
+	}
 }
 
 // Session is the unlocked vault as the rest of the program sees it: the
@@ -206,21 +300,41 @@ func (s *Session) UpdateRegistry(fn func(*format.Registry) error) error {
 	return updateRegistry(s.k, s.meta, fn)
 }
 
+// UpdateRegistryAt is UpdateRegistry with the modified_at this commit will
+// carry handed to fn — the same value the superblock and the registry record.
+// A decision that depends on it (§18.2: what a write may drop, and the
+// forgotten_at a write stores) is then made against the value that lands, never
+// against a second reading of the clock.
+func (s *Session) UpdateRegistryAt(fn func(g *format.Registry, modifiedAt int64) error) error {
+	if err := s.live(); err != nil {
+		return err
+	}
+	return updateRegistryAt(s.k, s.meta, fn)
+}
+
 // updateRegistry is the one path a registry change takes: clone the
 // Keystore's registry, let fn edit the clone, validate, commit. The commit
 // installs the clone as the Keystore's registry.
 func updateRegistry(k *Keystore, meta []byte, fn func(*format.Registry) error) error {
+	return updateRegistryAt(k, meta, func(g *format.Registry, _ int64) error { return fn(g) })
+}
+
+// updateRegistryAt is updateRegistry with the commit's modified_at computed
+// once, before fn runs, and carried into the commit as tx.at — so what fn was
+// told and what the file records are one value (R35, §18.2).
+func updateRegistryAt(k *Keystore, meta []byte, fn func(*format.Registry, int64) error) error {
+	at := stamp(k.sb.ModifiedAt)
 	next, err := cloneRegistry(k.reg)
 	if err != nil {
 		return err
 	}
-	if err := fn(next); err != nil {
+	if err := fn(next, at); err != nil {
 		return err
 	}
 	if err := next.Validate(); err != nil {
 		return err
 	}
-	return k.commit(txn{reg: next, meta: meta, gen: k.sb.VMKGeneration, pending: k.sb.RotationPending != 0})
+	return k.commit(txn{reg: next, meta: meta, gen: k.sb.VMKGeneration, at: at})
 }
 
 // cloneRegistry deep-copies a registry through its own codec, so that a

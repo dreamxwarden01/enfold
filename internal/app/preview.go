@@ -30,6 +30,7 @@ type previewServer struct {
 type oneTimeSecret struct {
 	value   string
 	label   string // the way in the value belongs to, for the saved file
+	id      string // the recovery key's ID (FORMAT.md §18.4), for the saved file
 	expires time.Time
 	fetched bool // the URL was consumed; the value stays behind the handle for a save (APP.md §3 Keys)
 }
@@ -164,25 +165,25 @@ var secretLife = 10 * time.Minute
 // mintSecret registers a one-time secret and returns its URL. The value is
 // delivered once, to the app's origin; it stays behind the URL's token —
 // the reveal's handle — until dropped or expired.
-func (p *previewServer) mintSecret(value, label string) string {
+func (p *previewServer) mintSecret(value, label, id string) string {
 	tok := newToken()
 	p.mu.Lock()
-	p.oneTime[tok] = oneTimeSecret{value: value, label: label, expires: p.c.now().Add(secretLife)}
+	p.oneTime[tok] = oneTimeSecret{value: value, label: label, id: id, expires: p.c.now().Add(secretLife)}
 	p.mu.Unlock()
 	return fmt.Sprintf("http://127.0.0.1:%d/s/%s", p.port, tok)
 }
 
 // secretValue is the value behind a handle, fetched or not, while it
 // lives, with the label of the way in it belongs to.
-func (p *previewServer) secretValue(tok string) (value, label string, ok bool) {
+func (p *previewServer) secretValue(tok string) (value, label, id string, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s, ok := p.oneTime[tok]
 	if !ok || p.c.now().After(s.expires) {
 		delete(p.oneTime, tok)
-		return "", "", false
+		return "", "", "", false
 	}
-	return s.value, s.label, true
+	return s.value, s.label, s.id, true
 }
 
 // dropSecret ends a handle: the dialog closed.

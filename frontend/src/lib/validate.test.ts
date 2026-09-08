@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem } from "./validate";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -33,6 +33,61 @@ describe("secretProblem", () => {
   it("requires a name once whitespace is gone", () => {
     expect(requiredProblem("   ")).toBe(REQUIRED);
     expect(requiredProblem("Mine")).toBe("");
+  });
+});
+
+describe("descriptionProblem", () => {
+  it("measures bytes of UTF-8, not characters (FORMAT.md §7.1)", () => {
+    expect(DESCRIPTION_MAX).toBe(1024);
+    expect(descriptionProblem("")).toBe(""); // empty clears it
+    expect(descriptionProblem("a".repeat(1024))).toBe("");
+    expect(descriptionProblem("a".repeat(1025))).toBe(DESCRIPTION_RULE);
+    // 400 four-byte emoji: 400 characters, 1 600 bytes — over the bound
+    // although a character count would pass it.
+    const emoji = "\u{1F5C4}".repeat(400);
+    expect([...emoji].length).toBe(400);
+    expect(descriptionProblem(emoji)).toBe(DESCRIPTION_RULE);
+    // 512 two-byte characters fit exactly; one more does not.
+    expect(descriptionProblem("é".repeat(512))).toBe("");
+    expect(descriptionProblem("é".repeat(513))).toBe(DESCRIPTION_RULE);
+  });
+});
+
+describe("confirmNameProblem", () => {
+  it("compares trimmed and exactly, case and all (APP.md §13)", () => {
+    expect(confirmNameProblem("Photos 2024", "Photos 2024")).toBe("");
+    expect(confirmNameProblem("  Photos 2024  ", "Photos 2024")).toBe("");
+    expect(confirmNameProblem("Photos 2024", "  Photos 2024 ")).toBe("");
+    expect(confirmNameProblem("photos 2024", "Photos 2024")).toBe(CONFIRM_NAME);
+    expect(confirmNameProblem("Photos 202", "Photos 2024")).toBe(CONFIRM_NAME);
+    expect(confirmNameProblem("Photos  2024", "Photos 2024")).toBe(CONFIRM_NAME); // inner space
+  });
+  it("asks for the name before it judges it", () => {
+    expect(confirmNameProblem("", "Photos 2024")).toBe(REQUIRED);
+    expect(confirmNameProblem("   ", "Photos 2024")).toBe(REQUIRED);
+  });
+});
+
+describe("confirmSecretProblem", () => {
+  it("passes only two that are the same, byte for byte", () => {
+    expect(confirmSecretProblem("a long passphrase", "a long passphrase")).toBe("");
+    expect(confirmSecretProblem("a long passphrase", "a long passphras")).toBe(CONFIRM_SECRET);
+    expect(confirmSecretProblem("Passphrase", "passphrase")).toBe(CONFIRM_SECRET);
+    expect(confirmSecretProblem("pass ", "pass")).toBe(CONFIRM_SECRET); // never trimmed
+  });
+  it("asks for the second field before it judges it", () => {
+    expect(confirmSecretProblem("", "")).toBe(REQUIRED);
+    expect(confirmSecretProblem("something", "")).toBe(REQUIRED);
+  });
+});
+
+describe("nameProblem", () => {
+  it("refuses an empty name and one over 1 024 bytes (APP.md \u00a713)", () => {
+    expect(nameProblem("Photos 2026")).toBe("");
+    expect(nameProblem("   ")).toBe(REQUIRED);
+    expect(nameProblem("a".repeat(NAME_MAX))).toBe("");
+    expect(nameProblem("a".repeat(NAME_MAX + 1))).toBe(NAME_RULE);
+    expect(nameProblem("\u{1F600}".repeat(300))).toBe(NAME_RULE); // 300 characters, 1 200 bytes
   });
 });
 

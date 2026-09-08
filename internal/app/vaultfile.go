@@ -151,15 +151,18 @@ func (c *Core) InspectFile(path string) (FileInfo, *Error) {
 	return info, nil
 }
 
-// inspect classifies an open keystore file.
+// inspect classifies an open keystore file. Generation and the recovery
+// slots are the file's own plaintext: they say which key a merge dialog
+// will want before the button is pressed, and decide nothing (APP.md §13).
 func inspect(ks *keystore.Keystore, path string) FileInfo {
-	info := FileInfo{Path: path, ModifiedAt: ks.ModifiedAt()}
+	info := FileInfo{Path: path, ModifiedAt: ks.ModifiedAt(), Generation: ks.Generation()}
 	countSlots(&info, ks.Slots())
 	return info
 }
 
 func countSlots(info *FileInfo, slots []keystore.SlotInfo) {
 	info.Kind = FileKindBackup
+	info.RecoverySlots = []SlotBrief{}
 	for _, s := range slots {
 		info.SlotCount++
 		switch {
@@ -169,6 +172,9 @@ func countSlots(info *FileInfo, slots []keystore.SlotInfo) {
 			info.Password++
 		case s.Type == format.SlotRecovery:
 			info.Recovery++
+			info.RecoverySlots = append(info.RecoverySlots, SlotBrief{
+				RecipientID: hexID(s.RecipientID), Label: s.Label, CreatedAt: s.CreatedAt,
+			})
 		}
 		if s.Type != format.SlotRecovery {
 			info.Kind = FileKindVault
@@ -362,8 +368,11 @@ func (c *Core) install(staged, dst, displayName string) error {
 func (c *Core) dropFactsLocked(path, displayName string) {
 	v := &c.vault
 	v.state, v.path, v.displayName = StateNone, path, displayName
-	v.vaultID, v.modifiedAt, v.rotationPending, v.slots, v.stale = [16]byte{}, 0, false, nil, nil
+	v.vaultID, v.modifiedAt, v.slots, v.stale = [16]byte{}, 0, nil, nil
+	v.entangled, v.canEnable, v.vaultFileSize = false, false, 0
+	v.tampered, v.tamperedReason = nil, ""
 	v.broken = nil
+	c.dropMeasurementsLocked()
 	delete(v.warnings, CodeVaultStale)
 	delete(v.warnings, CodeVaultTampered)
 	c.bump()
@@ -548,7 +557,10 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 // makes a file the user's, rather than its plaintext.
 func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystore.Unlocked, error) {
 	for {
-		cred, hc, card, err := cer.credential(method, ks.Slots())
+		// The incoming file's own switch decides whether its password is
+		// asked: importing an entangled vault into a machine whose kept
+		// vault is not entangled still needs that file's password.
+		cred, hc, card, err := cer.credential(method, ks.Slots(), ks.Entangled())
 		if err != nil {
 			return nil, err
 		}
@@ -568,17 +580,18 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 			continue
 		}
 		cer.closeCard(card)
-		if err == nil {
-			cer.escrowOpenedKey(unl, cred)
-		}
 		return unl, err
 	}
 }
 
 // adoptBackup opens an incoming backup with its recovery key and gives it
-// its first way in; the file is a vault when it returns.
+// its first way in; the file is a vault when it returns. A backup's header
+// carries entangle 0 (R28), so its recovery key is never asked for a
+// password and the vault's entanglement is chosen afresh here — slot and
+// header landing in one commit, so the adopted vault is never a key without
+// its password for a moment (FORMAT.md §15).
 func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions) (*keystore.Unlocked, error) {
-	cred, _, _, err := cer.credential(MethodRecovery, nil)
+	cred, _, _, err := cer.credential(MethodRecovery, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -586,8 +599,7 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions) (*k
 	if err != nil {
 		return nil, err
 	}
-	cer.escrowOpenedKey(unl, cred)
-	spec, err := cer.firstSlotSpec(first)
+	spec, ent, err := cer.firstWayIn(first)
 	if err != nil {
 		unl.Close()
 		return nil, err
@@ -597,40 +609,42 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions) (*k
 		return nil, err
 	}
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
-	if err := unl.AddSlot(spec); err != nil {
+	if err := unl.AddFirstWayIn(spec, ent); err != nil {
 		unl.Close()
 		return nil, err
 	}
 	return unl, nil
 }
 
-// firstSlotSpec collects the first way in of a new vault: the chosen
-// secret first, then the key (APP.md §3, Vault). No card is held here.
-func (cer *ceremony) firstSlotSpec(first EnrollOptions) (keystore.SlotSpec, error) {
+// firstWayIn collects the first way in of a new vault: the chosen secret
+// first, then the key (APP.md §3, Vault). The vault's password is returned
+// beside the slot rather than on it — since Revision 2 it is the file's,
+// not the slot's (FORMAT.md §18.1) — so a create passes it in CreateOptions
+// and an adopted backup to AddFirstWayIn. No card is held here.
+func (cer *ceremony) firstWayIn(first EnrollOptions) (keystore.SlotSpec, *keystore.Entangle, error) {
 	switch first.Kind {
 	case EnrollPassword:
 		pw, err := cer.askNew("password", StepPassword)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return keystore.PasswordSlot{Password: pw, Argon2: defaultArgon2, Label: mustString(first.Label, "Password")}, nil
+		return keystore.PasswordSlot{Password: pw, Argon2: defaultArgon2, Label: mustString(first.Label, "Password")}, nil, nil
 	case EnrollToken:
-		hs := keystore.HardwareSlot{}
+		var ent *keystore.Entangle
 		if first.Entangle {
 			pw, err := cer.askNew("password", StepPassword)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			hs.Password, hs.Argon2 = pw, defaultArgon2
+			ent = &keystore.Entangle{Password: pw, Argon2: defaultArgon2}
 		}
 		pub, serial, err := cer.enrollToken(nil, first.Label) // nothing unlocked: no key to wait out
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		hs.PublicKey, hs.Label = pub, mustString(first.Label, keyName(serial))
-		return hs, nil
+		return keystore.HardwareSlot{PublicKey: pub, Label: mustString(first.Label, keyName(serial))}, ent, nil
 	}
-	return nil, coded(CodeParams)
+	return nil, nil, coded(CodeParams)
 }
 
 // FinishSetup gives a vault that has only its recovery slot — an adopted
@@ -720,7 +734,7 @@ func (c *Core) VerifyBackup(path string) *Error {
 			return err
 		}
 		defer ks.Close()
-		cred, _, _, err := cer.credential(MethodRecovery, nil)
+		cred, _, _, err := cer.credential(MethodRecovery, nil, false)
 		if err != nil {
 			return err
 		}

@@ -16,8 +16,15 @@
 // into FORMAT.md §3.4):
 //
 //   - The AAD for wrapped_vmk is every byte of the slot record from slot_state
-//     through wrap_nonce inclusive, followed by vault_id. record_len and
-//     wrapped_vmk are not part of it.
+//     through wrap_nonce inclusive, followed by vault_id, with no exception
+//     since Revision 2. record_len and wrapped_vmk are not part of it, and
+//     neither is the slot region header.
+//   - The slot region opens with a 32-byte header (§6) carrying the vault's
+//     entangle switch, its Argon2id parameters and entangle_salt; the header
+//     is validated before any record is decoded, so a hostile Argon2 header
+//     never reaches a derivation.
+//   - The registry is read and written as version 3 only, and its secrets
+//     section (§7.6) is strictly ascending by (kind, id).
 //   - Public keys carry a u16 length prefix, like strings and byte fields.
 //   - The archive superblock has magic ENFOLDS\x01 and carries the index
 //     (offset, ciphertext length, nonce, tag) and the free-space map (offset,

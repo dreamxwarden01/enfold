@@ -163,7 +163,9 @@ Everything else arrives by **import**, and **nothing replaces the vault kept her
 incoming file has proved itself.** `Vault.InspectFile` reads a file's plaintext facts through a
 staged copy in the data folder (so read-only media and a file another process holds work, and the
 vault's own path answers from the cached facts) — `FileInfo{Kind, ModifiedAt, VaultMatches, Newer,
-SlotCount, Hardware, Password, Recovery}`, where a *backup* has only recovery slots active (R28's
+SlotCount, Hardware, Password, Recovery, RecoverySlots []SlotBrief{RecipientID, Label, CreatedAt},
+Generation}` (the last two since §13, so the merge dialog can name which sheet it will want),
+where a *backup* has only recovery slots active (R28's
 export) and a *vault* has at least one other — and every one of those is a plaintext claim (R25,
 R35): they inform the dialog, they decide nothing. `Vault.ImportFile` stages the file as
 `vault.incoming.eks` (read raw, never opened in place), inspects that copy, and runs the **import
@@ -480,7 +482,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
 
 **Vault**
 - `Status() VaultStatus{Seq, State, Path, DisplayName, LastUnlockedAt, LocksAt, AbsoluteAt,
-  Entangled, VaultFileSize, Tampered, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
+  Entangled, VaultFileSize, Tampered, TamperedReason Code, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
   OpenArchives int}` plus the one-vault facts of §2.1 (`SetupNeeded`, `DefaultPath`,
   `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`);
   `Readers() []Reader{Name}`.
@@ -503,7 +505,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   page says "choose a password", never the same words as an existing one); a password typed to
   prove a current way in never does.
 - Events: `vault.state` (the whole status), `vault.ceremony {Seq, Step, PromptID, SlotLabel,
-  Retries, RetriesKnown, ReaderCount, N, Error}`, `vault.warning`, and from the shell
+  Retries, RetriesKnown, ReaderCount, N, Error, Method, RecoveryID}` (`Method` — token · password ·
+  recovery — is what the lock screen's wording follows, since an adopted pending touch carries no
+  argument on the page; `RecoveryID` rides `StepRecovery` beside the one-time URL in `SlotLabel`,
+  §13), `vault.warning`, and from the shell
   `secret.refused {Code}`. A ceremony whose last step is the recovery key's reveal ends with that
   step in its final event, so the page shows the one-time URL above whatever view it is on.
 
@@ -604,7 +609,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
   is a capability to a value the page already fetched, not the value. Every recovery slot has
   its record from the commit that made it (FORMAT R38, registry version 3 only).
 - `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`,
-  `Export(path)` (which records `lastExportAt`, §13), `VerifyBackup(path)` (§2.1: a staged copy opened with the
+  `ExportBackup(path)` (which records `lastExportAt`, §13; the "Export" of earlier drafts),
+  `VerifyBackup(path)` (§2.1: a staged copy opened with the
   recovery key, nothing kept). What a backup is and whether it is this vault is
   `Vault.InspectFile`; restoring a single archive record from a backup (`RestoreArchiveRecord`,
   re-wrap under the current KWK) is deferred (§12).
@@ -713,7 +719,8 @@ during which no program can reach the card anyway.
 ## 6. Screens (the Native look)
 
 Lock screen (one panel, three-step line, the states of §2.2 including TwoKeys, NoMatch, Busy,
-Blocked, SwapKey; secondary: recovery key, password, open a backup — never a second vault; the
+Blocked; `SwapKey` is the enrolment's alone since §13; secondary: recovery key, password, open a
+backup — never a second vault; the
 "workstation-lock detection unavailable" and BitLocker warnings; while the status says
 `pendingTouch` from a cancelled unlock, one quiet line under the key card: the key is still
 waiting for the touch that was cancelled — unlock again to pick it up, or touch it or pull it
@@ -1028,9 +1035,11 @@ needs the session's key, not the VMK, and the brakes are the typed name, the ret
 backup.
 
 **The purge has one trigger.** Forgotten records are dropped at the end of a successful unlock
-of the vault kept here, before any archive is opened, in one registry write whose own
-`modified_at` decides (FORMAT §18.2), and `archives.changed` follows with a line naming what
-went. No other registry write purges, so nothing is dropped while the vault is locked and no
+of the vault kept here, before any archive is opened, in one registry write of its own whose
+`modified_at` decides (FORMAT §18.2) — beside, not inside, the write that pays the owed receipts,
+since the two fail differently; a purge that would drop nothing writes nothing, so an unlock does
+not restamp `modified_at` — and `archives.changed` follows with a line naming what went. No other
+registry write purges, so nothing is dropped while the vault is locked and no
 Save on one archive destroys another's keys; the unlock of a staged copy — `VerifyBackup`,
 `InspectFile`, `InspectRecords` — purges nothing. Every record while the vault is Tampered is
 skipped and left to the next unlock.
@@ -1116,7 +1125,9 @@ confirmations above say that no backup is recorded here rather than name a date.
 unauthenticated convenience: it chooses wording and pre-selects the rotate dialog's backup
 checkbox, and it never gates a cryptographic operation.
 
-**What changes in §3.** `VaultStatus` gains `Entangled` and `VaultFileSize`; §2.1's cached facts
+**What changes in §3.** `VaultStatus` gains `Entangled`, `VaultFileSize` and `TamperedReason`
+(`vault.tampered_hash` · `vault.tampered_generation`, so the warning can tell a damaged file from a
+spliced or rolled-back region); §2.1's cached facts
 are `VaultID`, `ModifiedAt`, `Entangled`, `Slots()`. `SlotView` loses `Entangled`, `Stale` and
 `Escrowed` — every recovery slot has its escrow record from the commit that creates it (FORMAT
 R38), so `vault.no_escrow`, `EscrowOpenedKey` and the Keys page's "Made before Enfold kept
@@ -1138,6 +1149,22 @@ LastCiphertextHash, ForgottenAt, AlwaysRequireFullAuth, Hidden, NoCompression, V
 for ids and hashes, Unix seconds for times, the policy as named booleans, and no
 `wrapped_archive_key`, no nonce and no offset, so §1's boundary holds; refused with
 `vault.locked` outside Unlocked — `Archives.CheckFiles()`, `Vault.InspectRecords(path)` (a
-ceremony, returning a handle and the record list), `Vault.MergeRecords(handle, ids)` (a
-registry write on the session) and `Vault.DiscardRecords(handle)`, `Keys.EntangledState()`,
-`Keys.SetEntangled(on)` and `Keys.ChangeEntangledPassword()` (ceremonies), `Vault.LastExportAt`.
+ceremony of kind `records` that ends at `StepRecords` with the handle in `SlotLabel`, as the
+reveal ends with its URL), `Vault.IncomingRecords(handle) []IncomingRecord{ArchiveID, Name,
+Description, CreatedAt, Versions, Action skip · version · add · forgotten, ForgottenAt, Differs
+[]{Field, Theirs}, Ticked}`, `Vault.MergeRecords(handle, ids)` (a registry write on the session)
+and `Vault.DiscardRecords(handle)`, `Keys.EntangledState()`, `Keys.SetEntangled(on)` and
+`Keys.ChangeEntangledPassword()` (ceremonies of kind `entangle`; the standalone password and the
+first way in are the only `Choose` prompts, confirmed on the page in a second field under the one
+prompt), `Vault.LastExportAt() int64` (seconds, zero for *never*). Codes this adds:
+`archive.forgotten`, `archive.delete_failed`, `archive.file_unreachable`,
+`archive.not_this_archive` (the proven mismatch: nothing removed, the page asks once more before
+forgetting), `archive.description_long`, `archive.name_invalid` (a rename that is empty or over
+1 024 bytes), `vault.not_this_vault` (no VMK and no key opened the incoming registry — never
+worded as damage), `vault.tampered_hash`, `vault.tampered_generation`, `vault.escrow_missing` (the
+registry keeps no copy of this recovery key — replace the slot; never a refusal of the unlock).
+`vault.no_escrow` and `EscrowOpenedKey` go; `vault.stale` stays for the A/B stale-copy warning and
+`Session.Live`. *Import records…* lives in the Archives page's command bar — the vault must be
+Unlocked for it, so the lock screen cannot offer it — with a pointer from the Keys page's Backups
+card. The rotate dialog's pre-selected backup performs the export and then the rotation in one
+press; a Save dialog cancelled at the export rotates nothing.

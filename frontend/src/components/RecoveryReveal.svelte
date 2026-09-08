@@ -15,9 +15,13 @@
     url: string;
     kind: string;
     vaultName: string;
+    // recoveryId: this key's ID (FORMAT.md §18.4), shown here and printed
+    // on the sheet so the sheet can be told from another one later. The
+    // core derives it once and the saved text file carries the same line.
+    recoveryId?: string;
     ondone: () => void;
   }
-  let { url, kind, vaultName, ondone }: Props = $props();
+  let { url, kind, vaultName, recoveryId = "", ondone }: Props = $props();
   let digits = $state("");
   let failed = $state(false);
   let ask = $state<"" | "save" | "print" | "written">("");
@@ -80,10 +84,11 @@
     {#if !digits}
       <p>Loading…</p>
     {:else}
+      {#if recoveryId}<div class="key-id"><span class="kid-label">Key ID</span><span class="kid">{recoveryId}</span></div>{/if}
       <div class="digits">
         {#each groups as g, i (i)}<span>{g}</span>{/each}
       </div>
-      <p class="t-quiet">{digits.length} digits. They can be shown again from the Keys page — unlock, then prove a YubiKey or a password once more.</p>
+      <p class="t-quiet">{digits.length} digits{recoveryId ? `, key ID ${recoveryId}` : ""}. They can be shown again from the Keys page — unlock, then prove a YubiKey or a password once more.</p>
       {#if savedTo}
         <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Saved to {savedTo}.</span></div>
       {/if}
@@ -135,6 +140,7 @@
   <div class="print-sheet" aria-hidden="true">
     <h1>Enfold recovery key</h1>
     <p>Vault: {vaultName}</p>
+    {#if recoveryId}<p class="key-id">Key ID: <span class="kid">{recoveryId}</span></p>{/if}
     <p>Printed: {printedAt}</p>
     <div class="print-digits">
       {#each groups as g, i (i)}<span>{g}</span>{/each}

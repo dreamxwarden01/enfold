@@ -3,6 +3,11 @@
   // never for a password, whose slot is "Password" — and the entangled
   // password's tick. Shared by the create, import and finish-setup
   // dialogs; the secret itself is chosen in the ceremony, never here.
+  //
+  // Since Revision 2 the tick is the vault's one switch, not this key's
+  // (APP.md §13, FORMAT.md §3.1): every YubiKey enrolled later inherits it
+  // from the kept K_P and is never asked about it, so the words here say
+  // the vault's fact rather than the key's.
   interface Props {
     kind: "token" | "password";
     label: string;
@@ -24,9 +29,9 @@
     <div class="field-top"><label for="{idPrefix}-label">Name this key</label><span class="hint">Left empty, its serial number names it.</span></div>
     <input id="{idPrefix}-label" class="input" bind:value={label} placeholder="YubiKey 5C — desk" />
   </div>
-  <label class="check"><input type="checkbox" bind:checked={entangle} />Also require a password with this key</label>
+  <label class="check"><input type="checkbox" bind:checked={entangle} />Also require a password with every YubiKey in this vault</label>
   {#if entangle}
-    <p>You choose that password first, before the key is set up. Unlocking then needs both.</p>
+    <p>You choose it first, before the key is set up. Every YubiKey added later will ask for it too; the recovery key never does.</p>
   {/if}
 {:else}
   <p>You choose the password in the next step.</p>

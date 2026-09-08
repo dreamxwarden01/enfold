@@ -30,9 +30,20 @@ const (
 	NonceSize      = 12
 	WrappedVMKSize = 56 // VMK ‖ u64 generation (40) + tag
 	WrappedKeySize = 48 // 32-byte key + tag
-	// WrappedRecoveryKeySize is an escrowed recovery key (R38, §7.6): the
-	// 16-byte key + tag.
-	WrappedRecoveryKeySize = 16 + TagSize
+	// WrappedSecretSize is one secrets-section ciphertext (§7.6, R22): a
+	// 32-byte plaintext and its tag. A secret shorter than 32 bytes is padded
+	// by the crypto layer, never by this one.
+	WrappedSecretSize = 32 + TagSize
+
+	// MinSlotRegionLen is the slot region header (§6): u32 slot_count, u8
+	// entangle, u8 argon2_p, u8[2] reserved, u32 argon2_m, u32 argon2_t and
+	// u8[16] entangle_salt. The first record begins at offset 32 and a region
+	// shorter than the header is invalid.
+	MinSlotRegionLen = 32
+
+	// MaxDescriptionLen bounds an archive record's description (§7.1): at most
+	// 1 024 bytes of UTF-8, longer is invalid.
+	MaxDescriptionLen = 1024
 
 	MLKEMEKSize   = 1568
 	MLKEMCTSize   = 1568
@@ -95,15 +106,37 @@ const (
 	CurveX25519 CurveID = 2
 )
 
-// Slot flags (§6).
+// Slot flags (§6). Bit 0 (was has_entangled_password) and bit 3 (was
+// rewrap_stale) are reserved since Revision 2 and must be zero: the vault's
+// entangled password lives in the slot region header (§18.1) and no rotation
+// is deferred any more (§8), so R29 and R30 are retired with them.
 const (
-	FlagEntangledPassword uint32 = 1 << 0
-	FlagPRFRawSaltMode    uint32 = 1 << 1 // reserved with key_source 2
-	FlagUVRequired        uint32 = 1 << 2
-	FlagRewrapStale       uint32 = 1 << 3
+	FlagPRFRawSaltMode uint32 = 1 << 1 // reserved with key_source 2
+	FlagUVRequired     uint32 = 1 << 2
 
-	knownSlotFlags = FlagEntangledPassword | FlagPRFRawSaltMode | FlagUVRequired | FlagRewrapStale
+	knownSlotFlags = FlagPRFRawSaltMode | FlagUVRequired
 )
+
+// SecretKind is a secrets-section record's kind (§7.6). A value outside 1–3
+// fails closed (§1).
+type SecretKind uint8
+
+const (
+	// SecretRecoveryEscrow keeps one recovery key per active recovery slot,
+	// keyed by that slot's recipient_id (R38).
+	SecretRecoveryEscrow SecretKind = 1
+	// SecretEntangledKey keeps K_P, the vault's entangled password key
+	// (§3.1); at most one record, its id sixteen zero bytes.
+	SecretEntangledKey SecretKind = 2
+	// SecretVMKHistory keeps one retired VMK per past generation (§8), its id
+	// that generation as a little-endian u64 in bytes 0–7, bytes 8–15 zero.
+	SecretVMKHistory SecretKind = 3
+)
+
+// ForgottenRetentionSeconds is the thirty days of §18.2: a writer may drop a
+// forgotten archive record only in a write whose own modified_at exceeds
+// forgotten_at by more than this.
+const ForgottenRetentionSeconds int64 = 2_592_000
 
 // Archive record policy bits (§7.1).
 const (

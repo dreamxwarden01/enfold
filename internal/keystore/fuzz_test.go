@@ -32,6 +32,10 @@ func FuzzOpen(f *testing.F) {
 	f.Add(seed, uint32(0), uint8(0))
 	f.Add(seed, uint32(format.KeystoreSuperblockAOff+16), uint8(1))
 	f.Add(seed, uint32(format.SlotRegionAOff+8), uint8(0xff))
+	// A byte inside the 32-byte slot region header (§6): argon2_m sits at
+	// offset 8 of it, so this seed lands the Argon2 downgrade the guard below
+	// is about.
+	f.Add(seed, uint32(format.SlotRegionAOff+10), uint8(0x40))
 	f.Add(seed[:format.RegistryMinOff+10], uint32(0), uint8(0))
 	f.Fuzz(func(t *testing.T, data []byte, at uint32, x uint8) {
 		if int(at) < len(data) {
@@ -57,6 +61,14 @@ func FuzzOpen(f *testing.F) {
 		// after unlock — so a mutated argon2_m reaches Argon2id. R24's
 		// ceiling is 2 GiB, a format bound, not one for parallel fuzz
 		// workers. This target is about parsing and error classification.
+		//
+		// Since Revision 2 the slot region header is a second source of
+		// Argon2 parameters (§6): K_P runs at the header's argon2_m for any
+		// hardware credential, so the guard covers it too even though this
+		// target only sends a password credential today.
+		if k.hdr.Argon2M > 1024 {
+			return
+		}
 		for i := range k.slots {
 			if k.slots[i].Argon2M > 1024 {
 				return

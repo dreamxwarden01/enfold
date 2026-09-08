@@ -2,6 +2,7 @@ package kdf
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -88,5 +89,27 @@ func ParseRecoveryDigits(s string) (RecoveryKey, error) {
 		}
 		binary.LittleEndian.PutUint16(r[2*i:], uint16(n/recoveryMul))
 	}
+	return r, nil
+}
+
+// Padded is R ‖ sixteen zero bytes: the 32-byte plaintext of a
+// recovery_escrow record (§7.6), ready for WrapKey under KWK_secrets.
+func (r RecoveryKey) Padded() [KeySize]byte {
+	var pt [KeySize]byte
+	copy(pt[:], r[:])
+	return pt
+}
+
+// RecoveryKeyFromPadded is the inverse: a reader takes the first sixteen bytes
+// and rejects the record when the tail is not zero (§7.6), which is
+// ErrSecretPadding. The tail is compared in constant time — the plaintext is
+// key material, and a record that fails this check has already authenticated.
+func RecoveryKeyFromPadded(pt [KeySize]byte) (RecoveryKey, error) {
+	var r RecoveryKey
+	var zero [KeySize - RecoveryKeySize]byte
+	if subtle.ConstantTimeCompare(pt[RecoveryKeySize:], zero[:]) != 1 {
+		return r, ErrSecretPadding
+	}
+	copy(r[:], pt[:RecoveryKeySize])
 	return r, nil
 }

@@ -350,6 +350,7 @@ func (cer *ceremony) adoptPending(path string, slots []keystore.SlotInfo) *attem
 	cer.held = p.card
 	cer.unlockPub, cer.unlockLabel = p.slot.PublicKey, p.slot.Label
 	cer.state.Step, cer.state.ReaderCount, cer.state.SlotLabel, cer.state.Error, cer.state.PromptID = StepTouch, 1, p.slot.Label, "", ""
+	cer.state.Method = string(MethodToken) // an adopted touch is a token flow, whatever the page asked for
 	cer.state.N, cer.state.PINAsked = p.touch.N, p.touch.PINAsked
 	cer.state.Seq = c.bump()
 	st := cer.state

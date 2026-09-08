@@ -97,8 +97,8 @@ H     = ECDH(SK_hw, epk)                          on the token, P-256, after PIN
 pre   = H                                         when the vault has no entangled password
                                                   (slot region header entangle = 0, §6)
 otherwise, with the vault's entangled password P (Revision 2, §18.1):
-K_P   = Argon2id(P', vault_salt', m, t, p) → 32   P' per R4; m, t, p and entangle_salt are the
-                                                  slot region header's (§6);
+K_P   = Argon2id(P, vault_salt', m, t, p) → 32    P per R4; m, t, p and entangle_salt (16 bytes)
+                                                  are the slot region header's (§6);
                                                   vault_salt' = SHA-256(entangle_salt ‖ vault_id)
 pre   = HKDF(H ‖ K_P, salt = ∅, info = "Enfold/v1/entangle" ‖ vault_id ‖ recipient_id) → 32
 ```
@@ -212,7 +212,10 @@ machines with different input methods must derive the same key, and combining se
 usual way that fails. **An empty password is rejected at input**; "no entangled password" is the
 slot region header's `entangle` = 0 (§6, §18.1), never inferred from length.
 
-**R5 — Raw ECDH outputs.** P-256 ECDH output is the **32-byte big-endian X coordinate** of the
+**R5 — Raw ECDH outputs.** A P-256 private scalar, wherever one is given as bytes — a test
+vector's `hw_sk` and `hw_esk`, the app's ephemeral key — is the **32-byte big-endian integer**
+`crypto/ecdh`'s `NewPrivateKey` takes; §1's little-endian rule is for the file's integers, not for
+curve scalars (found by the Revision 2 clean-room check: no sentence said so). P-256 ECDH output is the **32-byte big-endian X coordinate** of the
 shared point, exactly as `crypto/ecdh` returns it. X25519 output is likewise the **raw 32-byte
 u-coordinate**. Nothing is hashed at this stage on either curve; `H` feeds the HKDF of §3.1 — as
 `H ‖ K_P`, or is `pre` itself when the vault has no entangled password — and `H_x` feeds the
@@ -671,7 +674,7 @@ indistinguishable at that moment from a wrong password; it is named as tampering
 is opened a way that does not use the header, and from then R25's freeze applies — no rotation,
 re-wrap or slot mutation, which includes turning the password on, changing it and enrolling a
 key. A write never takes these values from the file: setting or changing the password draws a
-fresh salt and takes `argon2_m/t/p` from the app's settings, and every other write copies the
+fresh salt and takes `argon2_m/t/p` from the app's defaults, and every other write copies the
 header forward byte for byte after R25 has passed.
 
 | Field | Type | Notes |
@@ -1309,7 +1312,7 @@ document is the specification and this section keeps what changed and why.
 One password for every hardware slot, one switch for all of them (DECISIONS 2026-09-07). It is a
 password people keep, and people keep one; and its purpose — a second factor should the token or
 its curve be broken — is served by one password as well as by many, since any one of them would
-open the vault. The chain (§3.1) puts `K_P = Argon2id(P', vault_salt')` on the password alone,
+open the vault. The chain (§3.1) puts `K_P = Argon2id(P, vault_salt')` on the password alone,
 and `pre = HKDF(H ‖ K_P, …)` mixes the token in after the KDF, so that `K_P` can be **kept
 under `KWK_secrets`** (§7.6). With it every hardware slot can be re-wrapped from its stored
 `slot_pubkey` — a fresh ephemeral ECDH gives `H` — with no token present and no password typed:

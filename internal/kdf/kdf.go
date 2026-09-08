@@ -13,34 +13,45 @@ import (
 
 // Sizes, in bytes.
 const (
-	KeySize     = 32
-	SeedXSize   = 32
-	SeedKSize   = 64
-	IDSize      = 16
-	SaltSize    = 32
-	NonceSize   = 12
-	TagSize     = 16
-	VMKWrapSize = KeySize + 8 + TagSize // R12: VMK ‖ u64 generation, sealed
+	KeySize          = 32
+	SeedXSize        = 32
+	SeedKSize        = 64
+	IDSize           = 16
+	SaltSize         = 32
+	EntangleSaltSize = 16 // the slot region header's entangle_salt (FORMAT §6)
+	NonceSize        = 12
+	TagSize          = 16
+	VMKWrapSize      = KeySize + 8 + TagSize // R12: VMK ‖ u64 generation, sealed
+	// KeyWrapSize seals a 32-byte key: an archive key, a DEK, the identity
+	// key — and every secrets record (§7.6, R22), whose plaintext is padded
+	// to 32 where the secret is shorter.
 	KeyWrapSize = KeySize + TagSize
-	// RecoveryWrapSize is a recovery key escrowed under KWK_recovery (R38):
-	// the 16-byte key, sealed.
-	RecoveryWrapSize = RecoveryKeySize + TagSize
 )
 
-// Salt is a slot record's `salt` field: the input to salt' for Argon2id in
-// hardware and password slots (R13). SlotSalt is the record's `slot_salt`: the
-// HKDF salt for seed derivation in software slots. They are distinct types so
-// that the two 32-byte fields cannot be swapped without a visible conversion —
-// the confusion R13 exists to prevent.
+// Salt is a slot record's `salt` field: the input to salt' for Argon2id in the
+// standalone password slot, and since Revision 2 in that slot alone — no
+// hardware slot runs Argon2id, and a hardware and a recovery slot write the
+// field as zero (R13, R24). SlotSalt is the record's `slot_salt`: the HKDF salt
+// for seed derivation in software slots. They are distinct types so that the
+// two 32-byte fields cannot be swapped without a visible conversion — the
+// confusion R13 exists to prevent.
 type (
 	Salt     [SaltSize]byte
 	SlotSalt [SaltSize]byte
 )
 
+// EntangleSalt is the slot region header's entangle_salt (FORMAT §6): the
+// vault's, 16 bytes, redrawn whenever the password is set or changed. A
+// distinct type and a distinct length from Salt and SlotSalt (R13); this
+// package does not police its value, since §6 puts the one enforcement point
+// in format.SlotRegionHeader.Validate.
+type EntangleSalt [EntangleSaltSize]byte
+
 // Info-string prefixes (R3). ASCII, no terminator; the identities that follow
 // are appended raw (R2).
 const (
 	InfoIK           = "Enfold/v1/IK"
+	InfoEntangle     = "Enfold/v1/entangle"
 	InfoRecoveryX    = "Enfold/v1/recovery/x25519"
 	InfoRecoveryK    = "Enfold/v1/recovery/mlkem"
 	InfoRecoveryPre  = "Enfold/v1/recovery/combine"
@@ -51,7 +62,7 @@ const (
 	InfoDB           = "Enfold/v1/db"
 	InfoKWK          = "Enfold/v1/wrap/archive"
 	InfoKWKIdentity  = "Enfold/v1/wrap/identity"
-	InfoKWKRecovery  = "Enfold/v1/wrap/recovery"
+	InfoKWKSecrets   = "Enfold/v1/wrap/secrets"
 	InfoArchiveIndex = "Enfold/v1/archive/index"
 	InfoArchiveWrap  = "Enfold/v1/archive/wrap"
 )
@@ -64,6 +75,10 @@ var (
 	ErrParams = errors.New("kdf: invalid argon2 parameters")
 	// ErrKeySize is returned for key material of the wrong length.
 	ErrKeySize = errors.New("kdf: wrong key size")
+	// ErrSecretPadding is returned for a secrets-record plaintext whose pad is
+	// not zero (§7.6): a reader takes the first sixteen bytes of a
+	// recovery_escrow record and rejects the record if the tail is not zero.
+	ErrSecretPadding = errors.New("kdf: secret plaintext is not zero-padded")
 )
 
 // Argon2Params are the per-slot Argon2id parameters (R6). MemKiB is in KiB and
@@ -123,12 +138,24 @@ func argon2id(pwd, salt []byte, p Argon2Params) []byte {
 }
 
 // SaltPrime is salt' = SHA-256(salt ‖ vault_id ‖ recipient_id), the Argon2id
-// salt for hardware and password slots (R13).
+// salt of the standalone password slot (R8, R13). Since Revision 2 no hardware
+// slot runs Argon2id, so this is the only slot type that has a salt' at all;
+// the vault's entangled password uses VaultSaltPrime instead.
 func SaltPrime(salt Salt, vaultID, recipientID [IDSize]byte) [SaltSize]byte {
 	buf := make([]byte, 0, SaltSize+2*IDSize)
 	buf = append(buf, salt[:]...)
 	buf = append(buf, vaultID[:]...)
 	buf = append(buf, recipientID[:]...)
+	return sha256.Sum256(buf)
+}
+
+// VaultSaltPrime is vault_salt' = SHA-256(entangle_salt ‖ vault_id), the
+// Argon2id salt of K_P (§3.1). No recipient_id: the salt is the vault's, since
+// the entangled password is the vault's and not a slot's (§18.1).
+func VaultSaltPrime(es EntangleSalt, vaultID [IDSize]byte) [SaltSize]byte {
+	buf := make([]byte, 0, EntangleSaltSize+IDSize)
+	buf = append(buf, es[:]...)
+	buf = append(buf, vaultID[:]...)
 	return sha256.Sum256(buf)
 }
 
@@ -155,11 +182,12 @@ func KWKIdentity(vmk [KeySize]byte, vaultID [IDSize]byte) []byte {
 	return hkdfN(vmk[:], nil, Info(InfoKWKIdentity, vaultID), KeySize)
 }
 
-// KWKRecovery derives the key under which the registry keeps every recovery
-// key once more (R38): its own wrapping domain, and one a Session never
-// derives — only a holder of the VMK can open an escrowed recovery key.
-func KWKRecovery(vmk [KeySize]byte, vaultID [IDSize]byte) []byte {
-	return hkdfN(vmk[:], nil, Info(InfoKWKRecovery, vaultID), KeySize)
+// KWKSecrets derives the key that seals every record of the secrets section
+// (§7.6): escrowed recovery keys (R38), the entangled password's key K_P
+// (§3.1), and every retired VMK (§8). Its own wrapping domain, and one a
+// Session never derives — only a holder of the VMK opens a secrets record.
+func KWKSecrets(vmk [KeySize]byte, vaultID [IDSize]byte) []byte {
+	return hkdfN(vmk[:], nil, Info(InfoKWKSecrets, vaultID), KeySize)
 }
 
 // Keys below an archive key (§3).

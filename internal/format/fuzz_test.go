@@ -27,8 +27,12 @@ func withChecksum(data []byte) []byte {
 }
 
 func FuzzDecodeKeystoreSuperblock(f *testing.F) {
-	s := &KeystoreSuperblock{Seq: 1, SlotRegionOff: SlotRegionAOff, SlotRegionLen: 8, RegistryOff: RegistryMinOff, RegistryLen: 10}
-	b, _ := s.Encode()
+	s := &KeystoreSuperblock{Seq: 1, SlotRegionOff: SlotRegionAOff, SlotRegionLen: MinSlotRegionLen,
+		RegistryOff: RegistryMinOff, RegistryLen: 10, VMKGeneration: 1}
+	b, err := s.Encode()
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Add(b)
 	f.Add(b[:checksumOffset]) // body only: the target adds the checksum
 	f.Add([]byte{})
@@ -53,7 +57,11 @@ func FuzzDecodeKeystoreSuperblock(f *testing.F) {
 
 func FuzzPickKeystoreSuperblock(f *testing.F) {
 	mk := func(seq uint64) []byte {
-		b, _ := (&KeystoreSuperblock{Seq: seq, SlotRegionOff: SlotRegionAOff, SlotRegionLen: 8, RegistryOff: RegistryMinOff}).Encode()
+		b, err := (&KeystoreSuperblock{Seq: seq, SlotRegionOff: SlotRegionAOff, SlotRegionLen: MinSlotRegionLen,
+			RegistryOff: RegistryMinOff, VMKGeneration: 1}).Encode()
+		if err != nil {
+			f.Fatal(err)
+		}
 		return b
 	}
 	f.Add(mk(1), mk(2))
@@ -77,11 +85,17 @@ func FuzzPickKeystoreSuperblock(f *testing.F) {
 }
 
 func FuzzDecodeSlotRegion(f *testing.F) {
-	b, _ := EncodeSlotRegion([]SlotRecord{hardwareSlot(), softwareSlot(SlotRecovery)})
-	f.Add(b)
-	e, _ := EncodeSlotRegion([]SlotRecord{{State: SlotEmpty}, hardwareSlot()})
-	f.Add(e)
-	f.Add([]byte{0, 0, 0, 0, 0, 0, 0, 0})
+	add := func(r *SlotRegion) {
+		b, err := r.Encode()
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(b)
+	}
+	// entangle 1, entangle 0, and a bare 32-byte header — the floor.
+	add(&SlotRegion{Header: entangledHeader(), Slots: []SlotRecord{hardwareSlot(), softwareSlot(SlotRecovery)}})
+	add(&SlotRegion{Slots: []SlotRecord{{State: SlotEmpty}, hardwareSlot()}})
+	add(&SlotRegion{})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		d, err := DecodeSlotRegion(data)
 		if err != nil {
@@ -90,8 +104,11 @@ func FuzzDecodeSlotRegion(f *testing.F) {
 		if !SlotRegionCanonical(data, d) {
 			t.Fatalf("accepted region is not canonical")
 		}
-		for i := range d {
-			if _, err := d[i].AAD([16]byte{}); err != nil {
+		if err := d.Header.Validate(); err != nil {
+			t.Fatalf("accepted region carries an invalid header: %v", err)
+		}
+		for i := range d.Slots {
+			if _, err := d.Slots[i].AAD([16]byte{}); err != nil {
 				t.Fatalf("AAD: %v", err)
 			}
 		}
@@ -119,10 +136,12 @@ func FuzzDecodeSlotRecord(f *testing.F) {
 }
 
 func FuzzDecodeRegistry(f *testing.F) {
-	b, _ := sampleRegistry().Encode()
+	b, err := sampleRegistry().Encode()
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Add(b)
-	f.Add([]byte{1, 0, 0, 0})
-	f.Add([]byte{2, 0, 0, 0})
+	f.Add([]byte{3, 0, 0, 0}) // version 3 alone: the only version there is (§18.2)
 	f.Fuzz(func(t *testing.T, data []byte) {
 		d, err := DecodeRegistry(data)
 		if err != nil {
@@ -132,18 +151,9 @@ func FuzzDecodeRegistry(f *testing.F) {
 		if err != nil {
 			t.Fatalf("re-encode: %v", err)
 		}
-		if len(data) >= 4 && data[0] == 1 {
-			// A version-1 registry is rewritten as version 2 (R38): the
-			// same registry, four bytes longer, canonical from then on.
-			if len(b) != len(data)+4 || !bytes.Equal(b[4:len(data)], data[4:]) {
-				t.Fatalf("version 1 is not rewritten as itself")
-			}
-			d2, err := DecodeRegistry(b)
-			if err != nil || !reflect.DeepEqual(d, d2) {
-				t.Fatalf("rewritten version 1 does not decode as itself: %v", err)
-			}
-			return
-		}
+		// Since Revision 2 every accepted encoding is canonical: there is no
+		// migration path left to make an accepted input differ from its
+		// re-encoding (R21, §7).
 		if !bytes.Equal(b, data) {
 			t.Fatalf("accepted registry is not canonical")
 		}

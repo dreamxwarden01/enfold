@@ -1,6 +1,7 @@
 // kdfvec is the reference generator for testdata/kdf-vectors.json.
 //
-// It implements FORMAT.md §3 exactly as written, using fixed inputs, and emits every
+// It implements FORMAT.md §3 (with §3.1's K_P) and the secrets records of §7.6 exactly as
+// written, using fixed inputs, and emits every
 // intermediate value so that an independent implementation can be diffed against it stage
 // by stage rather than only at the end. Every wrong reading of the spec still produces 32
 // plausible bytes; only a vector notices.
@@ -18,7 +19,6 @@ import (
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/hkdf"
-	"crypto/hmac"
 	"crypto/mlkem"
 	"crypto/sha256"
 	"encoding/binary"
@@ -55,6 +55,15 @@ var (
 	archiveKey  = seq(0x91, 32)
 	wrapNonce   = seq(0xB1, 12)
 	wrapAAD     = []byte("Enfold kdf-vectors: placeholder AAD, not a real slot record")
+
+	// The slot region header's entangle_salt (§6): the vault's, 16 bytes, and the salt of K_P.
+	entangleSalt = seq(0x71, 16)
+	// One pinned nonce per secrets record (§7.6, R22): three records under one key must never
+	// share a nonce, in a vector file as in a vault, and pinning them is what makes the
+	// records reproducible.
+	secretNonceEscrow    = seq(0xA1, 12)
+	secretNonceEntangled = seq(0xF1, 12)
+	secretNonceHistory   = seq(0x51, 12)
 
 	// P-256 scalars for the hardware slot. Any 32-byte value in [1, n-1] is valid; these are
 	// far below n.
@@ -126,16 +135,42 @@ func argon2id(pwd, salt []byte, p argonParams) []byte {
 	return argon2.IDKey(pwd, salt, p.Time, p.MemKiB, p.Threads, 32)
 }
 
-// R7: HMAC-SHA256 keyed by H over the password bytes.
-func hmacFold(h, pwd []byte) []byte {
-	m := hmac.New(sha256.New, h)
-	m.Write(pwd)
-	return m.Sum(nil)
-}
-
+// R13: salt' of the standalone password slot. Since Revision 2 no hardware slot has one.
 func saltPrime() []byte {
 	s := sha256.Sum256(cat(argonSalt, vaultID, recipientID))
 	return s[:]
+}
+
+// §3.1: vault_salt' = SHA-256(entangle_salt ‖ vault_id), the Argon2id salt of K_P. No
+// recipient_id — the entangled password is the vault's, not a slot's (§18.1).
+func vaultSaltPrime() []byte {
+	s := sha256.Sum256(cat(entangleSalt, vaultID))
+	return s[:]
+}
+
+// §7.6, R22: a secrets record's AAD, 20 + 16 + 1 + 16 = 53 bytes.
+func secretAAD(kind byte, id []byte) []byte {
+	aad := cat([]byte("Enfold/v1/aad/secret"), vaultID, []byte{kind}, id)
+	if len(aad) != 53 {
+		panic("secrets AAD must be 53 bytes")
+	}
+	return aad
+}
+
+// §7.6: one secrets record, sealed under KWK_secrets with that record's pinned nonce.
+func sealSecret(kek, nonce, pt, aad []byte) []byte {
+	if len(pt) != 32 {
+		panic("a secrets plaintext is 32 bytes, padded where the secret is shorter")
+	}
+	g := must(cipher.NewGCM(must(aes.NewCipher(kek))))
+	ct := g.Seal(nil, nonce, pt, aad)
+	if len(ct) != 48 {
+		panic("a secrets ciphertext is 48 bytes")
+	}
+	if !bytes.Equal(must(g.Open(nil, nonce, ct, aad)), pt) {
+		panic("secrets round trip failed")
+	}
+	return ct
 }
 
 // R11: 16 bytes → 8 little-endian u16 → each ×11 → 6 digits → joined by '-'.
@@ -198,10 +233,19 @@ func main() {
 	inputs["wrap_nonce"] = hx(wrapNonce)
 	inputs["wrap_aad"] = hx(wrapAAD)
 
+	inputs["entangle_salt"] = hx(entangleSalt)
+	inputs["secret_nonce_escrow"] = hx(secretNonceEscrow)
+	inputs["secret_nonce_entangled"] = hx(secretNonceEntangled)
+	inputs["secret_nonce_history"] = hx(secretNonceHistory)
+
 	infoIK := infoSlot("Enfold/v1/IK")
 	vec["info_IK"] = hx(infoIK)
+	infoEntangle := infoSlot("Enfold/v1/entangle") // 18 + 16 + 16 = 50 bytes (R2, R3)
+	vec["info_entangle"] = hx(infoEntangle)
 	sp := saltPrime()
 	vec["salt_prime"] = hx(sp)
+	vsp := vaultSaltPrime()
+	vec["vault_salt_prime"] = hx(vsp)
 
 	// ---- hardware slot ------------------------------------------------------------------
 	p256 := ecdh.P256()
@@ -229,16 +273,26 @@ func main() {
 		"IK":  hx(hkdfN(hFromToken, nil, infoIK, 32)),
 	}
 
+	// (b), (c), (d): the vault has an entangled password (§3.1, §18.1). K_P is Argon2id over
+	// the password alone with vault_salt' as its salt — no H, no recipient_id — and the token
+	// enters afterwards through the HKDF, IKM = H ‖ K_P in that order (R3, R5).
+	entangled := func(P []byte, p argonParams) (kp, ikm, pre []byte) {
+		kp = argon2id(P, vsp, p)
+		ikm = cat(hFromToken, kp)
+		pre = hkdfN(ikm, nil, infoEntangle, 32)
+		return
+	}
+
 	// (b) entangled password, tiny params
 	{
 		P := passwordBytes(passwordASCII)
-		pwdPrime := hmacFold(hFromToken, P)
-		pre := argon2id(pwdPrime, sp, argonTiny)
+		kp, ikm, pre := entangled(P, argonTiny)
 		hw["password_tiny"] = H{
 			"password":      passwordASCII,
 			"password_utf8": hx(P),
-			"pwd_prime":     hx(pwdPrime),
 			"argon2":        argonTiny,
+			"K_P":           hx(kp),
+			"entangle_ikm":  hx(ikm),
 			"pre":           hx(pre),
 			"IK":            hx(hkdfN(pre, nil, infoIK, 32)),
 		}
@@ -251,14 +305,14 @@ func main() {
 		if !bytes.Equal(pNFD, pNFC) {
 			panic("NFC normalisation failed")
 		}
-		pwdPrime := hmacFold(hFromToken, pNFC)
-		pre := argon2id(pwdPrime, sp, argonTiny)
+		kp, ikm, pre := entangled(pNFC, argonTiny)
 		hw["password_nfc"] = H{
 			"password_nfd_input_utf8": hx([]byte(passwordNFD)),
 			"password_nfc_input_utf8": hx([]byte(passwordNFC)),
 			"password_normalised":     hx(pNFC),
-			"pwd_prime":               hx(pwdPrime),
 			"argon2":                  argonTiny,
+			"K_P":                     hx(kp),
+			"entangle_ikm":            hx(ikm),
 			"pre":                     hx(pre),
 			"IK":                      hx(hkdfN(pre, nil, infoIK, 32)),
 		}
@@ -267,17 +321,20 @@ func main() {
 	// (d) one production-sized anchor
 	{
 		P := passwordBytes(passwordASCII)
-		pwdPrime := hmacFold(hFromToken, P)
-		pre := argon2id(pwdPrime, sp, argonAnchor)
+		kp, ikm, pre := entangled(P, argonAnchor)
 		hw["password_anchor"] = H{
-			"password":  passwordASCII,
-			"pwd_prime": hx(pwdPrime),
-			"argon2":    argonAnchor,
-			"pre":       hx(pre),
-			"IK":        hx(hkdfN(pre, nil, infoIK, 32)),
+			"password":     passwordASCII,
+			"argon2":       argonAnchor,
+			"K_P":          hx(kp),
+			"entangle_ikm": hx(ikm),
+			"pre":          hx(pre),
+			"IK":           hx(hkdfN(pre, nil, infoIK, 32)),
 		}
 	}
 	vec["hardware_slot"] = hw
+
+	// K_P at the tiny parameters is the one the secrets section below keeps (§7.6 kind 2).
+	kpTiny := argon2id(passwordBytes(passwordASCII), vsp, argonTiny)
 
 	// ---- hybrid slots (recovery, standalone password) ------------------------------------
 	x25519 := ecdh.X25519()
@@ -354,12 +411,46 @@ func main() {
 	}
 
 	// ---- VMK- and archive-level keys -----------------------------------------------------
+	kwkSecrets := hkdfN(vmk, nil, infoVault("Enfold/v1/wrap/secrets"), 32)
 	vec["vmk_keys"] = H{
 		"metadata_key": hx(hkdfN(vmk, nil, infoVault("Enfold/v1/metadata"), 32)),
 		"db_key":       hx(hkdfN(vmk, nil, infoVault("Enfold/v1/db"), 32)),
 		"KWK":          hx(hkdfN(vmk, nil, infoVault("Enfold/v1/wrap/archive"), 32)),
 		"KWK_identity": hx(hkdfN(vmk, nil, infoVault("Enfold/v1/wrap/identity"), 32)),
-		"KWK_recovery": hx(hkdfN(vmk, nil, infoVault("Enfold/v1/wrap/recovery"), 32)),
+		"KWK_secrets":  hx(kwkSecrets),
+	}
+
+	// ---- secrets section (§7.6, R22, R38) ------------------------------------------------
+	//
+	// One record of each kind, all three under the pinned nonce so that the ciphertexts are
+	// reproducible; a live write draws a fresh nonce per record. The kind-3 record is the one
+	// a rotation away from generation 7 would append: its id is the generation the retiring
+	// VMK held, and its plaintext is that VMK — here the inputs' vmk, sealed under the
+	// vault's current KWK_secrets rather than the successor's, since only the current VMK
+	// exists in this file.
+	{
+		record := func(kind byte, id, nonce, pt []byte) H {
+			aad := secretAAD(kind, id)
+			return H{
+				"kind":       kind,
+				"id":         hx(id),
+				"nonce":      hx(nonce),
+				"aad":        hx(aad),
+				"plaintext":  hx(pt),
+				"ciphertext": hx(sealSecret(kwkSecrets, nonce, pt, aad)),
+			}
+		}
+		historyID := make([]byte, 16)
+		binary.LittleEndian.PutUint64(historyID, vmkGeneration)
+		vec["secrets"] = H{
+			"_note": "One record per kind, each under its own pinned nonce (a live write draws a fresh one per record, R22; no two records under one key ever share a nonce). Sealed under KWK_secrets of the inputs' vmk.",
+			// kind 1: R ‖ sixteen zero bytes, keyed by the recovery slot's recipient_id.
+			"recovery_escrow": record(1, recipientID, secretNonceEscrow, cat(recoveryR, make([]byte, 16))),
+			// kind 2: K_P, id all zero — at most one per vault.
+			"entangled_key": record(2, make([]byte, 16), secretNonceEntangled, kpTiny),
+			// kind 3: a retired VMK, id the little-endian generation in bytes 0-7.
+			"vmk_history": record(3, historyID, secretNonceHistory, vmk),
+		}
 	}
 	vec["archive_keys"] = H{
 		"index_key": hx(hkdfN(archiveKey, nil, infoArchive("Enfold/v1/archive/index"), 32)),
@@ -394,9 +485,9 @@ func main() {
 	inputs["password_ascii"] = passwordASCII
 	inputs["password_nfd_input"] = passwordNFD
 	inputs["password_nfc_input"] = passwordNFC
-	inputs["_note"] = "Inputs only. Implement docs/FORMAT.md §3 + §3.3 and emit the same keys as kdf-vectors.json."
+	inputs["_note"] = "Inputs only. Implement docs/FORMAT.md §3 (including §3.1's K_P) + §3.3 and the secrets section of §7.6, and emit the same keys as kdf-vectors.json. argon2_salt is the standalone password slot's alone (R13); entangle_salt is the vault's, the salt of K_P. The three secrets records are: kind 1 keyed by recipient_id over recovery_R padded to 32; kind 2 over K_P at argon2_tiny with an all-zero id; kind 3 over vmk with vmk_generation little-endian in bytes 0-7 of its id. All three are sealed under KWK_secrets, each with its own nonce (secret_nonce_escrow, secret_nonce_entangled, secret_nonce_history)."
 
-	vec["_spec"] = "docs/FORMAT.md §3, rules R1–R12 in §3.3"
+	vec["_spec"] = "docs/FORMAT.md §3 and §3.1, rules R1–R13 in §3.3 (R7 retired in Revision 2), the secrets records of §7.6 with R22's AAD"
 	vec["inputs"] = inputs
 
 	write := func(path string, v any) {

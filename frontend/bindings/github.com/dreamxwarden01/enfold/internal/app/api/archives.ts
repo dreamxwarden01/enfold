@@ -15,6 +15,14 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as app$0 from "../models.js";
 
+/**
+ * CheckFiles refreshes the presence of every record's last_path; the list's
+ * Status column follows on archives.changed.
+ */
+export function CheckFiles(): $CancellablePromise<void> {
+    return $Call.ByID(118112595);
+}
+
 export function Close(id: string): $CancellablePromise<void> {
     return $Call.ByID(1388822288, id);
 }
@@ -29,6 +37,30 @@ export function Compact(id: string): $CancellablePromise<string> {
 
 export function Create(path: string, name: string, noCompression: boolean): $CancellablePromise<string> {
     return $Call.ByID(1162996984, path, name, noCompression);
+}
+
+/**
+ * Delete is Forget plus the file when alsoFile is set: the file is removed
+ * first and only then is the record forgotten.
+ */
+export function Delete(id: string, alsoFile: boolean): $CancellablePromise<void> {
+    return $Call.ByID(2185012391, id, alsoFile);
+}
+
+/**
+ * Details is one registry record read whole, for the details pane and its
+ * modal: no key material, and refused while the vault is locked.
+ */
+export function Details(id: string): $CancellablePromise<app$0.ArchiveDetails> {
+    return $Call.ByID(2517846314, id);
+}
+
+/**
+ * Forget drops the record softly: its keys stay until the purge at an unlock
+ * more than thirty days later, and Restore brings it back.
+ */
+export function Forget(id: string): $CancellablePromise<void> {
+    return $Call.ByID(2605071885, id);
 }
 
 export function Hide(id: string): $CancellablePromise<void> {
@@ -47,8 +79,27 @@ export function Open(id: string): $CancellablePromise<app$0.ArchiveStat> {
     return $Call.ByID(923201420, id);
 }
 
+/**
+ * Rename writes the registry's trusted name (FORMAT.md §7.4); no ceremony.
+ */
+export function Rename(id: string, name: string): $CancellablePromise<void> {
+    return $Call.ByID(2187678638, id, name);
+}
+
+export function Restore(id: string): $CancellablePromise<void> {
+    return $Call.ByID(2523843286, id);
+}
+
 export function RotateKey(id: string): $CancellablePromise<string> {
     return $Call.ByID(3689812034, id);
+}
+
+/**
+ * SetDescription writes the record's description: at most 1 024 bytes of
+ * UTF-8, empty clears it (FORMAT.md §7.1).
+ */
+export function SetDescription(id: string, text: string): $CancellablePromise<void> {
+    return $Call.ByID(48311342, id, text);
 }
 
 export function Unhide(id: string): $CancellablePromise<void> {

@@ -36,10 +36,15 @@ type Keystore struct {
 	sb     *format.KeystoreSuperblock
 	live   format.Copy // which superblock copy is live
 	region []byte      // the live slot region as written
-	slots  []format.SlotRecord
-	ct     []byte           // registry ciphertext ‖ tag
-	reg    *format.Registry // the decrypted registry, once a credential opened it
-	lock   *fileLock        // exclusive while open: one process, one handle
+	// hdr is the slot region's 32-byte header (§6): the vault's entangle
+	// switch, Argon2id parameters and entangle_salt. Plaintext, readable
+	// before any credential, and copied forward byte for byte by every write
+	// that does not change it.
+	hdr   format.SlotRegionHeader
+	slots []format.SlotRecord
+	ct    []byte           // registry ciphertext ‖ tag
+	reg   *format.Registry // the decrypted registry, once a credential opened it
+	lock  *fileLock        // exclusive while open: one process, one handle
 	// Stale is the damage found on the superblock copy that lost, when it
 	// lost by being damaged rather than older: the file opened, but its last
 	// write may not have completed. nil when both copies were sound.
@@ -114,7 +119,7 @@ func load(f *os.File, path string) (*Keystore, error) {
 	if _, err := f.ReadAt(region, int64(sb.SlotRegionOff)); err != nil {
 		return nil, err
 	}
-	slots, err := format.DecodeSlotRegion(region)
+	sr, err := format.DecodeSlotRegion(region)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +130,7 @@ func load(f *os.File, path string) (*Keystore, error) {
 	if [format.TagSize]byte(ct[sb.RegistryLen:]) != sb.RegistryTag {
 		return nil, corrupt("registry tag in the file differs from the superblock's")
 	}
-	return &Keystore{f: f, path: path, size: size, sb: sb, live: live, region: region, slots: slots, ct: ct, Stale: stale}, nil
+	return &Keystore{f: f, path: path, size: size, sb: sb, live: live, region: region, hdr: sr.Header, slots: sr.Slots, ct: ct, Stale: stale}, nil
 }
 
 // Close releases the file. An Unlocked or Session over this Keystore is
@@ -178,9 +183,16 @@ func (k *Keystore) VaultID() [16]byte { return k.sb.VaultID }
 // Generation is the current VMK generation (§6.2).
 func (k *Keystore) Generation() uint64 { return k.sb.VMKGeneration }
 
-// RotationPending reports whether a rotation left slots behind (§8). The UI
-// must keep surfacing it.
-func (k *Keystore) RotationPending() bool { return k.sb.RotationPending != 0 }
+// Entangled is the slot region header's switch (§6): whether the vault has an
+// entangled password. Readable with no credential — one of the plaintext facts
+// the lock screen caches while Locked (APP.md §2.1) — and what decides whether
+// the password is asked before the PIN.
+func (k *Keystore) Entangled() bool { return k.hdr.Entangle }
+
+// FileSize is the keystore file's length: the logical end the last commit
+// computed, not a fresh Stat, so a caller holding a state mutex can read it
+// without a syscall.
+func (k *Keystore) FileSize() uint64 { return k.size }
 
 // ModifiedAt is when the keystore was last committed (Unix seconds, R35):
 // the wall clock of the last change, never decreasing, and for an export
@@ -230,11 +242,20 @@ func (k *Keystore) openRegistry(meta []byte) (*format.Registry, error) {
 
 // txn is one commit: what changes, all of it landing in one superblock flip.
 type txn struct {
-	slots   []format.SlotRecord // the new slot region; nil leaves it as it is
-	reg     *format.Registry    // the registry to seal; every commit carries one (R25, R35)
-	meta    []byte              // Metadata key, required when reg is set
-	gen     uint64              // the new VMK generation
-	pending bool                // rotation_pending after the commit
+	slots []format.SlotRecord // the new slot region's records; nil leaves them as they are
+	// hdr is the slot region header this commit writes, non-nil only on a
+	// write that changes it (§6). Otherwise the live header is copied forward
+	// byte for byte. A header change is a slot-region write even when the
+	// records are unchanged, so hdr alone rewrites the region.
+	hdr  *format.SlotRegionHeader
+	reg  *format.Registry // the registry to seal; every commit carries one (R25, R35)
+	meta []byte           // Metadata key, required when reg is set
+	gen  uint64           // the new VMK generation
+	// at is the modified_at this commit carries when the caller has already
+	// computed it — a decision that depends on it (§18.2) must be made against
+	// the value the superblock and the registry will record, not a second
+	// clock reading. Zero takes the clock (R35).
+	at int64
 }
 
 // commit writes tx in the order of §4 and §8: slot region into the inactive
@@ -258,18 +279,36 @@ func (k *Keystore) commit(tx txn) error {
 	if err := k.checkOnDisk(); err != nil {
 		return err
 	}
+	// The header this commit writes, and the writer's own fail-closed check
+	// that the registry agrees with it (§7.6, R38): exactly one entangled_key
+	// record while entangle is 1, none while it is 0. Before the flip, so a
+	// disagreement is never written rather than only refused at the next
+	// unlock.
+	hdr := k.hdr
+	if tx.hdr != nil {
+		hdr = *tx.hdr
+	}
+	if err := tx.reg.CheckEntangleAgreement(hdr.Entangle); err != nil {
+		return err
+	}
+
 	next := *k.sb
 	next.Seq++
 	next.VMKGeneration = tx.gen
-	next.RotationPending = 0
-	if tx.pending {
-		next.RotationPending = 1
+	if tx.at != 0 {
+		next.ModifiedAt = tx.at
+	} else {
+		next.ModifiedAt = stamp(k.sb.ModifiedAt)
 	}
-	next.ModifiedAt = stamp(k.sb.ModifiedAt)
 
 	region, slots := k.region, k.slots
-	if tx.slots != nil {
-		encoded, err := format.EncodeSlotRegion(tx.slots)
+	wroteRegion := tx.slots != nil || tx.hdr != nil
+	if wroteRegion {
+		records := tx.slots
+		if records == nil {
+			records = k.slots
+		}
+		encoded, err := (&format.SlotRegion{Header: hdr, Slots: records}).Encode()
 		if err != nil {
 			return err
 		}
@@ -279,7 +318,7 @@ func (k *Keystore) commit(tx txn) error {
 		}
 		next.SlotRegionOff = target.SlotRegionOff()
 		next.SlotRegionLen = uint64(len(encoded))
-		region, slots = encoded, tx.slots
+		region, slots = encoded, records
 	}
 
 	if tx.meta == nil {
@@ -287,7 +326,10 @@ func (k *Keystore) commit(tx txn) error {
 	}
 	var ct []byte
 	{
-		if tx.slots != nil {
+		if wroteRegion {
+			// The hash covers the header as part of the region as written
+			// (§6, R25), which is one of the only two things authenticating
+			// the header at all.
 			tx.reg.SlotRegionHash = format.SlotRegionHash(region)
 		}
 		// Otherwise the hash stays what the registry carried in: the last
@@ -296,7 +338,7 @@ func (k *Keystore) commit(tx txn) error {
 		// disk, the mismatch survives the write and is reported again at the
 		// next unlock.
 		tx.reg.ModifiedAt = next.ModifiedAt
-		plain, err := encodeRegistry(tx.reg)
+		plain, err := tx.reg.Encode()
 		if err != nil {
 			return err
 		}
@@ -351,7 +393,7 @@ func (k *Keystore) commit(tx txn) error {
 	} else {
 		k.size = end
 	}
-	k.sb, k.live, k.region, k.slots, k.ct = &next, target, region, slots, ct
+	k.sb, k.live, k.region, k.hdr, k.slots, k.ct = &next, target, region, hdr, slots, ct
 	if tx.reg != nil {
 		k.reg = tx.reg
 		k.Stale = nil
@@ -373,8 +415,12 @@ func (k *Keystore) registryTarget(n uint64) uint64 {
 // create writes a brand-new keystore file: superblock A with seq 1 and B
 // with seq 0, slot region A, and the registry at the fixed offset. path must
 // not exist.
-func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *format.Registry, meta []byte, gen uint64, prev int64) (*Keystore, error) {
-	region, err := format.EncodeSlotRegion(slots)
+func create(path string, vaultID [16]byte, hdr format.SlotRegionHeader, slots []format.SlotRecord, reg *format.Registry, meta []byte, gen uint64, prev int64) (*Keystore, error) {
+	// The same fail-closed writer check commit makes (§7.6, R38).
+	if err := reg.CheckEntangleAgreement(hdr.Entangle); err != nil {
+		return nil, err
+	}
+	region, err := (&format.SlotRegion{Header: hdr, Slots: slots}).Encode()
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +428,7 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 	// prev is the source's modified_at for an export, so that a clock set
 	// back cannot date a backup before the vault it was taken from (R35).
 	reg.ModifiedAt = stamp(prev)
-	plain, err := encodeRegistry(reg)
+	plain, err := reg.Encode()
 	if err != nil {
 		return nil, err
 	}
@@ -473,21 +519,29 @@ func create(path string, vaultID [16]byte, slots []format.SlotRecord, reg *forma
 	return k, nil
 }
 
-// encodeRegistry is the registry's encoder behind every commit — a seam,
-// so that a test can write the version-1 registry an older Enfold wrote
-// and watch it come back as version 2 (R38).
-var encodeRegistry = func(g *format.Registry) ([]byte, error) { return g.Encode() }
-
 // Removable reports whether the slot could be removed: the invariant
-// (§6.4) would still hold without it. From the plaintext facts, so that
-// a page can grey the action out before any ceremony is run for it.
+// (§6.4) would still hold without it. Evaluated over the records and the
+// header, both plaintext, so that a page can grey the action out before any
+// ceremony is run for it.
 func (k *Keystore) Removable(recipientID [16]byte) bool {
 	slots := cloneSlots(k.slots)
 	for i := range slots {
 		if slots[i].RecipientID == recipientID {
 			slots = append(slots[:i], slots[i+1:]...)
-			return checkInvariant(slots) == nil
+			return checkInvariant(k.hdr, slots) == nil
 		}
 	}
 	return false
+}
+
+// CanEnableEntangled evaluates §6.4 for a 0→1 switch of the header's entangle
+// byte, with no VMK and before any ceremony, so that a page can grey the
+// switch out as Removable greys Remove. nil means the switch could be turned
+// on; ErrInvariant means it could not — a vault whose active slots are all
+// hardware slots must add a recovery slot first, since the vault password
+// would then be one and the same secret for every way in.
+func (k *Keystore) CanEnableEntangled() error {
+	hdr := k.hdr
+	hdr.Entangle = true
+	return checkInvariant(hdr, k.slots)
 }

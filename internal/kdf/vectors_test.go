@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -48,29 +49,46 @@ type hybridJSON struct {
 	Argon2       argonJSON `json:"argon2"`
 }
 
+// secretJSON is one record of the secrets section (§7.6): the 53-byte AAD, the
+// 32-byte plaintext and the 48-byte ciphertext under that record's pinned nonce.
+type secretJSON struct {
+	Kind       uint8  `json:"kind"`
+	ID         string `json:"id"`
+	Nonce      string `json:"nonce"`
+	AAD        string `json:"aad"`
+	Plaintext  string `json:"plaintext"`
+	Ciphertext string `json:"ciphertext"`
+}
+
 type vectorsJSON struct {
 	Inputs struct {
-		VaultID     string    `json:"vault_id"`
-		RecipientID string    `json:"recipient_id"`
-		SlotSalt    string    `json:"slot_salt"`
-		Argon2Salt  string    `json:"argon2_salt"`
-		VMK         string    `json:"vmk"`
-		VMKGen      uint64    `json:"vmk_generation"`
-		ArchiveID   string    `json:"archive_id"`
-		ArchiveKey  string    `json:"archive_key"`
-		HwSK        string    `json:"hw_sk"`
-		HwESK       string    `json:"hw_esk"`
-		EphX        string    `json:"hybrid_eph_x25519_sk"`
-		WrapNonce   string    `json:"wrap_nonce"`
-		WrapAAD     string    `json:"wrap_aad"`
-		NFC         string    `json:"password_nfc_input"`
-		NFD         string    `json:"password_nfd_input"`
-		Anchor      argonJSON `json:"argon2_anchor"`
-		Tiny        argonJSON `json:"argon2_tiny"`
+		VaultID      string    `json:"vault_id"`
+		RecipientID  string    `json:"recipient_id"`
+		SlotSalt     string    `json:"slot_salt"`
+		Argon2Salt   string    `json:"argon2_salt"`
+		EntangleSalt string    `json:"entangle_salt"`
+		NonceEscrow  string    `json:"secret_nonce_escrow"`
+		NonceEntang  string    `json:"secret_nonce_entangled"`
+		NonceHistory string    `json:"secret_nonce_history"`
+		VMK          string    `json:"vmk"`
+		VMKGen       uint64    `json:"vmk_generation"`
+		ArchiveID    string    `json:"archive_id"`
+		ArchiveKey   string    `json:"archive_key"`
+		HwSK         string    `json:"hw_sk"`
+		HwESK        string    `json:"hw_esk"`
+		EphX         string    `json:"hybrid_eph_x25519_sk"`
+		WrapNonce    string    `json:"wrap_nonce"`
+		WrapAAD      string    `json:"wrap_aad"`
+		NFC          string    `json:"password_nfc_input"`
+		NFD          string    `json:"password_nfd_input"`
+		Anchor       argonJSON `json:"argon2_anchor"`
+		Tiny         argonJSON `json:"argon2_tiny"`
 	} `json:"inputs"`
-	InfoIK    string `json:"info_IK"`
-	SaltPrime string `json:"salt_prime"`
-	Hardware  struct {
+	InfoIK         string `json:"info_IK"`
+	InfoEntangle   string `json:"info_entangle"`
+	SaltPrime      string `json:"salt_prime"`
+	VaultSaltPrime string `json:"vault_salt_prime"`
+	Hardware       struct {
 		PkHW       string `json:"pk_hw"`
 		EPK        string `json:"epk"`
 		H          string `json:"H"`
@@ -81,8 +99,9 @@ type vectorsJSON struct {
 		Tiny struct {
 			Password     string    `json:"password"`
 			PasswordUTF8 string    `json:"password_utf8"`
-			PwdPrime     string    `json:"pwd_prime"`
 			Argon2       argonJSON `json:"argon2"`
+			KP           string    `json:"K_P"`
+			EntangleIKM  string    `json:"entangle_ikm"`
 			Pre          string    `json:"pre"`
 			IK           string    `json:"IK"`
 		} `json:"password_tiny"`
@@ -90,17 +109,19 @@ type vectorsJSON struct {
 			NFDInputUTF8 string    `json:"password_nfd_input_utf8"`
 			NFCInputUTF8 string    `json:"password_nfc_input_utf8"`
 			Normalised   string    `json:"password_normalised"`
-			PwdPrime     string    `json:"pwd_prime"`
 			Argon2       argonJSON `json:"argon2"`
+			KP           string    `json:"K_P"`
+			EntangleIKM  string    `json:"entangle_ikm"`
 			Pre          string    `json:"pre"`
 			IK           string    `json:"IK"`
 		} `json:"password_nfc"`
 		Anchor struct {
-			Password string    `json:"password"`
-			PwdPrime string    `json:"pwd_prime"`
-			Argon2   argonJSON `json:"argon2"`
-			Pre      string    `json:"pre"`
-			IK       string    `json:"IK"`
+			Password    string    `json:"password"`
+			Argon2      argonJSON `json:"argon2"`
+			KP          string    `json:"K_P"`
+			EntangleIKM string    `json:"entangle_ikm"`
+			Pre         string    `json:"pre"`
+			IK          string    `json:"IK"`
 		} `json:"password_anchor"`
 	} `json:"hardware_slot"`
 	Recovery hybridJSON `json:"recovery_slot"`
@@ -110,8 +131,13 @@ type vectorsJSON struct {
 		DB          string `json:"db_key"`
 		KWK         string `json:"KWK"`
 		KWKIdentity string `json:"KWK_identity"`
-		KWKRecovery string `json:"KWK_recovery"`
+		KWKSecrets  string `json:"KWK_secrets"`
 	} `json:"vmk_keys"`
+	Secrets struct {
+		Escrow    secretJSON `json:"recovery_escrow"`
+		Entangled secretJSON `json:"entangled_key"`
+		History   secretJSON `json:"vmk_history"`
+	} `json:"secrets"`
 	ArchiveKeys struct {
 		Index string `json:"index_key"`
 		Wrap  string `json:"wrap_key"`
@@ -125,9 +151,11 @@ type vectorsJSON struct {
 	} `json:"wrapped_vmk"`
 }
 
+const vectorsPath = "../../testdata/kdf-vectors.json"
+
 func loadVectors(t *testing.T) *vectorsJSON {
 	t.Helper()
-	raw, err := os.ReadFile("../../testdata/kdf-vectors.json")
+	raw, err := os.ReadFile(vectorsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +193,15 @@ func key32(t *testing.T, s string) (out [KeySize]byte) {
 	return
 }
 
+func nonce12(t *testing.T, s string) (out [NonceSize]byte) {
+	b := mustHex(t, s)
+	if len(b) != NonceSize {
+		t.Fatalf("%q is %d bytes, want 12", s, len(b))
+	}
+	copy(out[:], b)
+	return
+}
+
 func expect(t *testing.T, name string, got []byte, wantHex string) {
 	t.Helper()
 	if hex.EncodeToString(got) != wantHex {
@@ -172,14 +209,35 @@ func expect(t *testing.T, name string, got []byte, wantHex string) {
 	}
 }
 
+// secretsAAD builds §7.6's AAD from the rule as written — the 20 ASCII bytes of
+// "Enfold/v1/aad/secret" with no length prefix, then vault_id, the kind byte
+// and the 16-byte id — rather than by calling format.SecretAAD. Two
+// independent constructions of the same 53 bytes are the point (R22).
+func secretsAAD(t *testing.T, vaultID [IDSize]byte, kind uint8, id [IDSize]byte) []byte {
+	t.Helper()
+	aad := make([]byte, 0, 53)
+	aad = append(aad, "Enfold/v1/aad/secret"...)
+	aad = append(aad, vaultID[:]...)
+	aad = append(aad, kind)
+	aad = append(aad, id[:]...)
+	if len(aad) != 53 {
+		t.Fatalf("secrets AAD is %d bytes, want 53", len(aad))
+	}
+	return aad
+}
+
 func TestVectors(t *testing.T) {
 	v := loadVectors(t)
 	vault, recip := id16(t, v.Inputs.VaultID), id16(t, v.Inputs.RecipientID)
 	slotSalt, argonSalt := SlotSalt(key32(t, v.Inputs.SlotSalt)), Salt(key32(t, v.Inputs.Argon2Salt))
+	entangleSalt := EntangleSalt(id16(t, v.Inputs.EntangleSalt))
 
 	expect(t, "info_IK", Info(InfoIK, vault, recip), v.InfoIK)
+	expect(t, "info_entangle", Info(InfoEntangle, vault, recip), v.InfoEntangle)
 	sp := SaltPrime(argonSalt, vault, recip)
 	expect(t, "salt_prime", sp[:], v.SaltPrime)
+	vsp := VaultSaltPrime(entangleSalt, vault)
+	expect(t, "vault_salt_prime", vsp[:], v.VaultSaltPrime)
 
 	// ---- hardware slot ----
 	p256 := ecdh.P256()
@@ -206,18 +264,32 @@ func TestVectors(t *testing.T) {
 	expect(t, "no_password.pre", pre[:], v.Hardware.NoPassword.Pre)
 	expect(t, "no_password.IK", DeriveIK(pre, vault, recip), v.Hardware.NoPassword.IK)
 
+	// entangled: K_P from the password and the vault's salt alone, then the
+	// token afterwards through the HKDF (§3.1).
+	entangled := func(name string, password []byte, a argonJSON, kpHex, ikmHex, preHex, ikHex string) [KeySize]byte {
+		t.Helper()
+		kp, err := EntangledKey(password, entangleSalt, vault, a.params())
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect(t, name+".K_P", kp[:], kpHex)
+		expect(t, name+".entangle_ikm", append(append([]byte{}, h...), kp[:]...), ikmHex)
+		p, err := HardwarePreEntangled(h, kp, vault, recip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect(t, name+".pre", p[:], preHex)
+		expect(t, name+".IK", DeriveIK(p, vault, recip), ikHex)
+		return kp
+	}
+
 	pw, err := NormalizePassword(v.Hardware.Tiny.Password)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expect(t, "password_tiny.password_utf8", pw, v.Hardware.Tiny.PasswordUTF8)
-	expect(t, "password_tiny.pwd_prime", HMACFold(h, pw), v.Hardware.Tiny.PwdPrime)
-	pre, err = HardwarePreEntangled(h, pw, argonSalt, vault, recip, v.Hardware.Tiny.Argon2.params())
-	if err != nil {
-		t.Fatal(err)
-	}
-	expect(t, "password_tiny.pre", pre[:], v.Hardware.Tiny.Pre)
-	expect(t, "password_tiny.IK", DeriveIK(pre, vault, recip), v.Hardware.Tiny.IK)
+	tinyKP := entangled("password_tiny", pw, v.Hardware.Tiny.Argon2,
+		v.Hardware.Tiny.KP, v.Hardware.Tiny.EntangleIKM, v.Hardware.Tiny.Pre, v.Hardware.Tiny.IK)
 
 	expect(t, "password_nfc.nfd_input_utf8", []byte(v.Inputs.NFD), v.Hardware.NFC.NFDInputUTF8)
 	expect(t, "password_nfc.nfc_input_utf8", []byte(v.Inputs.NFC), v.Hardware.NFC.NFCInputUTF8)
@@ -233,28 +305,18 @@ func TestVectors(t *testing.T) {
 		t.Fatalf("NFD and NFC inputs normalise differently: %x vs %x", nfd, nfc)
 	}
 	expect(t, "password_nfc.normalised", nfd, v.Hardware.NFC.Normalised)
-	expect(t, "password_nfc.pwd_prime", HMACFold(h, nfd), v.Hardware.NFC.PwdPrime)
-	pre, err = HardwarePreEntangled(h, nfd, argonSalt, vault, recip, v.Hardware.NFC.Argon2.params())
-	if err != nil {
-		t.Fatal(err)
-	}
-	expect(t, "password_nfc.pre", pre[:], v.Hardware.NFC.Pre)
-	expect(t, "password_nfc.IK", DeriveIK(pre, vault, recip), v.Hardware.NFC.IK)
+	entangled("password_nfc", nfd, v.Hardware.NFC.Argon2,
+		v.Hardware.NFC.KP, v.Hardware.NFC.EntangleIKM, v.Hardware.NFC.Pre, v.Hardware.NFC.IK)
 
 	anchorPW, err := NormalizePassword(v.Hardware.Anchor.Password)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect(t, "password_anchor.pwd_prime", HMACFold(h, anchorPW), v.Hardware.Anchor.PwdPrime)
 	if testing.Short() {
 		t.Log("skipping the 512 MiB Argon2id anchor in -short mode")
 	} else {
-		pre, err = HardwarePreEntangled(h, anchorPW, argonSalt, vault, recip, v.Hardware.Anchor.Argon2.params())
-		if err != nil {
-			t.Fatal(err)
-		}
-		expect(t, "password_anchor.pre", pre[:], v.Hardware.Anchor.Pre)
-		expect(t, "password_anchor.IK", DeriveIK(pre, vault, recip), v.Hardware.Anchor.IK)
+		entangled("password_anchor", anchorPW, v.Hardware.Anchor.Argon2,
+			v.Hardware.Anchor.KP, v.Hardware.Anchor.EntangleIKM, v.Hardware.Anchor.Pre, v.Hardware.Anchor.IK)
 	}
 
 	// ---- hybrid slots ----
@@ -338,15 +400,55 @@ func TestVectors(t *testing.T) {
 	expect(t, "db_key", DBKey(vmk, vault), v.VMKKeys.DB)
 	expect(t, "KWK", KWK(vmk, vault), v.VMKKeys.KWK)
 	expect(t, "KWK_identity", KWKIdentity(vmk, vault), v.VMKKeys.KWKIdentity)
-	expect(t, "KWK_recovery", KWKRecovery(vmk, vault), v.VMKKeys.KWKRecovery)
+	kwkSecrets := KWKSecrets(vmk, vault)
+	expect(t, "KWK_secrets", kwkSecrets, v.VMKKeys.KWKSecrets)
 	archiveID := id16(t, v.Inputs.ArchiveID)
 	archiveKey := key32(t, v.Inputs.ArchiveKey)
 	expect(t, "index_key", ArchiveIndexKey(archiveKey, archiveID), v.ArchiveKeys.Index)
 	expect(t, "wrap_key", ArchiveWrapKey(archiveKey, archiveID), v.ArchiveKeys.Wrap)
 
+	// ---- secrets section (§7.6, R22) ----
+	// Each record has its own pinned nonce: three records under one key must never share one
+	// (R22), in a vector file as in a vault.
+	checkSecret := func(name string, rec *secretJSON, kind uint8, id [IDSize]byte, nonceHex string, pt [KeySize]byte) {
+		t.Helper()
+		if rec.Kind != kind {
+			t.Errorf("%s: kind %d, want %d", name, rec.Kind, kind)
+		}
+		secretNonce := nonce12(t, nonceHex)
+		expect(t, name+".nonce", secretNonce[:], rec.Nonce)
+		expect(t, name+".id", id[:], rec.ID)
+		aad := secretsAAD(t, vault, kind, id)
+		expect(t, name+".aad", aad, rec.AAD)
+		expect(t, name+".plaintext", pt[:], rec.Plaintext)
+		w, err := wrapKeyWithNonce(kwkSecrets, pt, secretNonce, aad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect(t, name+".ciphertext", w[:], rec.Ciphertext)
+		back, err := UnwrapKey(kwkSecrets, w, secretNonce, aad)
+		if err != nil || back != pt {
+			t.Fatalf("%s: unwrap %v", name, err)
+		}
+	}
+	// kind 1: R ‖ sixteen zero bytes, keyed by the recovery slot's recipient_id.
+	escrowR, err := ParseRecoveryDigits(v.Recovery.Digits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkSecret("secrets.recovery_escrow", &v.Secrets.Escrow, 1, recip, v.Inputs.NonceEscrow, escrowR.Padded())
+	// kind 2: K_P, id all zero.
+	checkSecret("secrets.entangled_key", &v.Secrets.Entangled, 2, [IDSize]byte{}, v.Inputs.NonceEntang, tinyKP)
+	// kind 3: a retired VMK, id the little-endian generation in bytes 0-7.
+	var historyID [IDSize]byte
+	binary.LittleEndian.PutUint64(historyID[:8], v.Inputs.VMKGen)
+	checkSecret("secrets.vmk_history", &v.Secrets.History, 3, historyID, v.Inputs.NonceHistory, vmk)
+	if v.Inputs.NonceEscrow == v.Inputs.NonceEntang || v.Inputs.NonceEntang == v.Inputs.NonceHistory || v.Inputs.NonceEscrow == v.Inputs.NonceHistory {
+		t.Error("the vector file seals two secrets records under one key with one nonce (R22)")
+	}
+
 	// ---- wrapped_vmk (R12) ----
-	var nonce [NonceSize]byte
-	copy(nonce[:], mustHex(t, v.WrappedVMK.Nonce))
+	nonce := nonce12(t, v.WrappedVMK.Nonce)
 	expect(t, "wrapped_vmk.nonce", nonce[:], v.Inputs.WrapNonce)
 	ik := mustHex(t, v.WrappedVMK.IK)
 	expect(t, "wrapped_vmk.IK", ik, v.Hardware.NoPassword.IK)
@@ -365,4 +467,95 @@ func TestVectors(t *testing.T) {
 	if err != nil || got != vmk || gen != v.Inputs.VMKGen {
 		t.Fatalf("unwrap: %v, generation %d", err, gen)
 	}
+}
+
+// TestVectorsHybridUnchanged pins the half of the vector file that Revision 2
+// does not touch, against the hex committed before it (git show
+// HEAD:testdata/kdf-vectors.json). ML-KEM encapsulation is randomised, so the
+// two ciphertexts are fixed inputs and Encapsulate is never called
+// (DECISIONS 2026-09-04): if regenerating the file had re-encapsulated, every
+// hybrid value below would have moved. It is the cheapest proof that the
+// revision reached only the hardware chain — and no second implementer is
+// needed for this half.
+func TestVectorsHybridUnchanged(t *testing.T) {
+	raw, err := os.ReadFile(vectorsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	field := func(path string) string {
+		t.Helper()
+		var cur any = doc
+		for _, seg := range strings.Split(path, ".") {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				t.Fatalf("%s: %q is not inside an object", path, seg)
+			}
+			if cur, ok = m[seg]; !ok {
+				t.Fatalf("%s: missing from the vector file", path)
+			}
+		}
+		s, ok := cur.(string)
+		if !ok {
+			t.Fatalf("%s: not a string", path)
+		}
+		return s
+	}
+	for _, c := range preRevision2 {
+		if got := field(c.path); got != c.want {
+			t.Errorf("%s moved:\n got  %s\n want %s", c.path, got, c.want)
+		}
+	}
+}
+
+// preRevision2 is that half, verbatim from the pre-Revision 2 vector file.
+var preRevision2 = []struct{ path, want string }{
+	{"info_IK", "456e666f6c642f76312f494b0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"},
+	{"salt_prime", "5808e844f616b9b780caa1bab3e757be07c66d127fdf4b5575b44fd36b6df239"},
+	{"hardware_slot.pk_hw", "0490e95e05cad3b7881e3b37a6badbc743b9d2ace993cecb9b64c2417b9730d6236b39cb9ddb5a533ce8d16dee321899b301ce28623a9e39b7f0e1831cfa3f9add"},
+	{"hardware_slot.epk", "043c06b1c7fc699ccd77641f46f0c0492cfd76bf784e4ed1968f13ae1d646568cbae90b48f7cf4acfde4fc09b124c424aeba66f604aef18c7201be06272b905899"},
+	{"hardware_slot.H", "c265f76862fda723ce727f6fa1fecc4e660b9249ad3928add4c39880dc4705e7"},
+	{"hardware_slot.no_password.pre", "c265f76862fda723ce727f6fa1fecc4e660b9249ad3928add4c39880dc4705e7"},
+	{"hardware_slot.no_password.IK", "8d9ddd001ffdc1114ef94cdb63ce24f0d8fcf223668bafd409395366341ba909"},
+	{"recovery_slot.E", "489cebba7a166c619835fe12eedc581dbfc1b36de10c830e4f0bc1c48734864b"},
+	{"recovery_slot.H_x", "ad128b0629a2a57848d11874f03dc5ffd62ec349c12c227486f66a3a47a0b563"},
+	{"recovery_slot.IK", "fee30e8208de997244d520473db9154d234f7fba4876b31dbadcf9e673594119"},
+	{"recovery_slot.K_k", "4549236273de77d16fedf5b94bcee7de63b4694b03145892dbf7069130b0d042"},
+	{"recovery_slot.R", "0010ffff34120000abcd0100807ffeca"},
+	{"recovery_slot.combine_ikm", "ad128b0629a2a57848d11874f03dc5ffd62ec349c12c227486f66a3a47a0b5634549236273de77d16fedf5b94bcee7de63b4694b03145892dbf7069130b0d042"},
+	{"recovery_slot.digits", "045056-720885-051260-000000-579161-000011-359040-571626"},
+	{"recovery_slot.mlkem_ct", "ef5b766da03150408a565926e23bed107589c165f7463c981e87ca7263ff6a81dc5739ebb3b11b0e23e69bd25b1f87211de2fc1ff0bdf5d1b943b421a036830327327b96bc9e66d20e28395506f976a20732fde050aa1cf0074a01ff2d47d1a7e332933b86c2ed6b98e735ff63899beb095a65ebbf8262a8ab74d750511f48584077e87751c7106b3c7cac0d6ffc54cb17cfb24737a8bd84fbd1753362bcc8709cababf224ddb483192af444299f697944564838fc0f899b9379d2e3281259ee6bc8deed181ac4d5a293e9356e94f69335f063accba9c35ab9c1b09bd02ad164d8d98f5ca7432cc44c44f0d1ef04d4bb34b60cd9de2a1deb8738c67de8acfb93d653f8f40b65341273c32b4de4b5cc0d4e2aef647fd5e0cd15d97220ec646c81f47099936c2db23cbd0d153799d098b0cb34e6da9299a85e894d09df49715225579052bd9cf49c2e41063a4f299a130c1a6b90308c932889811340067a1bd342880bc64079b939b396c84f68cea1a27c74f6ca8421d9eb5b37f474540b65b8ba305ffbc5e048a2193c9cbe75c2e0b204b3735dfa7b3ad04c002c1a609f75114e4783bdfb2880cb73f9a2017b280a20247f71fb870e4f17713462493d48ef358732cd80905d3099f7cfcf799f175598e1a2d89524455874d0018e63ce1b75e65db0b137c26b94c8447aa55865342c15c5cad03ad5bced934000666e340e9994e731d083544afef49e6f5912cf21be04621a79432c5c06a9c2bf24d70ebdf426089ef96972fa3abdaaaa0ca2b7d80cd327c0c7a80dfe3d94b0bd1973fa038ced13368af1ca890134511d361a5bb7005cd9947417dbea09d412a54a2d99ccb429e7750e718adce0e103cb0b862b247f485e6cb7c3c9fb5a743b2ba1abf163ae1e85ebcae057e801e0c7292f611692569d6c04bc8233580516d361465ebc1b51908b2409ebd17326723c753ec09bfa4473cfb55ddb1f4200f207e691446046ea53fd76cfc242c86b3dbf56fdef347560e0553f31ea174774aa30ee9f3e4771c077c4598cf598509c695ab83424469ec62bff821bf97a39f049861e4b50922c3f8bfb34ea6baf52d2da7b69a448d92c56f7f2f930756d10ab2b745896a00d2dc40d532d6ed83d29598435d1d32ccd69dd6f3a1f3ea7f7062ce2bda65ffb19d4fc2339b52c5712ea4b99c57cfa83bfc0e6f0348f43a76eb5a8659ae8d9b917f7d44e91cebc75ac278be63dc2f6bb2e73d5e44fa3245b347b76323c77cd749ae7d7e3bdf843734b054f30aca9a61add2992bb77ab4a6c51ed347a2761e2cecc11093dd7310ea7773d5f23914824a1cd8f268fc3f91ed644036e1dcc6fe8a19566aa9bea9feab82f14a55957ee1f168e564d613ae297e0dd295b461f9289da67ce0c3898b4f7c5cc4e860cf85552045e317ec1c99f52e606c08f80ecafeef64a9fc9c6a9b6218046d53a74daf1457c3ff75b6d8c72ce3289276da32b9201b7e1f7a2dda5c9624a24dc37b482d6a2d9d8804647dbc6f581606893a7372431ed9a492e3da944048f684de0b6be0a8b0cb32c3d9062c8fe8646447d60afe82d4124494f6fe09d24be574bb95fe2e423aa81493b6b13e4dab701d014ecac7e6504c41aaa059b804ff956f52af153e9e50774f3e1d68f85c97fb559ec521e6785ccf85250337bafcf17c9348fb7b5c38f3a8194513ec8ad1d3efb3bb7068b523f72c81f878a76b19bf5b55f25cd387eedb8dadd41433795d032b3d72ee8c740f7613379cd61de7403786e3ddfee05b26333a9e3dbd7e5243ffd0b6fc5a052fa44b4916353607ff114520035c29a87b14f3850564194e52cdcf46113254ea4977186619e2d72cea28a3832cecffd96a5c093cd69ac9fd5baf086ce0c27aa95f59b427bdf9f782f2ee24de37a093ee390f3b5b81136909049f48f3a967181794f520d70595e51ba97a14c50f8a121ff6583c14f04bab23da1582022f2866d243b74d291114f1479158b6143fefd3fafbc6186a4ebb1b8f8980ba580b9f9aa89a680e2ae6156eb11cccec301cc0db04abb2ca2961662ad74c1bd6e6a8d400bcc75713a4d2e90fce18f78297c840b10ead7852e74e1343ba9ef9117b80a28a65c57c6eee0de40366969fdb088eacbfb54147efa95ff590ad00f79640b6d23ac67a9054a41c47f4c81c77b693c6aef00a4831e15fd89fa5888b777322cf368cad8cf3f9f6974c09b42"},
+	{"recovery_slot.mlkem_ek", "d20c0c0689539915ab2501a055f291fc6c8c5266b7b8f30a4f840b0d7bc8d184ce6e9a42371a5ef6c196e6cacbf836379d3c548d1b630c921b6c0807008c73f5118c44698999da08fca5af1d0139a2b003ff3612aaf20d889545789c4edb0b8c0f0248df0387167496b053c83b2132ff145195ea0bfeb8ad99f66549d402855a9f5cc4b29d8099efba714751c9e4c1324517028a5a00b0bc9860859bfc7a9aa0856829b74f9135b4013bcfb2bcad7982c838e8639989cafb92a8488053628146ea0ab7dcb39d86c24bf7141b5bd818e98ca150b8514b573bcb8cac26ac86210006e4dba3deb3b03069a968b95fd891464972a0cdd632eab28d43651cdd3948961288725abf441ca085ec197b76178b49cacbcb0691486adc09a2e657bc8083b727c7aa4f593b0e504b57e71ffe002f132abb94d9a232d125f0589d94261efec5a0316b624cc5bb39a11fc85640a322b311cbb8fdb21ff9ba3157f7795c760028307db08876cdd95bec91b96626b262e25f53cbc6d80045fa4976d5dbcbf6e00390b6957e281b7b1562ecd07d3db549eb168115420008889bdc75304354a4697623da812fd9f7ac22f54b7fe5ac24e7ab4be6bedfd7cee71a9b21518d06d66ee0273151d456bc8c0eeef4470241a943404021da3e27cc62e014352a958bd5f159e21955d2f36f66d5b422ea12d8a2999f271bf624c7778803f46552ff16ada59474591a10afd9555022a290ca4a9db136752126b50a80b79276b0f2426be353f1a87bbd192854945ba3b6c5c5004a90db53834361ea633991f342814a541ee00c2eb3815d9b1bf7b86d6ce53bb809aee6960459d03864919284157d80847f190b2766cb108dc16409491012b28fd0c95f00ad29a9978f448b4563bb381413caa8f272ab07a95e5c194266872c0528660007b891052e359c9f669b51984ef7ebc78aea9a362332d2681777b62dbc11a6eed844e8250d48790a45446869d18e69d2709c904f4c342b5c10bedad3a19bab0be6f0383939302ef2952f3843b3a7bdb54a9292417dbcdb052791a2304029626759c3d9ad318a2d14fa9c05b16dc9a47efc514bbdb49808f9a188f36497f74e60053577c8c69e3135251c0638741b5cf2bd76904281220707e693bf0a5bc9c0c0d70b6a5c6ba233ca9c04017a5d30110241a7bd2822e4485ad39518b919b452babdd7969b289833c6fb6c5c383d45d7178734b7d7c3555b642d3c84b61729c3cbbac32db19f68912154cc176bda5c5a48130c5006a9f25c5e7c45a75914cc800d7c050ee7e36533f73607a4638eeb6e91bc54d949b59289185518b81c175c98cbc645ca6e9e667eec70400781b2e46a40cc3003715aa6e217174e9c9c157b8eb16297ed580a27d10bcb76782a05881fe0cd7eb918c1ac8cbff687a95872352774b7c19224f9887ef2029fb178a6e562e9f0520bd6425f49548df6a28ed85725b46e68396b00c594ced561b16241a79b821cea37420b5c84d212e43706ebc01e3e06505067252032333c306cee53830a5a3d64e48a6e562d8429c27cdba41761ac493719280359a3814ce7a428d1e95233b05bd275947c2639be675873a5c470b059bf43907301c0b7fc8effe247758c1132b183c8a526fd0360d1600eeb62636c370e03307b73a28434e7bee3285d721647470b1c75e9c83cb357c60b649735086cb8b6037528ec2835fd3c4d0b72611f35153de63abc56a097a2b2da4ac61ca79ee1a957f0f512314bb708302780a26895ccab1fa0cb75557932dc75484b88300806beb985c705b852cb0cf051551279a7972458c34153cbeb167d521c2f49a7785040bdb141ff06543f8a567b2aad43aa01a6058b0a602cd22c6174c8c4e0443e0566b3a51ac58fda7d9ea95e88975ba42b41632057a3f6a774e81bcc506a611738543b3579d50b012340e1466cf0aa12cf802649298928f17817c90cd9b572808b2ac6383a9b1a620b620986563bd5528cf19345c9726db155a547835bd5641c7a93040b5b3bbd304a7fd88506945cd92b3683320f1a1c18ca723c49f859e6520db0b30187736e1181627f7b999a7c480490be36f612c7e29dbedb16c1637183c367cbfc5466c6a6d896a8e33a6d2ec8bb2f941f13b4ca38b47757a402022b225d7607e3d32a4ca12f8cb70bec10c5395912701b9e5cc351c4aa7186783331784a0a800ed8c35bf5798236a265904f"},
+	{"recovery_slot.pk_x", "6cd4a255fac120aeb29a983c8e7295894e11f700edd578d01d596d6af776c109"},
+	{"recovery_slot.pre", "01e74664e807c46fb379b5355c68d6c0738965e5b41f09c81822ba72b92e1416"},
+	{"recovery_slot.seed_k", "cf00f9c2cdff481ca29a03d2269975891b397d8f1112f00a7e19c6443e6ffea8d1aa3b9ea898529847dce10ca1cfabc38f56c6fedaeb2a6f080b01d2a52fc3f8"},
+	{"recovery_slot.seed_x", "957ed87c3d93303e68badbf94ddbc7c415a3aa04c3ada5436e25653fa16fc811"},
+	{"password_slot.A", "b1fd96580ee7426282867c44d9b3c4453332905785caf54d02ba8838480f571f"},
+	{"password_slot.E", "489cebba7a166c619835fe12eedc581dbfc1b36de10c830e4f0bc1c48734864b"},
+	{"password_slot.H_x", "4aad8c2b852f0a8aec9237c0d4c782ea3d28cd50211928b5a79177b0cf603f68"},
+	{"password_slot.IK", "0624c57b6cff96972839c80ad312478d1d6fad7ddcf5b058c941cdd8bc4b8d3c"},
+	{"password_slot.K_k", "a4d5b62a47ad9c89c40411f4811d1b1074bf3cddfd43472b29c29eccd0d4c626"},
+	{"password_slot.combine_ikm", "4aad8c2b852f0a8aec9237c0d4c782ea3d28cd50211928b5a79177b0cf603f68a4d5b62a47ad9c89c40411f4811d1b1074bf3cddfd43472b29c29eccd0d4c626"},
+	{"password_slot.mlkem_ct", "71701ef005f4aa5dba4ff8332ed65719fff7f6fb0e8c47b7a58ef5d127f424c8b7ac8d3e926706636cc466e57d49520d431f961677e099b9ccfab70db868cc597fcddc7ffa26ad32f0edf7af75253b971010f7a0d030fd5741107c1e02eafe65df6c4ce61b31cda1c8d30d8a0b8b8b75a71aeb4b46c7df039f60751ee50ae1c7b5a39193eddd1b62d1395c6acb7eee33f078c19405c2baccc905152bc609968a32f89f6a41c0705755bf2d6ba1cc874d4547705b06a894c2571cb4f03dededffcfff58f3590a1d7d8337e75ad9c80ad7d656369bf405274d540b96d8cec9cab697dc885c3729aad0d650ef4951c1514d6acb1c742f0e68845318d9f01728c4fb407012610077b68e56e14e2c1e3ddd21521cc846b571da8fbe36e167c117d90511d5f3ce4f03214188f44829ebe7d9bf5ba86b8ed54b6c55ff529b38bdef8ba32d59b03d5185c3bfc70e3a74240a6202442ad7e49f5abc3cf36c23b5050a70865c4f366dd4faa6e2c3f60f975799f4b9c2826b5a200e72724364bf7025e934edfaa6d73589c19a4fc156467ffe5768f1f5e2b8ccaae350dae20084fc4e1cbc698cdf5edce08cfb3a60c74fd5a7e284ab73f47db12325096855fdd5d582baee32e4382e2ea856d0cd1e7868159febe6ca28c7806624f0e150fb3b9241bf737ff9ab77d211785a0422156d80433f23a0047f78069cbdf0dfc026ef76859ac5ed3ddc1b75c73d21134cd0bd28192ff57290cb5d98faa2607b07852b95870787b58bca400f7600455a5b2c2c2d2f2dd54f39ff4e2c94139240ad8f1d6d5abd1920bdab491dde48ff9dbcd1a291029ce4c77d146013cf258a834a3d69d940c671cecbdd824e4cf4a79b10814eb10ce2af48939674fa9c96fff6414a5ca5b02e5c09c7d70995d88e7554feeae5ed6acb70bcb2a343f5187fab2191f4054359b0eb1ad7988c5a8666f2880f4a6fe600d1afb0261cf4f2a563fea414286b821add65c45a3e647e4b6d4c71d5c460eef534a4c444e67f5d0a746b2960a701029dddd49f2a747d0d8270e7edeebdba01f65ae8b24e34302c7c4698953d93f822f0fc74128270b6a5a2e88b181848e1f2d3de9242126a1d5f50ecf56cc3578a4775c024d5a8bd848e8e19045f2a9bf16264bcb23d913fc27774ea065a3451ca9c7ab26ece1c5ed93f8aecc0d21a8f3dde0bf629fcf4cb26ff749dcb71b9f9e6f988a450c48f32be6f7764a8be7c982c10aced616eed9803c25aa92feb064f1542b6b4dde98cde0cf356229a6f4b8fed2785dcde45d7fbb6eb618aea56d67ae94d3a6c32f7df912b3afb614619b16feb2943202ab2db627175b91bc440c7f3a71f6ab8d68e3a1a126af38cdc91679ccb3ac973b35a89d9779532628f48939ab6c79148646375bcbedee350c44d8ab6cefb95f25d328cbc4f12aeaa02e4822a39a8846870a64e7a7e1c8a13272b78f329f511bc3aa4e6bb5a6d6cef7f1bdbe7c01b7a0a15a3363ff362b29fa013108a83c5d849079bdd2a9d6cbda019883b3e6e3984cbbddd7b5a9b9ba18aeb0efc9c43eede69c85e6a501363148140e5500aadb1e6b7f3f0333e9b600b7d895a11fb091f4f2be05a75781311d1de4493729f001a6bbd190e0bc2904222a32e363db9c71f290e72e42765182af73800ad0fb44b03e7c89115240965dd08a534ba72a0a8e5df704132ce8da0905fe22b2d35ace6e277f473ac09e21d60feacaf3ec41183a1a644855c2b8ce9fc451873ca1c2dba9dee8b478984d42b630bc080f2b788ee93c7781ee485e79557e9ffbb1af51bd592b1b5f4f109ac7940b055394994c62e7563e9b8f87fe79e4033c0eaae0c66da3dad0e1eb0fe74db9b7988f684f45b46118c3a74b82ca54f7bf0d919978ab15cad8851304ff6efe3f52f1246c7c3adb6e6792ed8d1c78d670804f0b6c01815e10159d93cce63da9a96ebc2b4ec16939f99b73250377bf5247b362c3f99dfca88eed5ec854538afdb859354165f9f30c878b42613ab6a24971accec57d13983c8d69401ea396d387c78bfed4a1b5cadb7f8db5b071c6838fdd7c0fe886836f149e0c2b706293aa124782352ec38a7a4431d351b8715c2ba633d511293bf9ac405daf8896ac8958a507d61c43a54e6bff4ea6fe18bea972794a0fd3b22e96368e71343ce8f3f5e3689e0e82eef3ea5ceded19abb15ffb98c7ff9bf8efaa13f5d93d68752d88456"},
+	{"password_slot.mlkem_ek", "1e0aa895a2151e190b70688e05e7b8826bc0bcf0c29c9528874b624a18ab76e4c759a2c2e34ac3b98663edc07551f99ac9376a574939a64b7a83c583ec568a7e62846986222ccc55bf4093f0e10f43d52743ea191430abc711bdca931d92a278bbcc2259d5460b503f06336f11aa598a870f651aafde16300421782cd16d38f69a1f6a89ffd769aac1a136d07bb873637f861dc6441f32d36221479b21c98d1a07a4b2f920e2c2c4d8274d28f43f6fa0bdd190a829b2c56e87bb15acbe6b578de9c449f5575e28da7aae713c80c1c8184a5431d12a64180e75a28a12a3118a11a751d73f05808a08c45c97d62e047228cbd346cfa1446f09239bb923be4998533639969258e426c6a2513617187677a3195b5409dbcaaeeb10507798b12c040b66ca364389164bd1908ed7118a0a2581a5c458b230b5d85be769ba9d9523aa20a6434148e281b335948250598ee4a25078382864827bc56bb04a258196a3a20e11413f5cc590a62fb5d100b655cc75a3bab7cbb4436abdb0b87207398dacb39c361c01a643237180a0cde63fd89c21c6f64add61b2899448b396bc71b308829620050361a753250ae11732659289171c59da2b3404b6e05b501c6194cce82c01803f23d1c2737885dc70253d813909b9357872be4562013ea13dfc11a470f33131e04a0e646bfe9b4e3d4b7968e57e442a3bb54c105dc52517a6a067eb375754036968607b4b2a730b7c1b3a87af7cb9d4c4ab6345cf4c16ca5114ba9d3a2b57f7c4272394421b309f7806746ab54c4694a157a8c1f27f1cd93007756fcf5ca66e6b0a37db65e35a7d3c90bd409ca4f526a055980bf5c234bcb22f26fcbcab80135670057d57811d268d6857743229b26d0516ba4bad3644c67387c443dc45125aca45d9b24131072b167b2620735b6b6d1baacbb6608a8c39b0402576606014250409c8ab6a9e759acedc0e1792bea8924cfde122792672e6342d37b8357e23647db14d98eaa891014e3c6aa11db93d2fe87e261c5ab929499e2926aa94cdc76a07dab78414809fc955a8f5b1b088d7cc0e6633afcacd5e025faff426db7704f01157aa497533e7b018eb098207bd7e554ceb93bfae9391e18c819d7418379814edc7a794c8ac8e0a875e87ac794b1b0797a9b609575a7892b6f963a0dccf4b08ca99c4bd66d25079b39edabc1edab185332916510aa0c472a7723c6450cb2bd243a12d5635b0041ad5c36bfd84607c65ab5cb12b3204cbaeb3354fc42a8fa173a6fc477bca132a17529d30780e84837aa46aad121ab1f3a27b4cc3a43043b6614699255b8b3ccb1f651d1526465f07c9a42211d1f29fd700d0554367f0d7a485592823aac2ee0b74ffa22c55201735a06bb2e8b874b0218ed675beb770a9fab8c1faad40b06d02f92a56f86692667729f8bb881810eef0964a7babca964d743c06c1f0b17b2b7b4a5304e3164aada969ecc322f47449956cc3c4539677d3b03454114d21aab2e64e7b4675ac977be8fca2d1088025cc71cf871f2c83a2b9431b87c7adecd46266039625327e81ea2c587246b639140ccb965c020b59c27ecd647001ba162267acac1b831d9734f4aac86a292c6cb588738851051377eda82e2623542276aa672430bd4914a47859ec4b81be92c774f95cd0a37d7215aa05b09bbcf3a27936419e9a995579521c50941aa7be2f8c2bb491af413041779c3375252050986de1a8364d7310cf91188af7a866480aaf251fbe83911c9c80e3ec1a6292385d885711bc257bc219f5bb709568b795b40cc6211adbe2bc530606aee484b214976a214db2e6ce6dab6316f91229766f9567c3074400f913525125526f4b76f7f03d36920a06eb14a4688c2ff48412b64c4f49441b01a017e95ef5c914ecf7945c34317d741243ea1ecc9741422a4d0a97936ceb5f15e50a7f4aa72c47aa9e6895f2bbb914495e81199164a9b6dbe4b7efd246919c97268059bd9a88bba514003dbd0f0400ef3932e67786990a4c6e8366d999a88b9a18d9913ac74234f33b4c0aa253e68662fe54a771bacd94d1c32a648397a921f3b680ccbb1b36b20a4bf88af7f69075761c3e1c0981d71f1b8a630bbb0b425337e7328154aa5358745f65cc1f65936118463b462972bb2a33f44a6c5c191c7d4176cce10aa8a26f6e1bdb625b5dd48e6b02e2816b7e127f123e0fbc1ee36191ea2a20f7799c61c8"},
+	{"password_slot.password", "correct horse battery staple"},
+	{"password_slot.password_utf8", "636f727265637420686f727365206261747465727920737461706c65"},
+	{"password_slot.pk_x", "bb4b80c5eff4070bc70be53cbdb290c44ca93e2011ad1436dc2b8fffc49b9a63"},
+	{"password_slot.pre", "ad30cda6cbaf517502b6e43bf192ea9207ad89f3818d9f5bc79cb13b144d3820"},
+	{"password_slot.seed_k", "b7d4b24c2b554181d9860f08935c37dd2402001929c02a1272ca5e4731713626303daaf48f571109b684ff72bb923d0812e0e230e4478ace17dbfd717fad4591"},
+	{"password_slot.seed_x", "7373c5c556943479ab9abb082bf0a8e369fb966a9fc52530b0b42e1287e5b4b3"},
+	{"vmk_keys.metadata_key", "74e718c997e578aeb730daa4aec6ff44451addccb236ecc4fac327ebf3695ca7"},
+	{"vmk_keys.db_key", "6584e526033aeb714d7b8c01d6edd5fbfad83255300e93522486ce2b7729ec14"},
+	{"vmk_keys.KWK", "f6505747ab8b7d77f0e0af52c544bde7cd29aa250bc9407408ba4bd8eed3549c"},
+	{"vmk_keys.KWK_identity", "0618d03a39bed2ec258ead4da73458cfb287f7f4e0c8fe862782d6f7e0699915"},
+	{"archive_keys.index_key", "bc8dc9a3ccd9cca8f39d48a042dd0cdc0c75571ff25b604dbc01406bda0379e2"},
+	{"archive_keys.wrap_key", "3e3fb814d552f26e1b368dd4c7b300f5343f0dfde74782473f34b9cbda6472a4"},
+	{"wrapped_vmk.IK", "8d9ddd001ffdc1114ef94cdb63ce24f0d8fcf223668bafd409395366341ba909"},
+	{"wrapped_vmk.plaintext", "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f800700000000000000"},
+	{"wrapped_vmk.nonce", "b1b2b3b4b5b6b7b8b9babbbc"},
+	{"wrapped_vmk.aad", "456e666f6c64206b64662d766563746f72733a20706c616365686f6c646572204141442c206e6f742061207265616c20736c6f74207265636f7264"},
+	{"wrapped_vmk.wrapped_vmk", "513e6987f346e923fdc4ce3b02e802cddfdb2db76957bd8db6c825f2e860396d3791ab833c2312eba23b0819d1e03a7ecc9f1b62f83a0447"},
 }

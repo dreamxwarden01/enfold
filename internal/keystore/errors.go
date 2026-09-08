@@ -24,12 +24,27 @@ var (
 	// this means a wrong password or a damaged record; for a software slot,
 	// whose verifier already passed, it means a damaged record.
 	ErrAuth = errors.New("keystore: wrapped VMK failed to authenticate")
-	// ErrStale: the slot opened but holds a VMK from before a rotation (§6.2,
-	// §8). Unlock another way first; then RewrapStale brings it up to date.
-	ErrStale = errors.New("keystore: this credential is behind a rotation")
-	// ErrTampered: the live slot region does not match the hash the registry
-	// authenticates (R25). The vault opened through the slot that was used,
-	// and stays readable; no rotation, re-wrap or slot mutation proceeds.
+	// ErrStale: this handle was derived at a VMK generation the file has moved
+	// past — its own Rotate, or another handle's — so its keys no longer wrap
+	// anything in the file. It is about the liveness of an Unlocked or a
+	// Session, never about a credential: since Revision 2 a rotation re-wraps
+	// every active slot in the one flip (§8), so no slot can be behind. Derive
+	// a fresh Unlocked and, from it, a fresh Session.
+	ErrStale = errors.New("keystore: this handle is behind a rotation")
+	// ErrTampered has two meanings, both statements about the slot region,
+	// which is checksummed but not authenticated (§5).
+	//
+	// The live slot region does not match the hash the registry authenticates
+	// (R25). The vault opened through the slot that was used and stays
+	// readable; no rotation, re-wrap or slot mutation proceeds.
+	//
+	// Or a slot opened to a VMK generation that is not the superblock's, in
+	// either direction: the region and the superblock do not belong together —
+	// a spliced or rolled-back region (§6.2, §18.1). Since Revision 2 that is
+	// a verdict, not a diagnosis: the unlock is refused, never reported as a
+	// credential being behind. The same verdict covers a registry that
+	// disagrees with the header it was written beside (§7.6) and a kept K_P
+	// that is not the one the header derives.
 	ErrTampered = errors.New("keystore: slot region does not match the registry")
 	// ErrInvariant: the mutation would leave fewer than two active slots with
 	// disjoint required-secret sets (§6.4).
@@ -37,9 +52,11 @@ var (
 	// ErrPolicy: a standalone password slot may not coexist with a hardware
 	// slot (DESIGN.md §5).
 	ErrPolicy = errors.New("keystore: a standalone password slot cannot coexist with a hardware slot")
-	// ErrPasswordRequired: the hardware slot has an entangled password and
-	// none was given.
-	ErrPasswordRequired = errors.New("keystore: this slot requires its entangled password")
+	// ErrPasswordRequired: the vault's entangled password was not given. It is
+	// decided from the slot region header's entangle byte (§6) before any
+	// token is touched, never from a slot record and never from the length of
+	// what was handed in (R4, §18.1).
+	ErrPasswordRequired = errors.New("keystore: this vault requires its entangled password")
 	// ErrNoRecoverySlot: an export needs a recovery slot to carry.
 	ErrNoRecoverySlot = errors.New("keystore: no recovery slot to export")
 	// ErrBusy: another process holds the keystore file open; this program
@@ -59,10 +76,18 @@ var (
 	ErrIndeterminate = errors.New("keystore: commit outcome unknown")
 	// ErrNotFound: no slot has this recipient ID.
 	ErrNotFound = errors.New("keystore: no such slot")
-	// ErrNoEscrow: the recovery slot has no escrow record (R38) — it was
-	// made before recovery keys were kept once more — so its key cannot be
-	// shown again, only replaced.
-	ErrNoEscrow = errors.New("keystore: this recovery key is not kept in the vault")
+	// ErrEscrowMissing: the active recovery slot has no recovery_escrow record
+	// in the secrets section (§7.6, R38). Registry version 3 is the only one
+	// read or written and every recovery slot gets its record from the commit
+	// that creates it, so this is a bookkeeping fault, not a slot made before
+	// escrow: there is nothing to repair — the key exists only on paper — and
+	// the cure is replacing the recovery slot. It never refuses an unlock.
+	ErrEscrowMissing = errors.New("keystore: the registry keeps no copy of this recovery key")
+	// ErrForeign: another keystore file's registry opened under none of this
+	// vault's VMKs — the current one or any the secrets section remembers
+	// (§18.2). Not this vault, or from a generation this vault no longer
+	// keeps; never reported as corruption of the file that was read.
+	ErrForeign = errors.New("keystore: not this vault, or from a generation this vault no longer keeps")
 	// ErrEscrowMismatch: the escrow record opened, but the key it holds does
 	// not derive the slot's public key (§6.3): it is not this slot's key,
 	// and is never shown.

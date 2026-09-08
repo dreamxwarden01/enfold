@@ -1,10 +1,9 @@
 package format
 
 // AADs for the key wraps of docs/FORMAT.md R22 — the three 32-byte ones and
-// the escrowed recovery key. Each binds a wrapped key to the record that
-// carries it, with an ASCII prefix for domain separation, so that a wrapped
-// key moved between records inside an otherwise authenticated structure
-// fails to open.
+// the secrets section's. Each binds a wrapped key to the record that carries
+// it, with an ASCII prefix for domain separation, so that a wrapped key moved
+// between records inside an otherwise authenticated structure fails to open.
 
 // ArchiveKeyAAD is the AAD for a version record's wrapped_archive_key (§7.2):
 // "Enfold/v1/aad/archive-key" ‖ archive_id ‖ kid.
@@ -37,14 +36,16 @@ func IdentityKeyAAD(vaultID, deviceID [16]byte) []byte {
 	return w.b
 }
 
-// RecoveryEscrowAAD is the AAD for a recovery-key escrow record's
-// wrapped_recovery_key (§7.6, R38): "Enfold/v1/aad/recovery-escrow" ‖
-// vault_id ‖ recipient_id — the record opens for this vault and this slot
-// only.
-func RecoveryEscrowAAD(vaultID, recipientID [16]byte) []byte {
-	w := &writer{b: make([]byte, 0, 29+32)}
-	w.fixed([]byte("Enfold/v1/aad/recovery-escrow"))
+// SecretAAD is the AAD for a secrets-section record's ciphertext (§7.6, R22):
+// "Enfold/v1/aad/secret" (20 ASCII bytes, no length prefix) ‖ vault_id ‖ u8
+// kind ‖ u8[16] id — 53 bytes. The record opens for this vault, this kind and
+// this id only, which is what keeps an escrowed recovery key, K_P and a
+// retired VMK from being interchanged inside one authenticated registry.
+func SecretAAD(vaultID [16]byte, kind SecretKind, id [16]byte) []byte {
+	w := &writer{b: make([]byte, 0, 20+16+1+16)}
+	w.fixed([]byte("Enfold/v1/aad/secret"))
 	w.fixed(vaultID[:])
-	w.fixed(recipientID[:])
+	w.u8(uint8(kind))
+	w.fixed(id[:])
 	return w.b
 }

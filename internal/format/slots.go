@@ -16,6 +16,10 @@ import (
 // credential_id is on the wire (u16 length, always 0) but not in the struct:
 // no v1 slot type carries one, and a non-empty value is rejected on read.
 //
+// slot_salt of a hardware slot is deliberately unconstrained: §6 gives it a
+// job for derived-keypair slots only and states no rule for the others, so
+// this package invents none.
+//
 // Decoding is canonical: every byte of a valid record is represented, so
 // re-encoding a decoded record reproduces the bytes read. AAD relies on that.
 type SlotRecord struct {
@@ -115,7 +119,12 @@ func (s *SlotRecord) Validate() error {
 		if s.Flags&FlagPRFRawSaltMode != 0 {
 			return invalidf("prf_raw_salt_mode is reserved")
 		}
-		argonNeeded = s.Flags&FlagEntangledPassword != 0
+		// R13, R24, §18.1: the entangled password is the vault's since
+		// Revision 2 and lives in the slot region header, so no hardware slot
+		// runs Argon2id and all four of its Argon2 fields are zero.
+		if s.Salt != zero32 {
+			return invalidf("hardware slot carries an argon2 salt")
+		}
 	case SlotStandalonePassword, SlotRecovery:
 		if s.KeySource != 0 {
 			return invalidf("software slot carries key_source %d", s.KeySource)
@@ -126,8 +135,12 @@ func (s *SlotRecord) Validate() error {
 		if len(s.MLKEMEK) != MLKEMEKSize || len(s.MLKEMCT) != MLKEMCTSize {
 			return invalidf("software slot ML-KEM lengths %d/%d, want %d/%d", len(s.MLKEMEK), len(s.MLKEMCT), MLKEMEKSize, MLKEMCTSize)
 		}
-		if s.Flags&(FlagEntangledPassword|FlagPRFRawSaltMode|FlagUVRequired) != 0 {
+		if s.Flags&(FlagPRFRawSaltMode|FlagUVRequired) != 0 {
 			return invalidf("software slot carries hardware-only flags 0x%x", s.Flags)
+		}
+		// R13: salt is the standalone password slot's alone.
+		if s.Type == SlotRecovery && s.Salt != zero32 {
+			return invalidf("recovery slot carries an argon2 salt")
 		}
 		argonNeeded = s.Type == SlotStandalonePassword
 	default:
@@ -197,12 +210,13 @@ func (s *SlotRecord) Encode() ([]byte, error) {
 
 // AAD returns the associated data for this record's wrapped_vmk (§6.1, R14):
 // every byte of the record from slot_state through wrap_nonce inclusive,
-// followed by vault_id, with one bit excepted — rewrap_stale (R29). That bit
-// is set by a rotation that could not reach the slot's secret, so it cannot
-// be authenticated by that secret; it is a hint for the UI, and the
-// authenticated truth about staleness is the generation inside wrapped_vmk
-// (§6.2). Neither record_len nor wrapped_vmk is part of the AAD. The record
-// is validated first, so the error is meaningful.
+// followed by vault_id. Since Revision 2 there is no exception — all of
+// flags, R29 and R30 having been retired with rewrap_stale, so nothing is
+// masked out here. Neither record_len nor wrapped_vmk is part of the AAD, and
+// neither are the vault's Argon2 parameters or entangle_salt: those live in
+// the slot region header, which §6 says is covered by the derivation and by
+// slot_region_hash (R25) instead. The record is validated first, so the error
+// is meaningful.
 func (s *SlotRecord) AAD(vaultID [16]byte) ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -213,15 +227,9 @@ func (s *SlotRecord) AAD(vaultID [16]byte) ([]byte, error) {
 	}
 	aad := make([]byte, 0, len(body)-WrappedVMKSize+16)
 	aad = append(aad, body[:len(body)-WrappedVMKSize]...)
-	aad[flagsOffset] &^= byte(FlagRewrapStale)
 	aad = append(aad, vaultID[:]...)
 	return aad, nil
 }
-
-// flagsOffset is where flags start in a record body: after slot_state,
-// slot_type, key_source, curve_id and recipient_id. FlagRewrapStale lives in
-// its first, little-endian byte.
-const flagsOffset = 4 + 16
 
 func decodeSlotBody(r *reader) *SlotRecord {
 	s := &SlotRecord{}
@@ -284,17 +292,87 @@ func DecodeSlotRecord(b []byte) (*SlotRecord, error) {
 	return s, nil
 }
 
-// EncodeSlotRegion encodes a whole slot region: u32 slot_count, u32 reserved,
-// then the records. The result must fit in SlotRegionSize.
-func EncodeSlotRegion(slots []SlotRecord) ([]byte, error) {
-	if len(slots) > MaxSlots {
-		return nil, invalidf("%d slots exceed the cap of %d", len(slots), MaxSlots)
+// SlotRegionHeader is the 32-byte header every slot region opens with (§6):
+//
+//	u32    slot_count
+//	u8     entangle        0 off · 1 on; any other value is invalid (§1)
+//	u8     argon2_p
+//	u8[2]  reserved        written zero, ignored on read
+//	u32    argon2_m        KiB
+//	u32    argon2_t
+//	u8[16] entangle_salt
+//
+// slot_count is not a field of the struct: it is the length of the region's
+// records. Entangle is a bool because the wire's third value is invalid, so no
+// decoded header can carry one.
+//
+// The header carries the vault's entangled password since Revision 2 (§18.1):
+// the switch, the Argon2id parameters and the salt of K_P, for the whole vault
+// rather than per slot. It is authenticated by the derivation — an edited
+// header yields a K_P that opens nothing — and by slot_region_hash (R25),
+// never by a slot record's AAD (§6.1).
+type SlotRegionHeader struct {
+	Entangle     bool
+	Argon2M      uint32 // KiB
+	Argon2T      uint32
+	Argon2P      uint8
+	EntangleSalt [16]byte
+}
+
+// Validate applies §6. With Entangle false the other four fields are zero and
+// R24's bounds are not applied — the carve-out for a reader that will run no
+// Argon2id. With it true EntangleSalt is non-zero and ValidateArgon2 passes,
+// bounds and the m × t work ceiling both, which a decoder checks before any
+// record is read and therefore before any derivation (R24).
+func (h *SlotRegionHeader) Validate() error {
+	if !h.Entangle {
+		if h.Argon2M != 0 || h.Argon2T != 0 || h.Argon2P != 0 || h.EntangleSalt != zero16 {
+			return invalidf("slot region header: entangle is 0 yet m=%d t=%d p=%d or entangle_salt is non-zero", h.Argon2M, h.Argon2T, h.Argon2P)
+		}
+		return nil
+	}
+	if h.EntangleSalt == zero16 {
+		return invalidf("slot region header: entangle is 1 with an all-zero entangle_salt")
+	}
+	return ValidateArgon2(h.Argon2M, h.Argon2T, h.Argon2P)
+}
+
+// encode writes the 32-byte header. slot_count comes from the caller because
+// it is the record count, not a field of the header struct.
+func (h *SlotRegionHeader) encode(w *writer, slotCount int) {
+	w.u32(uint32(slotCount))
+	if h.Entangle {
+		w.u8(1)
+	} else {
+		w.u8(0)
+	}
+	w.u8(h.Argon2P)
+	w.zeros(2) // reserved
+	w.u32(h.Argon2M)
+	w.u32(h.Argon2T)
+	w.fixed(h.EntangleSalt[:])
+}
+
+// SlotRegion is a whole slot region (§6): the header and its records.
+type SlotRegion struct {
+	Header SlotRegionHeader
+	Slots  []SlotRecord
+}
+
+// Encode returns the region as written: the 32-byte header, then the records,
+// each prefixed with its u32 record_len. The result must fit in
+// SlotRegionSize.
+func (r *SlotRegion) Encode() ([]byte, error) {
+	if err := r.Header.Validate(); err != nil {
+		return nil, err
+	}
+	if len(r.Slots) > MaxSlots {
+		return nil, invalidf("%d slots exceed the cap of %d", len(r.Slots), MaxSlots)
 	}
 	w := &writer{b: make([]byte, 0, 4096)}
-	w.u32(uint32(len(slots)))
-	w.u32(0)
-	for i := range slots {
-		rec, err := slots[i].Encode()
+	r.Header.encode(w, len(r.Slots))
+	for i := range r.Slots {
+		rec, err := r.Slots[i].Encode()
 		if err != nil {
 			return nil, err
 		}
@@ -306,21 +384,41 @@ func EncodeSlotRegion(slots []SlotRecord) ([]byte, error) {
 	return w.done()
 }
 
-// DecodeSlotRegion parses exactly slot_region_len bytes of a slot region.
-func DecodeSlotRegion(b []byte) ([]SlotRecord, error) {
+// DecodeSlotRegion parses exactly slot_region_len bytes of a slot region. The
+// header is validated before any record is decoded, so a hostile Argon2 header
+// never reaches a derivation (§6, R24).
+func DecodeSlotRegion(b []byte) (*SlotRegion, error) {
+	if len(b) < MinSlotRegionLen {
+		return nil, invalidf("slot region of %d bytes is shorter than its %d-byte header", len(b), MinSlotRegionLen)
+	}
 	if len(b) > SlotRegionSize {
 		return nil, invalidf("slot region of %d bytes exceeds %d", len(b), SlotRegionSize)
 	}
 	r := newReader(b, "slot region")
+	region := &SlotRegion{}
 	n := r.u32()
-	r.skip(4) // reserved
+	switch e := r.u8(); e {
+	case 0:
+	case 1:
+		region.Header.Entangle = true
+	default:
+		return nil, invalidf("slot region header: entangle %d is neither 0 nor 1", e)
+	}
+	region.Header.Argon2P = r.u8()
+	r.skip(2) // reserved: ignored on read (§1)
+	region.Header.Argon2M = r.u32()
+	region.Header.Argon2T = r.u32()
+	r.fixed(region.Header.EntangleSalt[:])
 	if r.err != nil {
 		return nil, r.err
+	}
+	if err := region.Header.Validate(); err != nil {
+		return nil, err
 	}
 	if n > MaxSlots {
 		return nil, invalidf("slot_count %d exceeds the cap of %d", n, MaxSlots)
 	}
-	slots := make([]SlotRecord, 0, n)
+	region.Slots = make([]SlotRecord, 0, n)
 	seen := make(map[[16]byte]struct{}, n)
 	seenPub := make(map[string]struct{}, n)
 	for i := uint32(0); i < n; i++ {
@@ -344,23 +442,24 @@ func DecodeSlotRegion(b []byte) ([]SlotRecord, error) {
 			}
 			seenPub[string(s.SlotPubkey)] = struct{}{}
 		}
-		slots = append(slots, *s)
+		region.Slots = append(region.Slots, *s)
 	}
 	if err := r.done(); err != nil {
 		return nil, err
 	}
-	return slots, nil
+	return region, nil
 }
 
-// SlotRegionCanonical reports whether re-encoding the given records
-// reproduces b exactly, ignoring the region header's reserved word. Decoders
-// are canonical by construction; this is the property the fuzz targets assert.
-func SlotRegionCanonical(b []byte, slots []SlotRecord) bool {
-	enc, err := EncodeSlotRegion(slots)
+// SlotRegionCanonical reports whether re-encoding the given region reproduces
+// b exactly, ignoring only the header's two reserved bytes at [6, 8) (R21).
+// Decoders are canonical by construction; this is the property the fuzz
+// targets assert.
+func SlotRegionCanonical(b []byte, r *SlotRegion) bool {
+	enc, err := r.Encode()
 	if err != nil || len(enc) != len(b) {
 		return false
 	}
-	return bytes.Equal(enc[:4], b[:4]) && bytes.Equal(enc[8:], b[8:])
+	return bytes.Equal(enc[:6], b[:6]) && bytes.Equal(enc[8:], b[8:])
 }
 
 func itoa(i int) string {

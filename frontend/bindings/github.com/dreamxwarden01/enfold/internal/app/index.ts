@@ -8,18 +8,24 @@ export {
 } from "./models.js";
 
 export type {
+    ArchiveDetails,
     ArchiveStat,
     ArchiveSummary,
     CeremonyState,
     Collision,
+    Difference,
+    EntangledState,
     FileInfo,
     FileOutcome,
     FileRow,
+    IncomingRecord,
     OpView,
     Page,
     Reader,
     Settings,
+    SlotBrief,
     SlotView,
     TextPreview,
-    VaultStatus
+    VaultStatus,
+    VersionView
 } from "./models.js";

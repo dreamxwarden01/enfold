@@ -55,12 +55,21 @@ type InputSource interface {
 // Logger receives the core's log lines. Nothing secret is ever logged.
 type Logger func(format string, args ...any)
 
+// Volumes answers whether a path is on a local fixed volume of this machine
+// — the only paths the presence pass probes (APP.md §13). nil uses the
+// platform's own answer; the shell supplies one only where the platform has
+// none, and tests use it to run the pass off a fixed disk.
+type Volumes interface {
+	LocalFixed(path string) bool
+}
+
 // Deps is what the shell supplies.
 type Deps struct {
 	Cards   Cards       // nil: hardware unlock unavailable
 	Events  Emitter     // required
 	Clock   Clock       // nil: the real clock
 	Input   InputSource // nil: trust Activity
+	Volumes Volumes     // nil: the platform's own answer
 	Log     Logger      // nil: discard
 	DataDir string      // %LOCALAPPDATA%\Enfold; settings.json lives here
 }
@@ -81,6 +90,10 @@ type Core struct {
 	pending *attempt
 
 	archives map[[16]byte]*openArchive
+	// deleting are the records a Delete has claimed: it releases the state
+	// mutex for the folder read and the removal, and nothing may open or
+	// forget the record while it does (APP.md §13).
+	deleting map[[16]byte]bool
 	retired  []string // vault-replaced-*.eks in the data folder, oldest first
 	damaged  []string // vault-damaged-*.eks in the data folder, oldest first: the vault's own file, refused, kept for salvage
 	ops      map[string]*op
@@ -90,6 +103,15 @@ type Core struct {
 	// lockWG counts the unbounded halves of locks still running, so that
 	// an open of the vault file waits for the handle they close.
 	lockWG sync.WaitGroup
+
+	// presencePass: a file-presence pass is running. One at a time, which
+	// is what bounds the probes it abandons (APP.md §13).
+	presencePass bool
+	// probeOut is the answer channel of a probe that went over its budget
+	// and is still inside its syscall. It cannot be cancelled, so it holds
+	// the one probe slot until it returns: no second probe is ever started
+	// while it is out, in this pass or a later one (§9 Q16).
+	probeOut chan error
 
 	closed bool
 }
@@ -237,14 +259,24 @@ func (c *Core) settingsPath() string { return filepath.Join(c.deps.DataDir, "set
 
 // slotView maps a keystore slot to its view.
 func slotView(s keystore.SlotInfo) SlotView {
-	v := SlotView{RecipientID: hexID(s.RecipientID), Label: s.Label, CreatedAt: s.CreatedAt, Entangled: s.EntangledPassword, Stale: s.Stale}
+	v := SlotView{RecipientID: hexID(s.RecipientID), Label: s.Label, CreatedAt: s.CreatedAt}
 	switch {
 	case s.PublicKey != nil:
 		v.Type = "hardware"
 	case s.Type == 3:
 		v.Type = "recovery"
+		v.RecoveryID = recoveryID(s.RecipientID)
 	default:
 		v.Type = "password"
 	}
 	return v
+}
+
+// recoveryID is the recovery key's ID (FORMAT.md §18.4): the first eight hex
+// digits of the slot's recipient_id, upper-cased and grouped "3F7A-9C21".
+// One derivation serves the view, the reveal and the saved text file, so the
+// ID on the sheet is the ID on the screen.
+func recoveryID(rid [16]byte) string {
+	s := strings.ToUpper(hex.EncodeToString(rid[:4]))
+	return s[:4] + "-" + s[4:]
 }

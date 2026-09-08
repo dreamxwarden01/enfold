@@ -425,10 +425,60 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
 .blocked .tag { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
 .digits span { font-family: var(--font-mono); font-size: 18px; letter-spacing: 0.08em; text-align: center; padding: 8px 0; background: var(--surface-alt); border: 1px solid var(--stroke); border-radius: var(--r-ctl); user-select: text; }
+/* The recovery key's ID (FORMAT.md §18.4): the checksum catches a mistyped
+   group, the ID catches the wrong sheet. */
+.key-id { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; }
+.key-id .kid-label { font-size: 11.5px; color: var(--ink-3); }
+.key-id .kid { font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.08em; color: var(--ink); user-select: text; }
 
 /* ---------- archives / archive / keys ---------------------------------------- */
-.arch-split { display: grid; grid-template-columns: 1fr 252px; gap: 16px; flex: 1; min-height: 0; padding-bottom: 14px; }
+.arch-split { display: grid; grid-template-columns: 1fr 300px; gap: 16px; flex: 1; min-height: 0; padding-bottom: 14px; }
 .arch-list { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+/* The inspector's Status column (APP.md §13): one word per fact, and
+   nothing at all until a presence pass has measured the path — a blank
+   cell is what "not measured" looks like, never "missing". */
+.status-cell { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.status-cell .st {
+  display: inline-flex; align-items: center; height: 19px; padding: 0 7px; flex: none;
+  border-radius: var(--r-sm); border: 1px solid var(--stroke); background: var(--surface-alt);
+  color: var(--ink-2); font-size: 11px; white-space: nowrap;
+}
+.status-cell .st.open { background: var(--accent-wash); border-color: var(--accent-line); color: var(--accent-ink); }
+.status-cell .st.dirty { background: var(--attention-wash); border-color: var(--attention-line); color: var(--ink); }
+.status-cell .st.missing { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger); }
+.status-cell .st.forgotten { background: var(--danger-wash); border-color: var(--danger-line); color: var(--ink-2); }
+.status-cell .st.hidden { color: var(--ink-3); }
+/* A sortable header's caret: shown on the column that sorts, turned for
+   ascending. No motion vocabulary of its own. */
+thead th button { display: inline-flex; align-items: center; gap: 5px; }
+thead th .caret { width: 12px; height: 12px; color: var(--ink-3); visibility: hidden; }
+thead th .caret.on { visibility: visible; }
+thead th .caret.on.asc { transform: rotate(180deg); }
+/* The filter box sits in the command bar and is a plain field. */
+.filterbox { display: inline-flex; align-items: center; }
+.filterbox .input { width: 168px; height: 30px; font-size: 12.5px; }
+.filterbox .input::-webkit-search-cancel-button { cursor: default; }
+/* Label · value · action, for the details modal's copyable rows and the
+   dialogs that name one file. */
+.kv { display: grid; grid-template-columns: 148px minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; font-size: 12.5px; }
+.kv .k { color: var(--ink-2); }
+.kv .v { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+/* The merge checklist (APP.md §13): one row per incoming record, the
+   rows the merge would not change greyed and not tickable. */
+.merge-list { display: flex; flex-direction: column; max-height: 320px; overflow: auto; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); }
+.merge-list .mrow { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--stroke); }
+.merge-list .mrow:last-child { border-bottom: none; }
+.merge-list .mrow.skip { opacity: 0.6; }
+.merge-list input[type="checkbox"] { margin-top: 2px; accent-color: var(--accent); }
+.merge-list .mbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.merge-list .mbody label { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--ink); }
+.merge-list .mbody label b { font-weight: 600; }
+.merge-list .mbody .tag { flex: none; height: 17px; padding: 0 6px; border-radius: var(--r-sm); background: var(--surface-alt); border: 1px solid var(--stroke); color: var(--ink-2); font-size: 10.5px; }
+.merge-list .mbody .note { color: var(--ink-3); font-size: 11.5px; }
+.merge-list .mbody .note.diff { color: var(--ink-2); }
+.merge-list .mmeta { flex: none; color: var(--ink-3); font-size: 11.5px; }
+.slotlist { margin: 6px 0 0; padding-left: 18px; }
+.slotlist li { font-size: 11.5px; color: var(--ink-2); }
 .details { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-card); overflow: auto; }
 .details-head { padding: 16px 16px 12px; border-bottom: 1px solid var(--stroke); }
 .details-head .eyebrow { color: var(--ink-3); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; }
@@ -490,13 +540,24 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
 .setrow select.input { width: auto; min-width: 140px; }
 .setrow input.input { width: 220px; }
 .input[aria-invalid="true"] { border-color: var(--danger-line); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); }
+/* A field that cannot be edited now — a forgotten record's name, a locked
+   vault's — reads as one, rather than as a field that swallows typing. */
+.input:disabled { background: var(--surface-alt); color: var(--ink-3); border-bottom-color: var(--ctl-bottom); }
 /* Responsive (APP.md §6): the two columns merge when the body is narrow, and a row stacks —
    the title, its line, then the control on a line of its own — when its card is. The window
    itself never goes below 880 × 560. */
 .layer-body { container-type: inline-size; }
 @container (max-width: 840px) {
   .ks-cols { grid-template-columns: 1fr; }
+  /* The inspector's pane goes under the list rather than beside it, and
+     keeps its own scroll so its save bar stays where the edits are. */
+  .arch-split { grid-template-columns: 1fr; flex: 1 0 auto; }
+  .arch-split .details { max-height: 60vh; }
 }
+/* The details pane scrolls on its own, and its save bar is in flow at the
+   foot of that pane and sticky there: it can never cover the last field
+   for good (APP.md §6, the save bar). */
+.arch-split .details .savebar-wrap { position: sticky; bottom: 12px; margin: auto 12px 12px; z-index: 3; }
 @container (max-width: 470px) {
   .setrow { flex-direction: column; align-items: stretch; gap: 8px; }
   .setrow .lab { flex: none; }
@@ -577,4 +638,6 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
   .print-sheet p { font-size: 12px; margin: 0 0 6px; max-width: 60ch; }
   .print-digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; max-width: 480px; }
   .print-digits span { font-family: var(--font-mono, Consolas, monospace); font-size: 20px; letter-spacing: 0.08em; text-align: center; border: 1px solid #000; padding: 6px 0; }
+  .print-sheet .key-id { display: block; margin: 0 0 6px; }
+  .print-sheet .key-id .kid { font-family: var(--font-mono, Consolas, monospace); font-size: 13px; letter-spacing: 0.08em; }
 }

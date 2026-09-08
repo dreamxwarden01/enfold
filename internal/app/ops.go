@@ -612,6 +612,9 @@ func (c *Core) recordReceiptLocked(oa *openArchive, rec archive.Receipt, hash *[
 
 // Verify re-hashes the file and refreshes the registry's hash (R36).
 func (c *Core) Verify(id string) (string, *Error) {
+	if e := c.refuseIfForgotten(id); e != nil {
+		return "", e
+	}
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return "", e
@@ -658,6 +661,9 @@ func (c *Core) Verify(id string) (string, *Error) {
 // unless open and clean; previews quiesced; the handle is finished by the
 // call and the path reopened.
 func (c *Core) Compact(id string) (string, *Error) {
+	if e := c.refuseIfForgotten(id); e != nil {
+		return "", e
+	}
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return "", e
@@ -742,6 +748,9 @@ func (c *Core) Compact(id string) (string, *Error) {
 // RotateKey is registry-first (R33, trap 21): the new version published,
 // the old retired, then the archive adopts it, then the receipt.
 func (c *Core) RotateKey(id string) (string, *Error) {
+	if e := c.refuseIfForgotten(id); e != nil {
+		return "", e
+	}
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return "", e
@@ -911,6 +920,9 @@ func (c *Core) HideArchive(id string, hidden bool) *Error {
 		if a == nil {
 			return coded(CodeArchiveNotFound)
 		}
+		if a.Forgotten() {
+			return coded(CodeArchiveForgotten)
+		}
 		if hidden {
 			a.Policy |= format.PolicyHidden
 		} else {
@@ -937,6 +949,9 @@ func (c *Core) Locate(id, newPath string) *Error {
 		a := findRecord(g, aid)
 		if a == nil {
 			return coded(CodeArchiveNotFound)
+		}
+		if a.Forgotten() {
+			return coded(CodeArchiveForgotten)
 		}
 		a.LastPath = newPath
 		return nil

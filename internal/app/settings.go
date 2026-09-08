@@ -1,12 +1,21 @@
 package app
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+// lastExport is when this machine last wrote a backup, and of which vault
+// (APP.md §13). It is local and unauthenticated: it words a confirmation
+// and pre-selects a checkbox, and gates nothing.
+type lastExport struct {
+	VaultID string `json:"vaultId"`
+	At      int64  `json:"at"`
+}
 
 // settingsFile is the machine-local part of Settings: nothing secret and
 // nothing security-relevant (the timeouts live in the registry, R37).
@@ -18,6 +27,8 @@ type settingsFile struct {
 	Look              string `json:"look"`
 	RecoveryRecordPct int    `json:"recoveryRecordPct"`
 	DictionaryBelow   int64  `json:"dictionaryBelow"`
+
+	LastExport *lastExport `json:"lastExportAt,omitempty"`
 }
 
 func defaultSettings() settingsFile {
@@ -51,6 +62,15 @@ func loadSettings(dir string) settingsFile {
 	}
 	if f.DictionaryBelow >= 0 && f.DictionaryBelow <= 64<<20 {
 		s.DictionaryBelow = f.DictionaryBelow
+	}
+	// Permissively: a stamp is kept only when it names a vault id at all
+	// and does not run backwards. Everything else about it is judged at
+	// LastExportAt, against the vault actually kept.
+	if f.LastExport != nil && f.LastExport.At >= 0 {
+		if b, err := hex.DecodeString(f.LastExport.VaultID); err == nil && len(b) == 16 {
+			le := *f.LastExport
+			s.LastExport = &le
+		}
 	}
 	return s
 }

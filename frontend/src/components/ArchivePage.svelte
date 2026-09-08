@@ -363,7 +363,7 @@
 <div class="layer-foot">
   <span class="num">{stat ? `${count(stat.files)} files · ${bytes(stat.size)} · key v${stat.keyVersion}${stat.lastSavedAt ? ` · last saved ${dateTime(stat.lastSavedAt)}` : ""}` : ""}</span>
   {#if alive && store.status}
-    <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>Locks in {countdown(store.status.locksAt, store.now)}</span>
+    <span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(store.status.locksAt, store.now)}</span>
   {:else if stat?.expiresAt}
     <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>Archive closes in {countdown(stat.expiresAt, store.now)}</span>
   {/if}

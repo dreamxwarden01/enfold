@@ -806,17 +806,42 @@ BitLocker's checksum (divisible by 11, below 720 896) turns red at once, before 
 sent; and when the core says the key did not open the vault, the digits come back for
 correction — the store keeps them across the derivation step, which unmounts the field.
 
-**Motion.** Every dialog, menu and popover enters over 140 ms (the box also scales from 97%)
-and leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
-steps, the lock screen's three cards — fades the new content in over 140 ms and the cards ease
-between live and dim; toasts fade. The script durations live in `lib/motion.ts` (`FAST` 140,
-`LEAVE` 100), the stylesheet's `--dur-fast` is the same 140 ms for the CSS-driven easing, and
-the two are kept equal by hand. `prefers-reduced-motion` zeroes both: the script reads the
-media query when a transition starts, the stylesheet's token collapses to 0. A closed dialog
-answers no key or click while it fades: Svelte marks the element inert the moment the outro is
-committed (synchronously, before any frame) and clears that if the dialog is reopened mid-fade,
-and the handlers check `inert`. Besides these, only the touch rings (gated on `no-preference`)
-and the 120 ms hover tint on controls animate.
+**Motion.** One vocabulary, in `lib/motion.ts` and the stylesheet's `--dur-*` tokens, kept
+equal by hand: *tap* 90 ms (press feedback), *hover* 120 ms in and 160 ms out (a control
+answers at once and settles when left), *leave* 100 ms, *fast* 140 ms (enter), *move* 220 ms
+(the only long one: a change of scene), *settle* 320 ms (the one deliberate pause, below).
+Entering eases out (`cubic-bezier(0.2, 0, 0, 1)`), leaving eases in; nothing travels more than
+12 px; one thing moves at a time, staggered by at most 40 ms; nothing loops but the touch rings.
+`prefers-reduced-motion` zeroes every duration — the script reads the media query when a
+transition starts, the tokens collapse to 0 — and the settle with them.
+- *Unlock.* The third card's check pops (the core scales from 60% with a little overshoot,
+  240 ms) and stays for the settle, so the ceremony has a full stop; then the lock screen lifts
+  (8 px up, fading, 180 ms) while the shell arrives: the rail slides in 12 px from the left and
+  the layer rises 8 px, 220 ms, the layer 40 ms behind. `showLock` holds for the settle after
+  the state says Unlocked.
+- *Lock.* The reverse: the shell sinks 6 px and fades (160 ms) while the lock screen rises in
+  (220 ms); the lock screen's header shows the open padlock and closes it over the first 160 ms.
+  While unlocked the status chips show the open padlock.
+- *Pages.* The outgoing page fades in place (100 ms); the incoming fades and travels 180 ms —
+  from the right 10 px going into an archive, from the left 10 px coming back, up 6 px for a
+  rail switch — over the old one, the layer being a grid so the two overlap and nothing jumps.
+- *Rail.* Hover tints in over 120 ms and out over 160 ms; a press is instant (`--ctl-press`,
+  the text to `--ink-2`); the current item's accent bar grows from its middle (180 ms) and the
+  previous one's shrinks.
+- *Menus.* The `<select>` stays native and its picker is styled (`appearance: base-select`,
+  Chromium 135+; WebView2 152 here): the list appears whole, falling 4 px and fading in over
+  140 ms, rows tint on hover (120 ms), the chosen row wears the accent wash while the list
+  fades out (100 ms). An older runtime ignores the declaration and shows the system popup,
+  unanimated and unchanged.
+- *Controls.* Every dialog and popover enters over 140 ms (the box also scales from 97%) and
+  leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
+  steps, the lock screen's three cards — fades the new content in over 140 ms and the cards
+  ease between live and dim; toasts rise 6 px as they fade in. A link-style button darkens on
+  hover (`--accent-ink-hover`, a step past `--accent-ink`; brighter in the dark theme, where
+  contrast goes the other way) and thickens its underline; a button's press is instant and dims
+  its text. A closed dialog answers no key or click while it fades: Svelte marks the element
+  inert the moment the outro is committed (synchronously, before any frame) and clears that if
+  the dialog is reopened mid-fade, and the handlers check `inert`.
 
 ## 7. Frontend
 

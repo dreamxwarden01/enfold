@@ -189,7 +189,7 @@
 <div class="layer-foot">
   <span>{sel ? `${sel.name} selected` : `${store.archives.length} archive(s)`}</span>
   {#if unlocked && st}
-    <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>Locks in {countdown(st.locksAt, store.now)}<button type="button" class="btn link" onclick={() => void Vault.Lock()}>Lock now</button></span>
+    <span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(st.locksAt, store.now)}<button type="button" class="btn link" onclick={() => void Vault.Lock()}>Lock now</button></span>
   {/if}
 </div>
 

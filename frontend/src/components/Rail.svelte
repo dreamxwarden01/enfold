@@ -1,6 +1,8 @@
 <script lang="ts">
   import { store } from "../lib/state.svelte";
   import type { Route } from "../lib/state.svelte";
+  import { fly } from "svelte/transition";
+  import { motion, enter, MOVE } from "../lib/motion";
 
   const items: { route: Route; label: string; icon: string }[] = [
     { route: "archives", label: "Archives", icon: "i-archives" },
@@ -13,7 +15,7 @@
   }
 </script>
 
-<nav class="rail" aria-label="Main">
+<nav class="rail" aria-label="Main" in:fly={motion(MOVE, { x: -12, easing: enter })}>
   <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
   {#each items as it (it.route)}
     <button type="button" class="rail-item" aria-current={current(it.route) ? "page" : undefined} onclick={() => store.go(it.route)}>

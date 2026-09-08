@@ -6,7 +6,8 @@
   import { codeText, retriesText, stepText, warningCopy } from "../lib/strings";
   import { dateTime, leaf } from "../lib/format";
   import { fade } from "svelte/transition";
-  import { motion } from "../lib/motion";
+  import { onMount } from "svelte";
+  import { motion, delay, LEAVE, OUT } from "../lib/motion";
   import { samePath } from "../lib/paths";
   import { firstRunCard } from "../lib/firstrun";
   import SecretInput from "./SecretInput.svelte";
@@ -193,13 +194,23 @@
   }
 
   const warnings = $derived((st?.warnings ?? []).filter((w) => w !== "vault.stale" || true));
+
+  // The header's padlock closes over the first moment the lock screen
+  // shows (APP.md §6, Motion): open on arrival, shut after the settle.
+  let closed = $state(false);
+  onMount(() => {
+    const t = setTimeout(() => (closed = true), delay(OUT));
+    return () => clearTimeout(t);
+  });
 </script>
 
 <section class="unlock" aria-label="Enfold — keystore locked">
   <div class="u-head">
     <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
     <div class="state">
-      <svg class="i i-14"><use href="#i-lock" /></svg>
+      <span class="lockbox" aria-hidden="true">
+        {#key closed}<svg class="i i-14 padlock" in:fade={motion()} out:fade={motion(LEAVE)}><use href={closed ? "#i-lock" : "#i-unlock"} /></svg>{/key}
+      </span>
       {#if running}{c?.kind === "import" ? "Importing" : c?.kind === "setup" ? "Setting up" : c?.kind === "verify" ? "Checking a backup" : "Unlocking"}{:else if card === "damaged"}Vault damaged{:else if card === "absent"}Vault not found{:else if firstRun}No vault yet{:else if busy}Vault open elsewhere{:else if broken}Needs attention{:else if setupNeeded}Needs setting up{:else}Keystore locked{/if}
     </div>
   </div>
@@ -420,7 +431,7 @@
               <p class="touch-sub">{stepText(c.step).body}</p>
               <div class="touch-slot"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.pinAsked ? "PIN accepted" : "Touch"}{c.slotLabel ? ` · ${c.slotLabel}` : ""}{c.n > 1 ? ` · touch ${c.n}` : ""}</div>
             {:else}
-              <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core"><svg viewBox="0 0 20 20"><use href="#i-check" /></svg></div></div>
+              <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core" class:pop={c.step === CeremonyStep.StepDone}><svg viewBox="0 0 20 20"><use href="#i-check" /></svg></div></div>
               <h2 class="touch-lead quiet">{c.step === CeremonyStep.StepDone ? doneTitle(c.kind) : stepText(c.step).title}</h2>
               <p class="touch-sub quiet">{stepText(c.step).body}</p>
               {#if c.error && c.step === CeremonyStep.StepDeriving}<p class="touch-sub">{codeText(c.error)}</p>{/if}
@@ -505,4 +516,6 @@
   .k-dot { fill: var(--accent); }
   .k-lines { stroke: var(--ink-3); }
   .pendingline { margin-top: 6px; max-width: 34em; }
+  .lockbox { position: relative; width: 14px; height: 14px; display: inline-block; }
+  .lockbox .padlock { position: absolute; inset: 0; }
 </style>

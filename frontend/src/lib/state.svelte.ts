@@ -150,7 +150,7 @@ class Store {
         void this.refreshSlots();
         void this.refreshSettings();
         if (this.stat) void this.refreshArchive(); // sessionAlive follows the new session
-        if (this.route === "lock") this.route = this.current ? "archive" : "archives";
+        if (this.route === "lock") this.setRoute(this.current ? "archive" : "archives");
       } else if (s.state === VaultState.StateLocked && before === VaultState.StateUnlocked) {
         void this.refreshArchives();
         if (this.stat) void this.refreshArchive();
@@ -228,7 +228,7 @@ class Store {
       this.stat = await Archives.Open(id);
       this.current = id;
       this.folder = "";
-      this.route = "archive";
+      this.setRoute("archive");
       await this.loadPage();
       return true;
     } catch (e) {
@@ -281,10 +281,20 @@ class Store {
     this.stat = null;
     this.page = null;
     this.folder = "";
-    if (this.route === "archive") this.route = "archives";
+    if (this.route === "archive") this.setRoute("archives");
   }
 
   go(route: Route): void {
+    this.setRoute(route);
+  }
+
+  // nav is the direction the last route change travelled, for the page
+  // transition (APP.md §6): 1 into an archive, -1 back out, 0 sideways.
+  nav = $state(0);
+
+  private setRoute(route: Route): void {
+    const from = this.route;
+    this.nav = from === "archives" && route === "archive" ? 1 : from === "archive" && route === "archives" ? -1 : 0;
     this.route = route;
   }
 

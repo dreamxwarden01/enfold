@@ -2850,3 +2850,21 @@ trustworthy and the seventeen runs are its confirmation; the long way asks the c
 recovered panic could leak the held card* — every flow closes its card before returning, so
 only a panic leaves one — and a ceremony's end now releases whatever it still holds, a disowned
 attempt having taken its card out of the ceremony's hands first.
+
+---
+
+## 2026-09-07 — Motion: one vocabulary, a full stop at the unlock, the native picker styled
+
+The user asked for the app to move: the unlock, the lock, the pages, the rail's hover, press
+and selection, the menus' drop and their fade, and link-style buttons that darken on hover.
+The ruling is one vocabulary rather than a set of effects — tap 90, hover 120 in and 160 out,
+leave 100, fast 140, move 220, settle 320 — with three rules: enter eases out and leave eases
+in, nothing travels more than 12 px, one thing at a time. The unlock gets the one deliberate
+pause in the app: the check stays 320 ms before the scene changes, so the ceremony ends with a
+full stop instead of a cut. The menus asked for a decision: the system's own select popup
+cannot be animated, but Chromium 135 made the picker a styleable in-page element behind
+`appearance: base-select`, and the runtime here is 152 — so the `<select>` stays native with
+its keyboard and its accessibility, and the list falls 4 px and fades in whole, which is what
+the user asked for over a sliding reveal. The hover colour of a link-style button had been the
+accent's *hover* shade, which is brighter; it is a darker ink now, the way a link is expected
+to answer. `prefers-reduced-motion` zeroes everything, the settle included. APP.md §6, Motion.

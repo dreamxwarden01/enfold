@@ -13,6 +13,8 @@
   import SettingsPage from "./components/SettingsPage.svelte";
   import RecoveryReveal from "./components/RecoveryReveal.svelte";
   import Dialog from "./components/Dialog.svelte";
+  import { fade, fly } from "svelte/transition";
+  import { motion, delay, enter, exit, LEAVE, OUT, MOVE, SETTLE } from "./lib/motion";
 
   const st = $derived(store.status);
   const theme = $derived(store.settings?.theme ?? "system");
@@ -23,15 +25,33 @@
     else delete root.dataset.theme;
   });
 
+  // The unlock's full stop (APP.md §6, Motion): the lock screen stays for
+  // the settle after the state says Unlocked, so the check is seen.
+  const unlocked = $derived(st?.state === VaultState.StateUnlocked);
+  let lockGone = $state(false);
+  $effect(() => {
+    if (!unlocked) {
+      lockGone = false;
+      return;
+    }
+    const t = setTimeout(() => (lockGone = true), delay(SETTLE));
+    return () => clearTimeout(t);
+  });
+
   // The lock screen shows whenever the vault is not unlocked and nothing
   // is open to browse, or when the user asks for it.
   const showLock = $derived.by(() => {
     if (!st) return true;
     if (st.state === VaultState.StateNone) return true;
-    if (st.state === VaultState.StateUnlocked) return false;
+    if (st.state === VaultState.StateUnlocked) return !lockGone;
     if (store.route === "lock") return true;
     return st.openArchives === 0;
   });
+
+  // pageKey changes when the page does; the transition's direction is
+  // the store's last navigation.
+  const pageKey = $derived(store.route === "archive" && store.current ? `archive:${store.current}` : store.route);
+  const pageIn = () => motion(180, { x: store.nav * 10, y: store.nav ? 0 : 6, easing: enter });
 
   // The recovery key's one reveal lives above every route: the ceremony
   // that minted it (create, or enrol) may have switched the view meanwhile.
@@ -79,22 +99,32 @@
 <Icons />
 {#if !store.booted}
   <div class="splash"><div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div></div>
-{:else if showLock}
-  <Lock />
 {:else}
-  <div class="shell">
-    <Rail />
-    <div class="layer">
-      {#if store.route === "archive" && store.current}
-        <ArchivePage />
-      {:else if store.route === "keys"}
-        <KeysPage />
-      {:else if store.route === "settings"}
-        <SettingsPage />
-      {:else}
-        <ArchivesPage />
-      {/if}
-    </div>
+  <div class="stage">
+    {#if showLock}
+      <div class="scene" in:fly={motion(MOVE, { y: 8, easing: enter })} out:fly={motion(180, { y: -8, easing: exit })}>
+        <Lock />
+      </div>
+    {:else}
+      <div class="scene shell" in:fade={motion(MOVE)} out:fly={motion(OUT, { y: 6, easing: exit })}>
+        <Rail />
+        <div class="layer" in:fly={motion(MOVE, { y: 8, delay: delay(40), easing: enter })}>
+          {#key pageKey}
+            <div class="page" in:fly={pageIn()} out:fade={motion(LEAVE, { easing: exit })}>
+              {#if store.route === "archive" && store.current}
+                <ArchivePage />
+              {:else if store.route === "keys"}
+                <KeysPage />
+              {:else if store.route === "settings"}
+                <SettingsPage />
+              {:else}
+                <ArchivesPage />
+              {/if}
+            </div>
+          {/key}
+        </div>
+      </div>
+    {/if}
   </div>
 {/if}
 

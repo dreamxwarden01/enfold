@@ -142,7 +142,7 @@
 
 <div class="layer-foot">
   <span>{st?.displayName} · keystore {unlocked ? "unlocked" : "locked"}</span>
-  {#if unlocked && st}<span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>Locks in {countdown(st.locksAt, store.now)}</span>{/if}
+  {#if unlocked && st}<span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(st.locksAt, store.now)}</span>{/if}
 </div>
 
 {#if adding}

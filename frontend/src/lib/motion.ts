@@ -11,8 +11,11 @@ export const FAST = 140; // enter
 export const OUT = 160; // a control settling when left; a scene leaving
 export const MOVE = 220; // a change of scene
 export const SETTLE = 320; // the one deliberate pause: the unlock's full stop
+export const GAP = 60; // what arrives waits this long for what leaves: no two texts at once
 
-// enter eases out (arrives and settles); exit eases in (leaves quickly).
+// enter eases out (arrives and settles). A crossfade's exit eases out
+// too — fast first, so the old text is gone before the new one is
+// readable; exit (eases in) is for a thing that travels away.
 export const enter = cubicOut;
 export const exit = cubicIn;
 

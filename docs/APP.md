@@ -809,9 +809,12 @@ correction — the store keeps them across the derivation step, which unmounts t
 **Motion.** One vocabulary, in `lib/motion.ts` and the stylesheet's `--dur-*` tokens, kept
 equal by hand: *tap* 90 ms (press feedback), *hover* 120 ms in and 160 ms out (a control
 answers at once and settles when left), *leave* 100 ms, *fast* 140 ms (enter), *move* 220 ms
-(the only long one: a change of scene), *settle* 320 ms (the one deliberate pause, below).
-Entering eases out (`cubic-bezier(0.2, 0, 0, 1)`), leaving eases in; nothing travels more than
-12 px; one thing moves at a time, staggered by at most 40 ms; nothing loops but the touch rings.
+(the only long one: a change of scene), *settle* 320 ms (the one deliberate pause, below),
+*gap* 60 ms (what arrives waits this long for what leaves). Entering eases out
+(`cubic-bezier(0.2, 0, 0, 1)`); a thing that travels away eases in; a crossfade's exit eases
+*out* — fast first, 80 ms for a page — so that no two texts share a spot at readable opacity,
+which is what a ghost is. Nothing travels more than 12 px; one thing moves at a time, staggered
+by at most 40 ms; nothing loops but the touch rings.
 `prefers-reduced-motion` zeroes every duration — the script reads the media query when a
 transition starts, the tokens collapse to 0 — and the settle with them.
 - *Unlock.* At Done the third card stays the touch's green and becomes the success card: a
@@ -819,17 +822,18 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   with a little overshoot, 240 ms), the word — *Unlocked* — sits in the middle, the vault's name
   under the open padlock at the foot; it stays for the settle, so the ceremony has a full stop
   rather than a cut to a white card. Then the lock screen lifts
-  (8 px up, fading, 180 ms) while the shell arrives: the rail slides in 12 px from the left and
-  the layer rises 8 px, 220 ms, the layer 40 ms behind. The store holds `settling` for the
+  (8 px up, fading fast-first, 160 ms) and, a gap later, the shell arrives: the rail slides in
+  12 px from the left and the layer rises 8 px, 220 ms, the layer 40 ms behind. The store holds `settling` for the
   settle after the state says Unlocked, and the lock screen keeps rendering the ceremony
   meanwhile — the state's event lands a few milliseconds before the ceremony's Done, and without
   the hold the screen fell back to its first card for that instant and the check was never seen.
-- *Lock.* The reverse: the shell sinks 6 px and fades (160 ms) while the lock screen rises in
-  (220 ms); the lock screen's header shows the open padlock and closes it over the first 160 ms.
+- *Lock.* The reverse: the shell sinks 6 px and fades fast-first (120 ms) and, a gap later,
+  the lock screen rises in (220 ms); the lock screen's header shows the open padlock and closes it over the first 160 ms.
   While unlocked the status chips show the open padlock.
-- *Pages.* The outgoing page fades in place (100 ms); the incoming fades and travels 180 ms —
-  from the right 10 px going into an archive, from the left 10 px coming back, up 6 px for a
-  rail switch — over the old one, the layer being a grid so the two overlap and nothing jumps.
+- *Pages.* The outgoing page fades in place, fast first (80 ms); a gap later the incoming
+  fades and travels 160 ms — from the right 10 px going into an archive, from the left 10 px
+  coming back, up 6 px for a rail switch — in the old one's place, the layer being a grid so
+  nothing jumps.
 - *Rail.* Hover tints in over 120 ms and out over 160 ms; a press is instant (`--ctl-press`,
   the text to `--ink-2`); the current item's accent bar grows from its middle (180 ms) and the
   previous one's shrinks.

@@ -2922,3 +2922,34 @@ it answers (trap 27's measurement). Ruled: Quit hides the window and the tray fi
 resolves, then waits unseen (`AwaitPendingTouch`), then ends — the process lingers invisibly
 for at most the key's timeout, releasing and resetting the card itself. Logoff does not wait:
 Windows resets the card at cleanup, measured, and gives a process only seconds anyway.
+
+---
+
+## 2026-09-07 — Revision 2: one entangled password for the vault, secrets under the VMK, the inspector, the recovery key's ID
+
+With a test vault holding nothing, the user reopened the contracts while reopening is free.
+Six rulings, one of them against the user's first proposal and one reshaped.
+
+*The Archives page becomes the vault's inspector* — it already lists registry records, so it
+grows rename, description, the full path with a foreign-platform reading, created time, KID and a
+details modal — and gets the destructive pair the 2026-09-06 entry had deferred: *Forget key*
+as a soft delete with thirty days' retention, and *Delete archive*, which removes the file only
+after reading its envelope's `archive_id`. Confirmation is the archive's name typed; no
+ceremony, since nothing cryptographic needs the VMK and the brakes are elsewhere. The raw
+archive-key reveal the user sketched was declined: nothing consumes a bare key, and the sharing
+feature's manual form is a one-record keystore export.
+
+*The entangled password is one per vault* (the user's judgement: it is a password people keep,
+and several of them add nothing against the threat it exists for). The chain is split so its
+Argon2id key stands alone and is kept under the VMK — the user's idea — which makes changing it,
+switching it, enrolling a key and rotating the VMK offline, and deletes the stale-rewrap
+machinery. *Secrets get a section*: recovery escrow, the password's key and the retired VMKs,
+under one `KWK_secrets`. *VMK history* replaces the user's per-backup wrapped VMK: a backup is
+this vault at some generation, and knowing every generation's VMK opens every backup of one's own
+without the sheet. *Merge records* with a selectable list joins *Import*. *Rotation keeps no
+copy*: the user's new-file-then-rename with the old file retained was declined — the A/B flip is
+already that, and a retained copy re-opens the removed slot; the dialog asks for a backup
+instead. *The recovery key gets an ID* like BitLocker's, on paper and at the prompt.
+
+Written into FORMAT.md Revision 2, APP.md §13 and DESIGN traps 28–30, to be critiqued and
+then implemented; nothing is kept compatible with the vault that exists today.

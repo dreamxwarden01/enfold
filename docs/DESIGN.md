@@ -925,6 +925,17 @@ Correct in this document, and easy to lose during implementation.
     key was released the long way"), never inferred. And a ceremony that ends with a card still
     held — only a panic leaves one — releases it at its end rather than leaking the exclusive
     connection for the life of the process.
+28. **Never delete an archive file by its name.** `last_path` is a hint (FORMAT §7.1); the file
+    there may be another archive, or a copy someone made. A delete opens the file, reads the
+    envelope's `archive_id`, and removes only a match; anything else leaves the file and says so.
+29. **A pre-rotation copy of the vault re-opens the slot you just removed.** Rotation exists to
+    revoke; a "keep the old file" safety net keeps the revoked way in alive. The safety net is a
+    backup — recovery slot only — taken before, which the rotate dialog asks for (APP.md §13).
+30. **A secret kept under the VMK exposes nothing the VMK does not.** The entangled password's
+    key, the retired VMKs, the escrowed recovery keys: each is reachable only through the current
+    VMK, which already opens every archive. What such a record buys is an *offline* operation —
+    re-wrapping without the token, reading an old backup without the sheet — and what it must
+    never do is let a secret be reached by less than the VMK (FORMAT R2 §1–2).
 
 ## 12. Deferred
 

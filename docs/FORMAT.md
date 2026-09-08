@@ -1216,3 +1216,93 @@ number of archives, their sizes and their filenames disappear along with everyth
 - **Volumes and recovery records** are planned as forms *beside* the archive — a split export
   with per-part headers, and Reed–Solomon parity over ciphertext as a sidecar or per part — so
   that the live format is untouched. Their layouts are not specified yet.
+
+## 18. Revision 2 — ruled 2026-09-07, to be implemented before any real vault exists
+
+Only a test vault exists and it holds no archive, so this revision replaces the rules it names
+rather than adding compatibility to them: readers accept the revised layouts only. It is the
+spec once implemented; until then the sections it amends stand and this one is the plan.
+
+### 18.1 The entangled password is the vault's, not a slot's
+
+One password for every hardware slot, one switch for all of them (DECISIONS 2026-09-07). It is a
+password people keep, and people keep one; and its purpose — a second factor should the token or
+its curve be broken — is served by one password as well as by many, since any one of them would
+open the vault. The chain changes so that the password's key can be kept under the VMK:
+
+```
+K_P   = Argon2id(P', vault_salt', m, t, p) → 32     P' per R4; vault_salt' = SHA-256(entangle_salt ‖ vault_id)
+pre_i = HKDF(H_i ‖ K_P, salt = ∅, info = "Enfold/v1/entangle" ‖ vault_id ‖ recipient_id) → 32
+IK_i  = HKDF(pre_i, …)  as before (R3)
+pre_i = H_i               when the vault has no entangled password
+```
+
+`K_P` depends on the password alone, so it is computed once per unlock and once per change, and
+**kept under `KWK_secrets` in the registry** (§18.2). With it every hardware slot can be re-wrapped
+from its stored `slot_pubkey` — a fresh ephemeral ECDH gives `H_i` — with no token present and no
+password typed: changing the password, turning it on or off, enrolling a key and rotating the VMK
+are all offline. Security is unchanged: an attacker who has the file and has broken the token's
+curve still guesses `P` through Argon2id one candidate at a time, exactly as before; `K_P` is
+reachable only through the VMK, and the VMK only through a wrap that needs `K_P`.
+
+The slot region header carries the vault's entanglement: `entangle` (u8: 0 off, 1 on),
+`entangle_salt` (u8[16]), `argon2_m`, `argon2_t`, `argon2_p` (as R6, bounded by R24); the
+per-slot `FlagEntangledPassword`, `salt` and Argon2 parameters of hardware slots are gone. The
+lock screen reads the header to know whether to ask for the password before the PIN.
+
+**Gone with it:** `rewrap_stale`, R29 and R30, and the "deferred and partial rotation" of §8. No
+v1 slot can fail to be re-wrapped any more, so `rotation_pending` is never left non-zero by a
+rotation that completed.
+
+New R3 rows: `K_P` — `Enfold/v1/entangle/key` is the Argon2id *purpose label* only (Argon2id takes
+no info; the row records the salt rule); `pre`, hardware entangled — `Enfold/v1/entangle` ‖
+vault_id ‖ recipient_id, IKM `H ‖ K_P`, salt ∅, out 32; `KWK_secrets` — `Enfold/v1/wrap/secrets`
+‖ vault_id, IKM VMK, salt ∅, out 32. `testdata/kdf-vectors.json` is regenerated and the clean-room
+check of SCOPE "Before the format is frozen" is done again over the new chain.
+
+### 18.2 Registry version 3
+
+Read and written as version 3 only; the version-1 and version-2 readers and the fuzz target's
+version-1 carve-out are removed.
+
+Archive record, two fields after `hash_at_seq`: `description` (string, optional, empty when
+none) and `forgotten_at` (i64, zero unless the record was forgotten). A forgotten record keeps
+its keys and is listed only on request; a registry write more than thirty days after
+`forgotten_at` drops it (the app's rule, §APP; the format only carries the time). `last_path`
+is unchanged and is written in the writer's own path syntax; a reader on another platform treats
+it as text — a drive letter on macOS is obviously not a path here — and offers *Locate*.
+
+The escrow section becomes the **secrets section**: `u32 secret_count`, then records of
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `kind` | `u8` | 1 `recovery_escrow` (the R38 record, one per recovery slot); 2 `entangled_key` (`K_P`, one at most); 3 `vmk_history` (a previous VMK, one per past generation) |
+| `id` | `u8[16]` | the recovery slot's recipient_id; zero for `entangled_key`; the generation as u64 in the first eight bytes, zero-padded, for `vmk_history` |
+| `nonce` | `u8[12]` | |
+| `ciphertext` | `u8[48]` | AES-256-GCM under `KWK_secrets` of the 32-byte secret; AAD `Enfold/v1/aad/secret` ‖ vault_id ‖ kind ‖ id |
+
+`KWK_recovery` and `RecoveryEscrowAAD` are replaced by this; the recovery key is the 16-byte
+`R` zero-padded to 32 in the ciphertext, its length known from the kind.
+
+**VMK history.** A rotation appends the VMK it retires under the new `KWK_secrets`, keyed by its
+generation. A backup of this vault from any earlier generation — a backup is *registry + recovery
+slot*, and its registry is under that generation's VMK — is therefore readable by the current
+vault with no recovery key: the vault knows every VMK it ever had. A backup of another vault
+still needs its own recovery key. Nothing is exposed that the current VMK did not already open:
+a rotation never changes an archive key, only its wrapper, so an old backup with its old VMK
+yields the same archive keys the current vault holds.
+
+### 18.3 Rotation is one flip, and nothing is kept beside it
+
+§8 stands: slot region, registry, then the superblock flip, atomic. It is not a new file renamed
+over the old, and no pre-rotation copy is kept: a rotation usually follows a removal, and the
+copy would still open with the slot just removed. The safety net is the backup the app asks
+for before rotating (APP.md): a backup holds the recovery slot only, so keeping it revokes
+nothing.
+
+### 18.4 The recovery key has an ID
+
+The recovery slot's `recipient_id`, its first eight hex digits grouped as `3F7A-9C21`, is the
+key's ID: printed on the sheet, written into the text file, shown at the reveal, and shown by
+the unlock prompt beside each recovery slot's label and date. The digits' checksum catches a
+mistyped group; the ID catches the wrong sheet. Nothing new is stored.

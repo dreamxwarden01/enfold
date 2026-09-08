@@ -958,3 +958,60 @@ as one operation;
 `overwrite` on extraction (an archive-layer change); an unelevated BitLocker check (measure
 first — if none exists, the SCOPE bullet or the least-privilege ruling has to move); the
 permitted range of the timeouts beyond the clamps.
+
+## 13. Ruled 2026-09-07, to implement (with FORMAT.md Revision 2)
+
+**The Archives page is the vault's inspector.** It lists registry records, not files, and it
+grows into the full view: columns *Name* (the description as a muted second line), *Size*,
+*Files* (open archives only), *Last saved*, *Key vN*, *Status* (open · dirty · file missing ·
+hidden · forgotten); a header line for the vault — archives, total stored size, the vault file's
+size, the registry's `modified_at`; sorting by column and a filter box. The details pane keeps
+what it shows and adds an editable *Description*, *Rename* (the registry's trusted name), the
+full *last_path* with *Show in Explorer* or *Locate…* — worded "last seen on another system at
+…" when the path's syntax is not this platform's — *Created*, the current *KID*, and *Details…*,
+a modal with the versions table (KID · created · retired · state), `archive_id`, revision, last
+writer, `last_seq` / `hash_at_seq`, the ciphertext hash, the policy bits, each with *Copy*.
+Tooltips only where text is cut short. There is no raw archive-key reveal: nothing opens an
+archive from a bare key, and the way to hand one archive to someone is a later *export one
+record as a small keystore*, the precursor of sharing.
+
+**Forget and delete.** *Forget key…* drops the record softly: `forgotten_at` is set, the record
+shows under *Show hidden* as "forgotten, purged on <date>" with *Restore*, and the first registry
+write thirty days on removes it; its file stays where it is and is unopenable from then on.
+*Delete archive…* is Forget plus the file: the file at `last_path` is opened, its envelope's
+`archive_id` compared, and only a match is deleted — never a file that merely has the name;
+absent or another archive's, the record is forgotten and the page says the file was left. Both
+confirm by the archive's name typed, and the warning names the last backup's time (kept in the
+settings file at every export, `last_export_at`) — "the backup of <date> still holds this key".
+No ceremony: the registry write needs the session's key, not the VMK, and the brakes are the
+typed name, the retention and the backup. In an open archive, *Delete archive…* on the page
+does the same with the file it holds — asking first when changes are unsaved — and is disabled
+while the vault is locked with the archive open.
+
+**The entangled password is the vault's** (FORMAT R2 §1). The lock screen asks for it once,
+before the PIN, whenever the header says it is on; the Keys page shows one row, *Entangled
+password: on/off · Change…*: turning it on asks for the new password twice, changing it asks for
+the new one twice (the old is not asked: the unlock proved possession, as for every slot
+change), turning it off confirms; each is a ceremony for the VMK by any way in and then re-wraps
+every hardware slot offline. Enrolling a key asks for no password. The rotate dialog loses its
+"except a key whose entangled password…" clause: every way in is re-wrapped, always.
+
+**Merge records.** Beside *Import* (which replaces the vault kept here) an *Import records…*
+action opens a backup or a vault, proves it — a backup of this vault from any generation with no
+key at all (FORMAT R2 §2, VMK history), anything else with its recovery key — and lists its
+archive records with checkboxes, all selected: a record whose `archive_id`, KID and key the
+vault already has is skipped; a known archive with a new KID gains that version (the file's
+envelope decides which is current); a new `archive_id` is added; a record's fields follow SYNC.md
+§5 (the higher revision wins, equal keeps the local).
+
+**The rotate dialog** shows the last backup's time and, past a week or with none, asks for a
+backup first; it never keeps a copy of the vault (FORMAT R2 §3).
+
+**The recovery key's ID** (FORMAT R2 §4) is on the sheet, in the text file and at the reveal; the
+recovery prompt lists the vault's recovery slots as *label · ID · date* so the right sheet is
+picked before a digit is typed.
+
+Bound methods this adds: `Archives.Rename(id, name)`, `Archives.SetDescription(id, text)`,
+`Archives.Forget(id)`, `Archives.Restore(id)`, `Archives.Delete(id, alsoFile bool)`,
+`Vault.InspectRecords(path)` and `Vault.MergeRecords(path, ids)`, `Keys.SetEntangled(on)` and
+`Keys.ChangeEntangledPassword()` (ceremonies), `Vault.LastExportAt`.

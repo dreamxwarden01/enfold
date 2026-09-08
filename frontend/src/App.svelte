@@ -14,7 +14,7 @@
   import RecoveryReveal from "./components/RecoveryReveal.svelte";
   import Dialog from "./components/Dialog.svelte";
   import { fade, fly } from "svelte/transition";
-  import { motion, delay, enter, exit, LEAVE, OUT, MOVE, SETTLE } from "./lib/motion";
+  import { motion, delay, enter, exit, LEAVE, OUT, MOVE } from "./lib/motion";
 
   const st = $derived(store.status);
   const theme = $derived(store.settings?.theme ?? "system");
@@ -25,25 +25,12 @@
     else delete root.dataset.theme;
   });
 
-  // The unlock's full stop (APP.md §6, Motion): the lock screen stays for
-  // the settle after the state says Unlocked, so the check is seen.
-  const unlocked = $derived(st?.state === VaultState.StateUnlocked);
-  let lockGone = $state(false);
-  $effect(() => {
-    if (!unlocked) {
-      lockGone = false;
-      return;
-    }
-    const t = setTimeout(() => (lockGone = true), delay(SETTLE));
-    return () => clearTimeout(t);
-  });
-
   // The lock screen shows whenever the vault is not unlocked and nothing
   // is open to browse, or when the user asks for it.
   const showLock = $derived.by(() => {
     if (!st) return true;
     if (st.state === VaultState.StateNone) return true;
-    if (st.state === VaultState.StateUnlocked) return !lockGone;
+    if (st.state === VaultState.StateUnlocked) return store.settling; // the unlock's full stop (APP.md §6)
     if (store.route === "lock") return true;
     return st.openArchives === 0;
   });

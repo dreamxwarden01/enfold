@@ -7,6 +7,7 @@ import type { ArchiveStat, ArchiveSummary, CeremonyState, OpView, Page, Settings
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, warningCopy } from "./strings";
 import { outcomeAfter, secretAskedAfter } from "./outcome";
+import { delay, SETTLE } from "./motion";
 import type { Outcome } from "./outcome";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
@@ -144,6 +145,17 @@ class Store {
       this.noteOutcome(s.ceremony);
     }
     if (before !== s.state) {
+      // The unlock's full stop (APP.md §6, Motion): the lock screen keeps
+      // showing the ceremony's last frame for the settle after the state
+      // says Unlocked — the Done event lands a few milliseconds after the
+      // state's, and the check must be seen.
+      clearTimeout(this.settleTimer);
+      if (s.state === VaultState.StateUnlocked) {
+        this.settling = true;
+        this.settleTimer = setTimeout(() => (this.settling = false), delay(SETTLE));
+      } else {
+        this.settling = false;
+      }
       if (s.state === VaultState.StateUnlocked) {
         this.outcome = null;
         void this.refreshArchives();
@@ -287,6 +299,11 @@ class Store {
   go(route: Route): void {
     this.setRoute(route);
   }
+
+  // settling: the vault is Unlocked and the lock screen is still showing
+  // the ceremony's end (APP.md §6, Motion).
+  settling = $state(false);
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
   // nav is the direction the last route change travelled, for the page
   // transition (APP.md §6): 1 into an archive, -1 back out, 0 sideways.

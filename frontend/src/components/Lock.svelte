@@ -19,7 +19,9 @@
 
   const st = $derived(store.status);
   const c = $derived(store.ceremony);
-  const running = $derived(st?.state === VaultState.StateUnlocking || st?.state === VaultState.StateReleasing);
+  // running: a ceremony is on the screen — including the settle after the
+  // unlock, when the third card shows the check (APP.md §6, Motion).
+  const running = $derived(st?.state === VaultState.StateUnlocking || st?.state === VaultState.StateReleasing || (st?.state === VaultState.StateUnlocked && store.settling));
   const firstRun = $derived(st?.state === VaultState.StateNone);
   const busy = $derived(st?.state === VaultState.StateBusy);
   const broken = $derived(st?.state === VaultState.StateBroken);
@@ -211,7 +213,7 @@
       <span class="lockbox" aria-hidden="true">
         {#key closed}<svg class="i i-14 padlock" in:fade={motion()} out:fade={motion(LEAVE)}><use href={closed ? "#i-lock" : "#i-unlock"} /></svg>{/key}
       </span>
-      {#if running}{c?.kind === "import" ? "Importing" : c?.kind === "setup" ? "Setting up" : c?.kind === "verify" ? "Checking a backup" : "Unlocking"}{:else if card === "damaged"}Vault damaged{:else if card === "absent"}Vault not found{:else if firstRun}No vault yet{:else if busy}Vault open elsewhere{:else if broken}Needs attention{:else if setupNeeded}Needs setting up{:else}Keystore locked{/if}
+      {#if running}{c?.step === CeremonyStep.StepDone && c?.kind === "unlock" ? "Unlocked" : c?.kind === "import" ? "Importing" : c?.kind === "setup" ? "Setting up" : c?.kind === "verify" ? "Checking a backup" : "Unlocking"}{:else if card === "damaged"}Vault damaged{:else if card === "absent"}Vault not found{:else if firstRun}No vault yet{:else if busy}Vault open elsewhere{:else if broken}Needs attention{:else if setupNeeded}Needs setting up{:else}Keystore locked{/if}
     </div>
   </div>
 

@@ -817,8 +817,10 @@ transition starts, the tokens collapse to 0 — and the settle with them.
 - *Unlock.* The third card's check pops (the core scales from 60% with a little overshoot,
   240 ms) and stays for the settle, so the ceremony has a full stop; then the lock screen lifts
   (8 px up, fading, 180 ms) while the shell arrives: the rail slides in 12 px from the left and
-  the layer rises 8 px, 220 ms, the layer 40 ms behind. `showLock` holds for the settle after
-  the state says Unlocked.
+  the layer rises 8 px, 220 ms, the layer 40 ms behind. The store holds `settling` for the
+  settle after the state says Unlocked, and the lock screen keeps rendering the ceremony
+  meanwhile — the state's event lands a few milliseconds before the ceremony's Done, and without
+  the hold the screen fell back to its first card for that instant and the check was never seen.
 - *Lock.* The reverse: the shell sinks 6 px and fades (160 ms) while the lock screen rises in
   (220 ms); the lock screen's header shows the open padlock and closes it over the first 160 ms.
   While unlocked the status chips show the open padlock.

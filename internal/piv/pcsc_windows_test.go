@@ -4,7 +4,10 @@ package piv
 
 import (
 	"errors"
+	"reflect"
 	"testing"
+
+	pivgo "github.com/go-piv/piv-go/v2/piv"
 )
 
 // The package's own return-code table (DESIGN.md §11 trap 26): the
@@ -45,5 +48,28 @@ func TestReturnCodeTable(t *testing.T) {
 	}
 	if scCheck("SCardTransmit", 0) != nil {
 		t.Error("success is an error")
+	}
+}
+
+// The release resets the card on piv-go's own exclusive handle, reached by
+// reflection (trap 27): this pins the layout it depends on — YubiKey.h
+// *scHandle with handle uintptr, and YubiKey.ctx *scContext with ctx
+// uintptr — so that a piv-go bump that renames a field fails here, in
+// -short, rather than silently sending every release the long way.
+func TestPivGoHandleLayout(t *testing.T) {
+	typ := reflect.TypeOf(pivgo.YubiKey{})
+	for _, f := range []struct{ outer, inner string }{{"h", "handle"}, {"ctx", "ctx"}} {
+		outer, ok := typ.FieldByName(f.outer)
+		if !ok || outer.Type.Kind() != reflect.Ptr {
+			t.Fatalf("piv-go YubiKey.%s: not a pointer field (%v)", f.outer, ok)
+		}
+		inner, ok := outer.Type.Elem().FieldByName(f.inner)
+		if !ok || inner.Type.Kind() != reflect.Uintptr {
+			t.Fatalf("piv-go YubiKey.%s.%s: not a uintptr field (%v)", f.outer, f.inner, ok)
+		}
+	}
+	// And the handle reset refuses anything but a piv-go device.
+	if err := resetHandleReal(&fakeDevice{}); !errors.Is(err, ErrParams) {
+		t.Fatalf("a fake device: %v", err)
 	}
 }

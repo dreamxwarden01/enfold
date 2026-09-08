@@ -259,6 +259,9 @@ func (a *attempt) await(cer *ceremony) (*keystore.Unlocked, error) {
 		}
 		c.pending = a
 		cer.att = nil
+		if cer.held == a.card {
+			cer.held = nil // the attempt's to release now, not the ceremony's
+		}
 		c.mu.Unlock()
 		c.log("ceremony %s: cancelled with the key still answering: the touch is pending", cer.kind)
 		c.emitState()
@@ -427,6 +430,14 @@ func (c *Core) releaseCard(card Card, kind string) {
 	err := card.Close()
 	if err != nil {
 		c.log("ceremony %s: releasing the key: %v", kind, err)
+	}
+	if f, ok := card.(interface{ Fallback() error }); ok {
+		if why := f.Fallback(); why != nil {
+			// A release through a second connection rather than on the
+			// exclusive handle (DESIGN.md §11 trap 27): said in the log,
+			// so a degraded release is seen, not inferred.
+			c.log("ceremony %s: the key was released the long way: %v", kind, why)
+		}
 	}
 	if err != nil && errors.Is(err, ErrTokenResetFailed) {
 		c.mu.Lock()

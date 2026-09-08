@@ -293,6 +293,18 @@ func (cer *ceremony) finish(e *Error) {
 	if c.cer == cer {
 		c.cer = nil
 	}
+	// A card still held here was left by a panic: every flow closes its
+	// card before it returns, and a disowned attempt takes the card out
+	// of held. It is released now rather than leaked with its exclusive
+	// connection for the life of the process.
+	held := cer.held
+	cer.held = nil
+	if held != nil {
+		c.mu.Unlock()
+		c.log("ceremony %s: the key was still held at the end: releasing it", cer.kind)
+		c.releaseCard(held, cer.kind)
+		c.mu.Lock()
+	}
 	if c.vault.state == StateUnlocking || c.vault.state == StateReleasing {
 		c.vault.state = cer.restore
 	}

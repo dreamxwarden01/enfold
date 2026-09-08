@@ -719,12 +719,15 @@ Correct in this document, and easy to lose during implementation.
     9d key without the PIN; touch is the only barrier. Whatever PIN policy is finally chosen
     (open, `SCOPE.md`), the unlock path must not leave a verified card behind it. Built in
     `internal/piv`: a `Card` is the exclusive connection (holding it is one session mechanism),
-    and `Close` resets the card through the package's own winscard connection — a *shared*
-    connect dropped with `SCARD_RESET_CARD`, the mode that was measured, the one nothing else can
-    refuse — whenever a PIN went through the Card or a verified state was used; if the reset
-    cannot be done and the card answers "verified", `Close` says so (`ErrResetFailed`,
-    `Card.ResetFailed`) and the UI warns. `Open` resets too, so every Card starts unverified.
-    The gap between piv-go's disconnect and the reset connect is sub-millisecond and accepted.
+    and `Close` resets the card — on the exclusive handle itself since 2026-09-07 (trap 27),
+    and before that through the package's own winscard connection, a *shared* connect dropped
+    with `SCARD_RESET_CARD`, which another program holding the card exclusively *can* refuse
+    (`SCARD_E_SHARING_VIOLATION`), as the takeover audit found — whenever a PIN went through
+    the Card or a verified state was used; if the reset cannot be done and the card answers
+    "verified", `Close` says so (`ErrResetFailed`, `Card.ResetFailed`) and the UI warns. `Open`
+    resets too, so every Card starts unverified. The gap between piv-go's disconnect and a
+    second connection's reset was called sub-millisecond and accepted here; trap 27 measured
+    it winnable, and it is gone.
 15. **Rotation re-wraps into stored public keys — verify the slot region first.** §8 step 4
     re-wraps the new VMK to each slot's stored `slot_pubkey` / `mlkem_ek` with no credential
     present. The slot region is only checksummed, so a substituted public key would receive the
@@ -821,7 +824,9 @@ Correct in this document, and easy to lose during implementation.
     over winscard (`tools/pivtool idle`): an exclusive connection that carries no APDU survives
     5 s and is reset before 6 s — the next request answers `SCARD_W_RESET_CARD`, "the smart card
     has been reset" — and the reset clears a verified PIN; a probe every 4 s (an empty VERIFY)
-    keeps it alive indefinitely. The first hardware test lost every create and unlock whose PIN
+    keeps it alive indefinitely. (It is the transaction's timer: Microsoft's `SCardBeginTransaction`
+    remarks say a transaction held for more than five seconds with no operation on the card
+    resets it, and piv-go holds a transaction for the connection's life.) The first hardware test lost every create and unlock whose PIN
     took longer than five seconds to type, because the card was held across the prompt. Rules:
     the operation lock is released while a prompter waits, so the caller can probe the card every
     3 s meanwhile — which is also how a key pulled during the prompt is noticed within 3 s — and
@@ -872,10 +877,15 @@ Correct in this document, and easy to lose during implementation.
       code lies outside the facility is `ErrNoCard`. Every piv-go call runs after the package's
       own preflight of the reader, so a Win32 code from piv-go's own context or connect is the
       same moment's failure and the caller waits for the key again; harmless.
-    - A reset on Close that cannot connect because the card, the reader or the service is not
-      there (`ErrNoCard`, `ErrNoReader`, `ErrNoService` from the reset connection) is not a
-      failed reset: an unpowered card holds nothing of ours. A connect refused for any other
-      reason — the card busy with another program — still warns, as before.
+    - A reset on Close the long way (trap 27) that cannot connect because the card or the
+      reader is not there (`ErrNoCard`, `ErrNoReader`) is not a failed reset: an unpowered card
+      holds nothing of ours. No service (`ErrNoService`) is the same verdict only after two
+      seconds of retries: Windows stops the Smart Card service when the last reader leaves — the
+      fourth test's log shows the key's removal taking it down — so a service that stays down is
+      a reader that is gone. The one case this misjudges is an administrator restarting the
+      service with the key still in, which is not measured (it needs an elevated shell). A
+      connect refused because another program holds the card is retried for the same two
+      seconds and then warns, as before.
 27. **The release gap is winnable; the reset goes on the exclusive handle.** Measured 2026-09-07
     on the test key (YubiKey 5.7.4, `tools/pivtool hold` against `tools/pivtool probe` from a
     second process; DECISIONS "Takeover audit"): *while this program holds the card* — PIN
@@ -900,6 +910,21 @@ Correct in this document, and easy to lose during implementation.
     for its disconnect and still frees its context, which is ignored. A card left verified by
     a version of piv-go the reflection cannot read would be reported by the fallback's warning
     as before. The measurement tools stay in the tree (`hold`, `probe`, `Probe`, `ProbeSpin`).
+    From the audit that followed (DECISIONS "Takeover audit", the audited paragraph): the long
+    way connects *exclusive* now — so a program that won the gap makes the connect fail rather
+    than share the card while it is reset — retrying a busy card and a stopped service for two
+    seconds, asks the card whether it is verified, then resets; measured on purpose
+    (`hold -release twostep`, five runs) the spinning process won the gap twice and held a
+    verified card for the length of its own connection, and the retrying connect reset the card
+    once it let go — the long way recovers from a momentary intruder and warns of a persistent
+    one, and the handle path had no gap in seventeen runs of seventeen. A reset on the exclusive
+    handle is trusted from its return code — nobody else is on the card — and the numbers are
+    its confirmation. The layout the reflection depends on is pinned by `TestPivGoHandleLayout`
+    (hardware-free, `-short`), so a piv-go bump fails there rather than sending every release
+    the long way in silence; a release that did go the long way is said in the core's log ("the
+    key was released the long way"), never inferred. And a ceremony that ends with a card still
+    held — only a panic leaves one — releases it at its end rather than leaking the exclusive
+    connection for the life of the process.
 
 ## 12. Deferred
 

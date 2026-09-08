@@ -2829,3 +2829,24 @@ spinning process connected only after the reset and found the card unverified �
 releases, one across a touch wait's own end (the pending touch's release), six in the
 experiment before it shipped. DESIGN §11 trap 27 carries the numbers; APP.md §2.2's claim that
 the pending touch never crosses a process now cites them instead of asserting them.
+
+**Audited** (three Opus lenses over the code and Microsoft's and Yubico's documentation, each
+finding refuted or confirmed by a second agent). The holds were found sound end to end: the
+exclusive connection and the transaction piv-go never ends refuse every share mode; nothing
+without a handle can reset the card; the PIV applet has no path from the HID interfaces; the
+keep-alive never lets go of the connection; the one reconnect follows a reset that already
+cleared the PIN and preflights with another; `Open` resets, `dirty` is marked before the VERIFY,
+a verified state this Card did not create is never trusted, and the exit waits. Five things
+changed after it. *The long way's reset connection was the one connect never retried, and it
+was shared:* a sharing violation at that instant ended the attempt with a warning, and a
+program that won the gap in shared mode was co-resident while the card was reset; it connects
+exclusive now, retries for two seconds, asks the card, then resets — measured, it recovers from
+a momentary intruder and warns of a persistent one. *No service was taken as no power:* the
+verdict now comes only after two seconds of retries, with the one unmeasured case (an
+administrator's restart with the key in) written down. *The reflection could degrade in
+silence:* `TestPivGoHandleLayout` pins piv-go's field layout in `-short`, and a release that
+fell back is logged. *A reset declared from a return code:* on the exclusive handle the code is
+trustworthy and the seventeen runs are its confirmation; the long way asks the card first. *A
+recovered panic could leak the held card* — every flow closes its card before returning, so
+only a panic leaves one — and a ceremony's end now releases whatever it still holds, a disowned
+attempt having taken its card out of the ceremony's hands first.

@@ -74,6 +74,13 @@ type Card struct {
 	dirty        dirtyReason // what this Card left on the card, to reset on Close
 	verifiedHere bool        // this Card sent the VERIFY that verified the card
 	resetFailed  bool
+	// fallback: Close could not reset the card on the exclusive handle
+	// and took the long way (DESIGN.md §11 trap 27); the reason, for the
+	// caller's log.
+	fallback error
+	// forceLongWay makes Close skip the handle reset: the experiment that
+	// measures the long way (Interrupt, tools/pivtool hold -release twostep).
+	forceLongWay bool
 	prompting    bool // a Token is waiting on its prompter: no second ceremony meanwhile
 	broken       bool // a reconnect after a reset failed: no connection, dev is nil
 }
@@ -164,6 +171,16 @@ func (c *Card) ResetFailed() bool {
 	c.st.Lock()
 	defer c.st.Unlock()
 	return c.resetFailed
+}
+
+// Fallback is why Close released the card the long way — through a
+// second connection rather than a reset on the exclusive handle — or nil
+// when it did not (DESIGN.md §11 trap 27). A caller that logs it makes a
+// degraded release visible rather than inferred.
+func (c *Card) Fallback() error {
+	c.st.Lock()
+	defer c.st.Unlock()
+	return c.fallback
 }
 
 // acquire takes the operation lock, refusing rather than waiting, and
@@ -344,9 +361,15 @@ func (c *Card) Close() error {
 	// card PIN-verified (DESIGN.md §11 trap 27). piv-go's own close then
 	// reports the handle gone and frees its context; nothing of ours is
 	// left on the card.
-	if err := resetHandle(c.dev); err == nil {
+	if c.forceLongWay {
+		// The experiment measuring the long way (Interrupt).
+	} else if err := resetHandle(c.dev); err == nil {
 		c.dev.Close()
 		return nil
+	} else {
+		c.st.Lock()
+		c.fallback = err
+		c.st.Unlock()
 	}
 	// The handle could not be reached or reset (the card gone, a piv-go
 	// without the field): the two-step release, with the reset

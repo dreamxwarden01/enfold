@@ -59,6 +59,10 @@ const (
 	// InterruptClose calls piv-go's own Close (disconnect with LEAVE_CARD,
 	// then the context released).
 	InterruptClose InterruptMode = "close"
+	// InterruptTwoStep is Close the long way, on purpose: piv-go's
+	// leave-card close, then the reset connection — the fallback, measured
+	// on its own (trap 27).
+	InterruptTwoStep InterruptMode = "twostep"
 )
 
 // Interrupt applies mode to the connection under whatever operation is in
@@ -71,6 +75,12 @@ func (c *Card) Interrupt(mode InterruptMode) error {
 	yk, ok := c.dev.(*pivgo.YubiKey)
 	if !ok {
 		return fmt.Errorf("%w: not a piv-go device", ErrParams)
+	}
+	if mode == InterruptTwoStep {
+		c.st.Lock()
+		c.forceLongWay = true
+		c.st.Unlock()
+		return c.Close()
 	}
 	c.st.Lock()
 	c.closed = true

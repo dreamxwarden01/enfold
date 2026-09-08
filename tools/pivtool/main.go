@@ -16,7 +16,7 @@
 //	pivtool idle [-seconds N] [-keepalive S] [-verify] [-verify-after] [-default-pin]
 //	pivtool busy [-rounds N] [-verify]
 //	pivtool touchabort [-mode cancel|reset|close] [-after N] [-default-pin]
-//	pivtool hold [-touch] [-seconds N] [-release reset|handle|leave|none] [-default-pin]
+//	pivtool hold [-touch] [-seconds N] [-release reset|handle|twostep|leave|none] [-default-pin]
 //	pivtool probe [-share shared|exclusive|direct] [-spin MS]
 //
 // -default-pin answers a test key's factory PIN (and management key) without
@@ -80,7 +80,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME] | idle [-seconds N] [-keepalive S] [-verify] [-default-pin] | busy [-rounds N] | touchabort [-mode cancel|reset|close] [-after N] [-default-pin] | hold [-touch] [-seconds N] [-release reset|handle|leave|none] [-default-pin] | probe [-share shared|exclusive|direct] [-spin MS]")
+	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME] | idle [-seconds N] [-keepalive S] [-verify] [-default-pin] | busy [-rounds N] | touchabort [-mode cancel|reset|close] [-after N] [-default-pin] | hold [-touch] [-seconds N] [-release reset|handle|twostep|leave|none] [-default-pin] | probe [-share shared|exclusive|direct] [-spin MS]")
 	os.Exit(2)
 }
 
@@ -726,7 +726,7 @@ func cmdHold(args []string) error {
 	slotArg := fs.String("slot", "9d", "slot in hex")
 	touch := fs.Bool("touch", false, "hold inside a touch wait (an ECDH nobody touches) instead of idle")
 	seconds := fs.Int("seconds", 6, "how long to hold before releasing (idle mode)")
-	release := fs.String("release", "reset", "reset | handle | leave | none")
+	release := fs.String("release", "reset", "reset | handle | twostep | leave | none")
 	defaultPIN := fs.Bool("default-pin", false, "answer the factory PIN 123456 without asking (a test key only)")
 	fs.Parse(args)
 	slot, err := parseSlot(*slotArg)
@@ -799,6 +799,10 @@ func cmdHold(args []string) error {
 		stamp("reset on the handle: err=%v", err)
 		err = c.Interrupt(piv.InterruptClose)
 		stamp("piv-go's close after it: err=%v", err)
+	case "twostep":
+		stamp("releasing: the long way on purpose (piv-go's leave-card close, then the reset connection)")
+		err := c.Interrupt(piv.InterruptTwoStep)
+		stamp("released the long way: err=%v resetFailed=%v", err, c.ResetFailed())
 	case "leave":
 		stamp("releasing: piv-go's close alone, NO reset (the worst case, on purpose)")
 		err := c.Interrupt(piv.InterruptClose)

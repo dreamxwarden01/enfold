@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -372,64 +373,94 @@ func Verified(reader string) (bool, error) {
 	return false, err
 }
 
-// prepareResetReal is Close's reset in two halves. The first — the
-// context and the reader name — runs before piv-go lets go of the card, so
-// that only a connect and a disconnect sit between piv-go's LEAVE_CARD and
-// the reset. The second, returned as a function, connects shared — the
-// mode that was measured to work, and the one with the fewest ways to be
-// refused, since no APDU is sent — and drops the connection with
-// SCARD_RESET_CARD. When that cannot be done, it reconnects and asks the
-// card whether it is still PIN-verified, so the caller warns only when
-// there is something to warn about; the management-key authentication
-// cannot be asked about, and the caller decides on that from what it did.
+// prepareResetReal is Close's reset in two halves, the long way: the
+// release taken only when the exclusive handle could not be reset in
+// place (DESIGN.md §11 trap 27). The first half establishes the context
+// before piv-go lets go of the card; the second connects EXCLUSIVE — so
+// that no other program can be on the card while it is reset, and one
+// that is makes the connect fail rather than go unnoticed — retrying a
+// busy card and a stopped service for a moment, asks the card whether it
+// is verified, and disconnects with a reset.
 //
-// done: the reset happened. verified: the reset did not happen and the card
-// is still PIN-verified, or could not be asked (which counts the same).
+// done: the reset happened, or the card is unpowered (no card, no reader;
+// or no service after the retries — Windows stops the service when the
+// last reader leaves, and an administrator restarting it with a key in is
+// the one case this misjudges). verified: the reset did not happen and
+// the card is still PIN-verified, or could not be asked (which counts the
+// same).
 func prepareResetReal(reader string) func() (done, verified bool, err error) {
-	ctx, err := newSCContext()
-	if err != nil {
-		if gone(err) {
-			return func() (bool, bool, error) { return true, false, nil } // no service: the reader left
-		}
-		return func() (bool, bool, error) { return false, true, fmt.Errorf("%w: %v", ErrResetFailed, err) }
-	}
+	ctx, _ := newSCContext() // retried below when it failed
 	return func() (bool, bool, error) {
-		defer ctx.release()
-		h, err := ctx.connect(reader, scardShareShared)
-		if err == nil {
-			if err := h.disconnect(scardResetCard); err == nil {
+		var (
+			h    *scHandle
+			last error
+		)
+		for attempt := 0; attempt < resetRetries; attempt++ {
+			if attempt > 0 {
+				time.Sleep(resetRetryEvery)
+			}
+			if ctx == nil {
+				var err error
+				if ctx, err = newSCContext(); err != nil {
+					last = err
+					if !errors.Is(err, ErrNoService) {
+						break
+					}
+					continue
+				}
+			}
+			h, last = ctx.connect(reader, scardShareExclusive)
+			if last == nil {
+				break
+			}
+			if errors.Is(last, ErrNoCard) || errors.Is(last, ErrNoReader) {
+				// The card or the reader is gone: an unpowered card holds
+				// nothing of ours, so there is nothing to reset and
+				// nothing to warn of (DESIGN.md §11 trap 26).
+				ctx.release()
 				return true, false, nil
 			}
-		} else if gone(err) {
-			// The card, the reader or the service is not there: an
-			// unpowered card holds nothing of ours, so there is nothing
-			// to reset and nothing to warn of (DESIGN.md §11 trap 26).
+			if !errors.Is(last, ErrBusy) && !errors.Is(last, ErrNoService) {
+				break
+			}
+		}
+		if ctx != nil {
+			defer ctx.release()
+		}
+		if h == nil {
+			if errors.Is(last, ErrNoService) {
+				return true, false, nil // the service stays down only without a reader
+			}
+			// Busy: another program is on the card, which may be verified.
+			return false, true, fmt.Errorf("%w: %v", ErrResetFailed, last)
+		}
+		// Nobody else is on the card. Ask it, then reset it.
+		known, isVerified := false, false
+		if err := h.begin(); err == nil {
+			if _, err := h.transmit(apduSelectPIV); err == nil {
+				_, verr := h.transmit(apduVerifyEmpty)
+				var st *apduStatus
+				switch {
+				case verr == nil:
+					known, isVerified = true, true
+				case errors.As(verr, &st) && (st.sw&0xfff0 == 0x63c0 || st.sw == 0x6983):
+					known, isVerified = true, false
+				}
+			}
+			h.end(scardLeaveCard)
+		}
+		if err := h.disconnect(scardResetCard); err == nil {
 			return true, false, nil
 		}
-		// The reset did not happen. Is the card verified?
-		h, err = ctx.connect(reader, scardShareShared)
-		if err != nil {
-			if gone(err) {
-				return true, false, nil
-			}
-			return false, true, fmt.Errorf("%w: %v", ErrResetFailed, err)
-		}
-		defer h.disconnect(scardLeaveCard)
-		if err := h.begin(); err != nil {
-			return false, true, fmt.Errorf("%w: %v", ErrResetFailed, err)
-		}
-		defer h.end(scardLeaveCard)
-		if _, err := h.transmit(apduSelectPIV); err != nil {
-			return false, true, fmt.Errorf("%w: %v", ErrResetFailed, err)
-		}
-		_, err = h.transmit(apduVerifyEmpty)
-		if err == nil {
-			return false, true, fmt.Errorf("%w: the card is still PIN-verified", ErrResetFailed)
-		}
-		var st *apduStatus
-		if errors.As(err, &st) && (st.sw&0xfff0 == 0x63c0 || st.sw == 0x6983) {
+		h.disconnect(scardLeaveCard)
+		if known && !isVerified {
 			return false, false, nil // no PIN is left; the caller judges the rest
 		}
-		return false, true, fmt.Errorf("%w: %v", ErrResetFailed, err)
+		return false, true, fmt.Errorf("%w: the reset was refused and the card may still be PIN-verified", ErrResetFailed)
 	}
 }
+
+// resetRetries bounds the long way's connect: Windows' own services take
+// a card for a moment after an insert or a reset, and the service that
+// stops when the last reader leaves takes a moment to say so.
+var resetRetries, resetRetryEvery = 8, 250 * time.Millisecond

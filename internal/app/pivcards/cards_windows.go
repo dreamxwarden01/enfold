@@ -99,6 +99,10 @@ func (k *card) Token(pub []byte, p app.Prompter) (keystore.Token, error) {
 
 func (k *card) Close() error { return wrap(k.c.Close()) }
 
+// Fallback is why the release went the long way, or nil (DESIGN.md §11
+// trap 27); the core logs it.
+func (k *card) Fallback() error { return k.c.Fallback() }
+
 // token wraps the piv Token so that its errors are the core's.
 type token struct {
 	t *piv.Token

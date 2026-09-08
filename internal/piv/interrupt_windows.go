@@ -10,18 +10,38 @@ import (
 	pivgo "github.com/go-piv/piv-go/v2/piv"
 )
 
-// An experiment, not an API: can a card call in flight — a touch wait —
-// be cut short from another goroutine? PC/SC offers two levers that the
-// package cannot otherwise reach, since piv-go keeps its handles
-// unexported: SCardCancel on piv-go's context, and SCardDisconnect on its
-// card handle with a reset. tools/pivtool touchabort measures both on the
-// test key (DESIGN.md §11 trap 23; DECISIONS 2026-09-07). Measured on a
-// YubiKey 5.7.4: none of the three cuts the wait short — SCardCancel is
-// accepted and does nothing to a transmit, and a disconnect (reset or
-// not) queues behind the transmit and returns with it — the key gives up
-// on its own after about 14.3 s. Nothing in the app calls this.
+// piv-go keeps its PC/SC handles unexported; this file reaches them by
+// reflection, for two things. One is the package's own release: a reset
+// on the exclusive handle itself (resetHandleReal), which Close uses so
+// that no other process can connect between piv-go's leave-card close
+// and a reset connection — a window measured to be winnable (DESIGN.md
+// §11 trap 27). The other is an experiment, not an API: Interrupt, which
+// tools/pivtool touchabort used to measure that a touch wait cannot be
+// cut short from another goroutine (trap 23) — SCardCancel is accepted
+// and does nothing to a transmit, and a disconnect queues behind it.
 
 var procSCardCancel = winscard.NewProc("SCardCancel")
+
+// resetHandleReal resets the card on piv-go's own exclusive handle:
+// SCardDisconnect(SCARD_RESET_CARD). Since the handle is the exclusive
+// one, nobody else holds the card at any moment before the reset — there
+// is no gap for a spinning SCardConnect to win. piv-go's Close afterwards
+// answers ERROR_INVALID_HANDLE for the disconnect and still releases its
+// context; the caller ignores it. An error here — no piv-go device, a
+// field that a newer piv-go renamed, the card gone — leaves the caller to
+// the two-step release.
+func resetHandleReal(dev device) error {
+	yk, ok := dev.(*pivgo.YubiKey)
+	if !ok {
+		return fmt.Errorf("%w: not a piv-go device", ErrParams)
+	}
+	h, err := handleField(yk, "h", "handle")
+	if err != nil {
+		return err
+	}
+	r, _, _ := procSCardDisconnect.Call(h, scardResetCard)
+	return scCheck("SCardDisconnect", r)
+}
 
 // InterruptMode is what Interrupt does to the connection under the
 // operation in flight.

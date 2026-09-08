@@ -993,3 +993,44 @@ func TestResetDuringTouchDisambiguationIsHealed(t *testing.T) {
 		t.Fatalf("reopens=%d prompts=%d verifies=%d", fx.dev.reopens, len(p.statuses), fx.dev.verifies)
 	}
 }
+
+// The release resets the card on the exclusive handle itself when it can
+// (DESIGN.md §11 trap 27): no reset connection, no gap, nothing to warn
+// of; and when it cannot, the two-step release stands.
+func TestCloseResetsOnTheHandle(t *testing.T) {
+	fx := newFixture(t)
+	handleResets := 0
+	resetHandle = func(dev device) error {
+		handleResets++
+		fx.dev.reset()
+		return nil
+	}
+	c, err := Open("Yubico YubiKey OTP+FIDO+CCID 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ProtectedManagementKey("123456"); err != nil && !errors.Is(err, ErrNoProtectedKey) {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil || c.ResetFailed() {
+		t.Fatalf("close: %v failed=%v", err, c.ResetFailed())
+	}
+	if handleResets != 1 || fx.prepared != 0 || fx.resets != 0 {
+		t.Fatalf("handle resets=%d prepared=%d reset connections=%d", handleResets, fx.prepared, fx.resets)
+	}
+	if fx.dev.verified {
+		t.Fatal("the card is still verified")
+	}
+	// A clean card needs no reset at all.
+	handleResets = 0
+	c, err = Open("Yubico YubiKey OTP+FIDO+CCID 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PINState(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil || handleResets != 0 {
+		t.Fatalf("clean close: %v handle resets=%d", err, handleResets)
+	}
+}

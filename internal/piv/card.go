@@ -338,8 +338,20 @@ func (c *Card) Close() error {
 	if dirty == 0 {
 		return mapErr(c.dev.Close())
 	}
-	// The reset connection is prepared before piv-go lets go of the card,
-	// so that only a connect and a disconnect sit in the gap.
+	// The card is reset on the exclusive handle itself, so that no other
+	// process can connect between the release and the reset: measured,
+	// a process spinning on SCardConnect wins that gap and finds the
+	// card PIN-verified (DESIGN.md §11 trap 27). piv-go's own close then
+	// reports the handle gone and frees its context; nothing of ours is
+	// left on the card.
+	if err := resetHandle(c.dev); err == nil {
+		c.dev.Close()
+		return nil
+	}
+	// The handle could not be reached or reset (the card gone, a piv-go
+	// without the field): the two-step release, with the reset
+	// connection prepared before piv-go lets go of the card, so that only
+	// a connect and a disconnect sit in the gap.
 	reset := prepareReset(c.reader)
 	closeErr := c.dev.Close()
 	done, verified, err := reset()

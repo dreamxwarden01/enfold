@@ -2794,3 +2794,38 @@ window.
 
 Smaller, from the same test: the strip said "two YubiKeys are inserted" for any number above
 one; it says "more than one" now and does not count.
+
+---
+
+## 2026-09-07 — Takeover audit: nothing reaches a held card; the release gap was real and is closed
+
+The user asked for an audit of the one thing the pending touch must never allow: another
+process taking over a YubiKey that Enfold holds PIN-verified — during the PIN prompt's
+keep-alive, inside the touch wait, as a pending touch — and getting a shared secret with one
+touch. Two halves: an Opus workflow over the code and the PC/SC documentation (read-only), and
+measurements on the test key with two new `pivtool` commands — `hold`, which holds the key the
+way the app does and releases it one of four ways, and `probe`, which is the other process:
+can it connect, in which share mode, and is the card verified for it (SELECT, GET SERIAL, the
+retry-free empty VERIFY; nothing else).
+
+**Measured** (YubiKey 5.7.4). While held — idle-verified with probes every 3 s, or inside the
+touch wait — every `SCardConnect` from the other process answers `SCARD_E_SHARING_VIOLATION`,
+shared, exclusive and direct alike. Killed while idle-verified, the card is unverified for the
+next process within milliseconds; killed inside the touch wait, it stays "in use" until the
+GENERAL AUTHENTICATE runs out (about 11 s more), then unverified: Windows resets a dead client's
+card. **The release was the hole.** `Card.Close` was piv-go's leave-card disconnect followed by
+a fresh shared connection that reset the card, and between the two the card is powered,
+verified and unowned: a process spinning on `SCardConnect(EXCLUSIVE)` won that gap in one run
+of five and held a PIN-verified card, while Enfold's reset failed with a sharing violation and
+warned "still verified" — true, and too late. A control run with piv-go's close alone showed the
+probe seeing `verified=true` at once, so the probe does see what it claims to.
+
+**Ruled and shipped.** The reset goes on the exclusive handle itself:
+`SCardDisconnect(SCARD_RESET_CARD)` on piv-go's own handle, reached by reflection (the
+experiment's `Interrupt` already did it), so there is no moment in which the card is verified
+and unowned; the two-step release stays as the fallback when the handle cannot be reached or
+reset, and its warning stays with it. Measured after the change: fourteen runs of fourteen, the
+spinning process connected only after the reset and found the card unverified — eight idle
+releases, one across a touch wait's own end (the pending touch's release), six in the
+experiment before it shipped. DESIGN §11 trap 27 carries the numbers; APP.md §2.2's claim that
+the pending touch never crosses a process now cites them instead of asserting them.

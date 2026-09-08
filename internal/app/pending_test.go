@@ -326,6 +326,10 @@ func TestPendingTouchOfASlotChangeHoldsTheHandle(t *testing.T) {
 	if n := card.touchCount(); n != 2 { // the unlock's, and the held one
 		t.Fatalf("touch prompts after the adoption: %d", n)
 	}
+	time.Sleep(100 * time.Millisecond)
+	if cs := h.status().Ceremony; cs == nil || cs.Step != StepTouch {
+		t.Fatalf("the adopted mutation's panel left the touch: %+v", cs)
+	}
 	if e := h.c.updateRegistry(func(g *registry) error { return nil }); e == nil || e.Code != CodeCeremonyRunning {
 		// The adopter holds the handle now: still refused, by the live
 		// ceremony.

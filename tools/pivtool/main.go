@@ -16,6 +16,8 @@
 //	pivtool idle [-seconds N] [-keepalive S] [-verify] [-verify-after] [-default-pin]
 //	pivtool busy [-rounds N] [-verify]
 //	pivtool touchabort [-mode cancel|reset|close] [-after N] [-default-pin]
+//	pivtool hold [-touch] [-seconds N] [-release reset|handle|leave|none] [-default-pin]
+//	pivtool probe [-share shared|exclusive|direct] [-spin MS]
 //
 // -default-pin answers a test key's factory PIN (and management key) without
 // asking; it is for a key the user has handed over as a test key, never for
@@ -64,6 +66,10 @@ func main() {
 		err = cmdBusy(os.Args[2:])
 	case "touchabort":
 		err = cmdTouchAbort(os.Args[2:])
+	case "hold":
+		err = cmdHold(os.Args[2:])
+	case "probe":
+		err = cmdProbe(os.Args[2:])
 	default:
 		usage()
 	}
@@ -74,7 +80,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME] | idle [-seconds N] [-keepalive S] [-verify] [-default-pin] | busy [-rounds N] | touchabort [-mode cancel|reset|close] [-after N] [-default-pin]")
+	fmt.Fprintln(os.Stderr, "usage: pivtool readers | info [-reader NAME] | generate [-reader NAME] [-slot 9d] [-pin-policy once|always] | selftest [-reader NAME] [-slot 9d] | resetcheck [-reader NAME] | idle [-seconds N] [-keepalive S] [-verify] [-default-pin] | busy [-rounds N] | touchabort [-mode cancel|reset|close] [-after N] [-default-pin] | hold [-touch] [-seconds N] [-release reset|handle|leave|none] [-default-pin] | probe [-share shared|exclusive|direct] [-spin MS]")
 	os.Exit(2)
 }
 
@@ -701,5 +707,145 @@ func cmdTouchAbort(args []string) error {
 	defer closeCard(c2)
 	st, err := printPINState(c2)
 	fmt.Printf("reopened: verified=%v retries=%d err=%v\n", st.Verified, st.Retries, err)
+	return nil
+}
+
+// cmdHold is one side of the takeover experiment (DESIGN.md §11 trap 27):
+// this process holds the test key PIN-verified — idle with keep-alive
+// probes, or inside a touch wait — for a while, then releases it the way
+// -release says, printing a timeline. Another process runs probe meanwhile.
+//
+//	reset:  the package's own Close — piv-go's leave-card close, then the
+//	        reset connection (the gap between them is what probe races for)
+//	handle: SCardDisconnect(SCARD_RESET_CARD) on the exclusive handle itself
+//	leave:  piv-go's close alone, no reset — the worst case, on purpose
+//	none:   never released: the process waits to be killed
+func cmdHold(args []string) error {
+	fs := flag.NewFlagSet("hold", flag.ExitOnError)
+	reader := fs.String("reader", "", "reader name (default: the only one)")
+	slotArg := fs.String("slot", "9d", "slot in hex")
+	touch := fs.Bool("touch", false, "hold inside a touch wait (an ECDH nobody touches) instead of idle")
+	seconds := fs.Int("seconds", 6, "how long to hold before releasing (idle mode)")
+	release := fs.String("release", "reset", "reset | handle | leave | none")
+	defaultPIN := fs.Bool("default-pin", false, "answer the factory PIN 123456 without asking (a test key only)")
+	fs.Parse(args)
+	slot, err := parseSlot(*slotArg)
+	if err != nil {
+		return err
+	}
+	c, err := open(*reader)
+	if err != nil {
+		return err
+	}
+	if c.Serial() != testKeySerial {
+		closeCard(c)
+		return fmt.Errorf("serial %d is not the test key (%d): refusing to experiment on it", c.Serial(), testKeySerial)
+	}
+	t0 := time.Now()
+	stamp := func(format string, a ...any) {
+		fmt.Printf("t=%v hold: %s\n", time.Since(t0).Round(time.Millisecond), fmt.Sprintf(format, a...))
+	}
+	pin := "123456"
+	if !*defaultPIN {
+		if pin, err = readSecret("PIN: "); err != nil {
+			closeCard(c)
+			return err
+		}
+	}
+	if *touch {
+		info, err := c.Inspect(slot)
+		if err != nil {
+			closeCard(c)
+			return err
+		}
+		tok, err := c.Token(info.PublicKey, terminalPrompter{defaultPIN: *defaultPIN, noTouch: true})
+		if err != nil {
+			closeCard(c)
+			return err
+		}
+		eph, err := ecdh.P256().GenerateKey(rand.Reader)
+		if err != nil {
+			closeCard(c)
+			return err
+		}
+		stamp("PIN verified inside ECDH; waiting for a touch nobody gives")
+		_, err = tok.ECDH(eph.PublicKey().Bytes())
+		stamp("ECDH returned: err=%v", err)
+	} else {
+		if _, err := c.ProtectedManagementKey(pin); err != nil && !errors.Is(err, piv.ErrNoProtectedKey) {
+			closeCard(c)
+			return fmt.Errorf("verify: %w", err)
+		}
+		st, _ := c.PINState()
+		stamp("PIN verified=%v; holding idle with a probe every 3 s for %d s", st.Verified, *seconds)
+		deadline := time.Now().Add(time.Duration(*seconds) * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(3 * time.Second)
+			st, err := c.PINState()
+			stamp("probe: verified=%v err=%v", st.Verified, err)
+			if err != nil {
+				break
+			}
+		}
+	}
+	switch *release {
+	case "reset":
+		stamp("releasing: Close (piv-go leave-card close, then the reset connection)")
+		err := c.Close()
+		stamp("released: err=%v resetFailed=%v", err, c.ResetFailed())
+	case "handle":
+		stamp("releasing: SCardDisconnect(SCARD_RESET_CARD) on the exclusive handle")
+		err := c.Interrupt(piv.InterruptReset)
+		stamp("reset on the handle: err=%v", err)
+		err = c.Interrupt(piv.InterruptClose)
+		stamp("piv-go's close after it: err=%v", err)
+	case "leave":
+		stamp("releasing: piv-go's close alone, NO reset (the worst case, on purpose)")
+		err := c.Interrupt(piv.InterruptClose)
+		stamp("left: err=%v", err)
+	case "none":
+		stamp("holding for ever: kill this process (pid %d) from another shell", os.Getpid())
+		select {}
+	default:
+		closeCard(c)
+		return fmt.Errorf("unknown -release %q", *release)
+	}
+	return nil
+}
+
+// cmdProbe is the other side: what another process sees of the card —
+// whether it can connect in the given share mode, and whether the card is
+// PIN-verified for it. With -spin it tries in a tight loop for that many
+// milliseconds and reports the first connection: the race for a window.
+// It sends nothing but SELECT, GET SERIAL and the retry-free empty VERIFY.
+func cmdProbe(args []string) error {
+	fs := flag.NewFlagSet("probe", flag.ExitOnError)
+	reader := fs.String("reader", "", "reader name (default: the only one)")
+	share := fs.String("share", "shared", "shared | exclusive | direct")
+	spin := fs.Int("spin", 0, "keep trying to connect for this many milliseconds (0: once)")
+	fs.Parse(args)
+	name := *reader
+	if name == "" {
+		readers, err := piv.Readers()
+		if err != nil {
+			return err
+		}
+		if len(readers) != 1 {
+			return fmt.Errorf("%d YubiKey readers; pick one with -reader", len(readers))
+		}
+		name = readers[0]
+	}
+	t0 := time.Now()
+	var res piv.ProbeResult
+	n := 1
+	if *spin > 0 {
+		res, n = piv.ProbeSpin(name, piv.ShareMode(*share), time.Duration(*spin)*time.Millisecond)
+	} else {
+		res = piv.Probe(name, piv.ShareMode(*share))
+	}
+	fmt.Printf("t=%v probe %s (%d attempt(s), %v): %s\n", time.Since(t0).Round(time.Millisecond), *share, n, res.Took.Round(time.Millisecond), res)
+	if res.Connected && res.Serial != 0 && res.Serial != testKeySerial {
+		fmt.Printf("note: serial %d is not the test key; nothing was changed on it\n", res.Serial)
+	}
 	return nil
 }

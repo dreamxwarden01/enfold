@@ -49,4 +49,5 @@ var (
 	preflight    = preflightReal
 	openDevice   = func(reader string) (device, error) { return pivgo.Open(reader) }
 	prepareReset = prepareResetReal
+	resetHandle  = resetHandleReal
 )

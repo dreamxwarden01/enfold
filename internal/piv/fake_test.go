@@ -372,7 +372,7 @@ type fixture struct {
 
 func newFixture(t interface{ Cleanup(func()) }) *fixture {
 	fx := &fixture{dev: newFake()}
-	oldList, oldPre, oldOpen, oldReset := listReaders, preflight, openDevice, prepareReset
+	oldList, oldPre, oldOpen, oldReset, oldHandle := listReaders, preflight, openDevice, prepareReset, resetHandle
 	listReaders = func() ([]string, error) { return []string{"Yubico YubiKey OTP+FIDO+CCID 0"}, nil }
 	preflight = func(reader string) (Version, error) {
 		fx.preflights++
@@ -397,6 +397,9 @@ func newFixture(t interface{ Cleanup(func()) }) *fixture {
 		fx.dev.dead = false // a fresh handle to the same card
 		return fx.dev, nil
 	}
+	// The fake device has no PC/SC handle: the two-step release is what
+	// the fake exercises, unless a test installs a handle reset.
+	resetHandle = func(dev device) error { return fmt.Errorf("%w: no handle in the fake", ErrParams) }
 	prepareReset = func(reader string) func() (bool, bool, error) {
 		fx.prepared++
 		return func() (bool, bool, error) {
@@ -411,6 +414,8 @@ func newFixture(t interface{ Cleanup(func()) }) *fixture {
 			return true, false, nil
 		}
 	}
-	t.Cleanup(func() { listReaders, preflight, openDevice, prepareReset = oldList, oldPre, oldOpen, oldReset })
+	t.Cleanup(func() {
+		listReaders, preflight, openDevice, prepareReset, resetHandle = oldList, oldPre, oldOpen, oldReset, oldHandle
+	})
 	return fx
 }

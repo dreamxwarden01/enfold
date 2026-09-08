@@ -876,6 +876,30 @@ Correct in this document, and easy to lose during implementation.
       there (`ErrNoCard`, `ErrNoReader`, `ErrNoService` from the reset connection) is not a
       failed reset: an unpowered card holds nothing of ours. A connect refused for any other
       reason — the card busy with another program — still warns, as before.
+27. **The release gap is winnable; the reset goes on the exclusive handle.** Measured 2026-09-07
+    on the test key (YubiKey 5.7.4, `tools/pivtool hold` against `tools/pivtool probe` from a
+    second process; DECISIONS "Takeover audit"): *while this program holds the card* — PIN
+    verified and idle with keep-alive probes, or inside the touch wait — `SCardConnect` from
+    another process answers `SCARD_E_SHARING_VIOLATION` in shared, exclusive and direct mode
+    alike: nothing reaches the card. *When the process is killed*, the resource manager resets
+    the card at the cleanup of its exclusive connection: killed while idle-verified, the next
+    connection finds it unverified within milliseconds; killed inside the touch wait, the card
+    stays "in use" until the GENERAL AUTHENTICATE runs out on its own (about 11 s more), then
+    unverified. *At the release*, however, the two-step close the package had — piv-go's
+    `SCardDisconnect(SCARD_LEAVE_CARD)`, then a fresh shared connection that disconnects with
+    `SCARD_RESET_CARD` — leaves the card powered, PIN-verified and unowned between the two: a
+    process spinning on `SCardConnect(EXCLUSIVE)` won that gap in one run of five, found the
+    card **verified**, and this program's reset then failed with a sharing violation (the
+    `token.reset_failed` warning, honest but late). With `SCardDisconnect(SCARD_RESET_CARD)`
+    on piv-go's own exclusive handle — reached by reflection, `interrupt_windows.go` — the
+    spinning process connected only after the reset in fourteen runs of fourteen (eight idle,
+    one across the touch wait's end, six in the experiment before it shipped), always
+    unverified. Rules: `Card.Close` resets on the exclusive handle first and falls back to the
+    two-step release only when the handle cannot be reached or reset (a piv-go that renamed
+    the field, the card gone); piv-go's own close afterwards answers `ERROR_INVALID_HANDLE`
+    for its disconnect and still frees its context, which is ignored. A card left verified by
+    a version of piv-go the reflection cannot read would be reported by the fallback's warning
+    as before. The measurement tools stay in the tree (`hold`, `probe`, `Probe`, `ProbeSpin`).
 
 ## 12. Deferred
 

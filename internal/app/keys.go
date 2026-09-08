@@ -185,7 +185,10 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 			c.mu.Lock()
 			cer.unlockPub, cer.unlockLabel = slot.PublicKey, slot.Label
 			c.mu.Unlock()
-			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+			if cer.adopted() == nil {
+				// An adopted attempt is at its touch already (unlockFile).
+				cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
+			}
 			unl, err := cer.agree(ks, false, h)
 			if err == nil {
 				return unl, card, nil

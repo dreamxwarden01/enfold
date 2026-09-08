@@ -318,8 +318,11 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
     proof's is its own ephemeral key: none of them is ever adopted, and none of them adopts.
     Adoption is refused after a lock trigger (§2.1: the trigger leaves the pending touch
     unadoptable) and after any slot change, and never crosses a process, since the exclusive
-    connection cannot: no other program reaches the PIN-verified card while the touch is
-    pending, and the release resets it. **What remains is the user's ruling** (DECISIONS
+    connection cannot — measured (DESIGN trap 27): no other program connects to the card in any
+    share mode while this one holds it, the release resets it on the exclusive handle itself
+    so that no moment exists in which the card is verified and unowned, and a killed process's
+    card is reset by Windows at the cleanup of its connection. **What remains is the user's
+    ruling** (DECISIONS
     2026-09-07, "The same VMK adopts"): within the key's own window — at most two of its
     timeouts — whoever is at the keyboard can finish a cancelled touch for another purpose on
     the same vault without the PIN typed seconds earlier: cancel *Add a key*, press the blinking

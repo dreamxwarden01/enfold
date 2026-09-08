@@ -883,8 +883,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   (a saved setting is the bar leaving). Where they go, ruled 2026-09-07 for whatever toasts come
   next: at the top of the window, centred on the window — not on the content layer — dropping
   in a little as they fade (a few pixels down, never sliding in from the top edge) and leaving
-  upward as they fade out; the toasts that exist today sit at the bottom right and move to this
-  the next time they are touched. A link-style button darkens on
+  upward as they fade out; `Toasts` does this, 14 px from the top, centred on the window's
+  width, the text centred and balanced. A link-style button darkens on
   hover (`--accent-ink-hover`, a step past `--accent-ink`; brighter in the dark theme, where
   contrast goes the other way) and thickens its underline; a button's press is instant and dims
   its text. A slider's label sits close beside it, fixed in width, and says the number alone,

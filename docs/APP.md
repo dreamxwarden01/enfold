@@ -814,8 +814,11 @@ Entering eases out (`cubic-bezier(0.2, 0, 0, 1)`), leaving eases in; nothing tra
 12 px; one thing moves at a time, staggered by at most 40 ms; nothing loops but the touch rings.
 `prefers-reduced-motion` zeroes every duration — the script reads the media query when a
 transition starts, the tokens collapse to 0 — and the settle with them.
-- *Unlock.* The third card's check pops (the core scales from 60% with a little overshoot,
-  240 ms) and stays for the settle, so the ceremony has a full stop; then the lock screen lifts
+- *Unlock.* At Done the third card stays the touch's green and becomes the success card: a
+  white disc with the accent's check pops in where the rings were (the core scales from 60%
+  with a little overshoot, 240 ms), the word — *Unlocked* — sits in the middle, the vault's name
+  under the open padlock at the foot; it stays for the settle, so the ceremony has a full stop
+  rather than a cut to a white card. Then the lock screen lifts
   (8 px up, fading, 180 ms) while the shell arrives: the rail slides in 12 px from the left and
   the layer rises 8 px, 220 ms, the layer 40 ms behind. The store holds `settling` for the
   settle after the state says Unlocked, and the lock screen keeps rendering the ceremony

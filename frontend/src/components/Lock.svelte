@@ -421,7 +421,7 @@
       </article>
 
       <!-- 3: the touch -->
-      <article class="step" class:touch={live === 3 && c?.step === CeremonyStep.StepTouch} class:dim={live !== 3}>
+      <article class="step" class:touch={live === 3 && (c?.step === CeremonyStep.StepTouch || c?.step === CeremonyStep.StepDone)} class:dim={live !== 3}>
         <div class="step-label"><b>3</b>{c?.step === CeremonyStep.StepTouch ? "Touch" : tokenOnly ? "Touch" : "Unlock"}</div>
         {#key k3}
         <div class="fill" in:fade={motion()}>
@@ -432,9 +432,14 @@
               <h2 class="touch-lead">{stepText(c.step).title}</h2>
               <p class="touch-sub">{stepText(c.step).body}</p>
               <div class="touch-slot"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.pinAsked ? "PIN accepted" : "Touch"}{c.slotLabel ? ` · ${c.slotLabel}` : ""}{c.n > 1 ? ` · touch ${c.n}` : ""}</div>
+            {:else if c.step === CeremonyStep.StepDone}
+              <!-- The full stop: the same green card, a check in a white disc that pops, the word in the middle (APP.md §6, Motion). -->
+              <div class="rings done" aria-hidden="true"><span></span><span></span><span></span><div class="core pop"><svg viewBox="0 0 20 20"><use href="#i-check" /></svg></div></div>
+              <h2 class="touch-lead">{doneTitle(c.kind)}</h2>
+              <div class="touch-slot"><svg class="i i-14"><use href="#i-unlock" /></svg>{st?.displayName || leaf(st?.path ?? "")}</div>
             {:else}
-              <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core" class:pop={c.step === CeremonyStep.StepDone}><svg viewBox="0 0 20 20"><use href="#i-check" /></svg></div></div>
-              <h2 class="touch-lead quiet">{c.step === CeremonyStep.StepDone ? doneTitle(c.kind) : stepText(c.step).title}</h2>
+              <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core"></div></div>
+              <h2 class="touch-lead quiet">{stepText(c.step).title}</h2>
               <p class="touch-sub quiet">{stepText(c.step).body}</p>
               {#if c.error && c.step === CeremonyStep.StepDeriving}<p class="touch-sub">{codeText(c.error)}</p>{/if}
             {/if}

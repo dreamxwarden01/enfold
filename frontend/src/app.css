@@ -399,6 +399,9 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
 .rings span:nth-child(3) { inset: 32px; border-color: var(--touch-ring); }
 .rings .core { position: absolute; inset: 44px; border-radius: 50%; background: var(--touch-ring); border: 1px solid var(--touch-soft); display: flex; align-items: center; justify-content: center; }
 .rings .core svg { width: 26px; height: 26px; stroke: var(--touch-ink); fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+/* Done: a white disc with the accent's check, on the same green card. */
+.rings.done .core { background: var(--touch-ink); border-color: var(--touch-ink); }
+.rings.done .core svg { width: 30px; height: 30px; stroke: var(--touch-bg-2); stroke-width: 1.7; }
 @media (prefers-reduced-motion: no-preference) {
   .rings.live span:nth-child(1) { animation: pulse 2.4s ease-out infinite; }
   .rings.live span:nth-child(3) { animation: pulse 2.4s ease-out infinite 0.8s; }

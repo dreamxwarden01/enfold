@@ -72,7 +72,7 @@ VMK  (random 256-bit, memory only, never persisted)
  ├─ HKDF(info = "Enfold/v1/db"       ‖ vault_id) → DB key          local caches
  ├─ HKDF(info = "Enfold/v1/wrap/archive"  ‖ vault_id) → KWK        wraps archive keys
  ├─ HKDF(info = "Enfold/v1/wrap/identity" ‖ vault_id) → KWK_identity
- └─ HKDF(info = "Enfold/v1/wrap/recovery" ‖ vault_id) → KWK_recovery   wraps the escrowed recovery keys (R38)
+ └─ HKDF(info = "Enfold/v1/wrap/secrets"  ‖ vault_id) → KWK_secrets    seals the secrets section (§7.6): escrowed recovery keys (R38), the entangled password's key K_P (§3.1), retired VMKs (§8)
 
 archive key   (random 256-bit, one per archive VERSION, named by KID, stored wrapped in the keystore)
  ├─ HKDF(info = "Enfold/v1/archive/index" ‖ archive_id) → archive index key   encrypts the file list
@@ -94,11 +94,19 @@ and differ only in how `pre` is produced.
 
 ```
 H     = ECDH(SK_hw, epk)                          on the token, P-256, after PIN + touch
-pwd'  = HMAC-SHA256(key = H, msg = user_password) entangled password, OPTIONAL
-salt' = SHA-256(salt ‖ vault_id ‖ recipient_id)
-pre   = Argon2id(pwd', salt', m, t, p) → 32 bytes
-        …or simply pre = H when no entangled password is set (Argon2id skipped entirely)
+pre   = H                                         when the vault has no entangled password
+                                                  (slot region header entangle = 0, §6)
+otherwise, with the vault's entangled password P (Revision 2, §18.1):
+K_P   = Argon2id(P', vault_salt', m, t, p) → 32   P' per R4; m, t, p and entangle_salt are the
+                                                  slot region header's (§6);
+                                                  vault_salt' = SHA-256(entangle_salt ‖ vault_id)
+pre   = HKDF(H ‖ K_P, salt = ∅, info = "Enfold/v1/entangle" ‖ vault_id ‖ recipient_id) → 32
 ```
+
+`K_P` depends on the password alone — not on `H`, not on the slot — so it is computed once per
+unlock and kept under `KWK_secrets` in the registry's secrets section (§7.6), which is what lets
+every hardware slot be re-wrapped with no token present and no password typed (§8 step 4).
+§18.1 says what that trades away.
 
 **Recovery slot** (`slot_type = 3`) — **hybrid X25519 + ML-KEM-1024, post-quantum**
 
@@ -109,8 +117,8 @@ creation, from the 128-bit recovery key R:
   (sk_x, pk_x) = X25519 from seed_x
   (dk,   ek)   = ML-KEM-1024 from seed_k
   store pk_x and ek; destroy both seeds, sk_x and dk immediately. R itself is kept once
-  more — wrapped under KWK_recovery in the registry (R38), so that whoever holds the VMK
-  can be shown it again — and nowhere else
+  more — in the registry's secrets section under KWK_secrets (§7.6, R38), so that whoever
+  holds the VMK can be shown it again — and nowhere else
 
 wrapping — offline, the recovery key need NOT be present:
   (e, E)    = fresh X25519 pair;  H_x = ECDH(e, pk_x);  destroy e
@@ -176,6 +184,7 @@ padding. `info = "Enfold/v1/IK" ‖ vault_id ‖ recipient_id` is exactly 12 + 1
 | Derives | `info` prefix | IKM | salt | out |
 | --- | --- | --- | --- | --- |
 | `IK` from `pre` | `Enfold/v1/IK` ‖ vault_id ‖ recipient_id | `pre` | ∅ | 32 |
+| `pre`, hardware entangled | `Enfold/v1/entangle` ‖ vault_id ‖ recipient_id | `H ‖ K_P` | ∅ | 32 |
 | `seed_x`, recovery | `Enfold/v1/recovery/x25519` ‖ vault_id ‖ recipient_id | `R` | `slot_salt` | 32 |
 | `seed_k`, recovery | `Enfold/v1/recovery/mlkem` ‖ vault_id ‖ recipient_id | `R` | `slot_salt` | 64 |
 | `pre`, recovery | `Enfold/v1/recovery/combine` ‖ vault_id ‖ recipient_id | `H_x ‖ K_k` | ∅ | 32 |
@@ -186,9 +195,12 @@ padding. `info = "Enfold/v1/IK" ‖ vault_id ‖ recipient_id` is exactly 12 + 1
 | DB key | `Enfold/v1/db` ‖ vault_id | VMK | ∅ | 32 |
 | `KWK` | `Enfold/v1/wrap/archive` ‖ vault_id | VMK | ∅ | 32 |
 | `KWK_identity` | `Enfold/v1/wrap/identity` ‖ vault_id | VMK | ∅ | 32 |
-| `KWK_recovery` | `Enfold/v1/wrap/recovery` ‖ vault_id | VMK | ∅ | 32 |
+| `KWK_secrets` | `Enfold/v1/wrap/secrets` ‖ vault_id | VMK | ∅ | 32 |
 | archive index key | `Enfold/v1/archive/index` ‖ archive_id | archive key | ∅ | 32 |
 | archive wrap key | `Enfold/v1/archive/wrap` ‖ archive_id | archive key | ∅ | 32 |
+
+`K_P` (§3.1) is Argon2id, not HKDF, so it has no row: it takes no info string, and its salt rule
+— `vault_salt' = SHA-256(entangle_salt ‖ vault_id)` — is pinned by the vectors like the rows above.
 
 The recovery and password slots use **distinct** strings even though their shapes are identical.
 Domain separation is free, and it forecloses any construction in which one slot type's output
@@ -197,20 +209,22 @@ could be mistaken for another's.
 **R4 — Passwords.** A password is the **UTF-8 encoding of the NFC-normalised string**. Not NFKC,
 not the raw code points the platform happened to produce. The same passphrase typed on two
 machines with different input methods must derive the same key, and combining sequences are the
-usual way that fails. **An empty password is rejected at input**; "no entangled password" is a
-state recorded by `flags` bit0, never inferred from length.
+usual way that fails. **An empty password is rejected at input**; "no entangled password" is the
+slot region header's `entangle` = 0 (§6, §18.1), never inferred from length.
 
 **R5 — Raw ECDH outputs.** P-256 ECDH output is the **32-byte big-endian X coordinate** of the
 shared point, exactly as `crypto/ecdh` returns it. X25519 output is likewise the **raw 32-byte
-u-coordinate**. Nothing is hashed at this stage on either curve; `H` feeds the HMAC fold (or, with
-no password, HKDF) directly, and `H_x` feeds the combine step directly.
+u-coordinate**. Nothing is hashed at this stage on either curve; `H` feeds the HKDF of §3.1 — as
+`H ‖ K_P`, or is `pre` itself when the vault has no entangled password — and `H_x` feeds the
+combine step directly.
 
 **R6 — Argon2id.** Version `0x13`. `m` is in **KiB**. The number of threads used equals `p`
 exactly — an implementation may not "helpfully" use more cores, because `p` is part of the
 function. Output 32 bytes. Go: `argon2.IDKey(pwd, salt, t, m, p, 32)`.
 
-**R7 — The HMAC fold.** `pwd' = HMAC-SHA256(key = H, msg = P)` with `H` (32 bytes) as the key and
-the R4-encoded password as the message. Not the other way round.
+**R7 — Retired (Revision 2).** The HMAC fold `pwd' = HMAC-SHA256(key = H, msg = P)` is gone:
+nothing folds `H` into the password any more (§3.1, §18.1). The number is kept so that the rules
+after it do not renumber.
 
 **R8 — The standalone password slot in full.** This was under-specified above; it is:
 
@@ -247,12 +261,13 @@ jobs, and the prose above uses the bare word "salt" for one of them:
 
 | Field | Used as |
 | --- | --- |
-| `salt` | Input to `salt' = SHA-256(salt ‖ vault_id ‖ recipient_id)`, the Argon2id salt for hardware and password slots |
+| `salt` | Input to `salt' = SHA-256(salt ‖ vault_id ‖ recipient_id)`, the Argon2id salt of the standalone password slot; the vault's `entangle_salt` in the slot region header plays the same part for `K_P` (§3.1) |
 | `slot_salt` | The HKDF salt when deriving `seed_x` and `seed_k` in software slots (R3, R8) |
 
 Wherever §3.1 or R8 writes `salt` unqualified, it means the `salt` field. The standalone password
-slot's Argon2id parameters are the slot record's own `argon2_m`, `argon2_t`, `argon2_p` — the same
-fields a hardware slot with an entangled password uses.
+slot's Argon2id parameters and `salt` are the slot record's own; a hardware slot and a recovery
+slot write those four fields as zero, and a hardware slot takes the vault's from the slot region
+header (§6, §18.1).
 
 **A note on what the vectors can and cannot catch.** These rules were checked by having an
 independent implementation written from this section and `testdata/kdf-inputs.json` alone, with
@@ -310,10 +325,9 @@ is on the wire with length zero and a non-zero length fails closed. An empty slo
 records of a region; a duplicate is invalid. The point of all three is that decoding is
 canonical — every accepted byte is represented — so that re-encoding a decoded record
 reproduces the bytes read, which is what an AAD computed from the struct relies on. The fuzz
-targets assert byte-exact round trips for slot records, the registry and the free-space map.
-A version-1 registry (R38) is the one accepted encoding that is not canonical: it re-encodes
-as version 2 with `escrow_count` 0 and is otherwise byte for byte the same, which the fuzz
-target asserts.
+targets assert byte-exact round trips for slot records, the slot region header (§6), the
+registry — including the order of its secrets section (§7.6) — and the free-space map. Since
+Revision 2 every accepted encoding is canonical: registry version 3 is the only one read (§7).
 
 **R22 — AADs for the key wraps.** §7.2 and §11 name the wrapped keys and their
 nonces but not their AADs. Each binds the wrapped key to the record that carries it, with an
@@ -325,10 +339,10 @@ authenticated structure fails to open:
 | `wrapped_archive_key` (§7.2) | `KWK` | `"Enfold/v1/aad/archive-key"` ‖ archive_id ‖ kid |
 | `wrapped_dek` (§11) | archive wrap key | `"Enfold/v1/aad/dek"` ‖ archive_id ‖ file_id ‖ u32 dek_epoch |
 | `wrapped_identity_key` (§7) | `KWK_identity` | `"Enfold/v1/aad/identity"` ‖ vault_id ‖ device_id |
-| `wrapped_recovery_key` (§7.6, R38) | `KWK_recovery` | `"Enfold/v1/aad/recovery-escrow"` ‖ vault_id ‖ recipient_id |
+| secrets records (§7.6, R38) | `KWK_secrets` | `"Enfold/v1/aad/secret"` ‖ vault_id ‖ u8 kind ‖ u8[16] id |
 
-The first three are AES-256-GCM, 32 bytes in, 48 out; the fourth is the same cipher over the
-16-byte recovery key, 32 out; every wrap draws a fresh 96-bit random nonce. `wrapped_vmk`
+All four are AES-256-GCM, 32 bytes in, 48 out — a secrets record's plaintext is padded to 32
+where the secret is shorter (§7.6); every wrap draws a fresh 96-bit random nonce. `wrapped_vmk`
 keeps its own AAD (R14).
 
 **R23 — Recovery-key input.** Whitespace is ignored and the groups may be typed with `-`, with
@@ -343,9 +357,10 @@ Argon2id has run — so without a ceiling a hostile record turns an unlock attem
 multi-gigabyte allocation. 2 GiB is twice the top of `DESIGN.md`'s recommended range. **Work is
 bounded as well as memory:** `argon2_m × argon2_t` ≤ 8 388 608 KiB·passes (2 GiB × 4, 1 GiB × 8,
 512 MiB × 16), since a memory ceiling alone would still let a hostile record demand 32 passes
-over 2 GiB. A slot that does not use Argon2id (hardware slot without an entangled password,
-recovery slot) carries all three as zero. Discovered the hard way: a review agent demonstrating
-the attack took the development machine down.
+over 2 GiB. A slot that does not use Argon2id — every hardware slot, every recovery slot —
+carries all three as zero. The slot region header's three parameters (§6) are checked against
+these same bounds only when its `entangle` is 1; with `entangle` 0 they are zero. Discovered the
+hard way: a review agent demonstrating the attack took the development machine down.
 
 **R25 — The registry authenticates the slot region.** The slot region is checksummed but not
 authenticated (§5), and each record's AAD is checked only when *that* slot is used to unlock. That
@@ -419,35 +434,25 @@ with the same `vault_id`, `vmk_generation` and registry, whose slot region holds
 recovery slots — never a stale one — and whose superblocks start again at `seq` 1 with
 `modified_at` set to the time of the export (R35). The recovery key opens it like any keystore,
 which is how an export is verified before it is needed and how it is restored: open it, unlock
-with the recovery key, enrol new slots. The escrow records of R38 travel with the registry —
-every one of them, so that the reveal works once the export is adopted (§15) — which means
-that whoever opens an export with one of its recovery keys can read every recovery key the
-vault had when the export was made. With one recovery slot that is nothing new; with more than
-one, all recovery keys share a fate: an export or a copy that may have leaked is answered by
-replacing every recovery slot of its date, then rotating (§15, `DESIGN.md` §5). Nothing else
-travels.
+with the recovery key, enrol new slots. Of the secrets section (§7.6) an export carries the
+`recovery_escrow` records of the recovery slots it carries, so that the reveal works once the
+export is adopted (§15), and every `vmk_history` record — the history is the vault's memory of
+itself, and a vault rebuilt from the export keeps it, so its older backups still open without
+their sheets — and **never the `entangled_key`**: an export holds no hardware slot, so nothing in
+it could use `K_P`, and `K_P`, unlike the VMK an export carries, survives every rotation, so an
+export that carried it would hand the vault's second factor to whoever leaks the export, for
+good. An export's slot region header is therefore written with `entangle` 0, a zero
+`entangle_salt` and zero Argon2 parameters, and adopting one chooses the entanglement afresh at
+its first way in (§15). The escrow records mean that whoever opens an export with one of its
+recovery keys can read every recovery key the vault had when the export was made. With one
+recovery slot that is nothing new; with more than one, all recovery keys share a fate: an export
+or a copy that may have leaked is answered by replacing every recovery slot of its date, then
+rotating (§15, `DESIGN.md` §5). Nothing else travels.
 
-**R29 — `rewrap_stale` is the one bit outside the slot AAD.** A rotation marks a slot it could not
-re-wrap by setting `rewrap_stale` while leaving `wrapped_vmk` "exactly as it is" (§8) — but
-`flags` is inside the AAD of R14, and a record cannot be re-authenticated without the slot's
-secret, which is precisely what the rotation lacked. So the AAD is computed with that one bit
-cleared. The bit is a hint for the UI and bookkeeping behind `rotation_pending`; the
-authenticated statement of staleness is the generation inside `wrapped_vmk` (§6.2), which an
-unlock compares against the superblock's whatever the bit says. An attacker who clears the bit
-changes nothing an unlock decides; one who sets it produces a spurious warning. Found when the
-keystore layer's first deferred rotation left a slot that could never open again.
-
-**R30 — Completing a deferred rotation needs the slot's own credential.** §8 says rotation needs
-no credential present, "only the entangled password, which the user just typed to unlock". That
-holds for the slot that opened the vault and for every slot without a password. For *another*
-hardware slot with an entangled password it holds only when that password is the same one — and
-nothing in the file can check a password without that slot's token, so re-wrapping with an
-unverified password would silently replace the slot's password with the unlocking one. Hence:
-a rotation re-wraps such slots only when the caller asserts that the password is shared, and
-otherwise marks them stale; and a stale slot is brought up to date only by presenting its own
-credential — token and password — which is checked against the record's existing wrap (the
-previous VMK, which is what a stale slot still holds) before the current VMK is wrapped in. A
-refused re-wrap leaves the record byte for byte as it was.
+**R29, R30 — Retired (Revision 2).** `rewrap_stale` and the completion of a deferred rotation are
+gone with the per-slot entangled password (§18.1): no rotation lacks a slot's secret any more, so
+no bit of `flags` sits outside the AAD (§6.1) and no slot is ever left behind (§8). The numbers
+are kept so that the rules after them do not renumber.
 
 **R31 — A writer keeps the losing superblock's state intact for one more commit.** The two
 superblock copies are only a fallback if what the losing copy references still exists. So a
@@ -519,27 +524,30 @@ means off.
 
 **R38 — The recovery key is kept once more, under the VMK.** A recovery key is shown to a human
 once, when it is made, and humans lose paper. So the registry keeps, for every active recovery
-slot, an *escrow record* (§7.6): the 16-byte `R` under AES-256-GCM with `KWK_recovery` (R3) and
-the AAD of R22, keyed by the slot's `recipient_id`. The record's life is the slot's: written by
-the commit that creates the slot (creation, `AddSlot`), removed by the commit that removes it,
-re-wrapped under `KWK_recovery'` by a rotation (§8 step 3). Only a key derived from the VMK
-opens it; the cached keys of a session (`DESIGN.md` §10: KWK, Metadata, DB) cannot, so showing
-a recovery key again is a ceremony that recovers the VMK through a protector first (`APP.md` §3
-Keys). Escrow adds no new principal — whoever can open a record already holds the VMK — but it
-makes a VMK exposure a recovery-key exposure: the digits a VMK holder reads outlive every
-rotation, since rotation re-wraps the recovery slot from its public keys, and the answer to a
-suspected VMK exposure is replacing every recovery slot, then rotating (`DESIGN.md` §5). Before
-a showing, the reader derives the slot's X25519 key from `R` (§3.1) and checks it against
-`slot_pubkey` (§6.3); a record that does not match its slot is refused, never shown. The section
-is what `registry_version` 2 adds. A version-1 registry is accepted, carries no escrow records,
-and is written back as version 2 at its next commit; a recovery slot without a record — made
-before this rule — cannot be shown again until an unlock through it hands the keystore `R`,
-which writes the record then (`Unlocked.EscrowOpenedKey`), or the slot is replaced. Orphans are
-the keystore layer's concern, since the format layer never sees the slot region: every write of
-the slot region — creation, `AddSlot`, `RemoveSlot`, `RewrapStale`, `Rotate`, an export — writes
-the registry with only the records of the recovery slots active in the region it writes; a
-record that does not unwrap fails the rotation (§1, fail closed), and two records with the same
-`recipient_id` are invalid.
+slot, a `recovery_escrow` record in the secrets section (§7.6): the 16-byte `R` under
+AES-256-GCM with `KWK_secrets` (R3) and the AAD of R22, keyed by the slot's `recipient_id`. The
+record's life is the slot's: written by the commit that creates the slot (creation, `AddSlot`),
+removed by the commit that removes it, re-encrypted under `KWK_secrets'` by a rotation (§8 step
+3), which also drops it if its slot is gone. Only a key derived from the VMK opens it; the
+cached keys of a session (`DESIGN.md` §10: KWK, Metadata, DB) cannot, so showing a recovery key
+again is a ceremony that recovers the VMK through a protector first (`APP.md` §3 Keys). Escrow
+adds no new principal — whoever can open a record already holds the VMK — but it makes a VMK
+exposure a recovery-key exposure: the digits a VMK holder reads outlive every rotation, since
+rotation re-wraps the recovery slot from its public keys, and the answer to a suspected VMK
+exposure is replacing every recovery slot, changing the entangled password if the vault has one
+— `K_P` sits under the same `KWK_secrets` (§7.6) and, like the digits, survives every rotation —
+and then rotating (`DESIGN.md` §5). Before a showing, the reader derives the slot's X25519 key
+from `R` (§3.1) and checks it against `slot_pubkey` (§6.3); a record that does not match its
+slot is refused, never shown. Every recovery slot has its record from the commit that creates
+it: registry version 3 is the only version read or written (§7), so there is no slot without
+one. Orphans are the keystore layer's concern, since the format layer never sees the slot
+region: every write of the slot region — creation, `AddSlot`, `RemoveSlot`, `Rotate`, an export
+— writes the registry with the `recovery_escrow` records of exactly the recovery slots active in
+the region it writes. That rule is kind 1's alone: the `entangled_key` and `vmk_history`
+records belong to the vault, not to a slot, and no slot-region write ever drops one — the one
+exception is an export, which by R28 leaves the `entangled_key` behind and takes the history. A
+record that does not unwrap fails the rotation (§1, fail closed), and two records of the same
+kind with the same `id` are invalid.
 
 ---
 
@@ -610,8 +618,8 @@ Fixed 4096 bytes. Everything before `checksum` is covered by it.
 | `registry_len` | `u64` | Ciphertext length, excluding tag |
 | `registry_nonce` | `u8[12]` | |
 | `registry_tag` | `u8[16]` | |
-| `vmk_generation` | `u64` | Incremented on each VMK rotation |
-| `rotation_pending` | `u8` | Non-zero while a rotation has been deferred or is incomplete (§8) |
+| `vmk_generation` | `u64` | `1` at creation; incremented on each VMK rotation, so `0` never exists. Plaintext and checksummed only: it orders, it never decides (§6.2, §18.2) |
+| `rotation_pending` | `u8` | Reserved since Revision 2: written zero — a rotation is one atomic flip and can no longer be partial (§8) — and ignored on read, since the superblock is checksummed, not authenticated, and failing on it would hand anyone with write access a one-byte denial of service |
 | `modified_at` | `i64` | Unix seconds of the commit that sealed this registry; never decreases; an export's is the time of the export (R35) |
 | `reserved1` | `u8[…]` | Zero-filled to 4064 |
 | `checksum` | `u8[32]` | SHA-256 over bytes `[0, 4064)` |
@@ -624,10 +632,47 @@ editing them causes an authentication failure rather than a silent misread.
 ## 6. Slot region
 
 ```
-u32   slot_count
-u32   reserved
+u32    slot_count
+u8     entangle          0 off · 1 on; any other value is invalid (§1)
+u8     argon2_p
+u8[2]  reserved          written zero, ignored on read
+u32    argon2_m          KiB
+u32    argon2_t
+u8[16] entangle_salt
 then slot_count records, each prefixed with u32 record_len
 ```
+
+**The header is 32 bytes**; the first record begins at offset 32 and a region shorter than that
+is invalid. R21's canonicality covers the header as well as the records: every byte but
+`reserved` is represented by the decode and re-encoding reproduces it, which the fuzz target
+asserts over the whole region.
+
+**The vault's entanglement lives here** (Revision 2, §18.1). With `entangle` 0 the other four
+fields are zero and R24's bounds are not applied — the carve-out for a reader that will run no
+Argon2id; with `entangle` 1 all four are non-zero, R24's bounds and its work ceiling are checked
+before any derivation, and a header that breaks either rule is invalid. `entangle_salt` is 16
+fresh random bytes drawn each time the password is set or changed, never reused and never
+carried forward by any other write; turning the password off zeroes all four fields. The lock
+screen reads the header to know whether to ask for the password before the PIN.
+
+*What authenticates the header.* No slot record does: R14's AAD is the record's own bytes, and
+extending it to the header would make turning the password on or off re-wrap the standalone
+password slot, whose `pre` needs that password typed (R8) — which would break the rule that
+switching and changing are offline. Two things cover it instead. The derivation binds it: all
+five fields feed `K_P`, and `K_P` feeds every entangled hardware slot's `IK`, so an edited header
+yields a key that opens nothing rather than a weaker one — an attacker who wants to brute-force
+runs Argon2id at whatever parameters he likes on his own machine, so the parameters need no
+protection against *him*, only R24's ceiling against the multi-gigabyte allocation a hostile
+header would otherwise demand of the honest reader. And `slot_region_hash` (R25) covers the
+header as part of the region as written, which is what catches an edit to `slot_count` or to a
+header the current way in does not read. The R25 check runs only after the registry decrypts,
+so an unlock against an edited header first shows as *this credential did not open the vault*,
+indistinguishable at that moment from a wrong password; it is named as tampering when the vault
+is opened a way that does not use the header, and from then R25's freeze applies — no rotation,
+re-wrap or slot mutation, which includes turning the password on, changing it and enrolling a
+key. A write never takes these values from the file: setting or changing the password draws a
+fresh salt and takes `argon2_m/t/p` from the app's settings, and every other write copies the
+header forward byte for byte after R25 has passed.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -637,13 +682,13 @@ then slot_count records, each prefixed with u32 record_len
 | `key_source` | `u8` | For type 1: `1` yubikey-piv · `2` prf-derived *(reserved)* · `3` phone-native |
 | `curve_id` | `u8` | `1` P-256 · `2` X25519 |
 | `recipient_id` | `u8[16]` | Random, stable for the slot's life; used in HKDF info and AAD |
-| `flags` | `u32` | bit0 `has_entangled_password` · bit1 `prf_raw_salt_mode` · bit2 `uv_required` · bit3 `rewrap_stale` (§8) |
+| `flags` | `u32` | bit0 *reserved, must be zero* (was `has_entangled_password`, Revision 2) · bit1 `prf_raw_salt_mode` · bit2 `uv_required` · bit3 *reserved, must be zero* (was `rewrap_stale`) |
 | `label` | `string` | Display only — never matched on |
 | `created_at` | `i64` | |
 | `epk` | `pubkey` | Per-slot ephemeral public key; regenerated on every re-wrap |
 | `slot_pubkey` | `pubkey` | `P`, present for all asymmetric slots; **also the verifier** |
-| `salt` | `u8[32]` | Argon2 salt |
-| `argon2_m` | `u32` | KiB |
+| `salt` | `u8[32]` | Argon2 salt of the standalone password slot; zero in every other slot type (R13) |
+| `argon2_m` | `u32` | KiB; standalone password slot only, zero elsewhere (R13, R24) |
 | `argon2_t` | `u32` | |
 | `argon2_p` | `u8` | Part of the algorithm — changing it changes the output |
 | `slot_salt` | `u8[32]` | Seed derivation and domain separation for derived-keypair slots (§3.1) |
@@ -660,9 +705,9 @@ then slot_count records, each prefixed with u32 record_len
 
 The Argon2 parameters cannot be encrypted — they must be read before any key exists — but they
 must be authenticated, or an attacker rewrites `argon2_m` from 1 GiB to 8 KiB and brute-forces
-cheaply. Same for `epk`, `salt`, `flags`, `mlkem_ek` and `mlkem_ct` — all of `flags` except the
-one bit `rewrap_stale`, which a rotation sets without the slot's secret and which therefore
-cannot be under it (R29).
+cheaply. Same for `epk`, `salt`, `flags`, `mlkem_ek` and `mlkem_ct` — all of `flags`, with no
+exception since Revision 2. The vault's own Argon2 parameters and `entangle_salt` are in no
+record's AAD: they live in the slot region header, and §6 says what covers them.
 
 ### 6.2 `vmk_generation` travels *inside* the wrapped blob
 
@@ -679,11 +724,11 @@ detectably stale the moment the VMK has been rotated. It does **not** help while
 unrotated, since the generation is then unchanged; the real defence there is to rotate, which is
 why rotation now defaults to on (§8).
 
-**Diagnosis.** Unlocking with a slot left stale by a deferred rotation would otherwise look like
-corruption: the verifier passes, the unwrap succeeds, and the registry then fails to decrypt
-because the recovered VMK is the previous one. Comparing the recovered generation against the
-superblock's turns that into an accurate message — *this credential is behind; unlock another way
-first to bring it up to date* — instead of a false corruption report.
+**Diagnosis — since Revision 2, a verdict.** No slot can be behind any more (§8): a recovered
+generation that is not the superblock's means the slot region and the superblock do not belong
+together — a spliced or rolled-back region, or a damaged file. It is reported as tampering
+(R25), never as *this credential is behind* and never with an invitation to unlock another way,
+which would talk a user past a rollback.
 
 ### 6.3 `slot_pubkey` doubles as a verifier
 
@@ -703,9 +748,19 @@ Code that expects `Decapsulate` to fail on a bad key is waiting for something th
 
 ### 6.4 Slot invariant
 
-Before committing any slot mutation, evaluate: **there exist two active slots whose
-required-secret sets are disjoint** (`DESIGN.md` §5). A mutation that would break it is refused.
-A predicate over the whole set, not a per-record check.
+Before committing any slot mutation — an add, a remove, a replace, or a change to the slot
+region header's `entangle` byte — evaluate: **there exist two active slots whose required-secret
+sets are disjoint** (`DESIGN.md` §5). A mutation that would break it is refused. A predicate over
+the whole set, not a per-record check.
+
+Its inputs are the slot records **and** the header. While `entangle` is 1, the required-secret
+set of every active slot of `slot_type` 1 is that slot's credential *and* the vault password, one
+and the same secret for all of them; slots of `slot_type` 2 and 3 are never entangled, which is
+what keeps a recovery slot disjoint from every token. Setting `entangle` from 0 to 1 is therefore
+evaluated over the sets as the new value would make them, before the header is written and
+before any slot is re-wrapped: a vault whose active slots are all hardware slots is refused, and
+in practice must add a recovery slot first. Clearing it to 0 only shrinks every set and is never
+refused.
 
 ## 7. Registry
 
@@ -718,7 +773,7 @@ AAD = vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_v
 Plaintext:
 
 ```
-u32    registry_version        2 — a 1 is read too: it ends after the peer pin records
+u32    registry_version        3 — the only version read or written (Revision 2, §18.2)
 u8[16] device_id               this replica's stable identity (SYNC.md)
 i64    modified_at
 u8[48] wrapped_identity_key    device identity X25519 private key, under KWK_identity
@@ -730,8 +785,8 @@ u32    archive_count
        … archive records
 u32    peer_count
        … peer pin records
-u32    escrow_count            version 2 and later
-       … recovery-key escrow records (§7.6, R38)
+u32    secret_count
+       … secret records (§7.6, R38)
 ```
 
 ### 7.1 Archive record
@@ -753,6 +808,8 @@ One per archive, carrying **all of its versions**.
 | `last_writer` | `u8[16]` | Merge |
 | `last_seq` | `u64` | The archive superblock's `seq` at the last commit this record saw: the keyless identity of a copy (R36) |
 | `hash_at_seq` | `u64` | The `last_seq` at which `last_ciphertext_hash` was computed; equal to `last_seq` means the hash is current; never greater |
+| `description` | `string` | Optional, empty when none; at most 1 024 bytes of UTF-8, longer is invalid (§1) |
+| `forgotten_at` | `i64` | Zero unless the record was forgotten: the `modified_at` of the write that forgot it (§18.2) |
 | `version_count` | `u32` | |
 | … | | version records |
 
@@ -846,15 +903,27 @@ u32     capabilities            bit0 open_archive · bit1 append_dek · bit2 ful
 u8      device_class            1 ephemeral-session · 2 enrolled-personal
 ```
 
-### 7.6 Recovery-key escrow record
+### 7.6 Secrets section
 
-One per active recovery slot (R38); `recipient_id` is the slot record's.
+Registry version 3 replaced the escrow section with the **secrets section**: `u32 secret_count`,
+then records of
 
-```
-u8[16] recipient_id            the recovery slot this key belongs to
-u8[12] wrap_nonce
-u8[32] wrapped_recovery_key    AES-256-GCM(KWK_recovery, R) with the AAD of R22: 16 bytes + tag
-```
+| Field | Type | Notes |
+| --- | --- | --- |
+| `kind` | `u8` | 1 `recovery_escrow` (R38, one per active recovery slot) · 2 `entangled_key` (`K_P`, §3.1, one at most) · 3 `vmk_history` (a retired VMK, one per past generation, §8) |
+| `id` | `u8[16]` | For `recovery_escrow`, the recovery slot's `recipient_id`. For `entangled_key`, sixteen zero bytes. For `vmk_history`, the retired generation as a little-endian `u64` (§1) in bytes 0–7, bytes 8–15 zero. A reader rejects an `entangled_key` record whose `id` is not all zero and a `vmk_history` record whose tail is not |
+| `nonce` | `u8[12]` | A fresh 96-bit random value at every write of the record (R22) |
+| `ciphertext` | `u8[48]` | AES-256-GCM under `KWK_secrets` (R3) over a 32-byte plaintext. AAD = `Enfold/v1/aad/secret` (20 ASCII bytes, no length prefix) ‖ `vault_id` (16) ‖ `kind` (1) ‖ `id` (16) = 53 bytes |
+
+The 32-byte plaintext is `K_P` for `entangled_key`, the retired VMK for `vmk_history`, and for
+`recovery_escrow` the 16-byte `R` followed by sixteen zero bytes: a reader takes the first
+sixteen and rejects the record if the tail is not zero. Records are written sorted ascending by
+`kind`, then by `id` compared as unsigned bytes, and a decoder rejects a section that is not so
+ordered, so decode and re-encode stay byte-exact (R21). No two records share a (`kind`, `id`)
+pair; a `kind` outside 1–3 fails closed (§1); there is exactly one `entangled_key` record when
+the slot region header's `entangle` is 1 and none when it is 0, and a registry that disagrees
+with its header is refused. Which records a write keeps is R38's; what a rotation does to them
+is §8 step 3; what an export carries is R28.
 
 ## 8. VMK rotation
 
@@ -864,10 +933,20 @@ u8[32] wrapped_recovery_key    AES-256-GCM(KWK_recovery, R) with the AAD of R22:
 1. Generate `VMK'`, increment `vmk_generation`, derive the five subordinate keys.
 2. Unwrap every archive key with `KWK`, re-wrap with `KWK'`. **No archive file is touched** — the
    archive keys themselves are unchanged, only their wrappers.
-3. Re-wrap the identity private key under `KWK_identity'`, and every escrowed recovery key
-   (§7.6) under `KWK_recovery'`.
-4. Re-wrap `VMK' ‖ vmk_generation` into every surviving slot with a fresh `epk` — and, for hybrid
-   software slots, a fresh ML-KEM encapsulation, so `mlkem_ct` is replaced too.
+3. Decrypt the whole secrets section (§7.6) under the retiring VMK's `KWK_secrets`, keeping the
+   plaintext `K_P` for step 4. Re-wrap the identity private key under `KWK_identity'`, and
+   re-encrypt under `KWK_secrets'` — each with a fresh 96-bit random nonce (R22) and its AAD
+   unchanged — every record this commit keeps: every `recovery_escrow` whose recovery slot is
+   active in the region this commit writes (R38 prunes the rest, so a removal-then-rotation
+   drops the removed slot's record and never carries it forward), the `entangled_key`, and every
+   `vmk_history` record. Then append one `vmk_history` record holding the retiring VMK, its `id`
+   **the generation that VMK held** — the value `vmk_generation` had before step 1's increment. A
+   record that fails to unwrap, or any kept record left un-re-encrypted, fails the rotation (§1,
+   fail closed): the superblock is not flipped and the vault stays at its old generation.
+4. Re-wrap `VMK' ‖ vmk_generation` into every surviving slot with a fresh `epk` — deriving each
+   hardware slot's `pre` from a fresh ECDH against its stored `slot_pubkey` and, while the slot
+   region header's `entangle` is 1, from the `K_P` step 3 held (§3.1) — and, for hybrid software
+   slots, a fresh ML-KEM encapsulation, so `mlkem_ct` is replaced too.
 5. Write the slot region, then the registry, then flip the superblock.
 
 The whole rotation lands in **one superblock flip**, so it is atomic: a crash leaves the old VMK
@@ -878,31 +957,19 @@ records.
 Cost is roughly 60 bytes per **archive**, not per file, because only archive keys are re-wrapped.
 A vault with a thousand archives rotates in well under a second.
 
-### Deferred and partial rotation
+### No rotation is deferred (Revision 2)
 
-Step 4 needs each slot's key material. Every v1 slot type is asymmetric — hardware slots use the
-stored `slot_pubkey`, software slots the stored `slot_pubkey` plus `mlkem_ek` — so **no credential
-need be physically present** and rotation normally completes in full. A future symmetric hardware
-slot (§16) would be the exception.
+Step 4 needs each slot's key material, and every v1 slot type is asymmetric: hardware slots use
+the stored `slot_pubkey` and — while the header's `entangle` is 1 — the `K_P` step 3 held,
+software slots the stored `slot_pubkey` plus `mlkem_ek`. So **no credential need be present and
+no password typed**, and a rotation that commits is complete: there is no stale slot, no
+`rewrap_stale`, no partial rotation and no VMK retained inside any slot. The one VMK history is
+the secrets section's (§7.6), reachable only through the current VMK. A future symmetric
+hardware slot (§16) would be the exception, and would need its own rule.
 
-When a slot genuinely cannot be re-wrapped — in v1, a hardware slot whose entangled password is
-not the one that unlocked the vault, unless the caller asserts that it is (R30) — it is marked
-`rewrap_stale` (a bit outside the AAD, R29) and its `wrapped_vmk` is **left exactly as it is**,
-which means that record alone still carries the *previous* VMK and its generation number.
-Bringing it up to date takes that slot's own credential, checked against what it still holds
-(R30).
-
-> This is the one place a VMK survives a rotation, and it is worth stating plainly because §8
-> otherwise says no VMK history is retained. The history is not a separate structure: it is the
-> untouched `wrapped_vmk` of a stale slot, reachable only by that slot's own credential.
-
-`rotation_pending` in the superblock stays non-zero while any slot is stale, and **the UI must
-keep surfacing it** — a deferred rotation that is never finished is the same as no rotation.
-Unlocking with a stale slot is detected by the generation comparison in §6.2 and reported as
-*this credential is behind*, never as corruption.
-
-Revocation is not weakened: the removed slot's record is deleted, so a removed credential cannot
-reach the retained old VMK through the current keystore.
+Revocation is not weakened: the removed slot's record is deleted, and the retired VMK it could
+have yielded is kept only under the new `KWK_secrets`, which the removed credential does not
+reach.
 
 ---
 
@@ -1112,11 +1179,14 @@ what makes the backend choice reversible rather than architectural.
 The recovery key does not help: it unlocks *a* keystore, it does not reconstruct one. These two
 are extremely easy to confuse and the confusion only surfaces at the worst possible moment, so the
 UI must state it plainly. The escrow of R38 changes none of this: it keeps the recovery key
-*inside* the keystore, to show it again; a keystore that is gone takes it along. What R38 does
-change is what a copy carries: every export, every retired or damaged copy holds, under its own
-VMK, every recovery key of its date. A copy that may have leaked is therefore answered by
-replacing every recovery slot that was active when it was made — not only the one it was opened
-with — and then rotating.
+*inside* the keystore, to show it again; a keystore that is gone takes it along. What R38 and
+the secrets section (§7.6) do change is what a copy carries: every export, every retired or
+damaged copy holds, under its own VMK, every recovery key of its date and every VMK the vault
+had retired by then — and a copy of the keystore itself, rather than an export, the entangled
+password's key `K_P` as well. A copy that may have leaked is therefore answered by replacing
+every recovery slot that was active when it was made — not only the one it was opened with —
+changing the entangled password, which is the only one of the three steps that replaces `K_P`,
+and then rotating.
 
 **Keystore backup is a separate concern from the recovery key**, and its design is **deferred**.
 An earlier draft called automatic backup a mandatory feature; that was premature. Automatic backup
@@ -1143,6 +1213,11 @@ The way out is to carry exactly one:
 > **Export = registry + the recovery slot only.** No hardware slots, no standalone password slot.
 
 R28 pins the form: an export is a keystore file whose slot region holds only the recovery slots.
+
+An export always presents itself with the entangled password off (R28: it carries no `K_P`).
+Adopting one takes its first way in exactly as at creation (`APP.md` §2.1), and the entanglement
+is chosen there: the password typed at that moment writes a fresh `entangle_salt`, a new `K_P`
+and the header's `entangle` in the same commit.
 
 This is restorable — the recovery key opens it, yielding the VMK, from which a fresh keystore is
 rebuilt and the YubiKeys re-enrolled. It is **post-quantum safe**, because the recovery slot is the
@@ -1193,7 +1268,11 @@ Hence the operational guidance, which belongs in the product and not only in thi
    volume in the clear. It defends against a stolen laptop or a lost USB stick, not against upload.
 3. Set an **entangled password** on high-value containers. It is the only thing standing between a
    harvested keystore and a future quantum adversary, which is a far more concrete reason to
-   recommend it than "defence in depth".
+   recommend it than "defence in depth". Since Revision 2 be precise about what it buys: an
+   extracted or quantum-recovered `H` alone still opens nothing, but the Argon2id grind over the
+   password can be run before the curve is broken (§18.1), so it is the password's entropy,
+   multiplied by the KDF's cost per guess, that sets the time — the wait for the curve no longer
+   adds to it.
 
 BitLocker also quietly repays the metadata leakage accepted in §2: to anyone holding the disk, the
 number of archives, their sizes and their filenames disappear along with everything else.
@@ -1217,87 +1296,109 @@ number of archives, their sizes and their filenames disappear along with everyth
   with per-part headers, and Reed–Solomon parity over ciphertext as a sidecar or per part — so
   that the live format is untouched. Their layouts are not specified yet.
 
-## 18. Revision 2 — ruled 2026-09-07, to be implemented before any real vault exists
+## 18. Revision 2 — ruled 2026-09-07, critiqued the same day, amended in place
 
-Only a test vault exists and it holds no archive, so this revision replaces the rules it names
-rather than adding compatibility to them: readers accept the revised layouts only. It is the
-spec once implemented; until then the sections it amends stand and this one is the plan.
+Only a test vault exists and it holds no archive, so this revision replaced the rules it names
+rather than adding compatibility to them: readers accept the revised layouts only. The sections
+it amends were rewritten in place after the critique — §3.1 and R3–R5, R7, R13, R22, R24, R28,
+R29–R30 (retired), R38, §5, §6 to §6.4, §7, §7.1, §7.6, §8, §15, §16 — so the body of this
+document is the specification and this section keeps what changed and why.
 
 ### 18.1 The entangled password is the vault's, not a slot's
 
 One password for every hardware slot, one switch for all of them (DECISIONS 2026-09-07). It is a
 password people keep, and people keep one; and its purpose — a second factor should the token or
 its curve be broken — is served by one password as well as by many, since any one of them would
-open the vault. The chain changes so that the password's key can be kept under the VMK:
+open the vault. The chain (§3.1) puts `K_P = Argon2id(P', vault_salt')` on the password alone,
+and `pre = HKDF(H ‖ K_P, …)` mixes the token in after the KDF, so that `K_P` can be **kept
+under `KWK_secrets`** (§7.6). With it every hardware slot can be re-wrapped from its stored
+`slot_pubkey` — a fresh ephemeral ECDH gives `H` — with no token present and no password typed:
+changing the password, turning it on or off, enrolling a key and rotating the VMK are all
+offline (§8), and the slot region header carries the switch, the salt and the Argon2 parameters
+for the whole vault (§6).
 
-```
-K_P   = Argon2id(P', vault_salt', m, t, p) → 32     P' per R4; vault_salt' = SHA-256(entangle_salt ‖ vault_id)
-pre_i = HKDF(H_i ‖ K_P, salt = ∅, info = "Enfold/v1/entangle" ‖ vault_id ‖ recipient_id) → 32
-IK_i  = HKDF(pre_i, …)  as before (R3)
-pre_i = H_i               when the vault has no entangled password
-```
+**What it trades away, stated rather than hidden.** First, `K_P` no longer depends on `H`:
+`entangle_salt` and the Argon2 parameters are in the plaintext header and `vault_id` in the
+superblock, so an attacker holding only the file can grind candidates into `K_P` **before** the
+token's curve is broken and test the stored table at HKDF-and-AES-GCM speed the moment `H`
+becomes computable. The old fold (R7, retired) forbade that: without `H` the grind could not
+start. The work is the same — Argon2id per candidate, at the parameters of §6 — only its timing
+moves, to before the curve breaks instead of after; `vault_salt'` binds `vault_id`, so a table
+serves one vault, and a password change redraws `entangle_salt` and voids it. What is left is
+the password's own entropy times the KDF's cost per guess, which now carries the whole of
+`DESIGN.md` §4 rather than supplementing it. Second, `K_P` is reachable only through a VMK —
+but not only through a wrap that needs `K_P`: the recovery slot and the standalone password
+slot reach the VMK without the password (§3.1), which is what makes the switch offline. So
+whoever ever holds any generation's VMK reads `K_P`, can grind it back to the password itself,
+and keeps it: a rotation re-wraps `K_P`, it never replaces it. A suspected VMK exposure is
+therefore answered in three steps, not two — replace every recovery slot, **change the
+entangled password**, then rotate (R38, §15, `DESIGN.md` §5) — and the app says so where it
+offers them (`APP.md` §13).
 
-`K_P` depends on the password alone, so it is computed once per unlock and once per change, and
-**kept under `KWK_secrets` in the registry** (§18.2). With it every hardware slot can be re-wrapped
-from its stored `slot_pubkey` — a fresh ephemeral ECDH gives `H_i` — with no token present and no
-password typed: changing the password, turning it on or off, enrolling a key and rotating the VMK
-are all offline. Security is unchanged: an attacker who has the file and has broken the token's
-curve still guesses `P` through Argon2id one candidate at a time, exactly as before; `K_P` is
-reachable only through the VMK, and the VMK only through a wrap that needs `K_P`.
+**The header, not the records.** The per-slot `has_entangled_password` flag, and the `salt` and
+Argon2 parameters of hardware slots, are retired: the fields stay on the wire, zero in every
+slot but the standalone password slot (R13, R24), so R18's record size, R14's AAD span and
+R21's round trip are unchanged. The header's five fields are authenticated by the derivation —
+an edited header yields a `K_P` that opens nothing — and by `slot_region_hash` (R25), never by a
+record's AAD (§6 says why). **Gone with it:** `rewrap_stale`, R29 and R30, the deferred and
+partial rotation of §8, the *Diagnosis* of §6.2 (a generation mismatch is tampering now), and
+R7. `K_P` is computed once per unlock and once per change.
 
-The slot region header carries the vault's entanglement: `entangle` (u8: 0 off, 1 on),
-`entangle_salt` (u8[16]), `argon2_m`, `argon2_t`, `argon2_p` (as R6, bounded by R24); the
-per-slot `FlagEntangledPassword`, `salt` and Argon2 parameters of hardware slots are gone. The
-lock screen reads the header to know whether to ask for the password before the PIN.
-
-**Gone with it:** `rewrap_stale`, R29 and R30, and the "deferred and partial rotation" of §8. No
-v1 slot can fail to be re-wrapped any more, so `rotation_pending` is never left non-zero by a
-rotation that completed.
-
-New R3 rows: `K_P` — `Enfold/v1/entangle/key` is the Argon2id *purpose label* only (Argon2id takes
-no info; the row records the salt rule); `pre`, hardware entangled — `Enfold/v1/entangle` ‖
-vault_id ‖ recipient_id, IKM `H ‖ K_P`, salt ∅, out 32; `KWK_secrets` — `Enfold/v1/wrap/secrets`
-‖ vault_id, IKM VMK, salt ∅, out 32. `testdata/kdf-vectors.json` is regenerated and the clean-room
-check of SCOPE "Before the format is frozen" is done again over the new chain.
+New R3 rows: `pre`, hardware entangled — `Enfold/v1/entangle` ‖ vault_id ‖ recipient_id, IKM
+`H ‖ K_P`, salt ∅, out 32; `KWK_secrets` — `Enfold/v1/wrap/secrets` ‖ vault_id, IKM VMK, salt
+∅, out 32; `K_P` has no info string (Argon2id takes none) and its salt rule is in §3.1.
+`testdata/kdf-vectors.json` is regenerated and the clean-room check of SCOPE "Before the format
+is frozen" is done again over the new chain.
 
 ### 18.2 Registry version 3
 
-Read and written as version 3 only; the version-1 and version-2 readers and the fuzz target's
-version-1 carve-out are removed.
+Read and written as version 3 only (§7); the version-1 and version-2 readers and the fuzz
+target's version-1 carve-out are removed.
 
-Archive record, two fields after `hash_at_seq`: `description` (string, optional, empty when
-none) and `forgotten_at` (i64, zero unless the record was forgotten). A forgotten record keeps
-its keys and is listed only on request; a registry write more than thirty days after
-`forgotten_at` drops it (the app's rule, §APP; the format only carries the time). `last_path`
-is unchanged and is written in the writer's own path syntax; a reader on another platform treats
-it as text — a drive letter on macOS is obviously not a path here — and offers *Locate*.
+Archive record (§7.1), two fields after `hash_at_seq`: `description` and `forgotten_at`. A
+forgotten record keeps its keys and is listed only on request. `forgotten_at` is Unix seconds
+in the same epoch as the superblock's `modified_at`, and the write that sets it stores that
+write's own `modified_at`, never the raw system clock; a restore sets it to zero. A writer may
+drop a forgotten record only in a write whose own `modified_at` exceeds `forgotten_at` by more
+than 2 592 000 seconds (thirty days), and never while `forgotten_at` is greater than that
+`modified_at` — a stamp from a faster clock is treated as freshly forgotten, not as overdue.
+R35's rule is a floor and not a ceiling, so a clock set forward is not stopped by the format;
+which write performs the drop, and the confirmation before it, are the app's (`APP.md` §13). A
+purged record leaves no tombstone, so a merge from a backup older than the purge offers the
+record again as a new one. `last_path` is unchanged and is written in the writer's own path
+syntax; a reader on another platform treats it as text — a drive letter on macOS is obviously
+not a path here — and offers *Locate*.
 
-The escrow section becomes the **secrets section**: `u32 secret_count`, then records of
+The escrow section became the **secrets section** (§7.6): `recovery_escrow`, `entangled_key`
+and `vmk_history` records under one `KWK_secrets`, with `KWK_recovery` and
+`RecoveryEscrowAAD` gone. Which records a write keeps is per kind (R38): the escrow records
+follow their slots, the other two belong to the vault and no slot-region write drops them.
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `kind` | `u8` | 1 `recovery_escrow` (the R38 record, one per recovery slot); 2 `entangled_key` (`K_P`, one at most); 3 `vmk_history` (a previous VMK, one per past generation) |
-| `id` | `u8[16]` | the recovery slot's recipient_id; zero for `entangled_key`; the generation as u64 in the first eight bytes, zero-padded, for `vmk_history` |
-| `nonce` | `u8[12]` | |
-| `ciphertext` | `u8[48]` | AES-256-GCM under `KWK_secrets` of the 32-byte secret; AAD `Enfold/v1/aad/secret` ‖ vault_id ‖ kind ‖ id |
-
-`KWK_recovery` and `RecoveryEscrowAAD` are replaced by this; the recovery key is the 16-byte
-`R` zero-padded to 32 in the ciphertext, its length known from the kind.
-
-**VMK history.** A rotation appends the VMK it retires under the new `KWK_secrets`, keyed by its
-generation. A backup of this vault from any earlier generation — a backup is *registry + recovery
-slot*, and its registry is under that generation's VMK — is therefore readable by the current
-vault with no recovery key: the vault knows every VMK it ever had. A backup of another vault
-still needs its own recovery key. Nothing is exposed that the current VMK did not already open:
-a rotation never changes an archive key, only its wrapper, so an old backup with its old VMK
-yields the same archive keys the current vault holds.
+**VMK history.** A rotation re-encrypts every secrets record the commit keeps under the new
+`KWK_secrets` and appends the VMK it retires, keyed by the generation that VMK held (§8 step
+3); a rotation that drops or fails to re-encrypt a kept record is aborted, never committed (§1,
+fail closed). No `vmk_history` record ever carries the vault's current generation, and two
+records for one generation are invalid. A backup of this vault from any earlier generation — a
+backup is *registry + recovery slots*, and its registry is under that generation's VMK — is
+therefore readable by the current vault with no recovery key: the vault knows every VMK it ever
+had. Which VMK to try is not read from the file's `vmk_generation` — plaintext, checksummed,
+unauthenticated (§5) — but found by trial: the current VMK, then each history record, at most
+one attempt each, the file's generation ordering the attempts and deciding nothing; the AEAD
+deciding is what proves the file is this vault's. A backup from a *later* generation than this
+vault's — possible only when an older copy of the vault was re-adopted (`APP.md` §2.1) — is not
+readable this way and needs its own recovery key. A backup of another vault always does. Nothing
+is exposed that the current VMK did not already open: a rotation never changes an archive key,
+only its wrapper, so an old backup with its old VMK yields the same archive keys the current
+vault holds — save those of records forgotten or deleted since, which is what a merge from an
+old backup is for, and which the app shows as new records rather than restoring silently. An
+export carries the history (R28), so a vault rebuilt from one keeps it.
 
 ### 18.3 Rotation is one flip, and nothing is kept beside it
 
 §8 stands: slot region, registry, then the superblock flip, atomic. It is not a new file renamed
 over the old, and no pre-rotation copy is kept: a rotation usually follows a removal, and the
 copy would still open with the slot just removed. The safety net is the backup the app asks
-for before rotating (APP.md): a backup holds the recovery slot only, so keeping it revokes
+for before rotating (`APP.md` §13): a backup holds the recovery slots only, so keeping it revokes
 nothing.
 
 ### 18.4 The recovery key has an ID
@@ -1305,4 +1406,5 @@ nothing.
 The recovery slot's `recipient_id`, its first eight hex digits grouped as `3F7A-9C21`, is the
 key's ID: printed on the sheet, written into the text file, shown at the reveal, and shown by
 the unlock prompt beside each recovery slot's label and date. The digits' checksum catches a
-mistyped group; the ID catches the wrong sheet. Nothing new is stored.
+mistyped group; the ID catches the wrong sheet. Nothing new is stored, and nothing is revealed:
+`recipient_id` is plaintext in the slot region already.

@@ -2953,3 +2953,59 @@ instead. *The recovery key gets an ID* like BitLocker's, on paper and at the pro
 
 Written into FORMAT.md Revision 2, APP.md §13 and DESIGN traps 28–30, to be critiqued and
 then implemented; nothing is kept compatible with the vault that exists today.
+
+**Critiqued 2026-09-07** — five Opus lenses (cryptography, keystore format, app flows,
+documentary consistency, implementability against the code), 59 findings, 46 confirmed by two
+independent verifiers each, 12 after merging, folded into FORMAT, APP and DESIGN in place; §18
+keeps the rationale. What the critique changed:
+
+- **§8's rotation was never amended.** The secrets section is under `KWK_secrets = HKDF(VMK)`, so
+  a rotation must decrypt it under the retiring VMK, keep `K_P` for step 4 and re-encrypt every
+  kept record under the new key — or the entangled key and the whole history are unreadable
+  after one rotation and the offline promise dies with them. Steps 3 and 4 say so; the history
+  record is keyed by the generation the retired VMK held; generation 1 is the first.
+- **R38's orphan rule would have pruned `K_P` and the history** at any slot write (the shipped
+  `pruneEscrows` keys purely on `recipient_id`). The rule is now kind 1's alone.
+- **An export carries kinds 1 and 3, never `K_P`.** `K_P` survives every rotation, so an export
+  that carried it would hand the vault's second factor to whoever leaks the export, for good;
+  the history is the vault's memory of itself and a rebuilt vault keeps it — the synthesis had
+  proposed leaving the history out too, and it was kept, since nothing in it opens more than the
+  export's own recovery key does. An export's header says `entangle` 0 and adopting it chooses
+  the entanglement afresh.
+- **The header got its bytes**: 32, the layout in §6, R24's bounds only while `entangle` is 1,
+  the salt redrawn at every change, authenticated by the derivation and by R25 — never by a
+  record's AAD, which would have made the switch need the standalone password typed.
+- **"Security is unchanged" was false**, and is replaced by what the design trades: `K_P` no
+  longer depends on `H`, so the Argon2id grind can be run before the token's curve is broken —
+  the same work, earlier — and a VMK holder reads `K_P` and keeps it across rotations. This
+  overturns the 2026-08-30 property that `H` gates the Argon2id step, knowingly, for the offline
+  operations; the answer to a VMK exposure is now three steps, the middle one a password change.
+- **The slot invariant reads the header**: with the password on, every hardware slot's set
+  contains it, and turning the password on in a vault of hardware keys alone is refused until a
+  recovery key exists.
+- **The retirements are complete**: R7, R29, R30, the deferred rotation, `rewrap_stale`,
+  `rotation_pending` (reserved, written zero, ignored), the *Diagnosis* of §6.2 (a generation
+  mismatch is tampering now, never "this key is behind"), `Keys.RewrapStale`, `SlotView.Stale`,
+  `Escrowed`, `vault.no_escrow`, `EscrowOpenedKey`, `BeginEnroll`'s `entangle`; the record
+  fields stay on the wire as zero so the record size and the AAD span do not move.
+- **The secrets section is byte-exact**: a 53-byte AAD, the generation little-endian in `id`,
+  zero tails checked, records sorted by kind then id, exactly one `entangled_key` iff the header
+  says on.
+- **The API carries the switch**: `VaultStatus.Entangled`, `Keys.EntangledState`, and the
+  `Details`, `CheckFiles`, `InspectRecords` / `MergeRecords` / `DiscardRecords` methods the
+  inspector and the merge needed and the first draft had not listed.
+- **Merge** proves a file by trial against the current VMK and the history (the superblock's
+  generation orders, never decides), needs a ceremony for this vault's VMK, asks the recovery key
+  for a later-generation backup, keeps local values where the two differ and says so, and never
+  takes the copy-describing fields.
+- **Forget and delete** have four outcomes, of which only a proven match or a proven absence
+  touches the record; an unreadable file never drops a key. The purge runs once, at the end of an
+  unlock, on the write's own `modified_at`, so no Save on one archive destroys another's keys.
+- **`last_path` is never auto-probed off local fixed volumes**, and `lastExportAt` is
+  `{vaultId, at}` in the settings file, a convenience that gates nothing.
+
+One finding was left as ruled: the critique argued the old entangled password should be asked
+before a change or a switch-off, since a recovery-sheet holder can otherwise clear it and the
+check is now one Argon2id run; it stays unasked, because whoever holds the VMK can enrol a way
+in of their own already, so the check is friction and not a guard. The alternative is written
+into APP.md §13 should the ruling be revisited.

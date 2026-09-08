@@ -73,7 +73,7 @@ Locked ──BeginUnlock──▶ Unlocking ──VMK derived──▶ Unlocked 
 or await any in-flight VMK mutation and `Unlocked.Close()`, (b) `Session.Lock()`, (c)
 `Keystore.Close()` — the only call that ends the decrypted registry's life, (d) then the event
 and the tray. The four plaintext facts the lock screen needs — `VaultID`, `ModifiedAt`,
-`RotationPending`, `Slots()` — are cached at lock and refreshed by a fresh `keystore.Open` on
+`Entangled` (the slot region header's switch, FORMAT §6), `Slots()` — are cached at lock and refreshed by a fresh `keystore.Open` on
 demand; a reopened file whose `VaultID` differs from the cached one is refused. The keystore
 file is held open only while Unlocked.
 
@@ -85,7 +85,8 @@ call: that call outlives the ceremony as a *pending touch* (§2.2), and the stat
 (`pendingTouch`) until the card answers.
 
 **Unlocked.** Holds `*keystore.Unlocked` only for the duration of a mutation that needs the VMK
-(enroll, remove, rotate, rewrap, export, backup restore) and otherwise only `*keystore.Session`;
+(enroll, remove, rotate, the entangled password's switch and change, export, backup restore,
+inspecting records) and otherwise only `*keystore.Session`;
 the `Unlocked` is closed — VMK destroyed — the moment the Session exists (DESIGN §10). Slot
 mutations therefore re-run the ceremony; the one exception is vault creation, whose `Unlocked`
 enrolls the first slots. **Rotation re-derives the Session:** `Rotate` is the one call that
@@ -220,8 +221,8 @@ the data folder. A fresh open of a file clears the tampered warning, which only 
 raise. "Use it where it is" (`OpenVaultFile`)
 copies and retires nothing, follows the open-archives rule and the ceremony gate all the same,
 and with an empty name keeps the name already given. A mutation on a vault that has neither a
-usable token nor a password — an adopted backup being set up from a recovery-key session, a
-vault whose one token is stale — proves itself with the recovery key.
+usable token nor a password — an adopted backup being set up from a recovery-key session —
+proves itself with the recovery key.
 
 **A backup is adopted, not restored** (FORMAT §15, R28: open it, unlock with the recovery key,
 enrol new slots). A backup placed by hand, or an import interrupted after the copy, is a vault with
@@ -266,8 +267,8 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   A failed `Open` is never fed back into the poll (DESIGN trap 24): `ErrBusy` parks the ceremony
   in `Busy` until the user cancels or retries.
 - Probing: `Card.Keys()` (no PIN, no touch) matched by public key against the keystore's
-  hardware slots; R34 makes the match unique. No match → `NoMatch`. The matched slot's
-  `EntangledPassword` decides whether `Password` comes first — the credential is assembled before
+  hardware slots; R34 makes the match unique. No match → `NoMatch`. The vault's `Entangled`
+  (FORMAT §6) decides whether `Password` comes first — the credential is assembled before
   any prompt, because `keystore.Unlock` takes it whole and the PIN prompt fires inside `ECDH`.
 - **The card is never left idle.** The host resets an exclusive connection that carries nothing
   for about five seconds (DESIGN §11 trap 25), so while any prompt stands with a card open — the
@@ -299,7 +300,7 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
 - **The pending touch outlives its ceremony.** A token's agreement — the card call that waits
   for the touch — runs on its own goroutine, the *attempt*, which owns what the call needs: the
   open Card (the exclusive connection, PIN-verified by this process), the token, the entangled
-  password when the slot has one, the keystore handle when the ceremony opened one (an unlock
+  password when the vault has one, the keystore handle when the ceremony opened one (an unlock
   from Locked; a slot change or a reveal uses the vault's open handle), and its *purpose*: the
   kind it was started for, the vault file, the slot. The ceremony waits for the attempt's answer
   or its own cancellation, whichever comes first. Cancelled, the ceremony *disowns* the attempt
@@ -380,7 +381,7 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   recovery digits for correction — never a failure the user has to start over from; the
   derivation shows again after the corrected answer. A note describes its prompt only: taken,
   gone or cancelled, the prompt clears it. The management-key PIN of an enrolment follows the
-  same rule. Only a token's refusal (a damaged record, a stale slot) parks.
+  same rule. Only a token's refusal (a damaged record) parks.
 - Wrong password (`ErrAuth` from Deriving) returns to `Password` with the Card kept open, so the
   retry costs a touch but no PIN on a PIN-once key; the copy says so. `MaxOperations` exhausted →
   "remove and reinsert the key" (WaitingForKey).
@@ -389,10 +390,10 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   `ErrResetFailed` is a warning event, never a failure. The publish point checks the lock latch.
 - Recovery key and standalone password skip the token states. `Vault.SubmitPassword` serves
   both the standalone slot and the entangled password; there is one submit per secret kind.
-- The rewrap loop after a deferred rotation holds one `Unlocked` across all stale slots (a stale
-  slot cannot unlock itself) and adds a `SwapKey` step — "remove *A*, insert *B*" — between
-  tokens, one YubiKey at a time; `ErrStale` at the lock screen is reported as "this key is
-  behind; unlock with another way in first", never as corruption.
+- No rotation is deferred (FORMAT §8), so there is no rewrap loop and no `SwapKey` between
+  tokens at the lock screen. A recovered generation that is not the superblock's is reported
+  through the vault's `Tampered` state with the tampering reason (FORMAT §6.2, R25) — a spliced
+  or rolled-back slot region — never as a key that is behind.
 
 ### 2.3 Archive
 
@@ -479,7 +480,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
 
 **Vault**
 - `Status() VaultStatus{Seq, State, Path, DisplayName, LastUnlockedAt, LocksAt, AbsoluteAt,
-  RotationPending, Tampered, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
+  Entangled, VaultFileSize, Tampered, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
   OpenArchives int}` plus the one-vault facts of §2.1 (`SetupNeeded`, `DefaultPath`,
   `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`);
   `Readers() []Reader{Name}`.
@@ -495,9 +496,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   replace)` (`method` proves a vault; `kind`/`label`/`entangle` are the first way in of a backup),
   `FinishSetup(kind, label, entangle)`, `OpenVaultFile(path, displayName)` (the advanced "use it
   where it is": sets the override, copies nothing, retires nothing). **A chosen secret comes before
-  the key**: for a token with an entangled password, create and enrol ask for the password
-  first, and only then wait for the key, inspect it and generate — a cancel at the password
-  leaves nothing on the token. Such prompts carry `Choose: true` on the ceremony state (the
+  the key**: with the entangled password chosen, a create — and the first way in of an adopted
+  backup — asks for the password first, and only then waits for the key, inspects it and
+  generates — a cancel at the password leaves nothing on the token; enrolling into an existing
+  vault never asks, the key inheriting the vault's setting (§13). Such prompts carry `Choose: true` on the ceremony state (the
   page says "choose a password", never the same words as an existing one); a password typed to
   prove a current way in never does.
 - Events: `vault.state` (the whole status), `vault.ceremony {Seq, Step, PromptID, SlotLabel,
@@ -506,13 +508,14 @@ sentinel of every package with a catch-all `internal` — and services are regis
   step in its final event, so the page shows the one-time URL above whatever view it is on.
 
 **Archives**
-- `List() []ArchiveSummary{ID, Name, Path, StoredSize, LastWrittenAt, KeyVersion, Open, Dirty,
-  ReceiptOwed, NoCompression, Note Code}` — hidden records are filtered; `ShowHidden` flag
-  lists them. `Open(id)`, `Close(id)`, `Create(path, name, noCompression)`, `Hide(id)`, `Unhide(id)`,
-  `Locate(id, newPath)`, `Compact(id) opID`, `RotateKey(id) opID`, `Verify(id) opID`,
-  `CloseAll()`. **There is no Forget in 1.0**: the registry record holds the only copy of the
-  archive keys, so dropping it destroys the archive; the destructive form, if ever wanted, is a
-  separately confirmed `ForgetKey` that names that consequence.
+- `List(showHidden) []ArchiveSummary{ID, Name, Description, Path, StoredSize, LastWrittenAt,
+  KeyVersion, Open, Dirty, ReceiptOwed, NoCompression, ForgottenAt, Note Code}` — hidden and
+  forgotten records are filtered unless `showHidden`. `Open(id)`, `Close(id)`, `Create(path,
+  name, noCompression)`, `Hide(id)`, `Unhide(id)`, `Locate(id, newPath)`, `Compact(id) opID`,
+  `RotateKey(id) opID`, `Verify(id) opID`, `CloseAll()`; and the inspector's `Rename`,
+  `SetDescription`, `Details`, `Forget`, `Restore`, `Delete` and `CheckFiles` of §13, where
+  Forget and Delete — the registry record holds the only copy of the archive keys, so dropping
+  it destroys the archive — are specified with their brakes.
 - Events: `archives.changed`, `op.progress {OpID, Done, Total, Phase}`, `op.done {OpID, Error,
   Results []FileOutcome}`.
 
@@ -539,13 +542,15 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - Events: `archive.changed {ID, Seq}`, `archive.expiring {ID, ClosesAt}`, progress as above.
 
 **Keys**
-- `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Entangled, Stale, Escrowed,
-  Removable}` — `Escrowed` says a recovery slot can be shown again (FORMAT R38), known while
-  Unlocked; `Removable` says the invariant would still hold without the slot
-  (`keystore.Removable`), so the page greys *Remove* before any ceremony is run for it.
-- `BeginEnroll(kind, label, entangle bool)` runs the ceremony for the VMK and releases the key
-  that unlocked, then — when `entangle` — asks for the new password (`Choose`), and only then
-  for a YubiKey the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
+- `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Removable}` — `Removable` says the
+  invariant would still hold without the slot (`keystore.Removable`, which reads the vault's
+  entangled switch as well as the records, FORMAT §6.4), so the page greys *Remove* before any
+  ceremony is run for it. The entangled password is the vault's, not a slot's: its row is
+  `EntangledState()` (§13).
+- `BeginEnroll(kind, label)` runs the ceremony for the VMK and releases the key that unlocked —
+  an enrolled hardware key inherits the vault's entangled password and is wrapped from the kept
+  `K_P` offline, so no password is asked (§13); a `kind = password` slot asks for its own
+  (`Choose`) — and then, for a YubiKey, the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
   — the one card present is probed for that key's public key (no PIN, no touch), because the
   swap may already have happened during the prompt and a swap in the same port shows the same
   reader name throughout — then for the key to enrol; `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
@@ -567,8 +572,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
   and touch, or the password; never the recovery key (the ruling: a protector authorises the
   showing) — then unwraps the slot's escrow record (FORMAT R38), checks it against the slot's
   own public key, and mints the URL. What can be refused before any prompt is:
-  `vault.slot_not_found` (not an active recovery slot), `vault.no_escrow` (the slot predates
-  escrow; `SlotView.Escrowed` lets the page say so first), `vault.setup_needed` (a vault with
+  `vault.slot_not_found` (not an active recovery slot), `vault.setup_needed` (a vault with
   no protector — the reveal would have to ask the recovery key); after the unlock,
   `vault.escrow_mismatch` (the kept key does not open its slot: refused, never shown). It writes
   nothing, but it holds the handle while the VMK is recovered (`keystore.Unlock` is not a read of
@@ -597,12 +601,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   not the value, which the core keeps for the reveal's life — until `DropRecoveryKey(handle)`
   when the dialog closes, ten minutes, or a lock trigger, which drops every held key (§2.1) — so
   a save after the digits were shown does not need the ceremony again; a token in a bound call
-  is a capability to a value the page already fetched, not the value. An unlock, a proof or a
-  setup through a recovery key whose slot has no record writes the record then
-  (`EscrowOpenedKey`; FORMAT R38), so a vault from before escrow comes under it the first time
-  its key is typed.
-- `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`, `RewrapStale()`
-  (the loop of §2.2), `Export(path)`, `VerifyBackup(path)` (§2.1: a staged copy opened with the
+  is a capability to a value the page already fetched, not the value. Every recovery slot has
+  its record from the commit that made it (FORMAT R38, registry version 3 only).
+- `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`,
+  `Export(path)` (which records `lastExportAt`, §13), `VerifyBackup(path)` (§2.1: a staged copy opened with the
   recovery key, nothing kept). What a backup is and whether it is this vault is
   `Vault.InspectFile`; restoring a single archive record from a backup (`RestoreArchiveRecord`,
   re-wrap under the current KWK) is deferred (§12).
@@ -621,7 +623,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
 **Settings** — `Get()`, `Set()`. Machine-local, in `%LOCALAPPDATA%\Enfold\settings.json`
 (temp-then-rename): the vault's path when kept elsewhere (empty: `vault.eks` in the data folder)
 and its display name, close-to-tray behaviour, theme, look, recovery
-record percentage, dictionary threshold. **Security-relevant values live in the authenticated
+record percentage, dictionary threshold, and the last export (`lastExportAt`, §13).
+**Security-relevant values live in the authenticated
 registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
@@ -718,14 +721,14 @@ out to end it; that line is the lock screen's only: on the Keys page the pending
 cancelled slot change or reveal is said by the next ceremony's own `token.pending` note while it
 waits, and on the first-run card a create or an import begun while a cancelled create's touch
 stands is answered with `token.pending`, a toast). Archives (list with details
-pane, commands Open / New archive / Compact / Rotate key / Verify / Hide, the deferred-rotation
-banner, the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
+pane, commands Open / New archive / Compact / Rotate key / Verify / Hide and the inspector's of
+§13, the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
 projection, paged table with pending markers, preview pane — image, video, audio through the
 loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
 drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
 Remove — greyed while the invariant would refuse — Rotate now (its dialog says every way in is
-rewrapped here and now, and names the one exception: a hardware key with an entangled password
-other than the one that unlocked), Rewrap, *Show recovery key…* — shown only while a recovery
+rewrapped here and now, and asks for a backup first, §13), the entangled password's row (§13),
+*Show recovery key…* — shown only while a recovery
 slot is selected — backups with the R35 date,
 the damaged copy when one is kept, session and appearance settings). First run (create, or
 import a vault or a backup; a file that is only a backup leads into *Finish setting up*, and so
@@ -779,9 +782,6 @@ key can be shown again from the Keys page — unlock, then prove a YubiKey or a 
 more — and, when the fetch of the one-time URL fails (a window recreated after the one fetch),
 that the key can be shown again from there, with *Done* as the one way out. It is not dismissed
 by Escape or the backdrop, and it closes when a lock trigger locks the vault it was shown on.
-On the Keys page a recovery slot without escrow (`Escrowed` false) has *Show recovery key…*
-disabled and the line "Made before Enfold kept recovery keys: it cannot be shown again. Add a
-new recovery key, then remove this one — or unlock with it once, which keeps it."
 
 **The create and enrol dialogs name the key, never the secret.** A token gets "Name this key"
 (the label shown in the list of ways in); a password way in has no name field — its slot is
@@ -945,73 +945,199 @@ ceremony states and the "never 0 attempts" rule.
   recorded; identity without a key) and `hash_at_seq u64` (the `last_seq` at which
   `last_ciphertext_hash` was computed; equal means fresh).
 - `Registry.idle_minutes u16`, `absolute_minutes u16` (zero = default).
-- `registry_version` 2: the recovery-key escrow records (R38, §7.6) under `KWK_recovery` (R3);
-  version 1 read and rewritten.
+- `registry_version` 3 (Revision 2, §18.2): the secrets section (§7.6) under `KWK_secrets` (R3)
+  — recovery escrow, the entangled password's key, the VMK history — and `description` and
+  `forgotten_at` on the archive record; no older version read.
 
 ## 12. Deferred, and open for the user
 
-pdf.js preview; `ForgetKey`; memguard for the session keys; an entropy estimate for a chosen
+pdf.js preview; memguard for the session keys; an entropy estimate for a chosen
 password (SCOPE: "with an entropy estimate shown"; the minimum of 8 stands in for it);
-`RestoreArchiveRecord` (one record
-from a backup into the vault, re-wrapped), and merging records from another vault; folder move
+folder move
 as one operation;
 `overwrite` on extraction (an archive-layer change); an unelevated BitLocker check (measure
 first — if none exists, the SCOPE bullet or the least-privilege ruling has to move); the
 permitted range of the timeouts beyond the clamps.
 
-## 13. Ruled 2026-09-07, to implement (with FORMAT.md Revision 2)
+## 13. Ruled 2026-09-07, critiqued the same day, to implement (with FORMAT.md Revision 2)
 
 **The Archives page is the vault's inspector.** It lists registry records, not files, and it
-grows into the full view: columns *Name* (the description as a muted second line), *Size*,
-*Files* (open archives only), *Last saved*, *Key vN*, *Status* (open · dirty · file missing ·
-hidden · forgotten); a header line for the vault — archives, total stored size, the vault file's
-size, the registry's `modified_at`; sorting by column and a filter box. The details pane keeps
-what it shows and adds an editable *Description*, *Rename* (the registry's trusted name), the
-full *last_path* with *Show in Explorer* or *Locate…* — worded "last seen on another system at
-…" when the path's syntax is not this platform's — *Created*, the current *KID*, and *Details…*,
-a modal with the versions table (KID · created · retired · state), `archive_id`, revision, last
-writer, `last_seq` / `hash_at_seq`, the ciphertext hash, the policy bits, each with *Copy*.
+grows into the full view: columns *Name* (the description as a muted second line), *Size*
+(`last_stored_size`, the registry's last observation of the file), *Files* (open archives only),
+*Last saved*, *Key vN*, *Status* (open · dirty · file missing · hidden · forgotten); a header
+line for the vault — archives and their stored total summed by the page over the rows, the vault
+file's size (`VaultStatus.VaultFileSize`), the registry's `ModifiedAt` (§2.1); sorting by column
+and a filter box. The details pane keeps what it shows and adds an editable *Description*,
+*Rename* (the registry's trusted name, FORMAT §7.4), the full `last_path` with *Show in
+Explorer* or *Locate…* — worded "last seen on another system at …" when the path's syntax is not
+this platform's — *Created*, the current *KID*, and *Details…*, a modal with the versions table
+(KID · created · retired · state), `archive_id`, revision, last writer, `last_seq` /
+`hash_at_seq`, the ciphertext hash, the policy bits, each with *Copy*. The pane's data is
+`Archives.Details(id)` (below), read when the selection changes, not when the modal opens.
 Tooltips only where text is cut short. There is no raw archive-key reveal: nothing opens an
 archive from a bare key, and the way to hand one archive to someone is a later *export one
 record as a small keystore*, the precursor of sharing.
 
-**Forget and delete.** *Forget key…* drops the record softly: `forgotten_at` is set, the record
-shows under *Show hidden* as "forgotten, purged on <date>" with *Restore*, and the first registry
-write thirty days on removes it; its file stays where it is and is unopenable from then on.
-*Delete archive…* is Forget plus the file: the file at `last_path` is opened, its envelope's
-`archive_id` compared, and only a match is deleted — never a file that merely has the name;
-absent or another archive's, the record is forgotten and the page says the file was left. Both
-confirm by the archive's name typed, and the warning names the last backup's time (kept in the
-settings file at every export, `last_export_at`) — "the backup of <date> still holds this key".
-No ceremony: the registry write needs the session's key, not the VMK, and the brakes are the
-typed name, the retention and the backup. In an open archive, *Delete archive…* on the page
-does the same with the file it holds — asking first when changes are unsaved — and is disabled
-while the vault is locked with the archive open.
+*file missing* is the `Note` code `archive.file_missing` and is never computed inside `List`:
+the core keeps a presence per record, refreshed by a pass after unlock and by the page's *Check
+files* action (`Archives.CheckFiles()`), one path at a time with the state mutex released and a
+2 s budget each, the probe abandoned on expiry so a path that does not answer is never reported
+missing. Only paths on a local fixed volume of this machine are probed; a path whose syntax is
+not this platform's, a removable or network drive and every UNC path are left unmeasured and
+are checked only for the one record the user acts on — `last_path` reaches the registry from
+*Import records…* as easily as from *Locate…*, and opening `\\host\share` because a record says
+so is an outbound authentication to a host someone else named. Until a pass has run the column
+is blank, never "missing".
 
-**The entangled password is the vault's** (FORMAT R2 §1). The lock screen asks for it once,
-before the PIN, whenever the header says it is on; the Keys page shows one row, *Entangled
-password: on/off · Change…*: turning it on asks for the new password twice, changing it asks for
-the new one twice (the old is not asked: the unlock proved possession, as for every slot
-change), turning it off confirms; each is a ceremony for the VMK by any way in and then re-wraps
-every hardware slot offline. Enrolling a key asks for no password. The rotate dialog loses its
+**Forget and delete.** *Forget key…* drops the record softly. The archive is closed first,
+unsaved changes asked about as for a delete; then `forgotten_at` is set (FORMAT §7.1, §18.2) and
+the record shows under *Show hidden* as "forgotten — restore it to open this archive again; its
+key is dropped at the first unlock after <date>" with *Restore*, which clears `forgotten_at`.
+While forgotten the record still holds the keys, so `Open`, `Rename`, `SetDescription`,
+`RotateKey`, `Verify`, `Compact`, `Locate`, `Hide` and `Unhide` are refused with
+`archive.forgotten` — never `archive.not_found`, which stays the answer for a record already
+purged, so the page can tell "restore it" from "its key is gone" — and no registry write ever
+updates a forgotten record. *Restore* and *Delete archive…* are the two actions that still work
+on it, and a second *Forget* does not move `forgotten_at`: the retention clock never restarts.
+
+*Delete archive…* is Forget plus the file (DESIGN trap 28). The file at `last_path` is opened
+once and removed through that same handle, never by the name a second time, and never with a
+handle this process is holding — the open archive is closed first, refused with `archive.busy`
+while an operation or a preview reader is live. Four outcomes, and only two touch the record.
+**`archive_id` matches**: the file is removed first, and only then is the record forgotten; if
+the removal fails the record is *not* forgotten and the page says the file could not be removed
+(`archive.delete_failed`). **Demonstrably not this archive** — the parent folder opened and the
+leaf was not in it, or the envelope parsed and holds another `archive_id`: nothing is removed,
+the page says so and asks once more before forgetting. **The path could not be reached** — the
+volume, share or folder is not there: `archive.file_unreachable`, nothing removed, nothing
+forgotten; *absent* is decided on the parent folder and never on the open of the file itself.
+**Anything else** — the file is held, access denied, a short read, a wrong magic, an envelope
+checksum that does not match: `archive.busy` or `archive.invalid`, **nothing removed and nothing
+forgotten**, with *Retry*, *Locate…* and *Forget the key only* offered, because a record dropped
+against a file that could not be read destroys the keys of an archive that is still intact. The
+Archive page's own *Delete archive…* is the same action on the archive it shows, closing it
+first — asking about unsaved changes — and is disabled while the vault is locked with the
+archive open (§2.3).
+
+Both confirm by the archive's name typed (compared trimmed and exactly, case and all), and the
+warning says only what is known here: with a `lastExportAt` for this vault at or after the
+record's `created_at`, "the last backup of this vault was made on <date>; if you still have it,
+it holds this key"; otherwise "no backup of this vault is recorded here — every other copy of
+this archive becomes unopenable when the record is dropped". No ceremony: the registry write
+needs the session's key, not the VMK, and the brakes are the typed name, the retention and the
+backup.
+
+**The purge has one trigger.** Forgotten records are dropped at the end of a successful unlock
+of the vault kept here, before any archive is opened, in one registry write whose own
+`modified_at` decides (FORMAT §18.2), and `archives.changed` follows with a line naming what
+went. No other registry write purges, so nothing is dropped while the vault is locked and no
+Save on one archive destroys another's keys; the unlock of a staged copy — `VerifyBackup`,
+`InspectFile`, `InspectRecords` — purges nothing. Every record while the vault is Tampered is
+skipped and left to the next unlock.
+
+**The entangled password is the vault's** (FORMAT §3.1, §18.1). `VaultStatus.Entangled` is the
+slot region header's switch, known while Locked; the lock screen asks for the password once,
+before the PIN, whenever it is on — the standalone-password and recovery ways in never ask,
+whatever the switch says — and the typed password lives with the attempt (§2.2), so a cancel, a
+retry and an adopted pending touch neither lose it nor ask again. The Keys page shows one row,
+*Entangled password: on/off · Change…*, backed by `Keys.EntangledState() {On, CanEnable,
+Reason}`: turning it on asks for the new password twice, changing it asks for the new one twice,
+turning it off confirms; each is a ceremony for the VMK by any way in and then re-wraps every
+hardware slot offline from the kept `K_P`, drawing a fresh `entangle_salt` (FORMAT §6). **The
+old password is not asked** (the ruling of 2026-09-07): whoever reaches the VMK — by the
+recovery key or the standalone password as much as by a token — can already enrol a way in of
+their own, so asking the old password there would be friction and not a guard, while the
+password's purpose, a second factor against a stolen or broken token, is untouched: a stolen
+token does not reach this page. The critique's alternative — the old asked once, checked offline
+for one Argon2id run against the kept `K_P`, with a *Forgot it?* path that turns the password
+off through the removal ceremony — is recorded in DECISIONS should the ruling be revisited.
+
+Turning it on is refused where the slot invariant would break (FORMAT §6.4): in a vault whose
+active slots are all hardware keys, one password would then stand in front of every way in, so
+`Keys.SetEntangled(true)` is refused for the invariant's reason before the ceremony starts and
+before a password is typed, worded "every key would then need this password — add a recovery
+key first" with the action that runs `BeginEnroll(recovery, label)`; `CanEnable` greys the
+switch ahead of any ceremony, as *Remove* is greyed from `SlotView.Removable`. The same
+predicate from the other side: with the password on, `Removable` is false for the last recovery
+slot when every other active slot is a hardware key. Turning it off is never refused. Enrolling a
+key asks for no password — an enrolled key inherits the vault's setting and is wrapped from the
+kept `K_P` offline — except the first way in of an adopted backup, which sets the vault's
+entanglement afresh, a backup carrying no `K_P` (FORMAT R28). The rotate dialog loses its
 "except a key whose entangled password…" clause: every way in is re-wrapped, always.
 
 **Merge records.** Beside *Import* (which replaces the vault kept here) an *Import records…*
-action opens a backup or a vault, proves it — a backup of this vault from any generation with no
-key at all (FORMAT R2 §2, VMK history), anything else with its recovery key — and lists its
-archive records with checkboxes, all selected: a record whose `archive_id`, KID and key the
-vault already has is skipped; a known archive with a new KID gains that version (the file's
-envelope decides which is current); a new `archive_id` is added; a record's fields follow SYNC.md
-§5 (the higher revision wins, equal keeps the local).
+action opens a backup or a vault over a staged copy and proves it before anything is listed.
+`Vault.InspectRecords(path)` is a ceremony for **this vault's** VMK by any way in — the VMK is
+what derives `KWK_secrets` and so the retired VMKs (FORMAT §7.6) — and it tries the current VMK
+and then each `vmk_history` VMK against the incoming registry, newest first by the file's own
+`vmk_generation`, which orders the attempts and decides nothing (FORMAT §18.2); each attempt
+derives that VMK's Metadata key and decrypts the incoming registry at *its own* offset, length
+and nonce with the AAD built from *its own* superblock fields. A file that opens this way needs
+no key from the user; anything else — another vault, or a backup from a *later* generation,
+which happens when this vault was rolled back to an older copy — asks for that file's own
+recovery key, and the dialog says which before the button is pressed, naming each recovery slot
+by its ID (below). A file that no VMK and no key opens is reported as *not this vault, or from a
+generation this vault no longer keeps*, never as corruption. The ceremony re-wraps what it read
+under this vault's `KWK` and returns a handle with the record list; the handle lives until
+`MergeRecords` consumes it, the dialog closes (`Vault.DiscardRecords(handle)`), or a lock trigger
+drops it with every held key (§2.1). `Vault.MergeRecords(handle, ids)` is then an ordinary
+registry write on the session, refused with `vault.archives_open` while any archive is open,
+`ceremony.in_progress` while a ceremony runs and `op.in_progress` while a save, verify, compact
+or rotation runs.
+
+The records are listed with checkboxes, ticked by default: a record whose `archive_id`, KID and
+key the vault already has is skipped and listed greyed as "already here"; a known archive with
+a new KID gains that version (the file's envelope decides which is current); a new `archive_id`
+is added; a record this vault holds as forgotten is listed unticked as "forgotten here on
+<date>" and ticking it is an explicit *Restore*. Fields are never taken by counter alone: version
+lists union; a field the local record leaves empty is filled; a field the two hold differently —
+`name`, `description`, `policy` — keeps the local value and the row says what differed ("named
+'Photos 2023' there"), except `always_require_full_auth`, which is set if either side has it and
+cleared by neither; the fields that describe a *copy* — `last_path`, `last_seq`, `hash_at_seq`,
+`last_ciphertext_hash`, `last_stored_size`, `last_written_at` — are the other vault's observation
+of its own file and are never taken over the local ones. Every record the merge changes is
+written with `revision = max(local, incoming) + 1` and this vault's `device_id` as
+`last_writer`, so a merge in the other direction sees a descendant rather than a rival
+(SYNC.md §5).
 
 **The rotate dialog** shows the last backup's time and, past a week or with none, asks for a
-backup first; it never keeps a copy of the vault (FORMAT R2 §3).
+backup first — it asks, it never refuses to rotate without one — and it never keeps a copy of
+the vault (FORMAT §18.3, DESIGN trap 29). Its backup, like every `Keys.Export`, records
+`lastExportAt`.
 
-**The recovery key's ID** (FORMAT R2 §4) is on the sheet, in the text file and at the reveal; the
-recovery prompt lists the vault's recovery slots as *label · ID · date* so the right sheet is
-picked before a digit is typed.
+**The recovery key's ID** (FORMAT §18.4) is on the sheet, in the text file and at the reveal; the
+recovery prompt lists the vault's recovery slots as *label · ID · date* (`SlotView.CreatedAt`)
+so the right sheet is picked before a digit is typed.
 
-Bound methods this adds: `Archives.Rename(id, name)`, `Archives.SetDescription(id, text)`,
-`Archives.Forget(id)`, `Archives.Restore(id)`, `Archives.Delete(id, alsoFile bool)`,
-`Vault.InspectRecords(path)` and `Vault.MergeRecords(path, ids)`, `Keys.SetEntangled(on)` and
-`Keys.ChangeEntangledPassword()` (ceremonies), `Vault.LastExportAt`.
+**`lastExportAt`** is the settings file's (§3): an object `{vaultId, at}` — the hex `vault_id` of
+the vault exported and Unix seconds — written only by `Keys.Export`. It reads as *never* when
+absent, zero, ahead of the clock, or carrying another vault's id, and *never* makes the
+confirmations above say that no backup is recorded here rather than name a date. It is a local,
+unauthenticated convenience: it chooses wording and pre-selects the rotate dialog's backup
+checkbox, and it never gates a cryptographic operation.
+
+**What changes in §3.** `VaultStatus` gains `Entangled` and `VaultFileSize`; §2.1's cached facts
+are `VaultID`, `ModifiedAt`, `Entangled`, `Slots()`. `SlotView` loses `Entangled`, `Stale` and
+`Escrowed` — every recovery slot has its escrow record from the commit that creates it (FORMAT
+R38), so `vault.no_escrow`, `EscrowOpenedKey` and the Keys page's "Made before Enfold kept
+recovery keys" state go too. `BeginEnroll(kind, label)` loses `entangle` and the `Choose` step
+for hardware keys; `Choose` remains for `kind = password`, the standalone slot's own.
+`CreateVault`, `ImportFile` and `FinishSetup` keep `entangle` — each is the moment a vault's
+switch is chosen rather than inherited. `Keys.RewrapStale`, `VaultStatus.RotationPending`,
+§2.2's rewrap loop and the lock screen's `SwapKey` state go with the deferred rotation (FORMAT
+§8); a generation mismatch is `Tampered`. `ArchiveSummary` gains `Description` and
+`ForgottenAt`; `List(showHidden)` lists hidden and forgotten records together and the *Status*
+column separates them. "There is no Forget in 1.0" is struck from §3 in favour of this section.
+
+Bound methods this adds: `Archives.Rename(id, name)`, `Archives.SetDescription(id, text)` (at
+most 1 024 bytes of UTF-8, FORMAT §7.1), `Archives.Forget(id)`, `Archives.Restore(id)`,
+`Archives.Delete(id, alsoFile bool)`, `Archives.Details(id) ArchiveDetails{ArchiveID,
+Description, CreatedAt, LastPath, CurrentKID, Revision, LastWriter, LastSeq, HashAtSeq,
+LastCiphertextHash, ForgottenAt, AlwaysRequireFullAuth, Hidden, NoCompression, Versions
+[]VersionView{KID, CreatedAt, RetiredAt, State}}` — one registry record read whole, hex strings
+for ids and hashes, Unix seconds for times, the policy as named booleans, and no
+`wrapped_archive_key`, no nonce and no offset, so §1's boundary holds; refused with
+`vault.locked` outside Unlocked — `Archives.CheckFiles()`, `Vault.InspectRecords(path)` (a
+ceremony, returning a handle and the record list), `Vault.MergeRecords(handle, ids)` (a
+registry write on the session) and `Vault.DiscardRecords(handle)`, `Keys.EntangledState()`,
+`Keys.SetEntangled(on)` and `Keys.ChangeEntangledPassword()` (ceremonies), `Vault.LastExportAt`.

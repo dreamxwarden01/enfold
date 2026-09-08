@@ -125,12 +125,14 @@ YubiKey PIV slot 9d -- P-256 private key SK_YK, never leaves hardware
         v
         H  (raw ECDH shared secret, the X coordinate)
         |
-        |  entangled password (OPTIONAL, per slot)
-        |  pwd'  = HMAC-SHA256(key = H, msg = user_password)
-        |  salt' = SHA256(salt || vault_id || recipient_id)
+        |  entangled password P (OPTIONAL, one for the vault — Revision 2, FORMAT.md §18.1):
+        |  K_P = Argon2id(P, SHA256(entangle_salt || vault_id), m, t, p)
+        |        salt and parameters from the slot region header; K_P is also kept
+        |        under the VMK, so every hardware slot can be re-wrapped offline
         v
-     Argon2id(pwd', salt', m, t, p)     <-- skipped entirely when no password is set;
-        |                                   H then feeds HKDF directly
+     pre = HKDF-SHA256(H || K_P, info = "Enfold/v1/entangle" || vault_id || recipient_id)
+        |                                   <-- skipped entirely when no password is set;
+        |                                       pre = H then
         v
      HKDF-SHA256(info = "Enfold/v1/IK" || vault_id || recipient_id)
         |
@@ -175,9 +177,16 @@ the textbook expression of this design. We deliberately do **not** use it:
    test vectors across implementations. That is a bad property for a format meant to stay
    readable for years.
 
-The HMAC fold gives the identical security property: without `H` an attacker cannot compute
-`pwd'`, so cannot begin the Argon2 grind at all. That is the whole point of the entanglement
-— an attacker holding only the keystore file has nothing to work on.
+The HMAC fold gave that property: without `H` an attacker could not compute `pwd'`, so could not
+begin the Argon2 grind at all. **Revision 2 gives it up deliberately** (`FORMAT.md` §18.1). One
+vault-wide password whose key is kept under the VMK is what makes changing it, switching it,
+enrolling a key and rotating offline, and a key that depends on `H` cannot be kept — at unlock
+the VMK is not yet there to reach it, and any vault-wide secret that could stand in for `H` would
+have to sit in the plaintext header where the attacker reads it. So `H` now enters after the
+KDF, at `pre = HKDF(H ‖ K_P)`: the attacker must still have both factors, but he can pay the
+guessing cost in advance and hold the answers until the curve breaks. Reasons 1 and 2 above
+still say why the mixing is done outside Argon2; §4's entropy rules are what the design now
+rests on.
 
 ### Why P-256 and not X25519
 
@@ -222,15 +231,18 @@ The VMK is wrapped independently once per unlock method. Each slot record stores
 | `slot_type` | yubikey / standalone-password / recovery-key |
 | `recipient_id` | stable identifier, used in the HKDF info and the AAD |
 | `epk` | ephemeral public key (YubiKey slots only) |
-| `salt` | Argon2 salt |
-| `argon2_params` | m, t, p — **must be authenticated, see below** |
-| `has_entangled_password` | bool |
+| `salt` | Argon2 salt (standalone password slot only) |
+| `argon2_params` | m, t, p (standalone password slot only) — **must be authenticated, see below** |
 | `wrapped_vmk` | AEAD ciphertext + tag |
+
+Whether the vault has an entangled password, its salt and its Argon2 parameters are the slot
+region *header's*, one for the vault (`FORMAT.md` §6, Revision 2), not a record's.
 
 **The entire slot record is the AAD of `wrapped_vmk`.** Argon2 parameters must be read
 *before* anything can be decrypted, so they cannot be encrypted — but they must be
 authenticated, or an attacker downgrades `m` from 1 GiB to 8 KiB and brute-forces cheaply.
-The same applies to `epk` and `salt`.
+The same applies to `epk` and `salt`. The header's parameters are covered differently — by the
+derivation itself and by the registry's hash of the region (`FORMAT.md` §6, R25).
 
 ### Two different things are called "password"
 
@@ -258,15 +270,17 @@ slots, but forgetting that password kills both.
 This is a predicate evaluated before *every* slot add / remove / replace, not a check written
 once in the creation flow.
 
-Implementation note (2026-09-05): the file cannot tell two entangled passwords apart, so the
-predicate counts every entangled password as the same secret. Two tokens each with its own
-password therefore still need a recovery slot — conservative, and the recovery slot is what the
-design wants present anyway.
+Implementation note (revised 2026-09-07, `FORMAT.md` §18.1): there is one password for the
+vault and the slot region header's `entangle` says whether it applies, so the predicate reads
+that header as well as the records — with it on, every active hardware slot's set contains the
+password, and turning it on is itself evaluated against the invariant. The 2026-09-05 note is
+gone with the per-slot flag: a predicate that read records alone would now see `{YK_A}` /
+`{YK_B}` where the truth is `{YK_A,pwd}` / `{YK_B,pwd}`.
 
 | Configuration | Required-secret sets | Valid |
 | --- | --- | --- |
-| Two YubiKeys, no password | `{YK_A}` / `{YK_B}` | yes |
-| Two YubiKeys, shared entangled password | `{YK_A,pwd}` / `{YK_B,pwd}` | **no** — needs a recovery key |
+| Two YubiKeys, the vault's password off | `{YK_A}` / `{YK_B}` | yes |
+| Two YubiKeys, the vault's password on | `{YK_A,pwd}` / `{YK_B,pwd}` | **no** — needs a recovery key, and the switch is refused without one |
 | One YubiKey + password + recovery key | `{YK,pwd}` / `{rec}` | yes |
 | Standalone password + recovery key | `{pwd}` / `{rec}` | yes (low-security tier) |
 
@@ -317,9 +331,9 @@ matters is the shape: a seed for a keypair.)
 
 A recovery key is shown to a human once and then lives on paper, and paper is lost — and with
 one vault per user (`APP.md` §2.1) there is no second vault to fall back on. So the keystore
-keeps a second copy of `R`: wrapped under a key derived from the VMK (`KWK_recovery`, `FORMAT.md`
-R3, R38) in the authenticated registry, one record per recovery slot, removed with the slot,
-re-wrapped by rotation. It adds no new principal — only a key derived from the VMK opens the
+keeps a second copy of `R`: wrapped under a key derived from the VMK (`KWK_secrets`, `FORMAT.md`
+R3, R38, §7.6) in the authenticated registry, one record per recovery slot, removed with the
+slot, re-encrypted by rotation. It adds no new principal — only a key derived from the VMK opens the
 record, and the session's cached keys cannot — but it makes a VMK exposure a recovery-key
 exposure, and one that rotation does not cure (§5 Revocation, trap 11). What it adds is a
 *second showing*, from the Keys page, after a ceremony that recovers the VMK through a YubiKey
@@ -338,12 +352,9 @@ Secure Enclave, so the constraint that forced P-256 in §3 does not apply here. 
 already carry a `slot_type` and an algorithm ID, so mixing curves across slot types is free.
 
 Result: **every slot type is asymmetric, and VMK rotation never requires any physical
-credential to be present** — only the entangled password, which the user just typed to unlock.
-Rotation can therefore be unconditional and invisible, which is the only way it will actually
-happen. One qualification, `FORMAT.md` R30: a *second* hardware slot with an entangled password
-of its own is re-wrapped with the typed password only if the user says the password is shared —
-the file cannot check a password without that slot's token — and is otherwise left stale until
-that token and password are presented.
+credential to be present** — nor, since Revision 2, the entangled password: its key is kept
+under the VMK (`FORMAT.md` §3.1, §18.1). Rotation can therefore be unconditional and invisible,
+which is the only way it will actually happen, and it is always complete (`FORMAT.md` §8).
 
 ### Revocation
 
@@ -363,6 +374,7 @@ thousand archives rotates in well under a second — and **no file data is re-en
 | **+ rotate the VMK** | ~60 B per archive | **All future access.** The removed credential now yields only the old VMK, which opens nothing in the current keystore |
 | + rotate archive keys | index rewrite per archive | Withdraws access to archives whose keys were released to a low-trust machine |
 | + replace every recovery slot | a new key to write down, per slot | What the escrow of `FORMAT.md` R38 exposed: a holder of the VMK — or of any copy of the keystore and one of its ways in — read every recovery key of that date, and those digits survive every rotation |
+| + change the entangled password | one password to memorise; every hardware slot re-wrapped offline, no token present | What `K_P` under the VMK exposes (`FORMAT.md` §18.1): a holder of any generation's VMK read `K_P`, can grind it back to the password, and keeps the second factor for every later generation, since rotation re-wraps `K_P` and never replaces it |
 
 **Rotation is offered on every slot removal and credential change, pre-selected.**
 
@@ -391,8 +403,8 @@ does not fit it. Without rotation, "I changed my password because I think it lea
 nothing: the old password plus an old keystore copy still opens archives added afterwards. Default
 to rotating on any password change.
 
-**A deferred rotation must stay visible** — `rotation_pending` in the superblock plus a persistent
-notice — because "later" otherwise becomes "never" (`FORMAT.md` §8).
+No rotation is deferred since Revision 2: every way in is re-wrapped from stored public keys
+and the kept `K_P`, so a rotation that commits is complete (`FORMAT.md` §8).
 
 **This does not depend on TRIM or secure erasure.** After rotation, a slot record recovered
 from unallocated SSD blocks decrypts to the *old* VMK, which is useless against the current
@@ -690,7 +702,7 @@ Correct in this document, and easy to lose during implementation.
     of the slot record still reaches the unchanged VMK and therefore every archive key, including
     those of archives created afterwards — and with write access they can splice the old slot
     region back outright, and such copies are likely to exist. Rotation is pre-selected on every
-    removal and every password change; a deferred one must stay visible (§5, Revocation).
+    removal and every password change, and since Revision 2 none is deferred (§5, Revocation).
     Since `FORMAT.md` R38 a VMK that leaked read every recovery key too, and rotation does not
     revoke those: replacing every recovery slot does.
 12. **The keystore must never go to public cloud storage**, and the storage layer should be
@@ -767,10 +779,9 @@ Correct in this document, and easy to lose during implementation.
     it had no password, and the slot it meant to leave stale never opened again. Build the new
     record in a copy and assign it whole.
 
-19. **`rewrap_stale` cannot be authenticated by the slot it marks** (`FORMAT.md` R29): the
-    rotation that sets it is the one that lacked the slot's secret. It is the one bit of `flags`
-    outside the slot AAD, and a hint only; the generation inside `wrapped_vmk` is the truth.
-
+19. **Retired (Revision 2).** `rewrap_stale` and R29 are gone: no rotation lacks a slot's secret
+    any more, so no bit of `flags` sits outside the slot AAD (`FORMAT.md` §6.1), and a generation
+    inside `wrapped_vmk` that is not the superblock's is tampering (§6.2), not a hint.
 20. **The allocation pool is not the published free map.** The map a commit writes lists what
     the new state does not use, including what the commit itself just freed. A writer that
     allocates from that map overwrites, one commit later, the very extents the losing superblock
@@ -931,11 +942,16 @@ Correct in this document, and easy to lose during implementation.
 29. **A pre-rotation copy of the vault re-opens the slot you just removed.** Rotation exists to
     revoke; a "keep the old file" safety net keeps the revoked way in alive. The safety net is a
     backup — recovery slot only — taken before, which the rotate dialog asks for (APP.md §13).
-30. **A secret kept under the VMK exposes nothing the VMK does not.** The entangled password's
-    key, the retired VMKs, the escrowed recovery keys: each is reachable only through the current
-    VMK, which already opens every archive. What such a record buys is an *offline* operation —
-    re-wrapping without the token, reading an old backup without the sheet — and what it must
-    never do is let a secret be reached by less than the VMK (FORMAT R2 §1–2).
+30. **A secret kept under the VMK exposes nothing the VMK does not — except the one that is a
+    function of a human secret.** The retired VMKs and the escrowed recovery keys are reachable
+    only through a VMK of this vault, and none opens more than that VMK opened in its day.
+    `K_P` is not like them: it is Argon2id over the password, so a VMK holder grinds it back to
+    the *password* — a value the user may have reused elsewhere — and keeps it, since a rotation
+    re-wraps `K_P` and only a password change replaces it. What such a record buys is an
+    *offline* operation — re-wrapping without the token, reading an old backup without the sheet
+    — what it must never do is let a secret be reached by less than the VMK (`FORMAT.md` §7.6,
+    R28: an export carries no `K_P`), and where the secret is a human one the price is a third
+    step in the answer to an exposure (§5).
 
 ## 12. Deferred
 

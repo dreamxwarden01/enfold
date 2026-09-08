@@ -463,7 +463,9 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
 .pending .txt { font-size: 12.5px; }
 .pending .txt b { font-weight: 600; }
 .pending .acts { margin-left: auto; display: flex; gap: 8px; }
-.ks-cols { display: grid; grid-template-columns: 1fr 316px; gap: 20px; flex: 1; min-height: 0; padding-bottom: 16px; }
+/* The columns take their content's height and grow to fill, never shrink: a save bar that follows
+   them in flow must sit after the content, not after a squeezed box (APP.md §6, the save bar). */
+.ks-cols { display: grid; grid-template-columns: 1fr 316px; gap: 20px; flex: 1 0 auto; padding-bottom: 12px; }
 .ks-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .ks-head { display: flex; align-items: baseline; gap: 10px; }
 .ks-head .t-quiet { margin-left: auto; }
@@ -478,14 +480,69 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
 .rule { display: flex; align-items: center; gap: 9px; color: var(--ink-2); font-size: 12px; padding: 2px 2px; }
 .rule .i { color: var(--ink-3); }
 .ks-actions { display: flex; gap: 8px; padding-top: 2px; flex-wrap: wrap; }
-.setcard { padding: 4px 16px; display: flex; flex-direction: column; }
-.setrow { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--stroke); }
+.setcard { padding: 4px 16px; display: flex; flex-direction: column; container-type: inline-size; }
+.setrow { display: flex; align-items: center; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--stroke); }
 .setrow:last-child { border-bottom: none; }
-.setrow .lab { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.setrow .lab { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 180px; }
 .setrow .lab b { font-size: 12.5px; font-weight: 600; }
 .setrow .lab span { color: var(--ink-3); font-size: 11.5px; }
 .setrow .ctl { margin-left: auto; flex: none; }
 .setrow select.input { width: auto; min-width: 140px; }
+.setrow input.input { width: 220px; }
+.input[aria-invalid="true"] { border-color: var(--danger-line); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); }
+/* Responsive (APP.md §6): the two columns merge when the body is narrow, and a row stacks —
+   the title, its line, then the control on a line of its own — when its card is. The window
+   itself never goes below 880 × 560. */
+.layer-body { container-type: inline-size; }
+@container (max-width: 840px) {
+  .ks-cols { grid-template-columns: 1fr; }
+}
+@container (max-width: 470px) {
+  .setrow { flex-direction: column; align-items: stretch; gap: 8px; }
+  .setrow .lab { flex: none; }
+  .setrow .ctl { margin-left: 0; }
+  .setrow select.input, .setrow input.input { width: 100%; }
+  .setrow .ctl.row { justify-content: space-between; }
+  .setrow .ctl.row input[type="range"] { flex: 1; width: auto; }
+}
+
+
+/* ---------- the save bar (APP.md §6) ---------------------------------------- */
+/* In flow at the foot of the scroll pane and sticky there: it can never cover the last row for
+   good, nor the rail. Frosted over the content; a red frame when the input is invalid. */
+/* 12 px above the bar (the columns' own padding) and 12 px below it: the same breath either side. */
+.savebar-wrap { position: sticky; bottom: 12px; z-index: 3; margin-top: auto; margin-bottom: 12px; flex: none; }
+.savebar {
+  position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 10px 8px 12px;
+  border: 1px solid var(--stroke-strong); border-radius: var(--r-card); color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(1.6); -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow: var(--shadow-pop), inset 0 1px 0 color-mix(in srgb, var(--surface) 80%, transparent);
+  transition: border-color var(--dur-hover) var(--ease-enter), box-shadow var(--dur-hover) var(--ease-enter);
+}
+.savebar.invalid { border-color: var(--danger-line); box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 16%, transparent), 0 0 0 1px var(--danger-line); }
+.sb-note { font-size: 12.5px; color: var(--danger); flex: none; padding-right: 6px; }
+.sb-left { display: flex; align-items: center; gap: 10px; flex: 1 1 0; min-width: 0; padding: 0; border: none; background: none; color: inherit; text-align: left; position: relative; cursor: default; }
+.sb-left.clk { cursor: pointer; }
+.sb-left:disabled { opacity: 1; pointer-events: none; }
+.sb-count { flex: none; background: var(--accent); color: var(--accent-on); border-radius: 99px; font-size: 11px; font-weight: 600; padding: 1px 8px; font-variant-numeric: tabular-nums; }
+.sb-pending { display: flex; align-items: center; gap: 7px; overflow: hidden; min-width: 0; flex: 1 1 0; font-size: 12.5px; white-space: nowrap; }
+.sb-tag { flex: none; background: var(--accent-wash); color: var(--accent-ink); border-radius: var(--r-ctl); padding: 2px 8px; font-weight: 500; white-space: nowrap; font-size: 12px; }
+.sb-tag.add { background: var(--accent-wash); color: var(--accent-ink); }
+.sb-tag.remove { background: var(--danger-wash); color: var(--danger); }
+.sb-more { color: var(--ink-3); white-space: nowrap; flex: none; }
+.sb-rail { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; display: flex; gap: 7px; white-space: nowrap; }
+.sb-pop {
+  position: absolute; left: 0; bottom: calc(100% + 6px); max-width: min(520px, 100%); max-height: 140px; overflow-y: auto;
+  display: flex; flex-wrap: wrap; gap: 5px 8px; padding: 6px; transform-origin: bottom left;
+  background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: 12.5px;
+}
+.savebar .btn:active { opacity: 0.85; }
+@container (max-width: 470px) {
+  .savebar { flex-wrap: wrap; }
+  .sb-left { flex-basis: 100%; }
+  .sb-note { flex-basis: 100%; padding-right: 0; }
+}
 
 /* ---------- ops, dialogs, toasts ---------------------------------------- */
 .ops { display: flex; flex-direction: column; gap: 6px; flex: none; }

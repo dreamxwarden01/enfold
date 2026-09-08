@@ -300,6 +300,11 @@ class Store {
     this.setRoute(route);
   }
 
+  // settingsDraft holds the settings page's staged edits, key by key, so
+  // that they survive a visit to another page; the page diffs it against
+  // the saved settings (APP.md §6, the save bar).
+  settingsDraft = $state<Record<string, unknown>>({});
+
   // footNote is what the layer's foot says on the left: the page sets it
   // (APP.md §6).
   footNote = $state("");

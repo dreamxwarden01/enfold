@@ -4,23 +4,98 @@
   import { store } from "../lib/state.svelte";
   import { codeText } from "../lib/strings";
   import { minutesLabel } from "../lib/format";
+  import SaveBar from "./SaveBar.svelte";
+  import type { PendingItem } from "./SaveBar.svelte";
 
   const s = $derived(store.settings);
   const unlocked = $derived(store.unlocked);
 
   const idleChoices = [0, 2, 5, 10, 15, 20, 30];
   const absChoices = [0, 30, 60, 120, 240, 480];
+  const dictChoices: [number, string][] = [[0, "off"], [65536, "64 KB"], [262144, "256 KB"], [1048576, "1 MB"], [4194304, "4 MB"]];
 
-  async function set(patch: Partial<SettingsView>) {
+  // The staged edits live in the store (they survive a visit to another
+  // page); the page shows saved ⊕ draft and diffs the two for the bar
+  // (APP.md §6, the save bar): dirty is derived, never stored, so an edit
+  // put back by hand un-dirties itself.
+  type Key = "displayName" | "idleMinutes" | "absoluteMinutes" | "closeToTray" | "recoveryRecordPct" | "dictionaryBelow" | "theme";
+  const draft = $derived({ ...(s ?? ({} as SettingsView)), ...(store.settingsDraft as Partial<SettingsView>) } as SettingsView);
+
+  function edit<K extends Key>(key: K, value: SettingsView[K]) {
     if (!s) return;
-    const next = { ...s, ...patch };
+    if (value === s[key]) delete store.settingsDraft[key];
+    else store.settingsDraft[key] = value;
+  }
+
+  // Only what can be changed counts: the timeouts while unlocked.
+  function editable(key: Key): boolean {
+    if (key === "idleMinutes" || key === "absoluteMinutes") return !!s?.timeoutsAdjustable;
+    return true;
+  }
+
+  const labels: Record<Key, string> = {
+    displayName: "Vault name",
+    idleMinutes: "Idle lock",
+    absoluteMinutes: "Absolute lock",
+    closeToTray: "When the window closes",
+    recoveryRecordPct: "Recovery record",
+    dictionaryBelow: "Dictionary",
+    theme: "Theme",
+  };
+
+  function shown(key: Key, v: unknown): string {
+    switch (key) {
+      case "idleMinutes": return v === 0 ? "default (10 minutes)" : minutesLabel(v as number);
+      case "absoluteMinutes": return v === 0 ? "default (1 hour)" : minutesLabel(v as number);
+      case "closeToTray": return v === "hide" ? "keep the window" : "free the window";
+      case "recoveryRecordPct": return `${v}%`;
+      case "dictionaryBelow": return dictChoices.find((c) => c[0] === v)?.[1] ?? String(v);
+      case "theme": return v === "system" ? "follow Windows" : String(v);
+      case "displayName": return String(v).trim() ? `“${String(v).trim()}”` : "(empty)";
+    }
+  }
+
+  // Whether a staged value differs from the saved one: the name compares
+  // trimmed, since spaces at its ends are allowed while typing and
+  // stripped when saved — never a change on their own, never invalid.
+  function differs(k: Key): boolean {
+    if (!s) return false;
+    const v = store.settingsDraft[k];
+    if (k === "displayName") return String(v).trim() !== s.displayName;
+    return v !== s[k];
+  }
+
+  const items = $derived.by((): PendingItem[] => {
+    if (!s) return [];
+    return (Object.keys(store.settingsDraft) as Key[])
+      .filter((k) => editable(k) && differs(k))
+      .map((k) => ({ key: k, label: `${labels[k]} · ${shown(k, store.settingsDraft[k])}` }));
+  });
+
+  // Invalid input greys Save and says why — in the bar, and at the field.
+  const nameBad = $derived("displayName" in store.settingsDraft && draft.displayName.trim() === "");
+  const invalid = $derived(nameBad ? "Give the vault a name to save." : "");
+
+  let busy = $state(false);
+
+  async function save() {
+    if (!s || busy || invalid) return;
+    busy = true;
+    const next: SettingsView = { ...draft, displayName: draft.displayName.trim() };
     try {
       await Settings.Set(next);
       await store.refreshSettings();
+      store.settingsDraft = {}; // the bar's leaving is the confirmation; no toast
     } catch (e) {
+      // The draft stays: the user can press Save again.
       store.toast(codeText(errorOf(e).code), "error");
-      await store.refreshSettings();
+    } finally {
+      busy = false;
     }
+  }
+
+  function discard() {
+    store.settingsDraft = {};
   }
 
   function num(e: Event): number {
@@ -46,19 +121,19 @@
         <div class="card setcard">
           <div class="setrow">
             <div class="lab"><b>Idle lock</b><span>No mouse or keyboard. Never off; at most 30 minutes.</span></div>
-            <div class="ctl"><select class="input" disabled={!s.timeoutsAdjustable} value={s.idleMinutes} onchange={(e) => set({ idleMinutes: num(e) })}>
+            <div class="ctl"><select class="input" disabled={!s.timeoutsAdjustable} value={draft.idleMinutes} onchange={(e) => edit("idleMinutes", num(e))}>
               {#each idleChoices as m (m)}<option value={m}>{m === 0 ? "default (10 minutes)" : minutesLabel(m)}</option>{/each}
             </select></div>
           </div>
           <div class="setrow">
             <div class="lab"><b>Absolute lock</b><span>Time since unlocking, whatever happens. At most 8 hours.</span></div>
-            <div class="ctl"><select class="input" disabled={!s.timeoutsAdjustable} value={s.absoluteMinutes} onchange={(e) => set({ absoluteMinutes: num(e) })}>
+            <div class="ctl"><select class="input" disabled={!s.timeoutsAdjustable} value={draft.absoluteMinutes} onchange={(e) => edit("absoluteMinutes", num(e))}>
               {#each absChoices as m (m)}<option value={m}>{m === 0 ? "default (1 hour)" : minutesLabel(m)}</option>{/each}
             </select></div>
           </div>
           <div class="setrow">
             <div class="lab"><b>When the window closes</b><span>Enfold stays in the tray either way.</span></div>
-            <div class="ctl"><select class="input" value={s.closeToTray} onchange={(e) => set({ closeToTray: str(e) })}>
+            <div class="ctl"><select class="input" value={draft.closeToTray} onchange={(e) => edit("closeToTray", str(e))}>
               <option value="destroy">Free the window's memory</option>
               <option value="hide">Keep the window in memory</option>
             </select></div>
@@ -68,17 +143,13 @@
         <div class="ks-head top"><h2 class="t-section">Exports</h2></div>
         <div class="card setcard">
           <div class="setrow">
-            <div class="lab"><b>Recovery record</b><span>Repairs an exported volume damaged in storage. Costs space.</span></div>
-            <div class="ctl row"><input type="range" min="1" max="20" value={s.recoveryRecordPct} onchange={(e) => set({ recoveryRecordPct: num(e) })} /><span class="num pct">{s.recoveryRecordPct}%{s.recoveryRecordPct === 3 ? " (default)" : ""}</span></div>
+            <div class="lab"><label for="recovery-pct"><b>Recovery record</b></label><span>Parity kept beside an exported volume, so damage in storage can be repaired without a key. Costs the same share of space. Recommended: 3%; 0% is off. Applies to exports made from now on.</span></div>
+            <div class="ctl row slider"><input id="recovery-pct" type="range" min="0" max="20" value={draft.recoveryRecordPct} oninput={(e) => edit("recoveryRecordPct", num(e))} /><span class="num pct">{draft.recoveryRecordPct}%</span></div>
           </div>
           <div class="setrow">
             <div class="lab"><b>Dictionary for small files</b><span>Files below this size share a compression dictionary.</span></div>
-            <div class="ctl"><select class="input" value={s.dictionaryBelow} onchange={(e) => set({ dictionaryBelow: num(e) })}>
-              <option value={0}>off</option>
-              <option value={65536}>64 KB</option>
-              <option value={262144}>256 KB</option>
-              <option value={1048576}>1 MB</option>
-              <option value={4194304}>4 MB</option>
+            <div class="ctl"><select class="input" value={draft.dictionaryBelow} onchange={(e) => edit("dictionaryBelow", num(e))}>
+              {#each dictChoices as [v, label] (v)}<option value={v}>{label}</option>{/each}
             </select></div>
           </div>
         </div>
@@ -89,7 +160,7 @@
         <div class="card setcard">
           <div class="setrow">
             <div class="lab"><b>Theme</b><span>The window's own theme follows at the next open.</span></div>
-            <div class="ctl"><select class="input" value={s.theme} onchange={(e) => set({ theme: str(e) })}>
+            <div class="ctl"><select class="input" value={draft.theme} onchange={(e) => edit("theme", str(e))}>
               <option value="system">Follow Windows</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
@@ -100,20 +171,32 @@
             <div class="ctl"><span class="chip">Native</span></div>
           </div>
         </div>
+
+        <div class="ks-head top"><h2 class="t-section">Vault</h2></div>
+        <div class="card setcard">
+          <div class="setrow">
+            <div class="lab"><label for="vault-name"><b>Name</b></label><span>How this vault is called on the lock screen and in the tray.</span></div>
+            <div class="ctl"><input id="vault-name" class="input" type="text" maxlength="60" value={draft.displayName} aria-invalid={nameBad || undefined} oninput={(e) => edit("displayName", str(e))} /></div>
+          </div>
+          <div class="setrow"><div class="lab"><b>File</b><span class="ellipsis" title={s.vaultPath || store.status?.defaultPath}>{s.vaultPath ? `${s.vaultPath} — kept elsewhere` : store.status?.defaultPath ?? ""}</span></div></div>
+        </div>
+
         <div class="ks-head top"><h2 class="t-section">About</h2></div>
         <div class="card setcard">
           <div class="setrow"><div class="lab"><b>Enfold 0.1.0</b><span>Compression and encryption archives, unlocked by a YubiKey.</span></div></div>
-          <div class="setrow"><div class="lab"><b>Vault</b><span class="ellipsis" title={s.vaultPath || store.status?.defaultPath}>{s.vaultPath ? `${s.vaultPath} — kept elsewhere` : store.status?.defaultPath ?? ""}</span></div></div>
           <div class="setrow"><div class="lab"><b>Data folder</b><span>%LOCALAPPDATA%\Enfold — the vault, settings and the log.</span></div></div>
         </div>
       </div>
     </div>
+    <SaveBar {items} {invalid} {busy} onsave={save} ondiscard={discard} />
   {/if}
 </div>
 
 
 <style>
   .ks-head.top { margin-top: 12px; }
-  .pct { min-width: 92px; text-align: right; }
-  input[type="range"] { accent-color: var(--accent); width: 140px; }
+  .ctl.slider { gap: 6px; }
+  .ctl.slider input[type="range"] { accent-color: var(--accent); width: 140px; margin: 0; }
+  .pct { min-width: 30px; text-align: right; }
+  .lab label { cursor: default; }
 </style>

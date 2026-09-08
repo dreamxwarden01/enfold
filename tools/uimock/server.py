@@ -86,7 +86,7 @@ METHODS = {
     332274822: lambda a: None,
     3319062579: lambda a: {"path": a[0], "kind": "backup", "modifiedAt": NOW - 90000, "vaultMatches": True, "slotCount": 1, "hardware": 0, "password": 0, "recovery": 1, "newer": False},  # vault.InspectFile
     18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: lambda a: None,  # ImportFile, FinishSetup, VerifyBackup
-    2652127606: lambda a: state["settings"], 740356410: lambda a: None,
+    2652127606: lambda a: state["settings"], 740356410: lambda a: state["settings"].update(a[0]) if a else None,
     3606391931: lambda a: None, 3229291943: lambda a: ["D:/Pictures/a.jpg"], 2529646972: lambda a: "D:/Pictures", 2079207478: lambda a: None,
     842300112: lambda a: None, 1923582270: lambda a: "D:/new.efd", 3130426784: lambda a: None,
 }

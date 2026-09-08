@@ -46,8 +46,8 @@ func loadSettings(dir string) settingsFile {
 	if f.Theme == "light" || f.Theme == "dark" {
 		s.Theme = f.Theme
 	}
-	if f.RecoveryRecordPct >= 1 && f.RecoveryRecordPct <= 20 {
-		s.RecoveryRecordPct = f.RecoveryRecordPct
+	if f.RecoveryRecordPct >= 0 && f.RecoveryRecordPct <= 20 {
+		s.RecoveryRecordPct = f.RecoveryRecordPct // 0: no recovery record (SCOPE.md: optional, 3% by default)
 	}
 	if f.DictionaryBelow >= 0 && f.DictionaryBelow <= 64<<20 {
 		s.DictionaryBelow = f.DictionaryBelow
@@ -126,7 +126,7 @@ func (c *Core) GetSettings() Settings {
 // SetSettings stores the machine-local part and, while unlocked, the
 // timeouts into the registry. Out-of-range timeouts are refused.
 func (c *Core) SetSettings(s Settings) *Error {
-	if s.RecoveryRecordPct < 1 || s.RecoveryRecordPct > 20 {
+	if s.RecoveryRecordPct < 0 || s.RecoveryRecordPct > 20 {
 		return coded(CodeParams)
 	}
 	if s.CloseToTray != "destroy" && s.CloseToTray != "hide" {

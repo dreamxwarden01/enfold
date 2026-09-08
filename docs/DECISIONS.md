@@ -2868,3 +2868,43 @@ its keyboard and its accessibility, and the list falls 4 px and fades in whole, 
 the user asked for over a sliding reveal. The hover colour of a link-style button had been the
 accent's *hover* shade, which is brighter; it is a darker ink now, the way a link is expected
 to answer. `prefers-reduced-motion` zeroes everything, the settle included. APP.md §6, Motion.
+
+---
+
+## 2026-09-07 — The save bar, the settings page's shape, and what a toast is for
+
+The settings page saved every control on change, squeezed its labels to a word a line when the
+window narrowed, and kept its right column at a fixed width whatever the window did. The user
+asked for a page that survives being narrowed, and for a save bar — edits staged and named,
+saved together — designed after the one in their other project's admin pages (the per-user and
+per-role permission lists), which an Opus agent read and summarised so that only its principles
+crossed into this one: dirty is derived by diffing, never stored, so an edit put back by hand
+un-dirties itself; the bar lives in flow at the foot of the scroll pane and sticks there, so it
+can never cover the last row for good nor the rail; it names the changes rather than counting
+them, folding what does not fit into "+N more…"; only editable fields count; validation is
+delta-aware — a new problem blocks Save, an old one is shown; invalid explains itself in the bar
+and at the field, never by a greyed button alone; busy is a label swap; success and failure are
+not the bar's to announce; Discard is instant and unconfirmed.
+
+**Ruled and shipped** (`SaveBar`, `store.settingsDraft`, APP.md §6 "The save bar" and
+"Responsive"). The bar rises 8 px and fades in, sinks and fades out, frosted at 88% over a blur,
+12 px above the pane's end with 12 px of the columns' own padding above it — the first draft
+had the columns shrinking to the pane (`flex: 1; min-height: 0`), which put the in-flow bar
+after a squeezed box and sent it to the middle of the page on scroll; the columns grow and
+never shrink now. A *Vault* card with an editable name gives the invalid state a real case (an
+empty name; spaces at the ends are allowed while typing, never a change on their own, and
+stripped when saved). The page's two columns merge under 840 px of body and a row stacks under
+470 px of card, by container query, so the window's minimum of 880 × 560 always holds every
+control. Ctrl+S saves. The draft survives a visit to another page.
+
+Three smaller rulings from the same session. *The recovery-record slider*: its label says the
+number alone, close beside it, and the row's line says the rest ("Recommended: 3%; 0% is off.
+Applies to exports made from now on."); a tick at the recommended value and an instant tooltip
+were built and then removed — the label is the value, and a lone tick reads as a stray mark.
+0% is accepted now: SCOPE calls the record optional, and the core had refused anything under 1.
+The setting is stored but consumed by nothing yet — the record is a planned parity sidecar
+beside exports, never a field of the envelope. *No "Settings saved." toast*: the bar leaving is
+the confirmation. *Toasts*, for whatever comes next: only for what the page cannot say in
+place, at the top of the window and centred on it — not on the content layer — dropping in a
+few pixels as they fade and rising as they leave; the bottom-right ones of today move when next
+touched.

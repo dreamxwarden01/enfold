@@ -846,15 +846,55 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   140 ms, rows tint on hover (120 ms), the chosen row wears the accent wash while the list
   fades out (100 ms). An older runtime ignores the declaration and shows the system popup,
   unanimated and unchanged.
+- *The save bar* (`SaveBar`, the Settings page first; every page that stages edits uses it
+  as it is). Edits are staged, never saved on change: the page shows saved ⊕ draft and *derives*
+  what is pending by diffing the two — dirty is never stored, so an edit put back by hand
+  un-dirties itself; only what the user may change counts (a timeout while locked does not).
+  While nothing is pending there is no bar. While something is, a frosted bar (the surface at
+  88% over a blur — enough to read through, not enough to read the content behind it — with an
+  inset hairline so its edge reads) rises 8 px and fades in (fast) at the
+  foot of the scroll pane — in flow after the content and sticky 12 px above the pane's bottom,
+  so it can never cover the last row for good, nor the rail — and sinks 8 px and fades out
+  (leave) when the last edit is reverted, discarded or saved. It names the changes rather than
+  counting them: an accent count pill, then as many chips as fit — "Idle lock · 5 minutes";
+  "+ label" and "− label" in the accent wash and the danger wash where a change adds or removes
+  something — the rest folded into "+N more…", a click on which opens a popover of exactly the
+  folded ones (fast, scaled from 97%; leave). Then *Discard* and the accent *Save changes*.
+  Invalid input greys Save and says why in one red sentence at the bar's left, with the bar
+  framed in the danger line; the field is marked in place too (`aria-invalid`), so the greyed
+  button is never the only signal; Discard stays enabled. Saving swaps the label to *Saving…*
+  and disables both; no spinner. Success is the bar leaving — nothing else says so; failure is
+  the page's toast, and the draft stays, so Save can be pressed again. Discard is one
+  action, instant, unconfirmed. Ctrl+S saves while the bar is up and valid. The draft survives a
+  visit to another page (the store keeps it). Validation is delta-aware where that applies:
+  only a problem the edit introduced blocks Save; one that was already there is shown, not
+  wedging an unrelated change. The page's controls press the way every control does; the
+  bar's buttons dim to 85% while pressed.
+- *Responsive.* The window never goes below 880 × 560. A page's two columns merge when the
+  layer's body is narrower than 840 px, and a settings row stacks — the title, its line, then
+  the control on a line of its own — when its card is narrower than 470 px; both are container
+  queries, not viewport ones, so a narrow column stacks its rows while a wide one keeps them
+  side by side. The save bar wraps its chips onto their own line at the same width.
 - *Controls.* Every dialog and popover enters over 140 ms (the box also scales from 97%) and
   leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
   steps, the lock screen's three cards — fades the new content in over 140 ms and the cards
-  ease between live and dim; toasts rise 6 px as they fade in. A link-style button darkens on
+  ease between live and dim. *Toasts* are for what the page cannot say in place — an error the
+  action's own surface is gone for — never a confirmation of something the page already shows
+  (a saved setting is the bar leaving). Where they go, ruled 2026-09-07 for whatever toasts come
+  next: at the top of the window, centred on the window — not on the content layer — dropping
+  in a little as they fade (a few pixels down, never sliding in from the top edge) and leaving
+  upward as they fade out; the toasts that exist today sit at the bottom right and move to this
+  the next time they are touched. A link-style button darkens on
   hover (`--accent-ink-hover`, a step past `--accent-ink`; brighter in the dark theme, where
   contrast goes the other way) and thickens its underline; a button's press is instant and dims
-  its text. A closed dialog answers no key or click while it fades: Svelte marks the element
-  inert the moment the outro is committed (synchronously, before any frame) and clears that if
-  the dialog is reopened mid-fade, and the handlers check `inert`.
+  its text. A slider's label sits close beside it, fixed in width, and says the number alone,
+  so nothing shifts as the value changes; what the number means — the recommendation, what 0
+  does, what it applies to — is the row's line, never a suffix that comes and goes ("Recommended:
+  3%; 0% is off. Applies to exports made from now on."). No tooltip and no tick: the label is
+  the value, and a lone tick reads as a stray mark. A closed dialog answers no key or click
+  while it fades: Svelte marks the element inert the moment the outro is committed
+  (synchronously, before any frame) and clears that if the dialog is reopened mid-fade, and
+  the handlers check `inert`.
 
 ## 7. Frontend
 

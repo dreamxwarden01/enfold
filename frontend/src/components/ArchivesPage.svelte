@@ -1,14 +1,14 @@
 <script lang="ts">
   // The Archives page is the vault's inspector (APP.md §13): it lists
   // registry records, not files. Name carries the description as its
-  // muted second line; Status carries what the row is — open, dirty, file
+  // muted second line; Status carries what the row is — open, file
   // missing, hidden, forgotten — and *file missing* is only ever the
   // core's own note, so the cell is blank until a presence pass has run
   // and never says "missing" about a path nobody has measured. The header
   // line sums the rows shown and says so, beside the vault file's own size
   // and the registry's date (§2.1).
   import { untrack } from "svelte";
-  import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
+  import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, warningCopy } from "../lib/strings";
@@ -66,10 +66,6 @@
     mode: "delete" | "forget";
   }
   let del = $state<DeleteAsk | null>(null);
-  // The same act on an open archive closes it first and asks about unsaved
-  // changes, as the Archive page's own Delete archive… does (APP.md §13).
-  let closeAsk = $state<DeleteAsk | null>(null);
-  let closeDirty = $state(0);
   let merging = $state("");
   let saving = $state(false);
 
@@ -102,8 +98,9 @@
   function statuses(a: ArchiveSummary): Status[] {
     const out: Status[] = [];
     if (a.forgottenAt > 0) out.push({ label: "forgotten", tone: "forgotten", title: `Forgotten on ${date(a.forgottenAt)}` });
-    if (a.open && a.dirty > 0) out.push({ label: "dirty", tone: "dirty", title: `${a.dirty} unsaved change${a.dirty === 1 ? "" : "s"}` });
-    else if (a.open) out.push({ label: "open", tone: "open" });
+    // Nothing is "dirty" since 2026-09-09: an archive is clean between
+    // operations, each of them its own transaction (APP.md §2.3).
+    if (a.open) out.push({ label: "open", tone: "open" });
     // Never computed here: the core keeps a presence per record and the
     // note is the only thing that says a file is gone (APP.md §13).
     if (a.note === "archive.file_missing") out.push({ label: "file missing", tone: "missing", title: codeText(a.note) });
@@ -114,7 +111,6 @@
   function statusRank(a: ArchiveSummary): number {
     if (a.forgottenAt > 0) return 5;
     if (a.note === "archive.file_missing") return 4;
-    if (a.open && a.dirty > 0) return 3;
     if (a.open) return 2;
     if (a.hidden) return 1;
     return 0;
@@ -287,10 +283,9 @@
   }
 
   // ---- Forget key… and Delete archive… -----------------------------------
-  // Both close the archive first, unsaved changes asked about (APP.md §13);
-  // the core refuses either with archive.busy while this process holds a
-  // handle, and a refusal on the consent screen would offer neither the
-  // close nor a word about the changes it discards.
+  // Both close the archive first (APP.md §13); the core refuses either
+  // with archive.busy while a preview reader is live, and a refusal on
+  // the consent screen would offer neither the close nor a reason.
   function ask(mode: "delete" | "forget"): DeleteAsk | null {
     const a = sel;
     if (!a) return null;
@@ -301,20 +296,12 @@
     const a = sel;
     const snap = ask(mode);
     if (!a || !snap) return;
-    if (a.open) {
-      if (a.dirty > 0) {
-        closeDirty = a.dirty;
-        closeAsk = snap;
-        return;
-      }
-      if (!(await closeFirst(snap.id))) return;
-    }
+    if (a.open && !(await closeFirst(snap.id))) return;
     del = snap;
   }
 
-  async function closeFirst(id: string, saveFirst = false): Promise<boolean> {
+  async function closeFirst(id: string): Promise<boolean> {
     try {
-      if (saveFirst) await Archive.Save(id);
       await Archives.Close(id);
     } catch (e) {
       fail(e);
@@ -325,13 +312,6 @@
     if (store.current === id) store.leaveArchive();
     await store.refreshArchives();
     return true;
-  }
-
-  async function continueAfterClose(saveFirst: boolean) {
-    const snap = closeAsk;
-    closeAsk = null;
-    if (!snap) return;
-    if (await closeFirst(snap.id, saveFirst)) del = snap;
   }
 
   // A Delete archive… begun on the Archive page: the archive was closed
@@ -576,24 +556,6 @@
 
 {#if showDetails && det}
   <ArchiveDetailsDialog d={det} onclose={() => (showDetails = false)} />
-{/if}
-
-{#if closeAsk}
-  <Dialog title="Save the unsaved changes first?" onclose={() => (closeAsk = null)}>
-    <p>
-      {closeAsk.name} has {closeDirty} unsaved change{closeDirty === 1 ? "" : "s"} and is closed first.
-      {#if closeAsk.mode === "delete"}
-        Deleting the archive removes the file, so anything not saved goes with it either way — saving first only puts the changes into the file that is about to be removed.
-      {:else}
-        Forgetting the key leaves the file exactly as it is, so saving first writes the changes into it; discarding them loses them.
-      {/if}
-    </p>
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (closeAsk = null)}>Cancel</button>
-      <button type="button" class="btn" onclick={() => void continueAfterClose(true)}>Save, then continue</button>
-      <button type="button" class="btn accent" onclick={() => void continueAfterClose(false)}>Discard and continue</button>
-    {/snippet}
-  </Dialog>
 {/if}
 
 {#if del}

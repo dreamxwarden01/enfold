@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"log"
@@ -27,6 +28,7 @@ import (
 	"github.com/dreamxwarden01/enfold/internal/app/api"
 	"github.com/dreamxwarden01/enfold/internal/app/pivcards"
 	"github.com/dreamxwarden01/enfold/internal/brand"
+	"github.com/dreamxwarden01/enfold/internal/spool"
 )
 
 //go:embed all:frontend/dist
@@ -56,8 +58,12 @@ type shell struct {
 	lock *lockWatch
 	log  func(string, ...any)
 
-	profile  string
-	winMu    sync.Mutex
+	profile string
+	winMu   sync.Mutex
+	// printMu holds the spooler watch for one print at a time: the page's
+	// dialog is modal, so a second print cannot start under the first.
+	printMu  sync.Mutex
+	spool    *spool.Watch
 	quitMu   sync.Mutex
 	quitting bool
 	settings func() app.Settings
@@ -93,6 +99,7 @@ func main() {
 	s.settings = core.GetSettings
 
 	vault, archives, archive, keys, settings := api.Services(core)
+	s.spool = spool.New(spool.System{})
 	shellSvc := api.NewShell(api.Hooks{
 		ShowWindow:  s.ensureWindow,
 		CloseWindow: s.closeWindow,
@@ -100,6 +107,8 @@ func main() {
 		PickFolder:  s.pickFolder,
 		SaveFile:    s.saveFile,
 		Reveal:      s.reveal,
+		PrintBegin:  s.printBegin,
+		PrintEnd:    s.printEnd,
 		Quit:        s.quit,
 	})
 
@@ -414,9 +423,37 @@ func (s *shell) reveal(path string) error {
 	return s.app.Env.OpenFileManager(path, true)
 }
 
-// quit is the tray's and the page's Quit: unsaved changes are named and
-// confirmed, then the ordered shutdown runs and the process ends. Never
-// asked twice.
+// The print spooler watch around the recovery key's print (APP.md §6): the
+// jobs standing before window.print(), then the poll after afterprint for
+// one the snapshot did not hold. Nothing here ever submits a job; an error
+// is the spooler being unreadable, and the page then asks the user as it
+// always did.
+func (s *shell) printBegin() error {
+	s.printMu.Lock()
+	defer s.printMu.Unlock()
+	if err := s.spool.Begin(); err != nil {
+		s.log("print: the spooler could not be read: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (s *shell) printEnd() (bool, error) {
+	s.printMu.Lock()
+	defer s.printMu.Unlock()
+	submitted, err := s.spool.End(context.Background())
+	if err != nil {
+		s.log("print: the spooler could not be read: %v", err)
+		return false, err
+	}
+	return submitted, nil
+}
+
+// quit is the tray's and the page's Quit: the running operations are named
+// and the quit confirmed, then the ordered shutdown runs and the process
+// ends. Never asked twice. There are no unsaved changes to ask about since
+// 2026-09-09 — every operation commits at its own end (APP.md §2.3) — so
+// what the question names is what quitting would cancel.
 func (s *shell) quit() {
 	s.quitMu.Lock()
 	if s.quitting {
@@ -426,11 +463,11 @@ func (s *shell) quit() {
 	s.quitting = true
 	s.quitMu.Unlock()
 	st := s.core.Status()
-	if st.DirtyArchives > 0 || st.State == app.StateUnlocking {
+	if running := runningOps(st); running > 0 || st.State == app.StateUnlocking {
 		// A Windows question dialog is a Yes/No message box: Show blocks
 		// until it closes and then runs the callback of the button whose
 		// label is the one pressed — "Yes" or "No", nothing else.
-		msg := fmt.Sprintf("%d archive(s) have changes not yet saved. Save them and quit?", st.DirtyArchives)
+		msg := fmt.Sprintf("%d operation(s) are still running. Cancel them and quit?", running)
 		if st.State == app.StateUnlocking {
 			msg = "An unlock is in progress. Cancel it and quit?"
 		}
@@ -465,6 +502,18 @@ func (s *shell) quit() {
 	s.core.ResolveForShutdown(shutdownBudget)
 	s.core.AwaitPendingTouch()
 	s.app.Quit()
+}
+
+// runningOps counts the operations of a status that have not finished: what
+// the Quit question names, and what the tray's tooltip says is under way.
+func runningOps(st app.VaultStatus) int {
+	n := 0
+	for _, o := range st.Ops {
+		if !o.Finished {
+			n++
+		}
+	}
+	return n
 }
 
 // onShutdown is the bounded, ordered end (§5): resolve, lock, stop.

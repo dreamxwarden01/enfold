@@ -110,7 +110,10 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeTokenTwoKeys]: "Two YubiKeys are inserted. Remove one.",
   [Code.CodeArchiveNotOpen]: "The archive is not open.",
   [Code.CodeArchiveOpen]: "The archive is already open.",
-  [Code.CodeArchiveDirty]: "The archive has changes not yet saved.",
+  // Not a state the user can be in since 2026-09-09 — an archive is clean
+  // between operations — but the code stands for the archive layer's
+  // "a transaction is already open on this handle", which is a bug.
+  [Code.CodeArchiveDirty]: "Something went wrong inside Enfold: an operation was begun on an archive that already had one. The log in the data folder has the details.",
   [Code.CodeArchiveBusy]: "The archive is busy with another operation.",
   [Code.CodeArchiveCompacting]: "The archive is being compacted.",
   [Code.CodeArchiveNeedsReopen]: "The archive needs to be reopened.",
@@ -153,8 +156,7 @@ export const codeCopy: Record<CodeKey, string> = {
 const extraCodes: Record<string, string> = {
   "shell.lock_detection_unavailable": "Workstation-lock detection is unavailable; Enfold polls instead and may lock a few seconds late.",
   "vault.timeouts_clamped": "The vault's stored timeouts were outside the permitted range and were replaced by the defaults.",
-  "archive.changes_discarded": "An archive's unsaved changes were discarded when its time ran out.",
-  "archive.envelope_stale": "An archive's envelope was left behind by a rotation; Enfold repairs it on the next save.",
+  "archive.envelope_stale": "An archive's envelope was left behind by a rotation; rotating its key again repairs it.",
 };
 
 export function codeText(code: string | undefined): string {

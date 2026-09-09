@@ -6,12 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dreamxwarden01/enfold/internal/archive"
 )
 
 // The archive page over a tree (APP.md §2.3, §3; FORMAT.md R39): ids at the
-// boundary, the merged view of the snapshot and the overlay, and the
-// operations that read and write it. Nothing here speaks a path except as
-// something the tree derives.
+// boundary, the committed snapshot re-taken after every commit, and the
+// operations that read and write it. Each operation is its own transaction,
+// so what a call returns is what the file holds. Nothing here speaks a path
+// except as something the tree derives.
 
 // rootID is the archive's root as the boundary spells it: the all-zero id,
 // 32 lowercase hex digits, the same value the format writes as a top-level
@@ -56,6 +59,16 @@ func (h *harness) row(t *testing.T, id, dirID, name string) FileRow {
 	return r
 }
 
+// stat is the status strip, failing the test if the archive is not open.
+func (h *harness) stat(t *testing.T, id string) ArchiveStat {
+	t.Helper()
+	st, e := h.c.Stat(id)
+	if e != nil {
+		t.Fatalf("stat: %v", e)
+	}
+	return st
+}
+
 // src writes a source file and returns its path.
 func (h *harness) src(t *testing.T, rel, content string) string {
 	t.Helper()
@@ -69,7 +82,7 @@ func (h *harness) src(t *testing.T, rel, content string) string {
 	return p
 }
 
-// add stages files under parentID and waits for the operation.
+// add adds files under parentID and waits for the operation.
 func (h *harness) add(t *testing.T, id, parentID string, policy AddPolicy, paths ...string) OpView {
 	t.Helper()
 	opID, e := h.c.AddFiles(id, parentID, paths, policy)
@@ -87,17 +100,6 @@ func (h *harness) addFolder(t *testing.T, id, parentID, dir string, policy AddPo
 		t.Fatalf("add folder: %v", e)
 	}
 	return h.rec.waitOp(t, opID)
-}
-
-func (h *harness) save(t *testing.T, id string) {
-	t.Helper()
-	opID, e := h.c.Save(id)
-	if e != nil {
-		t.Fatalf("save: %v", e)
-	}
-	if o := h.rec.waitOp(t, opID); o.Error != "" {
-		t.Fatalf("save op: %+v", o)
-	}
 }
 
 // outDir is a fresh extraction destination. Extracted files go under
@@ -132,7 +134,6 @@ func TestPageOverATreeWithCrumbs(t *testing.T) {
 	}
 	h.add(t, id, b, PolicySkip, h.src(t, "deep.txt", "0123456789"))
 	h.add(t, id, rootID, PolicySkip, h.src(t, "top.txt", "top"))
-	h.save(t, id)
 
 	root := h.page(t, id, rootID)
 	if root.Total != 2 || len(root.Rows) != 2 {
@@ -167,33 +168,24 @@ func TestPageOverATreeWithCrumbs(t *testing.T) {
 	}
 }
 
-// A dirID the page still holds can be gone — Discard drops what a
-// transaction staged, a Delete takes a subtree the page may be standing in —
-// and is told so, never given an empty listing under a breadcrumb that still
-// names the place.
+// A dirID the page still holds can be gone — a Delete takes a subtree the
+// page may be standing in — and is told so, never given an empty listing
+// under a breadcrumb that still names the place.
 func TestAPageWhoseFolderWentIsToldSo(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Gone")
 
-	staged, e := h.c.CreateFolder(id, rootID, "staged")
+	kept, e := h.c.CreateFolder(id, rootID, "kept")
 	if e != nil {
 		t.Fatal(e)
 	}
-	h.page(t, id, staged) // enterable while it is staged
-	if e := h.c.Discard(id); e != nil {
-		t.Fatal(e)
-	}
-	if _, e := h.c.Page(id, staged, "name", 0, 10); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("a folder Discard dropped: %v", e)
-	}
-	kept, _ := h.c.CreateFolder(id, rootID, "kept")
-	h.save(t, id)
+	h.page(t, id, kept) // enterable while it is there
 	if e := h.c.DeleteRecords(id, []string{kept}); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := h.c.Page(id, kept, "name", 0, 10); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("a folder staged for deletion: %v", e)
+		t.Fatalf("a folder the delete took: %v", e)
 	}
 	// An id that is not 32 hex digits is params, and one that never named a
 	// record is file.not_found.
@@ -212,8 +204,8 @@ func TestTheRootIsNamedButNeverActedOn(t *testing.T) {
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Root")
 	h.add(t, id, rootID, PolicySkip, h.src(t, "f.txt", "f"))
-	h.save(t, id)
 	f := h.row(t, id, rootID, "f.txt").ID
+	before := h.stat(t, id).Seq
 
 	if e := h.c.DeleteRecords(id, []string{rootID}); !isCode(e, CodeParams) {
 		t.Fatalf("delete the root: %v", e)
@@ -244,13 +236,13 @@ func TestTheRootIsNamedButNeverActedOn(t *testing.T) {
 	if _, e := h.c.CreateFolder(id, f, "x"); !isCode(e, CodeFileNotFound) {
 		t.Fatalf("create under a file: %v", e)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 0 {
-		t.Fatalf("a refusal staged something: %+v", st)
+	if st := h.stat(t, id); st.Seq != before {
+		t.Fatalf("a refusal committed something: %+v", st)
 	}
 }
 
-// A folder made in the app is a record: staged at once, listed, enterable,
-// and it survives the save with nothing in it. Discard drops it.
+// A folder made in the app is a record, committed at once: listed,
+// enterable, and it stands with nothing in it (FORMAT.md R39).
 func TestCreateFolderIsARecord(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
@@ -260,12 +252,9 @@ func TestCreateFolderIsARecord(t *testing.T) {
 	if e != nil {
 		t.Fatalf("create folder: %v", e)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 1 || st.State != "dirty" {
-		t.Fatalf("a staged folder is one change: %+v", st)
-	}
 	r := h.row(t, id, rootID, "Photos")
-	if !r.IsDir || r.Pending != "added" || r.ID != nid {
-		t.Fatalf("staged folder row: %+v", r)
+	if !r.IsDir || r.ID != nid {
+		t.Fatalf("the folder's row: %+v", r)
 	}
 	// A second folder of a folded-equal name is refused; the name itself is
 	// validated like any other's.
@@ -284,35 +273,29 @@ func TestCreateFolderIsARecord(t *testing.T) {
 	if _, e := h.c.CreateFolder(id, rootID, "CON"); !isCode(e, CodeFileName) {
 		t.Fatalf("a reserved device name: %v", e)
 	}
-	// It is a real parent while it is staged.
+	// It is a real parent at once.
 	inner, e := h.c.CreateFolder(id, nid, "2024")
 	if e != nil {
-		t.Fatalf("create under a staged folder: %v", e)
+		t.Fatalf("create under a fresh folder: %v", e)
 	}
 	h.add(t, id, inner, PolicySkip, h.src(t, "p.txt", "pic"))
-	h.save(t, id)
-	if p := h.page(t, id, nid); p.Total != 1 || p.Rows[0].Name != "2024" || p.Rows[0].Pending != "" {
-		t.Fatalf("after save: %+v", p.Rows)
+	if p := h.page(t, id, nid); p.Total != 1 || p.Rows[0].Name != "2024" {
+		t.Fatalf("the folder's children: %+v", p.Rows)
 	}
-	// An empty folder made after the save survives its own commit.
+	// An empty folder survives its own commit: a reopen of the file still
+	// has it.
 	empty, _ := h.c.CreateFolder(id, rootID, "Empty")
-	h.save(t, id)
+	if e := h.c.CloseArchive(id); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := h.c.OpenArchive(id); e != nil {
+		t.Fatal(e)
+	}
 	if p := h.page(t, id, empty); p.Total != 0 {
 		t.Fatalf("the empty folder took something with it: %+v", p)
 	}
 	if h.row(t, id, rootID, "Empty").ID != empty {
-		t.Fatal("the empty folder did not survive the save")
-	}
-	// Discard drops the folders that transaction staged.
-	dropped, _ := h.c.CreateFolder(id, rootID, "Dropped")
-	if e := h.c.Discard(id); e != nil {
-		t.Fatal(e)
-	}
-	if _, ok := rowsByName(h.page(t, id, rootID))["Dropped"]; ok {
-		t.Fatal("Discard kept a staged folder")
-	}
-	if _, e := h.c.Page(id, dropped, "name", 0, 10); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("the dropped folder is still enterable: %v", e)
+		t.Fatal("the empty folder did not survive the commit")
 	}
 }
 
@@ -354,7 +337,6 @@ func TestAddFolderCreatesAndEnters(t *testing.T) {
 			t.Fatalf("a directory outcome without IsDir: %+v", r)
 		}
 	}
-	h.save(t, id)
 	top := h.row(t, id, rootID, "pics")
 	if !top.IsDir || top.ModifiedAt != when.Unix() {
 		t.Fatalf("the folder's own time was not kept: %+v", top)
@@ -370,6 +352,7 @@ func TestAddFolderCreatesAndEnters(t *testing.T) {
 	// keeping its dir_id and its own time, and the policy goes on applying
 	// to what the walk carries inside.
 	h.src(t, "pics/two.txt", "two")
+	before := h.stat(t, id).Seq
 	o = h.addFolder(t, id, rootID, pics, PolicySkip)
 	got := map[string]string{}
 	for _, r := range o.Results {
@@ -381,10 +364,10 @@ func TestAddFolderCreatesAndEnters(t *testing.T) {
 	if got["pics/inner"] != "entered" || got["pics/blank"] != "entered" {
 		t.Fatalf("subfolders were not entered: %+v", o.Results)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 1 {
-		t.Fatalf("entering staged something: %+v", st)
+	// One commit for the whole walk, whatever it entered.
+	if st := h.stat(t, id); st.Seq != before+1 {
+		t.Fatalf("the walk's commits: %d, from %d", st.Seq, before)
 	}
-	h.save(t, id)
 	again := h.row(t, id, rootID, "pics")
 	if again.ID != top.ID || again.ModifiedAt != when.Unix() {
 		t.Fatalf("the entered folder is not the same record: %+v", again)
@@ -416,7 +399,6 @@ func TestKindsThatDifferNeverReplace(t *testing.T) {
 
 	// A file called "pics" at the root, and a source folder of that name.
 	h.add(t, id, rootID, PolicySkip, h.src(t, "pics", "a file, not a folder"))
-	h.save(t, id)
 	h.src(t, "tree/pics/one.txt", "one")
 	pics := filepath.Join(h.dir, "src", "tree", "pics")
 
@@ -424,17 +406,19 @@ func TestKindsThatDifferNeverReplace(t *testing.T) {
 	if len(o.Results) != 1 || o.Results[0].Outcome != "skipped" || !o.Results[0].IsDir {
 		t.Fatalf("skip left the subtree in: %+v", o.Results)
 	}
+	before := h.stat(t, id).Seq
 	o = h.addFolder(t, id, rootID, pics, PolicyReplace)
 	if len(o.Results) != 1 || o.Results[0].Outcome != "failed" || o.Results[0].Code != CodeKindMismatch {
 		t.Fatalf("replace across kinds: %+v", o.Results)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 0 {
-		t.Fatalf("a refused walk staged something: %+v", st)
+	// A walk that wrote nothing publishes nothing.
+	if st := h.stat(t, id); st.Seq != before {
+		t.Fatalf("a refused walk committed something: %+v", st)
 	}
 	// The other direction: a file offered where a folder stands.
-	folder, _ := h.c.CreateFolder(id, rootID, "docs")
-	h.save(t, id)
-	_ = folder
+	if _, e := h.c.CreateFolder(id, rootID, "docs"); e != nil {
+		t.Fatal(e)
+	}
 	o = h.add(t, id, rootID, PolicyReplace, h.src(t, "docs", "a file"))
 	if len(o.Results) != 1 || o.Results[0].Code != CodeKindMismatch {
 		t.Fatalf("a file over a folder: %+v", o.Results)
@@ -449,15 +433,12 @@ func TestKindsThatDifferNeverReplace(t *testing.T) {
 	if o.Results[0].Name != "docs (2)" {
 		t.Fatalf("keep-both for a file: %+v", o.Results)
 	}
-	h.save(t, id)
 	// And a file with an extension keeps it.
 	h.add(t, id, rootID, PolicySkip, h.src(t, "note.txt", "one"))
-	h.save(t, id)
 	o = h.add(t, id, rootID, PolicyKeepBoth, h.src(t, "note.txt", "one"))
 	if o.Results[0].Name != "note (2).txt" {
 		t.Fatalf("keep-both before the extension: %+v", o.Results)
 	}
-	h.save(t, id)
 	// A source whose name differs from a live sibling's only in case is the
 	// item already there: the pre-flight folds, so the policy decides it
 	// rather than the archive refusing the add.
@@ -470,7 +451,6 @@ func TestKindsThatDifferNeverReplace(t *testing.T) {
 	if o.Results[0].Outcome != "added" || o.Results[0].Name != "NOTE (3).TXT" {
 		t.Fatalf("a folded name under keep-both: %+v", o.Results)
 	}
-	h.save(t, id)
 	// Two sources of one batch whose names fold onto each other: the second
 	// meets what the first planned, and the policy decides it there too.
 	fresh, _ := h.c.CreateFolder(id, rootID, "fresh")
@@ -493,11 +473,11 @@ func TestKindsThatDifferNeverReplace(t *testing.T) {
 	}
 }
 
-// Deleting a directory is one staged change however large the subtree, and
-// one row: the folder keeps its place marked deleted, greyed and not
-// enterable, nothing beneath it is listed, and nothing may be staged into it.
-// A tombstone reserves no name.
-func TestDeleteOfADirectory(t *testing.T) {
+// Deleting a directory takes its whole subtree in one commit (FORMAT.md R39,
+// R32): the folder and everything beneath it go at once, nothing beneath it
+// is previewed or extracted afterwards, and the name is free again. There is
+// no undo — the page asked before this ran.
+func TestDeleteOfADirectoryCommitsTheSubtree(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Del")
@@ -506,21 +486,27 @@ func TestDeleteOfADirectory(t *testing.T) {
 	inner, _ := h.c.CreateFolder(id, d, "inner")
 	h.add(t, id, d, PolicySkip, h.src(t, "f.txt", "f"))
 	h.add(t, id, inner, PolicySkip, h.src(t, "g.txt", "g"))
-	h.save(t, id)
-
-	// A staged add beneath a committed folder goes into the tombstoning:
-	// its bytes are already in the file and the free map reclaims them at
-	// the commit, and the entry the deletion swallows leaves the overlay.
 	gid := h.row(t, id, inner, "g.txt").ID
-	h.add(t, id, inner, PolicySkip, h.src(t, "later.txt", "later"))
+	other, _ := h.c.CreateFolder(id, rootID, "other")
+	before := h.stat(t, id)
+	if before.Records != 5 {
+		t.Fatalf("records before the delete: %+v", before)
+	}
+
 	if e := h.c.DeleteRecords(id, []string{d}); e != nil {
 		t.Fatalf("delete: %v", e)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 1 {
-		t.Fatalf("a deleted folder of five records is one change: %+v", st)
+	// One commit however large the subtree, and the whole subtree is gone.
+	st := h.stat(t, id)
+	if st.Seq != before.Seq+1 {
+		t.Fatalf("a deleted folder of four records is one commit: %d, from %d", st.Seq, before.Seq)
 	}
-	// Nothing beneath it is listed, previewed or extracted while the
-	// deletion stands.
+	if st.Records != 1 || st.Files != 0 {
+		t.Fatalf("the subtree survived: %+v", st)
+	}
+	if _, still := rowsByName(h.page(t, id, rootID))["d"]; still {
+		t.Fatal("the deleted folder is still listed")
+	}
 	if _, e := h.c.PreviewURL(id, gid); !isCode(e, CodeFileNotFound) {
 		t.Fatalf("a record beneath a deleted folder is previewable: %v", e)
 	}
@@ -531,29 +517,11 @@ func TestDeleteOfADirectory(t *testing.T) {
 	if o := h.rec.waitOp(t, opID); o.Error != CodeFileNotFound {
 		t.Fatalf("a record beneath a deleted folder is extractable: %+v", o)
 	}
-	row := h.row(t, id, rootID, "d")
-	if row.Pending != "deleted" || !row.IsDir {
-		t.Fatalf("the greyed row: %+v", row)
-	}
 	if _, e := h.c.Page(id, d, "name", 0, 10); !isCode(e, CodeFileNotFound) {
 		t.Fatalf("a deleted folder is enterable: %v", e)
 	}
 	if _, e := h.c.Page(id, inner, "name", 0, 10); !isCode(e, CodeFileNotFound) {
 		t.Fatalf("a folder beneath a deleted one: %v", e)
-	}
-	// Nothing may be added, created or moved into it or beneath it.
-	if _, e := h.c.CreateFolder(id, d, "x"); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("create into a deleted folder: %v", e)
-	}
-	if _, e := h.c.AddFiles(id, d, []string{h.src(t, "h.txt", "h")}, PolicySkip); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("add into a deleted folder: %v", e)
-	}
-	if _, e := h.c.AddFolder(id, inner, filepath.Join(h.dir, "src"), PolicySkip); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("add a folder beneath a deleted one: %v", e)
-	}
-	other, _ := h.c.CreateFolder(id, rootID, "other")
-	if e := h.c.MoveRecords(id, []string{other}, d); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("move into a deleted folder: %v", e)
 	}
 	// A tombstone is not a live sibling, so the name is free again.
 	again, e := h.c.CreateFolder(id, rootID, "d")
@@ -561,84 +529,23 @@ func TestDeleteOfADirectory(t *testing.T) {
 		t.Fatalf("a new folder beside the tombstone: %v", e)
 	}
 	if col, _ := h.c.CheckNames(id, rootID, []string{"d"}); len(col) != 1 || col[0].Existing != again {
-		t.Fatalf("CheckNames counted the staged-deleted sibling: %+v", col)
+		t.Fatalf("CheckNames over the new folder: %+v", col)
 	}
-	h.save(t, id)
-	names := rowsByName(h.page(t, id, rootID))
-	// The tombstoned folder is gone; the new one of that name and the
-	// folder made beside it are what the save published.
-	if len(names) != 2 || names["d"].ID != again || names["other"].ID == "" {
-		t.Fatalf("after the save: %+v", names)
-	}
-	if _, e := h.c.Page(id, d, "name", 0, 10); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("the tombstoned folder came back: %v", e)
-	}
-}
-
-// Deleting a record whose whole existence is staged un-stages it instead of
-// tombstoning: the records staged under it go with it, and a committed
-// record that was moved into it goes back where the move found it, its move
-// un-staged too — a rename staged with that move still stands.
-func TestUnstagingAStagedFolderReturnsWhatWasMovedIn(t *testing.T) {
-	h := newHarness(t, nil, nil)
-	h.unlockWithPassword()
-	id := h.openArchive(t, "Unstage")
-
-	h.add(t, id, rootID, PolicySkip, h.src(t, "keep.txt", "k"), h.src(t, "moved.txt", "m"))
-	h.save(t, id)
-	moved := h.row(t, id, rootID, "moved.txt").ID
-
-	nid, e := h.c.CreateFolder(id, rootID, "new")
-	if e != nil {
+	// It is the file that holds all this, not the handle: a reopen agrees.
+	if e := h.c.CloseArchive(id); e != nil {
 		t.Fatal(e)
 	}
-	inside, _ := h.c.CreateFolder(id, nid, "inside")
-	h.add(t, id, inside, PolicySkip, h.src(t, "staged.txt", "s"))
-	if e := h.c.MoveRecords(id, []string{moved}, nid); e != nil {
-		t.Fatalf("move in: %v", e)
-	}
-	if h.row(t, id, nid, "moved.txt").Pending != "moved" {
-		t.Fatal("the move was not staged as moved")
-	}
-	if e := h.c.RenameRecord(id, moved, "renamed.txt"); e != nil {
-		t.Fatalf("rename: %v", e)
-	}
-	if r := h.row(t, id, nid, "renamed.txt"); r.Pending != "moved" {
-		t.Fatalf("a record both renamed and moved reads moved: %+v", r)
-	}
-	// Un-stage the folder.
-	if e := h.c.DeleteRecords(id, []string{nid}); e != nil {
-		t.Fatalf("un-stage: %v", e)
+	if _, e := h.c.OpenArchive(id); e != nil {
+		t.Fatal(e)
 	}
 	names := rowsByName(h.page(t, id, rootID))
-	if _, still := names["new"]; still {
-		t.Fatalf("the staged folder stayed: %+v", names)
-	}
-	back, ok := names["renamed.txt"]
-	if !ok || back.ID != moved || back.ParentID != rootID {
-		t.Fatalf("the moved record did not come back: %+v", names)
-	}
-	if back.Pending != "renamed" {
-		t.Fatalf("the move was not un-staged: %+v", back)
-	}
-	if st, _ := h.c.Stat(id); st.Dirty != 1 {
-		t.Fatalf("only the rename is left: %+v", st)
-	}
-	// The records staged under the folder went with it.
-	if _, e := h.c.Page(id, inside, "name", 0, 10); !isCode(e, CodeFileNotFound) {
-		t.Fatalf("a folder staged inside stayed: %v", e)
-	}
-	h.save(t, id)
-	if h.row(t, id, rootID, "renamed.txt").ID != moved {
-		t.Fatal("the rename did not survive")
-	}
-	if p := h.page(t, id, rootID); p.Total != 2 {
-		t.Fatalf("what the save published: %+v", p.Rows)
+	if len(names) != 2 || names["d"].ID != again || names["other"].ID != other {
+		t.Fatalf("after the reopen: %+v", names)
 	}
 }
 
-// Rename and Move are pre-flighted against R39 on the merged view before
-// anything is staged, with the four codes of APP.md §3.
+// Rename and Move are pre-flighted against R39 before anything is written,
+// with the four codes of APP.md §3.
 func TestRenameAndMoveRefusals(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
@@ -647,7 +554,6 @@ func TestRenameAndMoveRefusals(t *testing.T) {
 	a, _ := h.c.CreateFolder(id, rootID, "a")
 	b, _ := h.c.CreateFolder(id, a, "b")
 	h.add(t, id, rootID, PolicySkip, h.src(t, "one.txt", "1"), h.src(t, "two.txt", "2"))
-	h.save(t, id)
 	one := h.row(t, id, rootID, "one.txt").ID
 	two := h.row(t, id, rootID, "two.txt").ID
 
@@ -677,9 +583,7 @@ func TestRenameAndMoveRefusals(t *testing.T) {
 	if e := h.c.MoveRecords(id, []string{two}, a); e != nil {
 		t.Fatalf("move: %v", e)
 	}
-	h.save(t, id)
 	h.add(t, id, rootID, PolicySkip, h.src(t, "two.txt", "2"))
-	h.save(t, id)
 	two2 := h.row(t, id, rootID, "two.txt").ID
 	if e := h.c.MoveRecords(id, []string{two2}, a); !isCode(e, CodeFileExists) {
 		t.Fatalf("move onto a held name: %v", e)
@@ -692,12 +596,13 @@ func TestRenameAndMoveRefusals(t *testing.T) {
 	if e := h.c.MoveRecords(id, []string{strings.Repeat("ef", 16)}, a); !isCode(e, CodeFileNotFound) {
 		t.Fatalf("move an unknown id: %v", e)
 	}
+	before := h.stat(t, id).Seq
 	// A record already under the destination is a no-op, not an error.
 	if e := h.c.MoveRecords(id, []string{two2}, rootID); e != nil {
 		t.Fatalf("a no-op move: %v", e)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 0 {
-		t.Fatalf("a refused or no-op batch staged something: %+v", st)
+	if st := h.stat(t, id); st.Seq != before {
+		t.Fatalf("a refused or no-op batch committed something: %+v", st)
 	}
 }
 
@@ -712,16 +617,15 @@ func TestMoveBatchAbsorbsDescendants(t *testing.T) {
 	b, _ := h.c.CreateFolder(id, a, "b")
 	h.add(t, id, b, PolicySkip, h.src(t, "f.txt", "f"))
 	c, _ := h.c.CreateFolder(id, rootID, "c")
-	h.save(t, id)
+	before := h.stat(t, id).Seq
 
 	if e := h.c.MoveRecords(id, []string{a, b}, c); e != nil {
 		t.Fatalf("move: %v", e)
 	}
-	// One record written, not two: b is still under a.
-	if st, _ := h.c.Stat(id); st.Dirty != 1 {
-		t.Fatalf("the descendant was moved too: %+v", st)
+	// One commit, and b is still under a rather than beside it.
+	if st := h.stat(t, id); st.Seq != before+1 {
+		t.Fatalf("the move's commits: %d, from %d", st.Seq, before)
 	}
-	h.save(t, id)
 	if r := h.row(t, id, c, "a"); r.ID != a {
 		t.Fatalf("a is not under c: %+v", r)
 	}
@@ -757,7 +661,6 @@ func TestRenameAndMoveHoldTheSubtreeBounds(t *testing.T) {
 		}
 		parent = nid
 	}
-	h.save(t, id)
 	if p := h.page(t, id, parent); len(p.Crumbs) != 18 {
 		t.Fatalf("the chain is not 17 deep: %d", len(p.Crumbs))
 	}
@@ -769,8 +672,8 @@ func TestRenameAndMoveHoldTheSubtreeBounds(t *testing.T) {
 	if e := h.c.RenameRecord(id, top, strings.Repeat("z", 80)); e != nil {
 		t.Fatalf("a joined path of 4096: %v", e)
 	}
-	if e := h.c.Discard(id); e != nil {
-		t.Fatal(e)
+	if e := h.c.RenameRecord(id, top, "a"); e != nil {
+		t.Fatalf("rename back: %v", e)
 	}
 	// Moving the chain under a folder re-lengthens all of it the same way.
 	long, e := h.c.CreateFolder(id, rootID, strings.Repeat("q", 79))
@@ -785,19 +688,17 @@ func TestRenameAndMoveHoldTheSubtreeBounds(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	h.save(t, id)
 	if e := h.c.MoveRecords(id, []string{top}, long); !isCode(e, CodeTreeBounds) {
 		t.Fatalf("a move that would exceed the path bound: %v", e)
 	}
 	// The batch is refused whole and in place: a record that would fit does
 	// not move because another in the same batch would not, so the user
-	// retries with a name rather than finding half a selection moved. This
-	// is the app's own pre-flight and not the archive's per-call refusal,
-	// which would already have staged the first record.
+	// retries with a name rather than finding half a selection moved.
+	before := h.stat(t, id).Seq
 	if e := h.c.MoveRecords(id, []string{fits, top}, long); !isCode(e, CodeTreeBounds) {
 		t.Fatalf("a batch with one record over the bound: %v", e)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 0 {
+	if st := h.stat(t, id); st.Seq != before {
 		t.Fatalf("half a selection moved: %+v", st)
 	}
 	if r := h.row(t, id, rootID, "fits"); r.ID != fits {
@@ -806,7 +707,6 @@ func TestRenameAndMoveHoldTheSubtreeBounds(t *testing.T) {
 	if e := h.c.MoveRecords(id, []string{top}, short); e != nil {
 		t.Fatalf("a move that fits: %v", e)
 	}
-	h.save(t, id)
 	if r := h.row(t, id, short, "a"); r.ID != top {
 		t.Fatalf("the chain did not move: %+v", r)
 	}
@@ -838,7 +738,6 @@ func TestExtractAllWithFoldersAndTimes(t *testing.T) {
 		t.Fatal(e)
 	}
 	h.add(t, id, rootID, PolicySkip, h.src(t, "g.txt", "g"))
-	h.save(t, id)
 	emptyAt := h.row(t, id, rootID, "empty").ModifiedAt
 
 	out := outDir(t)
@@ -917,6 +816,16 @@ func TestExtractAllWithFoldersAndTimes(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("the existing folder was emptied: %v", err)
 	}
+	// A file already there is not overwritten, and rename takes the next
+	// free name beside it rather than replacing anything.
+	opID, _ = h.c.Extract(id, []string{rootID}, out, ExtractRename)
+	o = h.rec.waitOp(t, opID)
+	if b, _ := os.ReadFile(filepath.Join(out, "g (2).txt")); string(b) != "g" {
+		t.Fatalf("rename did not take the next name: %q (%+v)", b, o.Results)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "g.txt")); string(b) != "g" {
+		t.Fatalf("the file already there was touched: %q", b)
+	}
 }
 
 // Every target is resolved before the first byte and asserted to lie under
@@ -928,7 +837,6 @@ func TestExtractContainmentMissFailsWhole(t *testing.T) {
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Miss")
 	h.add(t, id, rootID, PolicySkip, h.src(t, "ok.txt", "ok"))
-	h.save(t, id)
 
 	// The snapshot is bent the way only a broken index could bend it.
 	aid, _ := parseID(id)
@@ -954,83 +862,10 @@ func TestExtractContainmentMissFailsWhole(t *testing.T) {
 	}
 }
 
-// A committed record moved into a staged folder goes back where the move
-// found it — and to the root when that folder is not there any more, its row
-// still saying moved, since no record may be left naming a parent that is
-// not there (APP.md §3). A way back whose name is taken refuses the whole
-// call before anything is un-staged.
-func TestUnstagingWhenTheParentTheMoveFoundItUnderWent(t *testing.T) {
-	h := newHarness(t, nil, nil)
-	h.unlockWithPassword()
-	id := h.openArchive(t, "Orphan")
-
-	a, _ := h.c.CreateFolder(id, rootID, "a")
-	h.add(t, id, a, PolicySkip, h.src(t, "x.txt", "x"))
-	h.save(t, id)
-	x := h.row(t, id, a, "x.txt").ID
-
-	f, e := h.c.CreateFolder(id, rootID, "f")
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e := h.c.MoveRecords(id, []string{x}, f); e != nil {
-		t.Fatalf("move out: %v", e)
-	}
-	if e := h.c.DeleteRecords(id, []string{a}); e != nil {
-		t.Fatalf("delete the folder the move found it under: %v", e)
-	}
-	if e := h.c.DeleteRecords(id, []string{f}); e != nil {
-		t.Fatalf("un-stage: %v", e)
-	}
-	names := rowsByName(h.page(t, id, rootID))
-	back, ok := names["x.txt"]
-	if !ok || back.ID != x || back.ParentID != rootID {
-		t.Fatalf("the record did not come back to the root: %+v", names)
-	}
-	if back.Pending != "moved" {
-		t.Fatalf("the row must say where the record actually is: %+v", back)
-	}
-	if _, still := names["f"]; still {
-		t.Fatalf("the staged folder stayed: %+v", names)
-	}
-	h.save(t, id)
-	if r := h.row(t, id, rootID, "x.txt"); r.ID != x || r.ParentID != rootID {
-		t.Fatalf("the save did not publish it at the root: %+v", r)
-	}
-
-	// The same sequence with the way back's name already taken: file.exists,
-	// and the un-stage is refused whole rather than dropping the record.
-	id2 := h.openArchive(t, "Taken")
-	a2, _ := h.c.CreateFolder(id2, rootID, "a")
-	h.add(t, id2, a2, PolicySkip, h.src(t, "same/y.txt", "y"))
-	h.add(t, id2, rootID, PolicySkip, h.src(t, "y.txt", "top"))
-	h.save(t, id2)
-	y := h.row(t, id2, a2, "y.txt").ID
-
-	f2, _ := h.c.CreateFolder(id2, rootID, "f")
-	if e := h.c.MoveRecords(id2, []string{y}, f2); e != nil {
-		t.Fatalf("move out: %v", e)
-	}
-	if e := h.c.DeleteRecords(id2, []string{a2}); e != nil {
-		t.Fatalf("delete a: %v", e)
-	}
-	st, _ := h.c.Stat(id2)
-	if e := h.c.DeleteRecords(id2, []string{f2}); !isCode(e, CodeFileExists) {
-		t.Fatalf("an un-stage with nowhere to put the record back: %v", e)
-	}
-	if now, _ := h.c.Stat(id2); now.Dirty != st.Dirty {
-		t.Fatalf("a refused un-stage staged something: %+v", now)
-	}
-	if r := h.row(t, id2, f2, "y.txt"); r.ID != y {
-		t.Fatalf("the record left the staged folder: %+v", r)
-	}
-}
-
-// The depth and joined-path bounds hold for live records only: a tombstone
-// keeps its name and is held to neither (FORMAT.md R32), so the app's
-// pre-flight walks the live subtree alone and answers what the encoder
-// answers — the save proves it.
-func TestSubtreeBoundsIgnoreARowStagedForDeletion(t *testing.T) {
+// The depth and joined-path bounds hold for live records only: a deleted
+// subtree is gone from the index, so the app's pre-flight measures the live
+// tree and answers what the encoder answers — the commit proves it.
+func TestSubtreeBoundsMeasureTheLiveTree(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Tombstoned")
@@ -1048,7 +883,6 @@ func TestSubtreeBoundsIgnoreARowStagedForDeletion(t *testing.T) {
 		}
 		parent, deepest = nid, nid
 	}
-	h.save(t, id)
 
 	// With the whole chain live the rename is over the path bound by one.
 	if e := h.c.RenameRecord(id, top, strings.Repeat("z", 81)); !isCode(e, CodeTreeBounds) {
@@ -1057,54 +891,48 @@ func TestSubtreeBoundsIgnoreARowStagedForDeletion(t *testing.T) {
 	if e := h.c.DeleteRecords(id, []string{deepest}); e != nil {
 		t.Fatalf("delete the deepest folder: %v", e)
 	}
-	// The tombstone is not measured, so the live subtree is what decides.
+	// The tombstone is not measured, so the live subtree is what decides,
+	// and the seal agrees — the rename commits.
 	if e := h.c.RenameRecord(id, top, strings.Repeat("z", 81)); e != nil {
-		t.Fatalf("a staged-deleted row held to the bounds: %v", e)
+		t.Fatalf("a deleted row held to the bounds: %v", e)
 	}
-	h.save(t, id)
 	if r := h.row(t, id, rootID, strings.Repeat("z", 81)); r.ID != top {
 		t.Fatalf("the rename did not survive the seal: %+v", r)
 	}
 }
 
-// A move batch is refused whole and in place even when the refusal comes
-// from the archive rather than the pre-flight: nothing is left half moved
-// (APP.md §3).
-func TestAMoveBatchTheArchiveRefusesIsPutBack(t *testing.T) {
+// A move batch the archive refuses is refused whole: the transaction is
+// dropped, so nothing is published and nothing is left half moved (APP.md
+// §3).
+func TestAMoveBatchTheArchiveRefusesIsDroppedWhole(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Whole")
 
-	h.add(t, id, rootID, PolicySkip, h.src(t, "one.txt", "1"), h.src(t, "two.txt", "2"))
+	h.add(t, id, rootID, PolicySkip, h.src(t, "one.txt", "1"))
 	d, _ := h.c.CreateFolder(id, rootID, "d")
-	h.save(t, id)
 	one := h.row(t, id, rootID, "one.txt").ID
-	two := h.row(t, id, rootID, "two.txt").ID
 
-	// A staged change opens the transaction; then the second record of the
-	// batch is tombstoned in the archive's own index behind the overlay's
-	// back, so the merged view still shows it live and the pre-flight
-	// passes. Only a bug of ours puts the two out of step — which is the
-	// case the promise is about.
-	if _, e := h.c.CreateFolder(id, rootID, "keep"); e != nil {
-		t.Fatal(e)
-	}
+	// A record the snapshot has and the index does not: the pre-flight sees
+	// it live and the archive answers not-found. Only a bug of ours puts the
+	// two out of step — which is the case the promise is about.
 	aid, _ := parseID(id)
-	tid, _ := parseID(two)
+	var ghost [16]byte
+	ghost[0] = 0xAA
 	h.c.mu.Lock()
-	err := h.c.archives[aid].tx.Delete(tid)
+	oa := h.c.archives[aid]
+	oa.snap = append(oa.snap, archive.FileInfo{ID: ghost, Name: "ghost.txt"})
+	oa.byID[ghost] = len(oa.snap) - 1
+	before := oa.seq
 	h.c.mu.Unlock()
-	if err != nil {
-		t.Fatalf("bend the working index: %v", err)
-	}
 
-	if e := h.c.MoveRecords(id, []string{one, two}, d); !isCode(e, CodeFileNotFound) {
+	if e := h.c.MoveRecords(id, []string{one, hexID(ghost)}, d); !isCode(e, CodeFileNotFound) {
 		t.Fatalf("the refusal: %v", e)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 1 {
-		t.Fatalf("half a selection moved: %+v", st)
+	if st := h.stat(t, id); st.Seq != before {
+		t.Fatalf("a refused batch committed something: %+v", st)
 	}
-	if r := h.row(t, id, rootID, "one.txt"); r.ID != one || r.ParentID != rootID || r.Pending != "" {
+	if r := h.row(t, id, rootID, "one.txt"); r.ID != one || r.ParentID != rootID {
 		t.Fatalf("the first record of the batch stayed moved: %+v", r)
 	}
 	if p := h.page(t, id, d); p.Total != 0 {
@@ -1112,10 +940,9 @@ func TestAMoveBatchTheArchiveRefusesIsPutBack(t *testing.T) {
 	}
 }
 
-// A folder row's Size is the sum of what a save would keep: a row staged for
-// deletion is not in it, which is the reading a deleted folder's own row
-// already takes — nothing beneath it is listed, so it shows zero.
-func TestAFolderSizeDropsWhatIsStagedForDeletion(t *testing.T) {
+// A folder row's Size is the sum of the plaintext beneath it, and a delete
+// takes what it removes out of that sum at once.
+func TestAFolderSizeIsTheSumBeneathIt(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Sizes")
@@ -1124,7 +951,6 @@ func TestAFolderSizeDropsWhatIsStagedForDeletion(t *testing.T) {
 	inner, _ := h.c.CreateFolder(id, d, "inner")
 	h.add(t, id, d, PolicySkip, h.src(t, "a.txt", "0123456789"))
 	h.add(t, id, inner, PolicySkip, h.src(t, "b.txt", "01234"))
-	h.save(t, id)
 	if r := h.row(t, id, rootID, "d"); r.Size != 15 {
 		t.Fatalf("the sum beneath the folder: %+v", r)
 	}
@@ -1138,11 +964,7 @@ func TestAFolderSizeDropsWhatIsStagedForDeletion(t *testing.T) {
 	if e := h.c.DeleteRecords(id, []string{d}); e != nil {
 		t.Fatal(e)
 	}
-	if r := h.row(t, id, rootID, "d"); r.Pending != "deleted" || r.Size != 0 {
-		t.Fatalf("a folder staged for deletion: %+v", r)
-	}
-	h.save(t, id)
 	if p := h.page(t, id, rootID); p.Total != 0 {
-		t.Fatalf("what the save published: %+v", p.Rows)
+		t.Fatalf("what the delete left: %+v", p.Rows)
 	}
 }

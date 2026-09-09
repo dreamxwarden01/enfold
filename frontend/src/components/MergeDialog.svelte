@@ -166,18 +166,14 @@
     <div class="kv">
       <div class="k">File</div>
       <div class="v" title={path}>{leaf(path)}</div>
-      <div></div>
       <div class="k">What it is</div>
       <div class="v">{info ? (info.kind === "backup" ? "a backup — recovery slots only" : "a full vault") : looked ? "unreadable" : "reading…"}</div>
-      <div></div>
       {#if info}
         <div class="k">Dated</div>
         <div class="v">{dateTime(info.modifiedAt)}</div>
-        <div></div>
-        <div class="k">Claims to be</div>
+          <div class="k">Claims to be</div>
         <div class="v">{info.vaultMatches ? "this vault" : "another vault"} · generation {info.generation}</div>
-        <div></div>
-      {/if}
+        {/if}
     </div>
     {#if recoveryLines.length > 0}
       <div class="bar">

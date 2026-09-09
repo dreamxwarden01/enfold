@@ -205,7 +205,7 @@ type Archive struct {
 	c *app.Core
 }
 
-// Page lists the live children of one directory in the merged view. dirID
+// Page lists the children of one directory of the committed snapshot. dirID
 // is a record id — the all-zero id is the archive's root — never a path, and
 // one that no longer names a live directory is file.not_found.
 func (a *Archive) Page(id, dirID, sortBy string, offset, limit int) (app.Page, error) {
@@ -218,8 +218,8 @@ func (a *Archive) Stat(id string) (app.ArchiveStat, error) {
 	return s, asErr(e)
 }
 
-// CreateFolder stages a directory record and returns its id: a folder is a
-// record, so an empty one survives the save (FORMAT.md R39).
+// CreateFolder commits a directory record and returns its id: a folder is a
+// record, so an empty one is a real thing (FORMAT.md R39).
 func (a *Archive) CreateFolder(id, parentID, name string) (string, error) {
 	rid, e := a.c.CreateFolder(id, parentID, name)
 	return rid, asErr(e)
@@ -240,8 +240,9 @@ func (a *Archive) Replace(id, fileID, path string) (string, error) {
 	return op, asErr(e)
 }
 
-// Delete stages a deletion of each record; a directory takes its subtree,
-// tombstoned in the same write and counted as one change.
+// Delete removes each record in one commit; a directory takes its subtree,
+// tombstoned in the same write. The page asks first — a delete cannot be
+// undone (APP.md §3, §6).
 func (a *Archive) Delete(id string, recordIDs []string) error {
 	return asErr(a.c.DeleteRecords(id, recordIDs))
 }
@@ -260,14 +261,6 @@ func (a *Archive) Extract(id string, recordIDs []string, dir, policy string) (st
 	op, e := a.c.Extract(id, recordIDs, dir, app.ExtractPolicy(policy))
 	return op, asErr(e)
 }
-
-func (a *Archive) Save(id string) (string, error) {
-	op, e := a.c.Save(id)
-	return op, asErr(e)
-}
-
-func (a *Archive) Discard(id string) error  { return asErr(a.c.Discard(id)) }
-func (a *Archive) KeepOpen(id string) error { return asErr(a.c.KeepOpen(id)) }
 
 func (a *Archive) PreviewURL(id, fileID string) (string, error) {
 	u, e := a.c.PreviewURL(id, fileID)

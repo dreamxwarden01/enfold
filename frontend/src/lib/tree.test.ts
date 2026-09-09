@@ -81,13 +81,8 @@ describe("what a drag may be dropped on", () => {
     expect(dropVerdict({ id: trips.id, isDir: true }, drag)).toBe("self");
   });
 
-  it("refuses a row staged for deletion: nothing may be moved beneath a tombstone", () => {
-    expect(dropVerdict({ id: "ee".repeat(16), isDir: true, pending: "deleted" }, drag)).toBe("deleted");
-  });
-
   it("refuses a file row: it is not a place", () => {
     expect(dropVerdict({ id: "ee".repeat(16), isDir: false }, drag)).toBe("file");
-    expect(dropVerdict({ id: "ee".repeat(16), isDir: false, pending: "added" }, drag)).toBe("file");
   });
 
   it("does nothing for an empty drag", () => {
@@ -103,9 +98,14 @@ describe("what a drag may be dropped on", () => {
   });
 });
 
+// The delete dialog is the one the docs write out (APP.md §3, §6):
+// "Permanently delete 3 files and 1 folder from ECON 280? A folder takes
+// everything beneath it. This cannot be undone." Nothing in it is staged,
+// nothing in it is undone.
 describe("the delete confirmation", () => {
   const file = { isDir: false, name: "notes.md" };
   const other = { isDir: false, name: "budget.csv" };
+  const third = { isDir: false, name: "essay.docx" };
   const folder = { isDir: true, name: "Trips" };
 
   it("counts files and folders apart", () => {
@@ -113,22 +113,40 @@ describe("the delete confirmation", () => {
     expect(deleteCounts([])).toEqual({ files: 0, folders: 0 });
   });
 
-  it("names them separately", () => {
+  it("names them separately, singular and plural", () => {
     expect(countPhrase({ files: 1, folders: 0 })).toBe("1 file");
+    expect(countPhrase({ files: 0, folders: 1 })).toBe("1 folder");
     expect(countPhrase({ files: 0, folders: 2 })).toBe("2 folders");
     expect(countPhrase({ files: 2, folders: 1 })).toBe("2 files and 1 folder");
     expect(countPhrase({ files: 0, folders: 0 })).toBe("");
   });
 
-  it("names the one thing when there is one", () => {
-    expect(deleteTitle([file])).toBe('Delete "notes.md"?');
-    expect(deleteTitle([folder])).toBe('Delete "Trips"?');
-    expect(deleteTitle([file, folder])).toBe("Delete 1 file and 1 folder?");
+  it("asks the question the docs ask, naming the archive", () => {
+    expect(deleteTitle([file, other, third, folder], "ECON 280")).toBe("Permanently delete 3 files and 1 folder from ECON 280?");
+    expect(deleteBody([file, other, third, folder])).toBe("A folder takes everything beneath it. This cannot be undone.");
   });
 
-  it("says a folder takes everything beneath it, and only then", () => {
-    expect(deleteBody([file])).not.toMatch(/beneath/);
-    expect(deleteBody([folder])).toMatch(/takes everything beneath it/);
-    expect(deleteBody([folder, { isDir: true, name: "Bills" }])).toMatch(/Each folder/);
+  it("counts one file as one file, not as its name", () => {
+    expect(deleteTitle([file], "ECON 280")).toBe("Permanently delete 1 file from ECON 280?");
+    expect(deleteTitle([folder], "ECON 280")).toBe("Permanently delete 1 folder from ECON 280?");
+  });
+
+  it("leaves the archive out when it has no name to give", () => {
+    expect(deleteTitle([file], "")).toBe("Permanently delete 1 file?");
+  });
+
+  it("says a folder takes everything beneath it only when one is in the selection", () => {
+    expect(deleteBody([file])).toBe("This cannot be undone.");
+    expect(deleteBody([file, other])).not.toMatch(/beneath/);
+    expect(deleteBody([folder])).toMatch(/^A folder takes everything beneath it\. /);
+  });
+
+  it("offers no undo anywhere in the copy", () => {
+    for (const rows of [[file], [folder], [file, folder]]) {
+      const body = deleteBody(rows);
+      expect(body).toMatch(/This cannot be undone\./);
+      expect(body).not.toMatch(/discard|staged|when you save|bring it back/i);
+      expect(deleteTitle(rows, "ECON 280")).toMatch(/^Permanently delete /);
+    }
   });
 });

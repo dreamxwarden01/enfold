@@ -8,9 +8,9 @@ import (
 	"github.com/dreamxwarden01/enfold/internal/compress"
 )
 
-// A staged add that is replaced stays one staged add: the row shows the
-// new size and can still be un-staged by deleting it.
-func TestReplaceOfStagedAddStaysOne(t *testing.T) {
+// Replace is the in-place edit and its own commit: the record keeps its id,
+// the row shows the new size, and the file holds it at once.
+func TestReplaceKeepsTheRecordAndCommits(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
@@ -22,10 +22,12 @@ func TestReplaceOfStagedAddStaysOne(t *testing.T) {
 	opID, _ := h.c.AddFiles(id, rootID, []string{small}, PolicySkip)
 	h.rec.waitOp(t, opID)
 	page, _ := h.c.Page(id, rootID, "name", 0, 10)
-	if len(page.Rows) != 1 || page.Rows[0].Pending != "added" || page.Rows[0].Size != 5 {
-		t.Fatalf("staged: %+v", page.Rows)
+	if len(page.Rows) != 1 || page.Rows[0].Size != 5 {
+		t.Fatalf("added: %+v", page.Rows)
 	}
-	opID, e := h.c.ReplaceFile(id, page.Rows[0].ID, big)
+	was := page.Rows[0].ID
+	before := h.stat(t, id).Seq
+	opID, e := h.c.ReplaceFile(id, was, big)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -33,23 +35,27 @@ func TestReplaceOfStagedAddStaysOne(t *testing.T) {
 		t.Fatalf("replace: %+v", o)
 	}
 	page, _ = h.c.Page(id, rootID, "name", 0, 10)
-	if len(page.Rows) != 1 || page.Rows[0].Pending != "added" || page.Rows[0].Size != 33 {
+	if len(page.Rows) != 1 || page.Rows[0].ID != was || page.Rows[0].Size != 33 {
 		t.Fatalf("after replace: %+v", page.Rows)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 1 {
-		t.Fatalf("dirty after replace: %+v", st)
+	if st := h.stat(t, id); st.Seq != before+1 {
+		t.Fatalf("the replace's commits: %d, from %d", st.Seq, before)
 	}
-	if e := h.c.DeleteRecords(id, []string{page.Rows[0].ID}); e != nil {
+	// It is the file that holds it: a reopen reads the new content back.
+	if e := h.c.CloseArchive(id); e != nil {
 		t.Fatal(e)
 	}
-	page, _ = h.c.Page(id, rootID, "name", 0, 10)
-	if len(page.Rows) != 0 {
-		t.Fatalf("staged add not un-staged: %+v", page.Rows)
+	if _, e := h.c.OpenArchive(id); e != nil {
+		t.Fatal(e)
+	}
+	text, _, e := h.c.PreviewText(id, was, 64)
+	if e != nil || text != "a much bigger content than before" {
+		t.Fatalf("after the reopen: %q %v", text, e)
 	}
 }
 
 // A file that is not the copy the registry last saw is flagged, never
-// adopted silently; the next save records this copy and clears it. The row's
+// adopted silently; the next commit records this copy and clears it. The row's
 // Note is the presence map's until a pass has run: an unmeasured record is
 // blank, never "missing", so nothing takes the slot the mismatch needs
 // (APP.md §13).
@@ -91,10 +97,8 @@ func TestCopyMismatchIsShown(t *testing.T) {
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("newer"), 0o600)
 	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
-	h.rec.waitOp(t, opID)
-	opID, _ = h.c.Save(id)
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
-		t.Fatalf("save: %+v", o)
+		t.Fatalf("add: %+v", o)
 	}
 	if e := h.c.CloseArchive(id); e != nil {
 		t.Fatal(e)
@@ -114,22 +118,20 @@ func TestCopyMismatchIsShown(t *testing.T) {
 	if list[0].Note != CodeArchiveCopyMismatch {
 		t.Fatalf("list note: %+v", list[0])
 	}
-	// Working on this copy and saving records it; the flag stays until
-	// the archive is reopened against a matching record.
+	// Working on this copy records it — every operation commits and writes
+	// its receipt — and the flag is gone at the next open.
 	opID, _ = h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
-	h.rec.waitOp(t, opID)
-	opID, _ = h.c.Save(id)
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
-		t.Fatalf("save 2: %+v", o)
+		t.Fatalf("add 2: %+v", o)
 	}
 	h.c.CloseArchive(id)
 	st, _ = h.c.OpenArchive(id)
 	if st.CopyMismatch {
-		t.Fatalf("flag survived a save that recorded this copy: %+v", st)
+		t.Fatalf("flag survived a commit that recorded this copy: %+v", st)
 	}
 }
 
-// Closing an archive whose save ended indeterminate releases the handle so
+// Closing an archive whose commit ended indeterminate releases the handle so
 // the file can be opened again.
 func TestCloseAfterNeedsReopen(t *testing.T) {
 	h := newHarness(t, nil, nil)

@@ -1139,7 +1139,12 @@ func TestSavedRecoveryKeyFileCarriesTheID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(text, []byte("Key ID: "+want)) {
-		t.Fatalf("the saved file does not name the key: %s", text)
+	// The heading is the name the page saves and prints under, so the sheet
+	// and the file say the same thing (APP.md §6, BitLocker's own shape).
+	if !bytes.HasPrefix(text, []byte("Enfold Keystore Recovery Key "+want+"\r\n")) {
+		t.Fatalf("the saved file does not head with the key's name: %s", text)
+	}
+	if bytes.Contains(text, []byte(h.c.GetSettings().DisplayName+" Recovery")) {
+		t.Fatalf("the name is the vault's, not the key's: %s", text)
 	}
 }

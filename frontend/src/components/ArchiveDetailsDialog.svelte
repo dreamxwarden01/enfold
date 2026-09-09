@@ -1,14 +1,23 @@
 <script lang="ts">
   // One registry record read whole (APP.md §13): the versions table and
-  // the copyable rows, rendered from what the details pane already
+  // the record's values, rendered from what the details pane already
   // loaded — the record is read when the selection changes, not when this
   // modal opens. It carries no wrapped_archive_key, no nonce and no
   // offset: there is no raw archive-key reveal anywhere (APP.md §1, §13).
+  //
+  // Since 2026-09-09 there is no column of *Copy* buttons: every value is
+  // selectable and a right-click on one opens a menu of a single item,
+  // *Copy*. The shell disables WebView2's own context menu, so that is the
+  // only one on the page. The ciphertext hash wraps onto a second line
+  // rather than being cut, and reads N/A while it is all zeros — no commit
+  // yet. The modal scrolls as a whole, and the versions table shows three
+  // rows before it scrolls on its own.
   import { Clipboard } from "@wailsio/runtime";
   import type { ArchiveDetails } from "../lib/api";
-  import { bytes, date, dateTime } from "../lib/format";
+  import { bytes, date, dateTime, hashText } from "../lib/format";
   import { methodWord } from "../lib/method";
   import { purgeAfter } from "../lib/retention";
+  import ContextMenu from "./ContextMenu.svelte";
   import Dialog from "./Dialog.svelte";
 
   interface Props {
@@ -17,23 +26,23 @@
   }
   let { d, onclose }: Props = $props();
 
-  // A copy says so in place — the button's own label for a moment — and
-  // never as a toast: a toast is for what the page cannot say where the
-  // action was (APP.md §6).
-  let copied = $state("");
-  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  // The menu the right-click opened: where it is, and what it copies.
+  let menu = $state<{ x: number; y: number; text: string } | null>(null);
 
   // Clipboard.SetText is the runtime's, not navigator.clipboard, which is
   // not dependable under the WebView2 custom scheme.
-  async function copy(key: string, text: string) {
-    try {
-      await Clipboard.SetText(text);
-      copied = key;
-      clearTimeout(copiedTimer);
-      copiedTimer = setTimeout(() => (copied = ""), 1400);
-    } catch {
-      copied = "";
-    }
+  function copy(text: string) {
+    void Clipboard.SetText(text).catch(() => {});
+  }
+
+  // The click's own selection is left alone: a right-click on a value the
+  // user has already selected part of copies the whole value, which is
+  // what the row's menu offers — the selection itself is theirs to copy
+  // with the keyboard.
+  function askCopy(e: MouseEvent, text: string) {
+    e.preventDefault();
+    if (!text || text === "—") return;
+    menu = { x: e.clientX, y: e.clientY, text };
   }
 
   const policy = $derived(
@@ -42,13 +51,15 @@
   const purge = $derived(purgeAfter(d.forgottenAt));
 
   // long marks the rows whose value can be cut short: tooltips only there,
-  // never over text that is fully visible (APP.md §13).
+  // never over text that is fully visible (APP.md §13). wrap marks the one
+  // value that is never cut at all — the hash, which takes a second line.
   interface Row {
     key: string;
     label: string;
     value: string;
     mono?: boolean;
     long?: boolean;
+    wrap?: boolean;
   }
   const rows = $derived<Row[]>([
     { key: "id", label: "Archive ID", value: d.archiveId, mono: true, long: true },
@@ -60,7 +71,7 @@
     { key: "rev", label: "Revision", value: String(d.revision) },
     { key: "writer", label: "Last writer", value: d.lastWriter || "—", mono: true, long: true },
     { key: "seq", label: "Last seq / hash at seq", value: `${d.lastSeq} / ${d.hashAtSeq}` },
-    { key: "hash", label: "Ciphertext hash", value: d.lastCiphertextHash || "—", mono: true, long: true },
+    { key: "hash", label: "Ciphertext hash", value: hashText(d.lastCiphertextHash), mono: true, wrap: true },
     // The compression the archive was created with, by its word: every
     // writer of this archive follows it (FORMAT.md §7.1 bits 2-5).
     { key: "method", label: "Compression", value: methodWord(d.method) },
@@ -74,11 +85,16 @@
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>Forgotten on {date(d.forgottenAt)}. Its key is dropped at the first unlock after {date(purge)}.</span></div>
   {/if}
 
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="kv">
     {#each rows as r (r.key)}
       <div class="k">{r.label}</div>
-      <div class="v" class:mono={r.mono} title={r.long ? r.value : undefined}>{r.value}</div>
-      <button type="button" class="btn sm" onclick={() => copy(r.key, r.value)}>{copied === r.key ? "Copied" : "Copy"}</button>
+      <div
+        class="v" class:mono={r.mono} class:wrap={r.wrap}
+        title={r.long ? r.value : undefined}
+        role="note"
+        oncontextmenu={(e) => askCopy(e, r.value)}
+      >{r.value}</div>
     {/each}
   </div>
 
@@ -106,10 +122,19 @@
   {/snippet}
 </Dialog>
 
+{#if menu}
+  {@const m = menu}
+  <ContextMenu x={m.x} y={m.y} items={[{ label: "Copy", icon: "i-copy", run: () => copy(m.text) }]} onclose={() => (menu = null)} />
+{/if}
+
 <style>
   .desc { margin: 0 0 4px; }
   .vh { margin: 14px 0 0; }
-  .vers { max-height: 190px; }
+  /* The table takes its content's height: three rows are visible before it
+     scrolls at all, and it never scrolls past eight — beyond that the
+     modal's own scroll takes over (APP.md §13). It may not be squeezed by
+     the flex column above it. */
+  .vers { flex: 0 0 auto; max-height: 320px; }
   .w-date { width: 128px; }
   .w-state { width: 72px; }
   .mono { font-family: var(--font-mono); font-size: 11.5px; }

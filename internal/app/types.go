@@ -45,7 +45,6 @@ type VaultStatus struct {
 	Ceremony        *CeremonyState `json:"ceremony,omitempty"`
 	Ops             []OpView       `json:"ops"`
 	OpenArchives    int            `json:"openArchives"`
-	DirtyArchives   int            `json:"dirtyArchives"`
 	HasPasswordSlot bool           `json:"hasPasswordSlot"`
 	HasHardwareSlot bool           `json:"hasHardwareSlot"`
 	// PendingTouch: a cancelled ceremony's key call is still answering —
@@ -163,7 +162,6 @@ type ArchiveSummary struct {
 	LastWrittenAt int64  `json:"lastWrittenAt"`
 	KeyVersion    int    `json:"keyVersion"`
 	Open          bool   `json:"open"`
-	Dirty         int    `json:"dirty"`
 	ReceiptOwed   bool   `json:"receiptOwed"`
 	// Method is how the archive is compressed — store | fastest | normal |
 	// better | best — read from the record's policy (FORMAT.md §7.1 bits
@@ -180,7 +178,7 @@ type ArchiveSummary struct {
 	// For open archives only.
 	Files     int    `json:"files"`
 	FreeSpace uint64 `json:"freeSpace"`
-	State     string `json:"state,omitempty"` // open | dirty | compacting | needs_reopen
+	State     string `json:"state,omitempty"` // open | compacting | needs_reopen
 }
 
 // VersionView is one key version of an archive record (FORMAT.md §7.2), for
@@ -246,31 +244,34 @@ type ArchivesChanged struct {
 	Purged []string `json:"purged"`
 }
 
-// ArchiveStat is the open archive's status strip.
+// ArchiveStat is the open archive's status strip. There is no Dirty, no
+// CapAt and no SessionAlive since 2026-09-09: every operation is its own
+// transaction, so the archive is clean between them (APP.md §2.3).
 type ArchiveStat struct {
-	Seq          uint64 `json:"seq"`
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Size         uint64 `json:"size"`
-	Files        int    `json:"files"`
+	Seq   uint64 `json:"seq"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Size  uint64 `json:"size"`
+	Files int    `json:"files"`
+	// Records counts live files and directories together, which is what
+	// Extract all is greyed on: the file count alone cannot say whether the
+	// tree holds anything (APP.md §3).
+	Records      int    `json:"records"`
 	FreeSpace    uint64 `json:"freeSpace"`
 	KeyVersion   int    `json:"keyVersion"`
 	LastSavedAt  int64  `json:"lastSavedAt"`
-	Dirty        int    `json:"dirty"`
 	State        string `json:"state"`
 	ExpiresAt    int64  `json:"expiresAt"` // the archive's own idle deadline
-	CapAt        int64  `json:"capAt"`     // the dirty cap, 0 when clean
 	ReceiptOwed  bool   `json:"receiptOwed"`
-	SessionAlive bool   `json:"sessionAlive"` // Save is possible now
 	CopyMismatch bool   `json:"copyMismatch"` // the file is not the copy the vault last saw
 }
 
-// FileRow is one row of a page: one record of the merged view, file or
-// directory alike (APP.md §3). ID and ParentID are the record's own ids —
-// 32 lowercase hex digits, the all-zero id being the root — Name is the
-// record's own name and Path the joined one (FORMAT.md R20, R39). A
-// directory's Size is the sum beneath it and its ModifiedAt the record's
-// own.
+// FileRow is one row of a page: one committed record, file or directory
+// alike (APP.md §3). ID and ParentID are the record's own ids — 32 lowercase
+// hex digits, the all-zero id being the root — Name is the record's own name
+// and Path the joined one (FORMAT.md R20, R39). A directory's Size is the
+// sum beneath it and its ModifiedAt the record's own. A row is committed or
+// it is not listed: there is no pending word since 2026-09-09.
 type FileRow struct {
 	ID           string `json:"id"`
 	ParentID     string `json:"parentId"`
@@ -281,7 +282,6 @@ type FileRow struct {
 	Storage      string `json:"storage"` // raw | zstd | zstd+dict
 	SavedPercent int    `json:"savedPercent"`
 	ModifiedAt   int64  `json:"modifiedAt"`
-	Pending      string `json:"pending,omitempty"` // added | replaced | renamed | moved | deleted
 }
 
 // Crumb is one step of the breadcrumb: a directory's id and its name, the
@@ -310,7 +310,6 @@ type Collision struct {
 	IsDir         bool   `json:"isDir"` // the kind offered: a name given with a trailing "/"
 	Existing      string `json:"existing"`
 	ExistingIsDir bool   `json:"existingIsDir"`
-	Pending       bool   `json:"pending"`
 }
 
 // FileOutcome is one record's result inside a batch operation. IsDir tells a
@@ -380,23 +379,27 @@ type Settings struct {
 	RecoveryRecordPct int    `json:"recoveryRecordPct"`
 	DictionaryBelow   int64  `json:"dictionaryBelow"`
 	// LastArchiveFolder is where the last archive was created, for the New
-	// archive dialog (APP.md §6). Read-only: Set ignores it, since only a
-	// create writes it.
+	// archive dialog (APP.md §6), and LastExtractFolder is where the last
+	// extraction went, for the extract dialog's destination (§3). Both are
+	// read-only: Set ignores them, since only a create and an extract write
+	// them.
 	LastArchiveFolder  string `json:"lastArchiveFolder"`
+	LastExtractFolder  string `json:"lastExtractFolder"`
 	IdleMinutes        int    `json:"idleMinutes"`     // from the registry; 0 = default
 	AbsoluteMinutes    int    `json:"absoluteMinutes"` // from the registry; 0 = default
 	TimeoutsFromVault  bool   `json:"timeoutsFromVault"`
 	TimeoutsAdjustable bool   `json:"timeoutsAdjustable"` // only while unlocked
 }
 
-// Events the core emits.
+// Events the core emits. There is no archive.expiring since 2026-09-09: an
+// archive is clean between operations, so its idle clock simply closes it
+// (APP.md §2.3, DESIGN.md §10).
 const (
 	EventVaultState      = "vault.state"
 	EventVaultCeremony   = "vault.ceremony"
 	EventVaultWarning    = "vault.warning"
 	EventArchivesChanged = "archives.changed"
 	EventArchiveChanged  = "archive.changed"
-	EventArchiveExpiring = "archive.expiring"
 	EventOpProgress      = "op.progress"
 	EventOpDone          = "op.done"
 )
@@ -405,13 +408,6 @@ const (
 type ArchiveChanged struct {
 	ID  string `json:"id"`
 	Seq uint64 `json:"seq"`
-}
-
-// ArchiveExpiring is the payload of EventArchiveExpiring.
-type ArchiveExpiring struct {
-	ID       string `json:"id"`
-	ClosesAt int64  `json:"closesAt"`
-	Dirty    int    `json:"dirty"`
 }
 
 // Warning is the payload of EventVaultWarning.

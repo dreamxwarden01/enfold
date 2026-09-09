@@ -22,6 +22,25 @@ export function PickFolder(title: string): $CancellablePromise<string> {
     return $Call.ByID(2529646972, title);
 }
 
+/**
+ * PrintBegin snapshots the print spooler before window.print(). An error is
+ * the spooler being unreadable, which the page answers by asking after the
+ * print as it always did (APP.md §6).
+ */
+export function PrintBegin(): $CancellablePromise<void> {
+    return $Call.ByID(3496539485);
+}
+
+/**
+ * PrintEnd answers whether a print job appeared that PrintBegin did not see:
+ * true is a submission — Microsoft Print to PDF is a printer, so a PDF
+ * counts, and a job that later fails was still submitted — and false is a
+ * print the user cancelled. The error is again the unreadable spooler.
+ */
+export function PrintEnd(): $CancellablePromise<boolean> {
+    return $Call.ByID(3980269933);
+}
+
 export function Quit(): $CancellablePromise<void> {
     return $Call.ByID(2079207478);
 }

@@ -1,7 +1,8 @@
 // Package app is the application core of docs/APP.md: the session state
-// machine, the unlock ceremony, open archives and their staged changes, the
-// preview server, the settings and the registry — every decision and every
-// secret — behind services the frontend binds and events it subscribes to.
+// machine, the unlock ceremony, open archives and the operations that are
+// each their own transaction (§2.3), the preview server, the settings and
+// the registry — every decision and every secret — behind services the
+// frontend binds and events it subscribes to.
 // It has no notion of a window and does not import Wails or internal/piv;
 // the shell (main_windows.go at the repository root) and one windows-tagged
 // adapter (internal/app/pivcards) supply both.

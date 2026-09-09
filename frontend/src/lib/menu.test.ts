@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buttonKey, menuKey } from "./menu";
+import { buttonKey, contextPlacement, menuKey } from "./menu";
 
 describe("buttonKey (APP.md §6, Menus)", () => {
   it("opens on the first item with Down, Enter and Space", () => {
@@ -61,5 +61,41 @@ describe("menuKey (APP.md §6, Menus)", () => {
   it("leaves every other key to the page", () => {
     expect(menuKey("a", 0, 3)).toEqual({ kind: "none" });
     expect(menuKey("ArrowLeft", 0, 3)).toEqual({ kind: "none" });
+  });
+});
+
+// The right-click menu of the details modal (APP.md §13): one item,
+// *Copy*, placed at the pointer and never off the window's edge.
+describe("where a context menu goes", () => {
+  const box = { width: 140, height: 36 };
+  const view = { width: 1000, height: 700 };
+
+  it("opens at the pointer where there is room", () => {
+    expect(contextPlacement({ x: 300, y: 200 }, box, view)).toEqual({ x: 300, y: 200 });
+  });
+
+  it("flips to the other side of the pointer against the right edge", () => {
+    expect(contextPlacement({ x: 980, y: 200 }, box, view)).toEqual({ x: 840, y: 200 });
+  });
+
+  it("flips upwards against the foot of the window", () => {
+    expect(contextPlacement({ x: 300, y: 690 }, box, view)).toEqual({ x: 300, y: 654 });
+  });
+
+  it("flips both at once in the far corner", () => {
+    expect(contextPlacement({ x: 995, y: 695 }, box, view)).toEqual({ x: 855, y: 659 });
+  });
+
+  it("clamps to the margin when neither side has room", () => {
+    // A window narrower than the menu itself: it is pulled inside, and the
+    // margin wins over an edge that would cut it.
+    const tiny = { width: 100, height: 40 };
+    expect(contextPlacement({ x: 60, y: 30 }, box, tiny)).toEqual({ x: 6, y: 6 });
+  });
+
+  it("takes the one item's own menu, so the keyboard lands on it", () => {
+    expect(menuKey("ArrowDown", 0, 1)).toEqual({ kind: "move", active: 0 });
+    expect(menuKey("Enter", 0, 1)).toEqual({ kind: "choose", index: 0 });
+    expect(menuKey("Escape", 0, 1)).toEqual({ kind: "close" });
   });
 });

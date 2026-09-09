@@ -478,29 +478,114 @@ func TestDeleteFailedRemovalLeavesTheRecord(t *testing.T) {
 	}
 }
 
-// The archive is closed first: an open archive, and a live preview reader on
-// it, are both archive.busy for Forget and Delete (A.7).
-func TestDeleteRefusesWhileTheArchiveIsOpen(t *testing.T) {
+// The archive is closed first, by the call itself (APP.md §13) — but the two
+// halves of that paragraph differ and 2026-09-09 changed only one of them.
+// *Forget key…* closes the archive "(a running operation is cancelled)".
+// *Delete archive…* closes the open archive and is "refused with
+// `archive.busy` while an operation or a preview reader is live": a delete
+// never kills a user's running add. There is nothing unsaved to ask about in
+// either since 2026-09-09.
+func TestForgetAndDeleteCloseTheOpenArchive(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id, _ := h.newArchive("A")
 	if _, e := h.c.OpenArchive(id); e != nil {
 		t.Fatal(e)
 	}
-	if e := h.c.DeleteArchive(id, true); !isCode(e, CodeArchiveBusy) {
-		t.Fatalf("delete while open: %v", e)
-	}
-	if e := h.c.ForgetArchive(id); !isCode(e, CodeArchiveBusy) {
+	if e := h.c.ForgetArchive(id); e != nil {
 		t.Fatalf("forget while open: %v", e)
 	}
-	if e := h.c.DeleteArchive(id, false); !isCode(e, CodeArchiveBusy) {
-		t.Fatalf("delete without the file while open: %v", e)
+	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
+		t.Fatalf("the archive was left open: %v", e)
 	}
-	if e := h.c.CloseArchive(id); e != nil {
+	if !h.record(id).Forgotten() {
+		t.Fatal("the record was not forgotten")
+	}
+	if e := h.c.RestoreArchive(id); e != nil {
 		t.Fatal(e)
 	}
+	if _, e := h.c.OpenArchive(id); e != nil {
+		t.Fatal(e)
+	}
+	big := filepath.Join(h.dir, "big.bin")
+	if err := os.WriteFile(big, incompressible(t, 4<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A delete taken from inside the operation's own progress event, on the
+	// goroutine that emitted it: the add is provably still running, and the
+	// delete is refused rather than taking the file and the record with it.
+	var once sync.Once
+	var deleteErr *Error
+	h.rec.onEvent(func(name string, _ any) {
+		if name != EventOpProgress {
+			return
+		}
+		h.clk.Advance(150 * time.Millisecond)
+		once.Do(func() { deleteErr = h.c.DeleteArchive(id, true) })
+	})
+	opID, e := h.c.AddFiles(id, rootID, []string{big}, PolicySkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	o := h.rec.waitOp(t, opID)
+	h.rec.onEvent(nil)
+	if !isCode(deleteErr, CodeArchiveBusy) {
+		t.Fatalf("a delete while an operation runs: %v", deleteErr)
+	}
+	if o.Error != "" {
+		t.Fatalf("the refused delete did not leave the operation alone: %+v", o)
+	}
+	if h.record(id).Forgotten() {
+		t.Fatal("a refused delete forgot the record")
+	}
+	if _, e := h.c.Stat(id); e != nil {
+		t.Fatalf("the refused delete closed the archive: %v", e)
+	}
+
+	// Forget, on a running operation, cancels it: its transaction is
+	// aborted, nothing is published, and the record is forgotten. The
+	// operation's first progress event says it is under way; the Forget is
+	// then taken from the test's own goroutine, since it awaits the cancel
+	// it issued and cannot run on the goroutine it is waiting for.
+	running := make(chan struct{})
+	var startOnce sync.Once
+	h.rec.onEvent(func(name string, _ any) {
+		if name != EventOpProgress {
+			return
+		}
+		h.clk.Advance(150 * time.Millisecond)
+		startOnce.Do(func() { close(running) })
+	})
+	// A batch of fresh files, long enough that the Forget lands inside it:
+	// the one already added would be skipped rather than read.
+	batch := filepath.Join(h.dir, "batch")
+	if err := os.MkdirAll(batch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 8 {
+		name := filepath.Join(batch, string(rune('a'+i))+".bin")
+		if err := os.WriteFile(name, incompressible(t, 4<<20), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opID, e = h.c.AddFolder(id, rootID, batch, PolicySkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	<-running
 	if e := h.c.ForgetArchive(id); e != nil {
-		t.Fatalf("forget once closed: %v", e)
+		t.Fatalf("forget while an operation runs: %v", e)
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != CodeOpCancelled {
+		t.Fatalf("the running operation was not cancelled: %+v", o)
+	}
+	h.rec.onEvent(nil)
+	if !h.record(id).Forgotten() {
+		t.Fatal("the record was not forgotten")
+	}
+	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
+		t.Fatalf("the archive was left open: %v", e)
 	}
 }
 
@@ -550,8 +635,9 @@ func TestDeleteClaimsTheRecordAcrossTheRemoval(t *testing.T) {
 	}
 }
 
-// A preview reader is live on the open archive: the refusal is the same one,
-// and it is the reader that must have ended before the file is touched.
+// A preview reader is live on the open archive: that one thing the call does
+// not take away, so the answer is archive.busy and the reader must have
+// ended before the file is touched (APP.md §13).
 func TestDeleteRefusesWhileAPreviewReaderIsLive(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()

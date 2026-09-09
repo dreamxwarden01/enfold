@@ -94,8 +94,11 @@ const (
 	CodeTokenTwoKeys     Code = "token.two_keys"
 
 	// Archives.
-	CodeArchiveNotOpen      Code = "archive.not_open"
-	CodeArchiveOpen         Code = "archive.already_open"
+	CodeArchiveNotOpen Code = "archive.not_open"
+	CodeArchiveOpen    Code = "archive.already_open"
+	// archive.dirty is archive.ErrTxOpen alone since 2026-09-09: two
+	// transactions on one handle, a bug and not a state (APP.md §2.3 — an
+	// archive is clean between operations, so no user can be in this one).
 	CodeArchiveDirty        Code = "archive.dirty"
 	CodeArchiveBusy         Code = "archive.busy"
 	CodeArchiveCompacting   Code = "archive.compacting"

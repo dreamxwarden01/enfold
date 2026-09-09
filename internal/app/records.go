@@ -174,11 +174,8 @@ func (c *Core) busyForRecordLocked(aid [16]byte) *Error {
 		// the file is about to go, so nothing else claims the record.
 		return coded(CodeArchiveBusy)
 	}
-	hex := hexID(aid)
-	for _, o := range c.ops {
-		if !o.finished && o.archiveID == hex {
-			return coded(CodeArchiveBusy)
-		}
+	if c.hasRunningOpLocked(aid) {
+		return coded(CodeArchiveBusy)
 	}
 	return nil
 }
@@ -192,6 +189,9 @@ func (c *Core) ForgetArchive(id string) *Error {
 	if !ok {
 		return coded(CodeParams)
 	}
+	// The archive is closed first, a running operation cancelled with it
+	// (APP.md §13): there are no unsaved changes to ask about.
+	c.closeForRecord(aid)
 	c.mu.Lock()
 	if e := c.busyForRecordLocked(aid); e != nil {
 		c.mu.Unlock()
@@ -286,6 +286,12 @@ func (c *Core) DeleteArchive(id string, alsoFile bool) *Error {
 	if !ok {
 		return coded(CodeParams)
 	}
+	// Unlike Forget, the archive is only closed if it is quiet: §13's Delete
+	// paragraph is "the open archive is closed first, refused with
+	// `archive.busy` while an operation or a preview reader is live", so a
+	// running add is never killed by a delete — busyForRecordLocked answers
+	// archive.busy below and the user cancels the operation first.
+	c.closeQuietForRecord(aid)
 	c.mu.Lock()
 	if e := c.busyForRecordLocked(aid); e != nil {
 		c.mu.Unlock()

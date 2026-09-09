@@ -431,11 +431,11 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if e != nil {
 		t.Fatalf("open: %v", e)
 	}
-	if st.Files != 0 || st.State != "open" || !st.SessionAlive {
+	if st.Files != 0 || st.Records != 0 || st.State != "open" {
 		t.Fatalf("stat: %+v", st)
 	}
 
-	// Stage two files, a folder made in the app and a source folder walked
+	// Add two files, a folder made in the app and a source folder walked
 	// into it: a folder is a record, never a prefix of a name.
 	src := filepath.Join(h.dir, "src")
 	os.MkdirAll(filepath.Join(src, "sub"), 0o700)
@@ -465,13 +465,13 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatalf("page: %v", e)
 	}
 	names := rowsByName(page)
-	if len(page.Rows) != 3 || names["a.txt"].Pending != "added" || !names["docs"].IsDir {
-		t.Fatalf("staged page: %+v", page.Rows)
+	if len(page.Rows) != 3 || !names["docs"].IsDir {
+		t.Fatalf("root page: %+v", page.Rows)
 	}
 	// Two files, the folder made, the folder the walk created and its file:
-	// five records staged, five changes.
-	if st, _ := h.c.Stat(id); st.Dirty != 5 || st.State != "dirty" || st.CapAt == 0 {
-		t.Fatalf("dirty stat: %+v", st)
+	// five records, three of them files.
+	if st, _ := h.c.Stat(id); st.Records != 5 || st.Files != 3 || st.State != "open" {
+		t.Fatalf("stat after the adds: %+v", st)
 	}
 	// A second add of the same name is a collision under skip; the kind on
 	// both sides is what the dialog greys Replace from.
@@ -479,31 +479,20 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if e != nil || len(col) != 2 {
 		t.Fatalf("collisions: %+v %v", col, e)
 	}
-	if col[0].Name != "a.txt" || !col[0].Pending || col[0].IsDir || col[0].ExistingIsDir {
+	if col[0].Name != "a.txt" || col[0].IsDir || col[0].ExistingIsDir {
 		t.Fatalf("file collision: %+v", col[0])
 	}
 	if col[1].Name != "docs/" || !col[1].IsDir || !col[1].ExistingIsDir {
 		t.Fatalf("folder collision: %+v", col[1])
 	}
-	// Preview of a staged file is refused (not committed yet).
-	if _, e := h.c.PreviewURL(id, names["a.txt"].ID); e == nil {
-		t.Fatal("preview of a staged file")
+	// An added file is committed, so it previews at once.
+	if _, e := h.c.PreviewURL(id, names["a.txt"].ID); e != nil {
+		t.Fatalf("preview of an added file: %v", e)
 	}
 
-	opID, e = h.c.Save(id)
-	if e != nil {
-		t.Fatalf("save: %v", e)
-	}
-	if o := h.rec.waitOp(t, opID); o.Error != "" {
-		t.Fatalf("save op: %+v", o)
-	}
-	st, _ = h.c.Stat(id)
-	if st.Dirty != 0 || st.State != "open" || st.Files != 3 || st.CapAt != 0 {
-		t.Fatalf("after save: %+v", st)
-	}
 	list, _ = h.c.ListArchives(false)
 	if list[0].Files != 3 || list[0].ReceiptOwed || list[0].LastWrittenAt == 0 {
-		t.Fatalf("list after save: %+v", list[0])
+		t.Fatalf("list after the adds: %+v", list[0])
 	}
 	// The walked folder keeps its own name under the folder the app made,
 	// and its file hangs off it by id.
@@ -516,7 +505,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 	sub := page.Rows[0].ID
 	page, _ = h.c.Page(id, sub, "name", 0, 100)
-	if len(page.Rows) != 1 || page.Rows[0].Path != "docs/sub/c.txt" || page.Rows[0].Pending != "" {
+	if len(page.Rows) != 1 || page.Rows[0].Path != "docs/sub/c.txt" {
 		t.Fatalf("sub page: %+v", page.Rows)
 	}
 	// The breadcrumb is the whole chain, root-inclusive, the archive's name
@@ -553,8 +542,9 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatalf("multi-range: %d", resp.StatusCode)
 	}
 
-	// Rename one record, delete another, save, then extract the whole
-	// archive: the all-zero id is the root and takes everything.
+	// Rename one record and delete another — each its own commit — then
+	// extract the whole archive: the all-zero id is the root and takes
+	// everything.
 	page, _ = h.c.Page(id, rootID, "name", 0, 100)
 	names = rowsByName(page)
 	if e := h.c.RenameRecord(id, names["a.txt"].ID, "x/a.txt"); !isCode(e, CodeFileName) {
@@ -565,10 +555,6 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 	if e := h.c.DeleteRecords(id, []string{names["b.txt"].ID}); e != nil {
 		t.Fatalf("delete: %v", e)
-	}
-	opID, _ = h.c.Save(id)
-	if o := h.rec.waitOp(t, opID); o.Error != "" {
-		t.Fatalf("save 2: %+v", o)
 	}
 	// Extracted files go under GOTMPDIR when it is set: on the dev machine
 	// that directory is excluded from the antivirus, whose scan of a fresh
@@ -610,17 +596,10 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatalf("hash behind after verify: %+v", list[0])
 	}
 
-	// Lock: the archive stays open but Save needs the session.
+	// Lock: the archive stays open and its operations still commit, each
+	// owing its receipt until the next unlock (APP.md §2.3).
 	h.c.Lock()
 	h.rec.waitState(t, StateLocked)
-	if st, e := h.c.Stat(id); e != nil || st.SessionAlive {
-		t.Fatalf("stat while locked: %+v %v", st, e)
-	}
-	if _, e := h.c.Save(id); !isCode(e, CodeNeedsUnlock) {
-		t.Fatalf("save while locked: %v", e)
-	}
-	// CreateFolder and Move stay usable after a lock, into the staged
-	// transaction (APP.md §2.3); Save is what needs the session.
 	after, e := h.c.CreateFolder(id, rootID, "after")
 	if e != nil {
 		t.Fatalf("create folder while locked: %v", e)
@@ -628,8 +607,11 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if e := h.c.MoveRecords(id, []string{h.row(t, id, rootID, "a2.txt").ID}, after); e != nil {
 		t.Fatalf("move while locked: %v", e)
 	}
-	if e := h.c.Discard(id); e != nil {
-		t.Fatalf("discard while locked: %v", e)
+	if st, e := h.c.Stat(id); e != nil || !st.ReceiptOwed {
+		t.Fatalf("a commit under a lock owes its receipt: %+v %v", st, e)
+	}
+	if _, e := h.c.Compact(id); !isCode(e, CodeNeedsUnlock) {
+		t.Fatalf("compact while locked: %v", e)
 	}
 	list, _ = h.c.ListArchives(false)
 	if len(list) != 1 || !list[0].Open {
@@ -643,7 +625,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 }
 
-func TestArchiveIdleClockAndDirtyCap(t *testing.T) {
+func TestArchiveIdleClockClosesIt(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
@@ -653,16 +635,17 @@ func TestArchiveIdleClockAndDirtyCap(t *testing.T) {
 	if _, e := h.c.OpenArchive(id); e != nil {
 		t.Fatal(e)
 	}
-	// Clean and idle: the archive closes itself, silently, after the
-	// session's idle span (the timers fire inside Advance).
+	// Idle: the archive closes itself, silently, after the session's idle
+	// span (the timers fire inside Advance). There is nothing to ask about —
+	// an archive is clean between operations (APP.md §2.3, DESIGN.md §10).
 	h.clk.Advance(defaultIdle + time.Second)
 	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
-		t.Fatalf("clean idle archive still open: %v", e)
+		t.Fatalf("idle archive still open: %v", e)
 	}
 	h.rec.waitState(t, StateLocked) // the session's own idle clock fired too
 
-	// Dirty: never closed silently. Two expiring notices, then it holds
-	// until the cap discards the changes.
+	// An archive worked on is not idle: the clock is re-armed by every
+	// operation, and what was committed is there after the close.
 	h.unlockWithPassword()
 	if _, e := h.c.OpenArchive(id); e != nil {
 		t.Fatal(e)
@@ -670,71 +653,67 @@ func TestArchiveIdleClockAndDirtyCap(t *testing.T) {
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("x"), 0o600)
 	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
-	h.rec.waitOp(t, opID)
+	if o := h.rec.waitOp(t, opID); o.Error != "" {
+		t.Fatalf("add: %+v", o)
+	}
 	st, _ := h.c.Stat(id)
-	if st.Dirty != 1 || st.CapAt == 0 || st.ExpiresAt == 0 {
-		t.Fatalf("dirty: %+v", st)
+	if st.ExpiresAt != h.clk.Now().Add(defaultIdle).Unix() {
+		t.Fatalf("the operation did not re-arm the clock: %+v", st)
 	}
-	dirtyAt := h.clk.Now()
 	h.clk.Advance(defaultIdle + time.Second)
-	ev := h.rec.waitFor(t, EventArchiveExpiring, func(p any) bool { return true }).(ArchiveExpiring)
-	if ev.ID != id || ev.Dirty != 1 || ev.ClosesAt != h.clk.Now().Add(archiveExtension).Unix() {
-		t.Fatalf("expiring: %+v", ev)
-	}
-	h.clk.Advance(archiveExtension + time.Second)
-	h.rec.waitFor(t, EventArchiveExpiring, func(p any) bool { return true })
-	h.clk.Advance(archiveExtension + time.Second)
-	if st, e := h.c.Stat(id); e != nil || st.Dirty != 1 || st.ExpiresAt != 0 {
-		t.Fatalf("after the extensions: %+v %v", st, e)
-	}
-	if e := h.c.KeepOpen(id); e != nil {
-		t.Fatalf("keep open: %v", e)
-	}
-	if st, _ := h.c.Stat(id); st.ExpiresAt == 0 {
-		t.Fatal("KeepOpen did not rearm the idle clock")
-	}
-	// The cap: dirtySince + the absolute span.
-	h.clk.Advance(dirtyAt.Add(defaultAbsolute).Sub(h.clk.Now()) + time.Second)
-	h.rec.waitFor(t, EventVaultWarning, func(p any) bool {
-		w, ok := p.(Warning)
-		return ok && w.Code == "archive.changes_discarded"
-	})
 	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
-		t.Fatalf("dirty cap did not close the archive: %v", e)
-	}
-	// The abort left the file at its last commit: empty.
-	h.unlockWithPassword()
-	if _, e := h.c.OpenArchive(id); e != nil {
-		t.Fatal(e)
-	}
-	if st, _ := h.c.Stat(id); st.Files != 0 {
-		t.Fatalf("aborted change was committed: %+v", st)
-	}
-}
-
-func TestShutdownCommitsDirtyArchives(t *testing.T) {
-	h := newHarness(t, nil, nil)
-	h.unlockWithPassword()
-	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
-	h.c.OpenArchive(id)
-	f := filepath.Join(h.dir, "f.txt")
-	os.WriteFile(f, []byte("saved at exit"), 0o600)
-	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
-	h.rec.waitOp(t, opID)
-	h.c.ResolveForShutdown(5 * time.Second)
-	if st := h.status(); st.State != StateLocked || st.OpenArchives != 0 {
-		t.Fatalf("after shutdown: %+v", st)
+		t.Fatalf("the idle clock did not close the archive: %v", e)
 	}
 	h.unlockWithPassword()
-	list, _ := h.c.ListArchives(false)
-	if len(list) != 1 || list[0].ReceiptOwed || list[0].Files != 0 {
-		t.Fatalf("list: %+v", list)
-	}
 	if _, e := h.c.OpenArchive(id); e != nil {
 		t.Fatal(e)
 	}
 	if st, _ := h.c.Stat(id); st.Files != 1 {
-		t.Fatalf("shutdown did not commit: %+v", st)
+		t.Fatalf("the committed add did not survive the close: %+v", st)
+	}
+}
+
+// The shutdown cancels a running operation, aborts its transaction, closes
+// the archives and locks (APP.md §5): nothing half-written is published, and
+// what earlier operations committed is there.
+func TestShutdownCancelsARunningOperation(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
+	h.c.OpenArchive(id)
+	done := filepath.Join(h.dir, "done.txt")
+	os.WriteFile(done, []byte("committed before the exit"), 0o600)
+	opID, _ := h.c.AddFiles(id, rootID, []string{done}, PolicySkip)
+	if o := h.rec.waitOp(t, opID); o.Error != "" {
+		t.Fatalf("the first add: %+v", o)
+	}
+
+	// A second add, big enough to still be running: the operation is
+	// registered before AddFiles returns, so the cancel below always
+	// reaches it, whatever it has written by then.
+	big := filepath.Join(h.dir, "big.bin")
+	os.WriteFile(big, incompressible(t, 4<<20), 0o600)
+	opID, e := h.c.AddFiles(id, rootID, []string{big}, PolicySkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	h.c.ResolveForShutdown(5 * time.Second)
+	if o := h.rec.waitOp(t, opID); o.Error != CodeOpCancelled {
+		t.Fatalf("the running operation was not cancelled: %+v", o)
+	}
+	if st := h.status(); st.State != StateLocked || st.OpenArchives != 0 {
+		t.Fatalf("after shutdown: %+v", st)
+	}
+	h.unlockWithPassword()
+	if _, e := h.c.OpenArchive(id); e != nil {
+		t.Fatal(e)
+	}
+	st, _ := h.c.Stat(id)
+	if st.Files != 1 {
+		t.Fatalf("the cancelled add was published: %+v", st)
+	}
+	if r := h.row(t, id, rootID, "done.txt"); r.Size != uint64(len("committed before the exit")) {
+		t.Fatalf("the committed add did not survive: %+v", r)
 	}
 }
 

@@ -10,6 +10,7 @@ import { methodAfter, outcomeAfter } from "./outcome";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
 import { hasTrouble, summaryLine, tally } from "./results";
+import { opLabel } from "./ops";
 import type { Outcome } from "./outcome";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
@@ -30,12 +31,6 @@ export interface Drop {
   isDir?: boolean[] | null;
   archiveId: string;
   dirId: string;
-}
-
-export interface Expiring {
-  id: string;
-  closesAt: number;
-  dirty: number;
 }
 
 // The archives.changed payload (APP.md §13): the names the purge dropped
@@ -110,7 +105,6 @@ class Store {
   // the lock screen's wording follows it for the rest of the ceremony,
   // and not whether a secret was asked (APP.md §2.2, §13).
   unlockMethod = $state("");
-  expiring = $state<Expiring | null>(null);
   drop = $state<Drop | null>(null);
   now = $state(Date.now());
   booted = $state(false);
@@ -151,9 +145,6 @@ class Store {
       if (d.id === this.current && d.seq > (this.archiveSeq[d.id] ?? 0)) {
         void this.refreshArchive();
       }
-    });
-    Events.On("archive.expiring", (e) => {
-      this.expiring = e.data as Expiring;
     });
     Events.On("op.progress", (e) => this.applyOp(e.data as OpView));
     Events.On("op.done", (e) => this.applyOp(e.data as OpView, true));
@@ -227,7 +218,7 @@ class Store {
         void this.refreshEntangled();
         void this.refreshLastExport();
         void this.refreshSettings();
-        if (this.stat) void this.refreshArchive(); // sessionAlive follows the new session
+        if (this.stat) void this.refreshArchive(); // the receipt it owed is paid
         if (this.route === "lock") this.setRoute(this.current ? "archive" : "archives");
       } else if (s.state === VaultState.StateLocked) {
         // The lock screen lists the vault's recovery slots while Locked —
@@ -289,6 +280,13 @@ class Store {
     }
     if (o.archiveId && o.archiveId === this.current) void this.refreshArchive();
     void this.refreshArchives();
+    // Every extract records the folder it went to (settings.json,
+    // lastExtractFolder), which is what the extract dialog is prefilled
+    // with next time (APP.md §3). The core writes it at the destination's
+    // creation, before the first byte, so a cancelled or partly failed
+    // extract has recorded it too — the re-read is not gated on the
+    // outcome.
+    if (o.kind === "extract") void this.refreshSettings();
     setTimeout(() => {
       delete this.ops[o.id];
     }, 8000);
@@ -411,10 +409,9 @@ class Store {
   private entering = "";
 
   // loadPage lists the directory the page holds. The page can hold one
-  // that is gone — Discard drops the folders that transaction staged, a
-  // Delete takes a subtree the page was standing in — and the core answers
-  // file.not_found rather than an empty listing under a breadcrumb that
-  // still names the place (APP.md §3). The crumbs last held are then
+  // that is gone — a Delete took a subtree the page was standing in — and
+  // the core answers file.not_found rather than an empty listing under a
+  // breadcrumb that still names the place (APP.md §3). The crumbs last held are then
   // walked upwards, retrying until one answers; the root always does.
   async loadPage(): Promise<void> {
     const id = this.current;
@@ -547,26 +544,6 @@ class Store {
   revealPending(url: string): boolean {
     return !this.revealed.has(url);
   }
-}
-
-export function opLabel(kind: string): string {
-  switch (kind) {
-    case "add":
-      return "Adding";
-    case "replace":
-      return "Replacing";
-    case "extract":
-      return "Extracting";
-    case "save":
-      return "Saving";
-    case "verify":
-      return "Verifying";
-    case "compact":
-      return "Compacting";
-    case "rotate":
-      return "Rotating key";
-  }
-  return kind;
 }
 
 export const store = new Store();

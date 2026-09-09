@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -23,6 +24,8 @@ import (
 
 // op is a long operation: an id, progress coalesced to a few events per
 // second, a result the frontend can fetch again after a window is rebuilt.
+// done is closed when it ends, so a caller that cancelled one can wait for
+// the transaction to be aborted before it closes the archive.
 type op struct {
 	id        string
 	kind      string
@@ -32,6 +35,7 @@ type op struct {
 	total     atomic.Uint64
 	phase     atomic.Value // string
 	cancel    context.CancelFunc
+	over      chan struct{}
 	finished  bool
 	err       *Error
 	results   []FileOutcome
@@ -69,10 +73,57 @@ func (o *op) progress(done, total uint64, phase string) {
 	o.c.emit(EventOpProgress, v)
 }
 
+// countingReaderAt reports how far a write has read into its source, so that
+// the bar moves inside one large file (APP.md §3: progress is by bytes, not
+// by file). What it reports is a front, not a running sum: a file is read
+// more than once — the storage plan samples it before the seal reads it
+// whole — and it must be counted once.
+type countingReaderAt struct {
+	src  io.ReaderAt
+	size int64
+	seen atomic.Int64
+	on   func(read int64)
+}
+
+func (r *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := r.src.ReadAt(p, off)
+	if n > 0 {
+		r.advance(off, int64(n))
+	}
+	return n, err
+}
+
+// advance moves the front when the read continues it. A read that starts
+// beyond what has been read is the compression probe sampling the middle or
+// the end of the file (DESIGN.md §9), not progress through it, and moves
+// nothing; and a read past the end — the archive layer's one-byte check that
+// the source ends where it said — stops at size.
+func (r *countingReaderAt) advance(off, n int64) {
+	for {
+		seen := r.seen.Load()
+		if off > seen {
+			return
+		}
+		end := off + n
+		if end > r.size {
+			end = r.size
+		}
+		if end <= seen {
+			return
+		}
+		if r.seen.CompareAndSwap(seen, end) {
+			if r.on != nil {
+				r.on(end)
+			}
+			return
+		}
+	}
+}
+
 // startOp registers an operation and runs fn on its own goroutine.
 func (c *Core) startOp(kind, archiveID string, fn func(ctx context.Context, o *op) ([]FileOutcome, error)) string {
 	ctx, cancel := context.WithCancel(context.Background())
-	o := &op{id: randomID(), kind: kind, archiveID: archiveID, startedAt: c.now(), cancel: cancel, c: c}
+	o := &op{id: randomID(), kind: kind, archiveID: archiveID, startedAt: c.now(), cancel: cancel, over: make(chan struct{}), c: c}
 	o.phase.Store("starting")
 	c.mu.Lock()
 	c.ops[o.id] = o
@@ -100,9 +151,14 @@ func (c *Core) startOp(kind, archiveID string, fn func(ctx context.Context, o *o
 
 func (c *Core) finishOp(o *op, results []FileOutcome, e *Error) {
 	c.mu.Lock()
+	if o.finished { // a panic after a finish: the first outcome stands
+		c.mu.Unlock()
+		return
+	}
 	o.finished, o.results, o.err = true, results, e
 	v := o.view()
 	c.mu.Unlock()
+	close(o.over)
 	c.emit(EventOpDone, v)
 	c.emitState()
 	// Keep finished ops for a while so a rebuilt window sees the outcome.
@@ -113,7 +169,8 @@ func (c *Core) finishOp(o *op, results []FileOutcome, e *Error) {
 	})
 }
 
-// CancelOp cancels a running operation.
+// CancelOp cancels a running operation. On a running add or replace this is
+// Abort: nothing is published (APP.md §2.3).
 func (c *Core) CancelOp(id string) *Error {
 	c.mu.Lock()
 	o := c.ops[id]
@@ -171,15 +228,15 @@ type planItem struct {
 	name   string // the name it takes in the archive
 	joined string // its joined path there
 	// Its destination: an existing directory (or the root), or a folder
-	// this batch creates, whose id is known only once it is staged.
+	// this batch creates, whose id is known only once it is written.
 	parentID   [16]byte
 	parentPlan *planItem
 	// The record in the way, for enter and replace.
 	existing     [16]byte
 	existingPlan *planItem
 	children     []*planItem
-	id           [16]byte // filled in as the item is staged
-	staged       bool
+	id           [16]byte // filled in as the item is written
+	written      bool
 }
 
 // addDest is where a run of nodes goes: the destination's identity, its
@@ -194,9 +251,10 @@ type addDest struct {
 	planned []*planItem
 }
 
-// AddFiles stages files under parentID. Every name is one element,
-// validated with format.ValidateName and matched case folded against the
-// live children of its parent in the merged view (APP.md §3).
+// AddFiles adds files under parentID in one transaction, committed at its
+// end (APP.md §2.3). Every name is one element, validated with
+// format.ValidateName and matched case folded against the live children of
+// its parent (APP.md §3).
 func (c *Core) AddFiles(id, parentID string, paths []string, policy AddPolicy) (string, *Error) {
 	oa, pid, e := c.addTarget(id, parentID)
 	if e != nil {
@@ -228,10 +286,10 @@ func (c *Core) AddFiles(id, parentID string, paths []string, policy AddPolicy) (
 	}), nil
 }
 
-// AddFolder stages a directory tree under parentID. Every directory the walk
-// creates becomes a record with its own time; an existing directory of that
-// name is entered whatever the policy, so one source folder is never split
-// across two records (APP.md §3).
+// AddFolder adds a directory tree under parentID in one transaction. Every
+// directory the walk creates becomes a record with its own time; an existing
+// directory of that name is entered whatever the policy, so one source
+// folder is never split across two records (APP.md §3).
 func (c *Core) AddFolder(id, parentID, dir string, policy AddPolicy) (string, *Error) {
 	oa, pid, e := c.addTarget(id, parentID)
 	if e != nil {
@@ -247,10 +305,8 @@ func (c *Core) AddFolder(id, parentID, dir string, policy AddPolicy) (string, *E
 }
 
 // addTarget resolves the archive and the destination folder: the core
-// validates that the archive is open and that the id is the root or a
-// directory live in the merged view — a folder staged by CreateFolder
-// counts, one staged for deletion does not — and refuses loudly (APP.md §3,
-// the file drop's data-dir-id).
+// validates that the archive is open and that the id is the root or a live
+// directory, and refuses loudly (APP.md §3, the file drop's data-dir-id).
 func (c *Core) addTarget(id, parentID string) (*openArchive, [16]byte, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
@@ -329,8 +385,11 @@ func walkSource(ctx context.Context, dir string) (*addNode, error) {
 	return root, nil
 }
 
-// addTree pre-flights the whole walk against the merged view and then stages
-// it. Nothing is staged until every item has been decided.
+// addTree pre-flights the whole walk against the committed view and then
+// runs it inside one transaction: nothing is written until every item has
+// been decided, and the commit at the end is what publishes any of it. An
+// add that wrote nothing after all — every item skipped or refused —
+// publishes nothing rather than committing an empty change.
 func (c *Core) addTree(ctx context.Context, o *op, oa *openArchive, parentID [16]byte, nodes []*addNode, policy AddPolicy) ([]FileOutcome, error) {
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
@@ -359,15 +418,29 @@ func (c *Core) addTree(ctx context.Context, o *op, oa *openArchive, parentID [16
 	}
 	count(plan)
 	o.progress(0, total, "adding")
+	tx, e := c.beginOp(oa)
+	if e != nil {
+		return nil, e
+	}
 	results := []FileOutcome{}
 	var done uint64
-	err := c.runPlan(ctx, o, oa, plan, &results, &done, total)
-	c.mu.Lock()
-	c.settleLocked(oa) // nothing staged after all: not dirty
-	c.mu.Unlock()
-	c.emitArchiveChanged(oa)
-	c.emitState()
-	return results, err
+	wrote := false
+	err := c.runPlan(ctx, o, oa, tx, plan, &results, &done, total, &wrote)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil || !wrote {
+		// Cancelled, failed, or nothing to write after all: the transaction
+		// is dropped and nothing is published (APP.md §2.3).
+		c.abortOp(oa, tx)
+		return results, err
+	}
+	// The commit is not cancellable: the writing is done, and a Cancel that
+	// arrives now would leave the outcome to a race rather than to the user.
+	if e := c.commitOp(context.WithoutCancel(ctx), oa, tx); e != nil {
+		return results, e
+	}
+	return results, nil
 }
 
 // planNodes decides one run of siblings and, for a folder that is created or
@@ -464,9 +537,7 @@ func planNodes(m *merged, d *addDest, nodes []*addNode, policy AddPolicy) []*pla
 }
 
 // inTheWay is the live child of the destination whose name folds onto name,
-// or the item this batch has already planned there. A staged-deleted sibling
-// reserves no name (FORMAT.md R39 folds among live children only), so a
-// deleted folder's name is free and the walk makes a new record.
+// or the item this batch has already planned there.
 func inTheWay(m *merged, d *addDest, name string) (*mergedRec, *planItem) {
 	if d.plan == nil {
 		if r := m.sibling(d.id, name, [16]byte{}); r != nil {
@@ -520,10 +591,12 @@ func join(dir, name string) string {
 	return dir + "/" + name
 }
 
-// runPlan stages the pre-flighted walk, parents before children. A folder
-// that could not be staged takes its subtree with it: one outcome for the
-// folder and nothing beneath it.
-func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, items []*planItem, results *[]FileOutcome, done *uint64, total uint64) error {
+// runPlan writes the pre-flighted walk into the transaction, parents before
+// children. A folder that could not be written takes its subtree with it:
+// one outcome for the folder and nothing beneath it. wrote says whether the
+// transaction holds anything, so an add that changed nothing commits
+// nothing.
+func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, tx *archive.Tx, items []*planItem, results *[]FileOutcome, done *uint64, total uint64, wrote *bool) error {
 	for _, it := range items {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -546,62 +619,55 @@ func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, items []*pla
 			*results = append(*results, res)
 			continue
 		case "enter":
-			it.id, it.staged = it.existing, true
+			it.id, it.written = it.existing, true
 			if it.existingPlan != nil {
 				it.id = it.existingPlan.id
-				it.staged = it.existingPlan.staged
+				it.written = it.existingPlan.written
 			}
 			res.Outcome = "entered"
 			*results = append(*results, res)
 		case "create":
-			c.mu.Lock()
-			if err := c.beginLocked(oa); err != nil {
-				c.mu.Unlock()
-				return err
-			}
-			info, err := oa.tx.AddDir(parent, it.name, it.node.modifiedAt)
-			if err == nil {
-				oa.stageAdd(&pendingChange{kind: pendingAdded, id: info.ID, isDir: true, name: it.name, parentID: parent, dir: info})
-				it.id, it.staged = info.ID, true
-				oa.seq++
-				c.touchArchiveLocked(oa)
-			}
-			c.mu.Unlock()
+			info, err := tx.AddDir(parent, it.name, it.node.modifiedAt)
 			if err != nil {
 				res.Outcome, res.Code = "failed", classify(err).Code
 				*results = append(*results, res)
 				continue // nothing beneath a folder that was not made
 			}
+			it.id, it.written, *wrote = info.ID, true, true
 			res.Outcome = "created"
 			*results = append(*results, res)
 		case "add", "replace":
-			e := c.stageFile(ctx, oa, it, parent, &res)
+			err := c.addFile(ctx, o, tx, it, parent, &res, *done, total)
+			if res.Outcome == "added" || res.Outcome == "replaced" {
+				*wrote = true
+			}
 			*results = append(*results, res)
-			if e != nil {
-				return e
+			if err != nil {
+				return err
 			}
 			*done += uint64(max64(it.node.size, 0))
 			o.progress(*done, total, "adding")
 			continue
 		}
-		if !it.staged && it.action == "enter" {
+		if !it.written && it.action == "enter" {
 			continue // the folder it would have entered was not made
 		}
-		if err := c.runPlan(ctx, o, oa, it.children, results, done, total); err != nil {
+		if err := c.runPlan(ctx, o, oa, tx, it.children, results, done, total, wrote); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// stageFile writes one file into the transaction: an add of a fresh record,
-// or the in-place edit of the record in the way. A source that changed
-// underneath between the walk and the add is one outcome, not a failed
-// operation.
-func (c *Core) stageFile(ctx context.Context, oa *openArchive, it *planItem, parent [16]byte, res *FileOutcome) error {
+// addFile writes one file into the transaction: an add of a fresh record, or
+// the in-place edit of the record in the way. Its bytes are counted as they
+// are read, so the bar moves inside one large file (APP.md §3). A source
+// that changed underneath between the walk and the write is one outcome, not
+// a failed operation.
+func (c *Core) addFile(ctx context.Context, o *op, tx *archive.Tx, it *planItem, parent [16]byte, res *FileOutcome, base, total uint64) error {
 	target := it.existing
 	if it.existingPlan != nil {
-		if !it.existingPlan.staged {
+		if !it.existingPlan.written {
 			res.Outcome, res.Code = "failed", CodeFileNotFound
 			return nil
 		}
@@ -613,26 +679,14 @@ func (c *Core) stageFile(ctx context.Context, oa *openArchive, it *planItem, par
 		return nil
 	}
 	defer f.Close()
-	c.mu.Lock()
-	if err := c.beginLocked(oa); err != nil {
-		c.mu.Unlock()
-		return err
-	}
-	var cur *mergedRec
-	if it.action == "replace" {
-		cur = oa.merge().live(target)
-		if cur == nil {
-			c.mu.Unlock()
-			res.Outcome, res.Code = "failed", CodeFileNotFound
-			return nil
-		}
-	}
-	c.mu.Unlock()
+	src := &countingReaderAt{src: f, size: it.node.size, on: func(read int64) {
+		o.progress(base+uint64(read), total, "adding")
+	}}
 	var info archive.FileInfo
 	if it.action == "replace" {
-		info, err = oa.tx.Replace(ctx, target, f, it.node.size)
+		info, err = tx.Replace(ctx, target, src, it.node.size)
 	} else {
-		info, err = oa.tx.Add(ctx, parent, it.name, f, it.node.size)
+		info, err = tx.Add(ctx, parent, it.name, src, it.node.size)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -641,18 +695,12 @@ func (c *Core) stageFile(ctx context.Context, oa *openArchive, it *planItem, par
 		res.Outcome, res.Code = "failed", classify(err).Code
 		return nil
 	}
-	c.mu.Lock()
+	it.id, it.written = info.ID, true
 	if it.action == "replace" {
-		oa.stageReplace(cur, info)
 		res.Outcome = "replaced"
 	} else {
-		oa.stageAdd(&pendingChange{kind: pendingAdded, id: info.ID, isDir: false, name: it.name, parentID: parent, file: info})
 		res.Outcome = "added"
 	}
-	it.id, it.staged = info.ID, true
-	oa.seq++
-	c.touchArchiveLocked(oa)
-	c.mu.Unlock()
 	return nil
 }
 
@@ -663,7 +711,8 @@ func max64(a, b int64) int64 {
 	return b
 }
 
-// ReplaceFile is the in-place edit: the file's content from src, same id.
+// ReplaceFile is the in-place edit: the file's content from src, same id,
+// its own transaction (APP.md §2.3). Cancel aborts it.
 func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
@@ -688,29 +737,36 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 			return nil, archive.ErrNotFound
 		}
 		name := m.path(fid)
-		if err := c.beginLocked(oa); err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
 		c.mu.Unlock()
 		f, err := os.Open(src)
 		if err != nil {
 			return nil, err
 		}
 		defer f.Close()
-		o.progress(0, uint64(st.Size()), "replacing")
-		info, err := oa.tx.Replace(ctx, fid, f, st.Size())
-		if err != nil {
+		total := uint64(max64(st.Size(), 0))
+		o.progress(0, total, "replacing")
+		tx, e := c.beginOp(oa)
+		if e != nil {
+			return nil, e
+		}
+		rd := &countingReaderAt{src: f, size: st.Size(), on: func(read int64) {
+			o.progress(uint64(read), total, "replacing")
+		}}
+		if _, err := tx.Replace(ctx, fid, rd, st.Size()); err != nil {
+			c.abortOp(oa, tx)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, err
 		}
-		c.mu.Lock()
-		oa.stageReplace(cur, info)
-		oa.seq++
-		c.touchArchiveLocked(oa)
-		c.mu.Unlock()
-		o.progress(uint64(st.Size()), uint64(st.Size()), "replacing")
-		c.emitArchiveChanged(oa)
-		c.emitState()
+		if err := ctx.Err(); err != nil {
+			c.abortOp(oa, tx)
+			return nil, err
+		}
+		if e := c.commitOp(context.WithoutCancel(ctx), oa, tx); e != nil {
+			return nil, e
+		}
+		o.progress(total, total, "replacing")
 		return []FileOutcome{{Name: name, Path: src, Outcome: "replaced"}}, nil
 	}), nil
 }
@@ -742,7 +798,9 @@ type extractItem struct {
 // because its record is live, never because a file needed a parent (DESIGN
 // trap 31): an empty folder extracts as an empty folder. The all-zero id
 // among recordIDs is the root and extracts everything; an empty recordIDs is
-// params, never everything.
+// params, never everything. The destination is created if it does not exist
+// and remembered as settings.json's lastExtractFolder, which the extract
+// dialog prefills next time.
 func (c *Core) Extract(id string, recordIDs []string, dir string, policy ExtractPolicy) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
@@ -807,6 +865,7 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		if err := os.MkdirAll(root, 0o700); err != nil {
 			return nil, err
 		}
+		c.rememberFolder(extractFolder, root)
 		results := make([]FileOutcome, 0, len(items))
 		at := make(map[[16]byte]int, len(items))
 		gone := map[[16]byte]bool{}
@@ -849,10 +908,12 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 			oa.readers++
 			c.touchArchiveLocked(oa)
 			c.mu.Unlock()
-			err := oa.a.ExtractTo(ctx, it.id, it.dst)
+			base := done
+			count := func(written uint64) { o.progress(base+written, total, "extracting") }
+			err := extractFile(ctx, oa.a, it.id, it.dst, count)
 			for n := 2; err != nil && errors.Is(err, os.ErrExist) && policy == ExtractRename && n < 1000; n++ {
 				res.Path = renamed(it.dst, n)
-				err = oa.a.ExtractTo(ctx, it.id, res.Path)
+				err = extractFile(ctx, oa.a, it.id, res.Path, count)
 			}
 			c.mu.Lock()
 			oa.readers--
@@ -889,10 +950,7 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 }
 
 // extractPlan resolves the set and orders it parents-first. A record reached
-// twice is planned once; a staged rename or move carries its target with it;
-// staged adds and replaces are not extractable until Save, as with
-// PreviewURL, and nothing beneath a staged folder is either. Caller holds
-// the state mutex.
+// twice is planned once. Caller holds the state mutex.
 func extractPlan(m *merged, ids [][16]byte, all bool) ([]extractItem, *Error) {
 	want := map[[16]byte]bool{}
 	for _, rid := range ids {
@@ -922,10 +980,6 @@ func extractPlan(m *merged, ids [][16]byte, all bool) ([]extractItem, *Error) {
 			if !all && !want[r.id] {
 				continue
 			}
-			switch r.pending {
-			case pendingAdded, pendingReplaced, pendingDeleted:
-				continue
-			}
 			out = append(out, extractItem{
 				id: r.id, parentID: r.parentID, isDir: r.isDir, path: m.path(r.id),
 				size: r.size, modifiedAt: r.modifiedAt, depth: depth,
@@ -943,76 +997,6 @@ func extractPlan(m *merged, ids [][16]byte, all bool) ([]extractItem, *Error) {
 func renamed(p string, n int) string {
 	ext := filepath.Ext(p)
 	return fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(p, ext), n, ext)
-}
-
-// Save commits the transaction and records the receipt. Gated on the
-// session before it starts; one state-mutex section spans the commit and
-// the registry write; a receipt the write cannot record is owed.
-func (c *Core) Save(id string) (string, *Error) {
-	oa, e := c.findArchive(id)
-	if e != nil {
-		return "", e
-	}
-	c.mu.Lock()
-	if _, e := c.sessionLocked(); e != nil {
-		c.mu.Unlock()
-		return "", coded(CodeNeedsUnlock)
-	}
-	c.mu.Unlock()
-	return c.startOp("save", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
-		oa.opMu.Lock()
-		defer oa.opMu.Unlock()
-		o.progress(0, 1, "saving")
-		c.mu.Lock()
-		tx := oa.tx
-		if tx == nil {
-			c.mu.Unlock()
-			return nil, nil
-		}
-		if _, e := c.sessionLocked(); e != nil {
-			c.mu.Unlock()
-			return nil, e
-		}
-		c.mu.Unlock()
-		// The commit — index seal, free map, two syncs — runs under the
-		// archive's own mutex only: the state mutex stays short so a lock
-		// trigger is never held up by I/O. A lock that lands in between
-		// leaves the receipt owed (APP.md §2.3), which the next unlock pays.
-		rec, err := tx.Commit(ctx)
-		c.mu.Lock()
-		if err != nil {
-			if errors.Is(err, archive.ErrIndeterminate) {
-				oa.state = "needs_reopen"
-				c.clearDirtyLocked(oa)
-				c.mu.Unlock()
-				c.emitArchivesChanged()
-				return nil, err
-			}
-			// Any other failure aborted the transaction (the archive's
-			// contract): the staged changes are gone, and the page must not
-			// keep showing them as pending.
-			n := oa.dirty()
-			c.clearDirtyLocked(oa)
-			oa.refreshSnapshot()
-			oa.seq++
-			c.mu.Unlock()
-			c.log("save of %s failed, %d changes discarded: %v", oa.name, n, err)
-			c.emit(EventVaultWarning, Warning{Code: "archive.changes_discarded"})
-			c.emitArchiveChanged(oa)
-			c.emitArchivesChanged()
-			return nil, err
-		}
-		c.clearDirtyLocked(oa)
-		oa.refreshSnapshot()
-		oa.lastSavedAt = rec.WrittenAt
-		oa.seq++
-		c.recordReceiptLocked(oa, rec, nil)
-		c.mu.Unlock()
-		o.progress(1, 1, "saved")
-		c.emitArchiveChanged(oa)
-		c.emitArchivesChanged()
-		return nil, nil
-	}), nil
 }
 
 // recordReceiptLocked writes a receipt to the registry or owes it. Caller
@@ -1055,12 +1039,6 @@ func (c *Core) Verify(id string) (string, *Error) {
 	return c.startOp("verify", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
-		c.mu.Lock()
-		if oa.tx != nil {
-			c.mu.Unlock()
-			return nil, coded(CodeArchiveDirty)
-		}
-		c.mu.Unlock()
 		o.progress(0, 1, "hashing")
 		h, err := oa.a.Hash(ctx)
 		if err != nil {
@@ -1091,8 +1069,9 @@ func (c *Core) Verify(id string) (string, *Error) {
 }
 
 // Compact rewrites the archive without free space (APP.md §2.3): refused
-// unless open and clean; previews quiesced; the handle is finished by the
-// call and the path reopened.
+// unless Open, gated on the session, and it waits its turn on the handle
+// like every other operation; previews are quiesced; the handle is finished
+// by the call and the path reopened.
 func (c *Core) Compact(id string) (string, *Error) {
 	if e := c.refuseIfForgotten(id); e != nil {
 		return "", e
@@ -1102,10 +1081,6 @@ func (c *Core) Compact(id string) (string, *Error) {
 		return "", e
 	}
 	c.mu.Lock()
-	if oa.tx != nil {
-		c.mu.Unlock()
-		return "", coded(CodeArchiveDirty)
-	}
 	if _, e := c.sessionLocked(); e != nil {
 		c.mu.Unlock()
 		return "", coded(CodeNeedsUnlock)
@@ -1140,12 +1115,12 @@ func (c *Core) Compact(id string) (string, *Error) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		c.mu.Lock()
-		if oa.tx != nil || c.archives[oa.id] != oa {
-			// A change was staged between the gate and the operation's
-			// turn on the handle: the archive stays as it is.
+		if c.archives[oa.id] != oa {
+			// The archive was closed between the gate and the operation's
+			// turn on the handle.
 			oa.quiesced = false
 			c.mu.Unlock()
-			return nil, coded(CodeArchiveDirty)
+			return nil, coded(CodeArchiveNotOpen)
 		}
 		oa.state = "compacting"
 		c.mu.Unlock()
@@ -1189,10 +1164,6 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 		return "", e
 	}
 	c.mu.Lock()
-	if oa.tx != nil {
-		c.mu.Unlock()
-		return "", coded(CodeArchiveDirty)
-	}
 	if _, e := c.sessionLocked(); e != nil {
 		c.mu.Unlock()
 		return "", coded(CodeNeedsUnlock)
@@ -1212,11 +1183,6 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 		defer kdf.Zero(key[:])
 		o.progress(0, 3, "registry")
 		c.mu.Lock()
-		if oa.tx != nil {
-			// Staged between the gate and the operation's turn.
-			c.mu.Unlock()
-			return nil, coded(CodeArchiveDirty)
-		}
 		sess, e := c.sessionLocked()
 		if e != nil {
 			c.mu.Unlock()
@@ -1358,28 +1324,41 @@ func (c *Core) CreateArchive(p, name, method string) (string, *Error) {
 		os.Remove(p)
 		return "", e
 	}
-	c.rememberArchiveFolder(filepath.Dir(p))
+	c.rememberFolder(archiveFolder, filepath.Dir(p))
 	c.emitArchivesChanged()
 	return hexID(id), nil
 }
 
-// rememberArchiveFolder records where the last archive was made, so that
-// the next New archive dialog opens there (APP.md §6, settings.json's
-// lastArchiveFolder). A convenience: a folder that could not be written
-// down is logged and nothing else — the archive is made either way.
-func (c *Core) rememberArchiveFolder(dir string) {
+// rememberFolder records one of the settings file's two remembered folders —
+// where the last archive was made, where the last extraction went — so that
+// the next dialog opens there (APP.md §3's lastExtractFolder, §6's
+// lastArchiveFolder). A convenience: a folder that could not be written down
+// is logged and nothing else, and the operation stands either way.
+func (c *Core) rememberFolder(which folderKind, dir string) {
 	c.mu.Lock()
-	if c.settings.LastArchiveFolder == dir {
+	field := &c.settings.LastArchiveFolder
+	if which == extractFolder {
+		field = &c.settings.LastExtractFolder
+	}
+	if *field == dir {
 		c.mu.Unlock()
 		return
 	}
-	c.settings.LastArchiveFolder = dir
+	*field = dir
 	file := c.settings
 	c.mu.Unlock()
 	if err := saveSettings(c.deps.DataDir, file); err != nil {
-		c.log("settings: recording the archive folder: %v", err)
+		c.log("settings: recording %s: %v", which, err)
 	}
 }
+
+// folderKind names which remembered folder rememberFolder writes.
+type folderKind string
+
+const (
+	archiveFolder folderKind = "the archive folder"
+	extractFolder folderKind = "the extract folder"
+)
 
 // HideArchive and UnhideArchive flip the hidden policy bit.
 func (c *Core) HideArchive(id string, hidden bool) *Error {

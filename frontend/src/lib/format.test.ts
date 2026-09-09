@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keyId } from "./format";
+import { hashText, keyId } from "./format";
 
 describe("keyId", () => {
   it("groups the first eight hex digits, upper-cased (FORMAT.md §18.4)", () => {
@@ -19,5 +19,29 @@ describe("keyId", () => {
     expect(keyId("3f7a9c2g")).toBe(""); // g is not hex
     expect(keyId("Recovery key — printed")).toBe("");
     expect(keyId("3f7a-9c21d4e5f607")).toBe(""); // a grouped id is not an id
+  });
+});
+
+// The details modal's ciphertext hash (APP.md §13): a hash of all zeros is
+// no commit yet, and reads N/A rather than sixty-four zeros.
+describe("hashText", () => {
+  it("is the hash itself, whole and never shortened", () => {
+    const h = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+    expect(hashText(h)).toBe(h);
+  });
+
+  it("reads N/A while it is all zeros", () => {
+    expect(hashText("0".repeat(64))).toBe("N/A");
+    expect(hashText("0")).toBe("N/A");
+  });
+
+  it("reads N/A when there is none at all", () => {
+    expect(hashText("")).toBe("N/A");
+    expect(hashText("   ")).toBe("N/A");
+    expect(hashText(undefined)).toBe("N/A");
+  });
+
+  it("does not read N/A for a hash that merely begins with zeros", () => {
+    expect(hashText("0".repeat(63) + "1")).toBe("0".repeat(63) + "1");
   });
 });

@@ -615,11 +615,12 @@ On vault close, also destroy the decrypted index and the Metadata key.
 
 Auto-lock destroys the KWK and the VMK and blocks opening anything new. Archives already open
 stay usable until closed, so a running stream or an in-progress edit is not killed mid-flight.
-Open archives carry their **own idle timeout**; otherwise "keep it open" becomes a way to
-bypass the session timeout entirely. A dirty archive — staged changes not yet saved — is never
-closed silently and never unbounded: its idle expiry prompts (Save / Discard / Keep open, with
-at most two extensions) and a per-archive absolute cap from the first staged change, running
-across a lock, aborts and closes it (`APP.md` §2.3).
+Open archives carry their **own idle timeout**; otherwise "keep it open" becomes a way to bypass
+the session timeout entirely. Since 2026-09-09 an archive is clean between operations — every
+add, delete, rename, move and folder creation is its own transaction, committed at its end, and
+a running one can be cancelled (`APP.md` §2.3) — so the idle expiry simply closes it; the staged
+model with its Save / Discard prompts and its per-archive cap is gone, as it is from every
+archiver the user compared.
 
 ### Making the unlocked state visible
 

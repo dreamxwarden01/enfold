@@ -1,15 +1,16 @@
 package app
 
 import (
-	"context"
 	"time"
 )
 
 // ResolveForShutdown is the ordered, bounded end of the process (APP.md
-// §5): every dirty archive committed under a fresh short context, each
-// receipt recorded, the archives closed, then the lock. A commit that does
-// not finish in time stays unpublished, which the format tolerates. Called
-// by the shell's shutdown hook and by the tray's Quit after the user
+// §5): a running operation is cancelled — its transaction aborted, nothing
+// published, which the format tolerates — each owed receipt is written, the
+// archives are closed, then the lock, bounded to the budget in all. Nothing
+// is committed here: since 2026-09-09 every operation commits at its own
+// end, so an archive between operations has nothing outstanding (§2.3).
+// Called by the shell's shutdown hook and by the tray's Quit after the user
 // answered; never shows UI.
 func (c *Core) ResolveForShutdown(budget time.Duration) {
 	deadline := c.now().Add(budget)
@@ -36,36 +37,28 @@ func (c *Core) ResolveForShutdown(budget time.Duration) {
 	}
 	c.mu.Lock()
 	var list []*openArchive
+	var running []*op
 	for _, oa := range c.archives {
 		list = append(list, oa)
+		running = append(running, c.cancelOpsLocked(oa.id)...)
 	}
+	c.mu.Unlock()
+	// A cancelled add or replace aborts its transaction on the way out; the
+	// wait is what lets the archive be closed rather than left behind.
+	if remaining := deadline.Sub(c.now()); remaining > 0 {
+		c.awaitOps(running, remaining)
+	}
+	// The receipts a lock or a ceremony stranded are written while the
+	// session is still there (APP.md §2.3, §5).
+	c.mu.Lock()
+	c.applyOwedLocked()
 	c.mu.Unlock()
 	for _, oa := range list {
 		if !oa.opMu.TryLock() {
-			continue // an operation is running; its transaction stays unpublished
+			continue // an operation did not end in time: its handle is its own
 		}
 		c.mu.Lock()
-		if oa.tx != nil {
-			remaining := deadline.Sub(c.now())
-			if remaining > 0 {
-				ctx, cancel := context.WithTimeout(context.Background(), remaining)
-				rec, err := oa.tx.Commit(ctx)
-				cancel()
-				if err == nil {
-					c.clearDirtyLocked(oa)
-					oa.refreshSnapshot()
-					c.recordReceiptLocked(oa, rec, nil)
-				} else {
-					c.log("shutdown: %s not saved: %v", oa.name, err)
-				}
-			}
-		}
-		if oa.tx == nil {
-			c.closeArchiveLocked(oa)
-		} else {
-			// Unpublished: leave the file as the last commit left it.
-			oa.tx.Abort()
-			c.clearDirtyLocked(oa)
+		if c.archives[oa.id] == oa {
 			c.closeArchiveLocked(oa)
 		}
 		c.mu.Unlock()

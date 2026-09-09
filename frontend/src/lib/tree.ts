@@ -20,8 +20,8 @@ export interface CrumbLike {
 }
 
 // retryChain: the ids to try, in order, when Page answered file.not_found
-// for dirId — the page held a folder that has gone (Discard dropped a
-// folder it staged, a Delete took an ancestor). The chain is the crumbs
+// for dirId — the page held a folder that has gone (a Delete took it, or
+// took an ancestor of it). The chain is the crumbs
 // the page last held, walked upwards from just above dirId, and it always
 // ends at the root, which always answers (APP.md §3). Crumbs that do not
 // name dirId at all are the chain whole: the page had just stepped into a
@@ -65,8 +65,6 @@ export interface DropTarget {
   id: string;
   // a crumb is a directory; a row is one when it says so
   isDir: boolean;
-  // the row's pending word, if it has one
-  pending?: string;
 }
 
 export interface DragState {
@@ -78,15 +76,15 @@ export interface DragState {
 
 // move: the drop is a Move. here: the target is the folder they are
 // already in — the row's own folder, or the last crumb — and a drop is a
-// no-op. deleted: a row staged for deletion takes nothing (nothing may be
-// moved beneath a tombstone). self: a folder cannot be dropped on itself.
-// file: a file row is not a place. nothing: an empty drag.
-export type DropVerdict = "move" | "here" | "deleted" | "self" | "file" | "nothing";
+// no-op. self: a folder cannot be dropped on itself. file: a file row is
+// not a place. nothing: an empty drag. A row deleted is no row at all
+// since 2026-09-09: a delete commits at once, so nothing on screen is a
+// tombstone.
+export type DropVerdict = "move" | "here" | "self" | "file" | "nothing";
 
 export function dropVerdict(target: DropTarget, drag: DragState): DropVerdict {
   if (drag.ids.length === 0) return "nothing";
   if (!target.isDir) return "file";
-  if (target.pending === "deleted") return "deleted";
   if (drag.ids.includes(target.id)) return "self";
   if (target.id === drag.from) return "here";
   return "move";
@@ -129,18 +127,19 @@ export function countPhrase(c: Counts): string {
   return parts.join(" and ");
 }
 
-export function deleteTitle(rows: Kinded[]): string {
-  if (rows.length === 1) return `Delete "${rows[0].name}"?`;
-  return `Delete ${countPhrase(deleteCounts(rows))}?`;
+// The delete dialog, worded as APP.md §3 and §6 word it: "Permanently
+// delete 3 files and 1 folder from ECON 280? A folder takes everything
+// beneath it. This cannot be undone." The question names the counts and
+// the archive; the folder sentence appears only when a folder is in the
+// selection; there is no undo anywhere in the copy, deletion being
+// cryptographic erasure (FORMAT.md R32).
+export function deleteTitle(rows: Kinded[], archiveName = ""): string {
+  const what = countPhrase(deleteCounts(rows));
+  const from = archiveName ? ` from ${archiveName}` : "";
+  return `Permanently delete ${what}${from}?`;
 }
 
 export function deleteBody(rows: Kinded[]): string {
-  const c = deleteCounts(rows);
-  const folders =
-    c.folders > 0
-      ? c.folders === 1
-        ? " The folder takes everything beneath it, whatever is in it now."
-        : " Each folder takes everything beneath it, whatever is in it now."
-      : "";
-  return `The change is staged and written when you save.${folders} Discard brings it back.`;
+  const folders = deleteCounts(rows).folders > 0 ? "A folder takes everything beneath it. " : "";
+  return `${folders}This cannot be undone.`;
 }

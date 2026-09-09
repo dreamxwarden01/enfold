@@ -804,12 +804,16 @@ func (c *Core) DropRecoveryKey(handle string) *Error {
 
 // recoveryKeyText is the saved file: the digits, what they are for, and
 // what they are not. Windows line endings, for Notepad.
+//
+// The heading is recoveryKeyTitle — the same string the page uses as the
+// suggested file name and as the print's document.title, so the sheet, the
+// file and the page all say which key this is (APP.md §6, DECISIONS
+// 2026-09-09, BitLocker's own shape).
 func recoveryKeyText(name, label, id string, at time.Time, digits string) string {
 	lines := []string{
-		"Enfold recovery key",
+		recoveryKeyTitle(id),
 		"Vault: " + name,
 		"Way in: " + label,
-		"Key ID: " + id, // FORMAT.md §18.4: what tells one sheet from another
 		"Saved: " + at.Format("2006-01-02 15:04"),
 		"",
 		digits,
@@ -823,6 +827,20 @@ func recoveryKeyText(name, label, id string, at time.Time, digits string) string
 		"",
 	}
 	return strings.Join(lines, "\r\n")
+}
+
+// recoveryKeyTitle names one recovery key: the key's ID and never the
+// vault's name, which says nothing about which sheet this is (FORMAT.md
+// §18.4). It heads the saved file and the printed sheet; the page adds
+// ".txt" for the Save dialog's suggested name and sets document.title to it
+// for the print, so Print to PDF offers the same name. The core imposes
+// nothing on the name the user then chooses (SaveRecoveryKey judges the
+// place, never the name).
+// The trim is what the page does (frontend/src/lib/print.ts): an empty ID
+// leaves the bare "Enfold Keystore Recovery Key" rather than a trailing
+// space, so the two strings §6 requires to be the same are the same.
+func recoveryKeyTitle(id string) string {
+	return strings.TrimSpace("Enfold Keystore Recovery Key " + id)
 }
 
 // RemoveSlot removes a way in after a ceremony; the invariant may refuse.

@@ -153,12 +153,12 @@ func (c *Core) dropMeasurementsLocked() {
 	c.vault.presence, c.vault.presenceKnown, c.vault.incoming = nil, nil, nil
 }
 
-// closeCleanArchivesLocked closes the open archives that hold no staged
-// change and are not busy; the dirty ones keep their transaction until
-// their cap. Caller holds the state mutex.
+// closeCleanArchivesLocked closes the open archives that are not busy: an
+// archive is clean between operations, and one with an operation running
+// keeps its handle until that operation ends. Caller holds the state mutex.
 func (c *Core) closeCleanArchivesLocked() {
 	for _, oa := range c.archives {
-		if oa.tx != nil || oa.state == "compacting" || !oa.opMu.TryLock() {
+		if oa.state == "compacting" || !oa.opMu.TryLock() {
 			continue
 		}
 		c.closeArchiveLocked(oa)
@@ -188,7 +188,7 @@ func (c *Core) cacheFactsLocked(ks *keystore.Keystore) {
 
 // OpenVaultFile configures path as the vault — where it is, copying
 // nothing — and reads its facts. Like an import it is refused while an
-// archive is open, whose saves would land in the wrong registry. An
+// archive is open, whose commits would land in the wrong registry. An
 // empty displayName keeps the name already given.
 func (c *Core) OpenVaultFile(path, displayName string) *Error {
 	if reservedName(path) {
@@ -299,11 +299,8 @@ func (c *Core) statusLocked() VaultStatus {
 	for _, o := range c.ops {
 		st.Ops = append(st.Ops, o.view())
 	}
-	for _, a := range c.archives {
+	for range c.archives {
 		st.OpenArchives++
-		if a.dirty() > 0 {
-			st.DirtyArchives++
-		}
 	}
 	return st
 }
@@ -383,7 +380,8 @@ func (c *Core) updateRegistryAtLocked(allowForgotten bool, fn func(g *registry, 
 	}
 	// A slot change commits to the same handle from its own goroutine; the
 	// Keystore is not safe for concurrent use, so registry writes wait
-	// until the ceremony is over (a Save owes its receipt meanwhile).
+	// until the ceremony is over (an operation's commit owes its receipt
+	// meanwhile).
 	if (c.cer != nil && c.cer.mutation) || (c.pending != nil && c.pending.vaultHandle) {
 		return coded(CodeCeremonyRunning)
 	}

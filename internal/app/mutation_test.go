@@ -40,8 +40,8 @@ func TestLockCancelsMutationCeremony(t *testing.T) {
 	h.unlockWithPassword()
 }
 
-// Registry writes wait for a slot change; a Save meanwhile owes its
-// receipt, which is paid when the ceremony ends.
+// Registry writes wait for a slot change; an operation that commits
+// meanwhile owes its receipt, which is paid when the ceremony ends.
 func TestRegistryWritesWaitForMutation(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
@@ -54,8 +54,6 @@ func TestRegistryWritesWaitForMutation(t *testing.T) {
 	}
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("owed"), 0o600)
-	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
-	h.rec.waitOp(t, opID)
 
 	h.rec.reset()
 	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollPassword, Label: "Second"}); e != nil {
@@ -68,16 +66,16 @@ func TestRegistryWritesWaitForMutation(t *testing.T) {
 		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != p1.PromptID
 	}).(CeremonyState)
 	// The ceremony holds the handle: a direct registry write is refused,
-	// a Save commits its archive and owes the receipt.
+	// while an add commits its archive and owes the receipt (APP.md §2.3).
 	if e := h.c.HideArchive(id, true); !isCode(e, CodeCeremonyRunning) {
 		t.Fatalf("hide during ceremony: %v", e)
 	}
-	opID, e = h.c.Save(id)
+	opID, e := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	if e != nil {
-		t.Fatalf("save during ceremony: %v", e)
+		t.Fatalf("add during ceremony: %v", e)
 	}
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
-		t.Fatalf("save op: %+v", o)
+		t.Fatalf("add op: %+v", o)
 	}
 	list, _ := h.c.ListArchives(false)
 	if !list[0].ReceiptOwed {

@@ -3228,3 +3228,56 @@ failed and skipped items alike (a skipped subtree is one line for its top and wo
 vanish; narrowing it to failures is one line). Left open, small: *Extract all* is no longer gated
 (the file count cannot say whether the tree holds anything — a record count on `ArchiveStat`
 would), Move has no keyboard path, and the mock's Discard does not revert a staged move.
+
+## 2026-09-09 — Operations commit at once (the staged model retired), the extract dialog, print detection, the details modal
+
+The user, on the built tree: "is the confirm-changes mechanism really necessary? WinRAR has
+none — an add needs only a Cancel, a delete a warning that says what is being permanently
+deleted." Weighed: the staged model bought a multi-step batch published in one commit and a way
+to drop it whole, at the price of a dirty state nobody else's archiver has — a pending bar,
+*Save changes* and *Discard*, an expiry prompt with extensions, a per-archive cap, an overlay
+with a precedence vocabulary and un-staging rules, and the question "did I save?" that every
+archiver answers by never asking it. Per-operation commits keep every atomicity the format
+gives (one commit per operation, all-or-nothing, a crash leaving the previous index) and cost a
+few milliseconds of index rewrite per rename. **Ruled: each operation is its own transaction**,
+committed at its end; *Cancel* aborts an add or a replace (the bytes it wrote lie in extents the
+committed free map still holds free); a delete asks first — files and folders counted apart, "a
+folder takes everything beneath it", "this cannot be undone" — and then commits; the overlay,
+the pending vocabulary, `Save`, `Discard`, `KeepOpen`, `archive.expiring`, `Dirty`, `CapAt` and
+`SessionAlive` go; `ArchiveStat.Records` arrives so *Extract all* can be greyed on an empty
+archive. Progress is by bytes within the file in hand — the bar had stood still for a whole file.
+
+*Extract all* extracts from the root straight into the chosen destination, never into a folder
+it makes on its own. The user asked whether the picker could prefill the archive's name when the
+user makes a new folder; the native picker cannot (Wails exposes no such hook and the dialog's
+*New folder* is its own), so the page gets an extract dialog with an editable destination
+prefilled from `lastExtractFolder`, *Browse…*, and one action that appends `\<archive name>` —
+WinRAR's destination field, in effect.
+
+The recovery key's saved and printed name is `Enfold Keystore Recovery Key <ID>.txt` — the
+user's choice, BitLocker's own shape ("BitLocker Recovery Key 5A58C3B0-…") — the key's ID and
+not the vault's name; the same string heads the file and the sheet, and `document.title` carries
+it into Print to PDF. Whether a print was
+submitted or cancelled — which BitLocker knows — is read from the print spooler: the shell
+snapshots every local printer's jobs before `window.print()` and polls for three seconds after
+`afterprint`; a new job, even one that later fails, is a submission, and only an unreadable
+spooler falls back to the second question.
+
+The details modal loses its column of *Copy* buttons for selectable values with a right-click
+*Copy*, wraps the hash, reads *N/A* for an all-zero one, scrolls as a whole, and shows at least
+three key versions before that table scrolls. Sorting is still to be designed.
+
+**Landed the same morning** (one Go implementer, one frontend implementer, a reviewer with twelve
+findings — one major, a doc sentence the code had outrun — all fixed): `beginOp` / `commitOp` /
+`abortOp` make every operation one transaction with the receipt-owed path untouched; the overlay,
+the pending vocabulary, `Save`, `Discard`, `KeepOpen`, `archive.expiring`, the cap clock,
+`Dirty`, `CapAt`, `SessionAlive`, `DirtyArchives` are gone from Go, the bindings, the page, the
+CSS and the mock; `Records`; the byte counter is a forward front (the compression probe samples
+the middle and the end of a file, so a sum would over-count); an extract streams through a
+temporary beside the target and is placed exclusively, so the bar moves within a file there too;
+`internal/spool` reads winspool.drv behind an interface with a fake, and the shell's
+`PrintBegin` / `PrintEnd` wrap `window.print()`; the reveal names its file and its print
+"Enfold Keystore Recovery Key <ID>" and treats a submitted print as done; the details modal is
+selectable with a right-click *Copy*. One consequence worth knowing: with `SessionAlive` gone,
+everything on the Archive page but *Delete archive…* works while the vault is locked, as APP
+§2.3 has always said it should, the receipt owed until the next unlock.

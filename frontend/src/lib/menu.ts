@@ -59,3 +59,37 @@ export function menuKey(key: string, active: number, count: number): MenuAction 
   }
   return NONE;
 }
+
+// ---- the context menu (APP.md §13) ------------------------------------
+//
+// A value in the details modal is selectable and a right-click on it opens
+// a menu of one item, *Copy*. The shell disables WebView2's own context
+// menu, so this is the only one there is. Its keyboard is the machine
+// above — one item, so the arrows land on it and Enter takes it — and
+// where the box goes is here.
+
+export interface Size {
+  width: number;
+  height: number;
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+// contextPlacement puts the box's top-left at the pointer and pulls it
+// back inside the viewport when it would hang off the right or the
+// bottom: the box is flipped to the other side of the pointer where there
+// is room for it, and clamped to the margin where there is not, so a menu
+// opened in a corner is never partly off screen and never under the
+// pointer's own path. margin keeps it off the very edge.
+export function contextPlacement(at: Point, box: Size, view: Size, margin = 6): Point {
+  const place = (p: number, size: number, extent: number): number => {
+    if (p + size + margin <= extent) return p; // it fits below/right of the pointer
+    const flipped = p - size;
+    if (flipped >= margin) return flipped; // it fits above/left of it
+    return Math.max(margin, extent - size - margin);
+  };
+  return { x: place(at.x, box.width, view.width), y: place(at.y, box.height, view.height) };
+}

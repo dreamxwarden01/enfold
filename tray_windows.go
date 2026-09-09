@@ -45,8 +45,8 @@ func newTray(s *shell) *tray {
 	t.close = menu.Add("Close all archives")
 	t.close.OnClick(func(*application.Context) {
 		go func() {
-			if dirty := s.core.CloseAllArchives(); len(dirty) > 0 {
-				s.ensureWindow() // the page shows what is unsaved
+			if kept := s.core.CloseAllArchives(); len(kept) > 0 {
+				s.ensureWindow() // the page shows what would not close
 			}
 		}()
 	})
@@ -113,8 +113,14 @@ func (t *tray) tooltip() string {
 	default:
 		s += fmt.Sprintf(" · %d archives open", st.OpenArchives)
 	}
-	if st.DirtyArchives > 0 {
-		s += " (unsaved changes)"
+	// What is under way, rather than what is unsaved: an archive is clean
+	// between operations since 2026-09-09 (APP.md §2.3).
+	switch n := runningOps(st); n {
+	case 0:
+	case 1:
+		s += " · 1 operation running"
+	default:
+		s += fmt.Sprintf(" · %d operations running", n)
 	}
 	return s
 }

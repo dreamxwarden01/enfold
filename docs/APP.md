@@ -418,51 +418,48 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
 ### 2.3 Archive
 
 ```
-Closed ──Open──▶ Open ──first staged change──▶ Dirty ──Save──▶ Open    Open ──Compact──▶ Compacting ──▶ Closed → reopen
-   ▲               │ idle (no readers, no ops)     │ Discard                 Open ──RotateKey──▶ Rotating ──▶ Open
-   └───────────────┘                               │ per-archive cap        any ErrIndeterminate ──▶ NeedsReopen
+Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abort──▶ Open     Open ──Compact──▶ Compacting ──▶ Closed → reopen
+   ▲               │ idle (no readers, no ops)                            Open ──RotateKey──▶ Rotating ──▶ Open
+   └───────────────┘                                                      any ErrIndeterminate ──▶ NeedsReopen
 ```
 
 - **Open**: keys for every version of the registry record unwrapped through
   `Session.UnwrapArchiveKey`, handed to `archive.Open` as candidates, zeroed after. The core keeps
-  per archive: the committed **snapshot** (`Files()` taken once per open and re-taken after every
-  index-republishing operation), the **overlay** of staged changes keyed by file id
-  (added / replaced / renamed / moved / deleted, files and directories alike, with the new name,
-  parent or `FileInfo`) — one entry per record and one word per entry, which is also what a row's
-  `Pending` reads in §3: `added` outlives every later change to a staged-added record, `replaced`
-  outranks `renamed` and `moved`, a record both renamed and moved reads `moved`, and `deleted`
-  never sits on a staged add, which un-stages instead; a deleted directory is one entry, keyed by
-  the directory, and the subtree it takes gets none, the **tree** — the directory records plus the overlay's staged
-  directories, from which the breadcrumb and the rows come (FORMAT R39; never a prefix
-  projection) — a preview **token** (32 random bytes, minted at Open, forgotten at
+  per archive: the committed **snapshot** — `Files()` and `Dirs()`, taken once per open and
+  re-taken after every commit — from which the breadcrumb and the rows come (FORMAT R39; never a
+  prefix projection); there is no overlay and no pending vocabulary since 2026-09-09: a row is
+  committed or it is not listed, and the running operation's progress is the only in-between —
+  a preview **token** (32 random bytes, minted at Open, forgotten at
   Close), a reader count and a last-served time, and two clocks.
-- **Dirty**: the first change calls `Begin()`; `Tx.Add` writes at once, so "3 changes not yet
-  saved" means three recorded changes whose data is in the file but not published. One overlay entry is one
-  change, so a deleted folder of 900 files is one change and not 901, and an entry the deletion
-  swallows — a rename staged under the folder before it was deleted — leaves the overlay with it.
-  `Stat.Dirty`, the pending bar and the warning that names what a discard threw away all read
-  that one number. Save =
-  `Commit` → receipt → one `Session.UpdateRegistry` (`LastStoredSize`, `LastWrittenAt`,
-  `LastSeq`, `Revision`); Discard = `Abort`. Closing the window keeps the transaction; a lock
-  keeps it. **Save and Compact are gated on `Session.Live()`** before they start
-  (`NeedsUnlock`: the staged changes are kept and finish after the next unlock). The commit —
-  index seal, free map, two syncs — runs under the archive's own mutex only, so the state mutex
-  stays short and a lock trigger is never held up by I/O; the receipt is written under the state
-  mutex right after. A lock that lands between the two, a hardware trigger inside the ~2 s
-  suspend budget, or a slot-change ceremony holding the handle leaves a **receipt owed**, held in
-  memory, applied when the ceremony ends or at the next unlock before any archive is opened
-  (dropped if the record's kid moved), shown as "saved; vault record pending". On reopen a file whose size or `last_seq` disagrees with the
-  record is reported, never adopted silently.
-- **Two clocks per archive** (DESIGN §10's own idle timeout): idleness — no running op, no open
-  reader, no request — closes a clean archive; a dirty one gets `archive.expiring` and a visible
-  prompt (Save / Discard / Keep open, at most two bounded extensions), and a per-archive
-  absolute cap from `dirtySince` that runs across a lock: on expiry `Abort` then `Close`, with a
-  warning naming what was discarded. A preview range request resets the archive's clock, never
+- **An operation is a transaction** (ruled 2026-09-09: the staged model — a pending bar, *Save
+  changes* and *Discard*, a dirty state with clocks of its own — is gone, as it is from every
+  archiver the user compared; WinRAR's practice). Each Add, Replace, Delete, Rename, Move and
+  CreateFolder calls `Begin()`, does its work, and ends in `Commit` → receipt → one
+  `Session.UpdateRegistry` (`LastStoredSize`, `LastWrittenAt`, `LastSeq`, `Revision`) →
+  `archive.changed`; nothing is staged between operations. *Cancel* on a running Add or Replace
+  is `Abort`: nothing is published, and the bytes it wrote lie in extents the committed free map
+  still holds free, so nothing is lost and nothing leaks. A Delete asks first, on the page —
+  "Permanently delete 3 files and 1 folder from ECON 280? A folder takes everything beneath it.
+  This cannot be undone." — and then commits; deletion is cryptographic erasure (FORMAT R32).
+  Rename, Move and CreateFolder commit at once, with no question. **Compact and RotateKey are
+  gated on `Session.Live()`** before they start (`NeedsUnlock`); an operation's own commit is
+  not — the archive key is in memory — and the receipt it owes waits for the session. The
+  commit — index seal, free map, two syncs — runs under the archive's own mutex only, so the
+  state mutex stays short and a lock trigger is never held up by I/O; the receipt is written
+  under the state mutex right after. A lock that lands between the two, a hardware trigger
+  inside the ~2 s suspend budget, or a slot-change ceremony holding the handle leaves a
+  **receipt owed**, held in memory, applied when the ceremony ends or at the next unlock before
+  any archive is opened (dropped if the record's kid moved), shown as "saved; vault record
+  pending". On reopen a file whose size or `last_seq` disagrees with the record is reported,
+  never adopted silently.
+- **One clock per archive** (DESIGN §10's own idle timeout): idleness — no running operation, no
+  open reader, no request — closes the archive, which is always clean between operations; a
+  running operation holds the clock. A preview range request resets the archive's clock, never
   the session's.
 - **What stays usable after a lock** (DESIGN §10): `Page`, `Stat`, `PreviewText`, `Extract`,
-  `PreviewURL`, in-flight readers, `CreateFolder`/`AddFiles`/`AddFolder`/`Delete`/`Rename`/`Move`
-  into the staged transaction;
-  Save, Compact, RotateKey, Open and Create need the session. The frontend keeps an open
+  `PreviewURL`, in-flight readers, and the operations — `CreateFolder`/`AddFiles`/`AddFolder`/
+  `Delete`/`Rename`/`Move` — each committing the archive and owing its receipt; Compact,
+  RotateKey, Open and Create need the session. The frontend keeps an open
   archive's view mounted across a lock (a locked banner; nothing new can be opened).
 - **Compacting**: refused unless Open and clean; previews for the archive are quiesced by
   draining (stop minting URLs, refuse new requests, wait for in-flight handlers, with a timeout
@@ -577,20 +574,16 @@ sentinel of every package with a catch-all `internal` — and services are regis
   bounded as R39 bounds it), and `Total` counts that directory's children, not its subtree.
   `Crumbs` is the chain from the root down to `dirID` **inclusive** and is never empty: its first
   entry is the root, `{ID: <the all-zero id>, Name: <the archive's name, the same string as
-  ArchiveStat.Name>}`, its last is `dirID` itself, and a staged directory stands in it like any
-  other — so the page draws the whole breadcrumb from `Crumbs` alone and takes no name from
-  `Stat`. A directory row's `Size` is the sum beneath it and its `ModifiedAt` the record's own.
-  The page holds a `dirID` across events and can hold one that is gone — `Discard` drops the
-  folders that transaction staged, a `Delete` takes a subtree the page may be standing in — so an
-  id that no longer names a live directory of the merged view answers `file.not_found`, never an
+  ArchiveStat.Name>}`, its last is `dirID` itself, — so the page draws the whole breadcrumb from `Crumbs` alone and takes no name from `Stat`. A directory row's `Size` is the sum beneath it and its `ModifiedAt` the record's own.
+  The page holds a `dirID` across events and can hold one that is gone — a `Delete` took a subtree the page was standing in — so an id that no longer names a live directory of the merged view answers `file.not_found`, never an
   empty listing under a breadcrumb that still names the place: the page walks the `Crumbs` it
   last held upwards, retrying until one answers (the root always does), and says which folder
   went. A live directory with nothing in it is not that case — it answers zero rows with `Total`
   zero, which is what an empty folder is. `Compact` and `RotateKey` change no id (FORMAT R33),
   so a reopen leaves the page where it was.
   `Stat(id) ArchiveStat`.
-- `CreateFolder(id, parentID, name) recordID` stages a directory record (empty is fine — it is
-  a record, FORMAT R39, its name validated and matched like any other's); `AddFiles(id, parentID,
+- `CreateFolder(id, parentID, name) recordID` commits a directory record at once (empty is fine —
+  it is a record, FORMAT R39, its name validated and matched like any other's); `AddFiles(id, parentID,
   paths, policy) opID`, `AddFolder(id, parentID, path, policy) opID` — every directory the walk
   **creates** becomes a record with its own time, so an empty subfolder and every folder's
   modified time survive; every name is one element, validated with `format.ValidateName` and
@@ -624,30 +617,17 @@ sentinel of every package with a catch-all `internal` — and services are regis
   kind on both sides — what is being offered and what is in the way, `Existing` being the record
   id it collides with — so the dialog can say "*Photos* is a file here" and grey *Replace*
   whenever the two differ. `Replace(id, fileID, path)
-  opID` is the in-place edit (never Delete + Add). `Delete(id, recordIDs)` — a directory takes its subtree as the merged view has it, tombstoned in
-  the same write (FORMAT R39): a record moved into it during this transaction goes with it, one
-  moved out before the deletion does not. It is **one** staged change however large the subtree,
-  and one row: the directory keeps its place in its parent's listing marked `deleted`, greyed and
-  not enterable, and nothing beneath it is listed, previewed or extracted while the deletion
-  stands; nothing may be added, created or moved into it or beneath it (`file.not_found`), so a
-  live record is never staged under a tombstone. A tombstone is not a live sibling and reserves
-  no name (R39 folds names among live children only), so a new record of that name may be made
-  beside it, and the sibling check and `CheckNames` ignore staged-deleted siblings. Deleting a
-  record whose whole existence is staged un-stages it instead of tombstoning — for a directory
-  the records staged under it go with it, and a committed record that was moved into it goes back
-  where the move found it, its move un-staged too, so no record is left naming a parent that is
-  not there. A committed directory deleted with staged adds beneath it takes them into the
-  tombstoning; their bytes are already in the file and the free map reclaims them at the commit.
-  There is no per-row undo: `Discard` is what brings a deletion back, with everything else the
-  transaction holds — `Rename(id, recordID, newName)` (one record, file or directory; a `/` is refused, and a name that
+  opID` is the in-place edit (never Delete + Add). `Delete(id, recordIDs)` — a directory takes its subtree as the index has it, tombstoned in the
+  same commit (FORMAT R39, R32); the page asks first, naming files and folders apart and saying a
+  folder takes everything beneath it and that this cannot be undone, and the operation then runs
+  at once: there is no undo, deletion being cryptographic erasure — `Rename(id, recordID, newName)` (one record, file or directory; a `/` is refused, and a name that
   folds onto a live sibling of the record's own parent is `file.exists` — a change of case alone
   is not one, since a record is not its own sibling), `Move(id, recordIDs, parentID)` re-parents
   each record, one record written per item whatever subtree hangs beneath it. Both, like
-  `CreateFolder` and the adds, are pre-flighted against R39 on the merged view **before anything
-  is staged**, and a move batch is refused whole and in place, so nothing the encoder would
-  reject is ever staged and the user retries with a name rather than finding half a selection
-  moved: a destination that is not the root or a directory live in the merged view — a folder
-  staged by `CreateFolder` counts, one staged for deletion does not — is `file.not_found`, as is
+  `CreateFolder` and the adds, are pre-flighted against R39 **before anything is written**, and a move batch is refused whole
+  and in place, so nothing the encoder would reject is ever written and the user retries with a
+  name rather than finding half a selection moved: a destination that is not the root or a live
+  directory is `file.not_found`, as is
   a `recordID` that is not live; a directory moved into itself or into one of its descendants is
   `file.move_into_self`; a name a live child of the destination already holds under case
   folding, or that two records of the same batch would both take, is `file.exists`, naming the
@@ -664,9 +644,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
   merged view: each selected record, every live record beneath a selected directory, and the
   ancestor directories of all of them up to the root (the all-zero id among `recordIDs` is the
   root and extracts everything — the page's *Extract all* — which makes any other id in the call
-  redundant; an empty `recordIDs` is `params`, never everything). A record reached twice is
-  planned once, a staged rename or move carries its target with it, and staged adds and replaces
-  are not extractable until Save, as with `PreviewURL`. The plan is ordered **parents before
+  redundant; an empty `recordIDs` is `params`, never everything). A record reached twice is planned once. The plan is ordered **parents before
   anything under them**, and a directory is in it because its record is live, never because a
   file needed a parent (DESIGN trap 31): an empty folder extracts as an empty folder, and no path
   is ever inferred into existence. Every target is `filepath.Join(dir, FromSlash(path))`, all of
@@ -685,17 +663,30 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Enfold does not alter what it did not make), and a time that will not set leaves the folder
   `created` with `io` in its `Code`. Directories appear in `Results` as `created | skipped |
   failed` and add no bytes to the progress `Total`, which counts file plaintext only, so a plan
-  of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not), `Save(id) opID`,
-  `Discard(id)`, `PreviewURL(id, fileID)` (only for committed rows; staged adds and replaces are
-  not previewable until Save), `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
+  of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not). **The extract dialog** (the page's, for the pane's
+  *Extract…* and the toolbar's *Extract all* alike) holds an editable destination prefilled with
+  the folder last extracted to (`settings.json`, `lastExtractFolder`, written by every extract),
+  *Browse…* opening the native folder picker into it, one action *+ a folder named after the
+  archive* that appends `\<archive name>` to the field (the native picker cannot prefill the name
+  of a folder the user creates, so the field does what WinRAR's destination field does), the
+  `skip | rename` policy, and *Extract*; the destination is created if it does not exist. *Extract
+  all* extracts everything from the root straight into that destination — never into a folder it
+  makes on its own — and is greyed while `ArchiveStat.Records` is zero (live files and folders
+  together; the file count alone cannot say whether the tree holds anything). `PreviewURL(id,
+  fileID)`, `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
   `OpenReader` + `LimitReader`; no cross-origin fetch exists). `Stat` carries `CopyMismatch` and the
   list a `Note` of `archive.copy_mismatch` when the file's seq is not the one the registry last
-  saw (an older copy restored): shown, never adopted silently; a save records this copy. The archive layer's transaction takes the tree with it: `Tx.Add` and
+  saw (an older copy restored): shown, never adopted silently; the next commit records this copy. The archive layer's transaction takes the tree with it: `Tx.Add` and
   `Tx.Replace` carry the record's `parent_id`, a delete collects the subtree from the index rather
   than from the caller, sibling checks are per parent and case folded against the transaction's
   own index (FORMAT R39), and nothing is looked up by a path — there is no whole-name lookup any
   more.
-- Events: `archive.changed {ID, Seq}`, `archive.expiring {ID, ClosesAt}`, progress as above.
+- Events: `archive.changed {ID, Seq}` and progress as above. Progress is by **bytes**, not by
+  file: an add, a replace and an extract count the bytes read of the file in hand, so a single
+  large file moves the bar (at most ten events a second, as before); `Done`/`Total` are plaintext
+  bytes. `ArchiveStat` loses `Dirty`, `CapAt` and `SessionAlive` and gains `Records` (live files
+  and directories); `Save`, `Discard` and `KeepOpen` are gone; `CancelOp` on a running Add or
+  Replace aborts its transaction.
 
 **Keys**
 - `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Removable}` — `Removable` says the
@@ -750,7 +741,13 @@ sentinel of every package with a catch-all `internal` — and services are regis
   prints no header or footer of its own — the one browser-provided output the page invokes (§4:
   previews are
   decrypted content and stay without one; a recovery key is meant to leave the machine) — the
-  page cannot tell a print from a cancelled one, so a second confirmation follows ("it printed,
+  page can tell a print from a cancelled one: the shell watches the print spooler — `Shell.PrintBegin()`
+  snapshots the jobs of every local printer, `window.print()` runs, and `Shell.PrintEnd()` polls
+  for up to three seconds after `afterprint` and answers whether a new job appeared (Microsoft
+  Print to PDF is a printer, so a PDF counts; a job that later fails still counts — it was
+  submitted, as BitLocker counts it) — so a print the spooler saw is done with no second question,
+  and one it did not see is said to have been cancelled with *Print…* still offered; only when
+  the spooler cannot be read at all does the second confirmation follow ("it printed,
   and all 48 digits are legible"); **written down** — a second confirmation ("all 48 digits,
   checked against the screen") before the dialog closes. After a save the core acknowledged the
   dialog closes on *Done*. The handle is the URL's token: the one-time GET consumes the URL,
@@ -780,17 +777,19 @@ sentinel of every package with a catch-all `internal` — and services are regis
 **Settings** — `Get()`, `Set()`. Machine-local, in `%LOCALAPPDATA%\Enfold\settings.json`
 (temp-then-rename): the vault's path when kept elsewhere (empty: `vault.eks` in the data folder)
 and its display name, close-to-tray behaviour, theme, look, recovery
-record percentage, dictionary threshold, and the last export (`lastExportAt`, §13).
+record percentage, dictionary threshold, the last export (`lastExportAt`, §13), the folder of the
+last archive created (`lastArchiveFolder`) and the folder last extracted to (`lastExtractFolder`).
 **Security-relevant values live in the authenticated
 registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
 
-**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile(title, filename,
-dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
+**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `PrintBegin()` / `PrintEnd()
+bool` (the spooler watch around `window.print()`, §6; `PrintEnd` answers false when nothing was
+submitted and errors when the spooler cannot be read), `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
 `Reveal`, `Quit`
-(names the unsaved changes in a native Yes/No question — the only buttons a Windows message box
-has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
+(names the running operations, if any, in a native Yes/No question — the only buttons a Windows
+message box has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
 dialog is "nothing chosen", never an error; a submitted secret that found no prompt is reported
 back as the `secret.refused {Code}` event. Tray and menu callbacks run on the Wails main thread
 and leave it (a goroutine) before touching the window or a dialog. The service lives in `internal/app/api` like the others and holds the Wails
@@ -861,9 +860,9 @@ offset 16: the union is 8-byte aligned) and treats the unknown state as no answe
 calls `LockNow` synchronously.
 
 **Shutdown.** `Options.ShouldQuit` never shows UI. `Options.OnShutdown` runs
-`resolveForShutdown()`: for each dirty archive `Commit` under a fresh ~2 s context, write each
-receipt, close the archives, then lock — bounded to ~3 s in all; on timeout the transaction stays
-unpublished, which the format tolerates. The tray's Quit asks the user first, then takes the
+`resolveForShutdown()`: a running operation is cancelled — its transaction aborted, nothing
+published, which the format tolerates — each owed receipt is written under a fresh ~2 s context,
+the archives are closed, then the lock — bounded to ~3 s in all. The tray's Quit asks the user first, then takes the
 window and the tray away, runs the same function, and waits — unseen — for a pending touch
 (§2.2) to end (`AwaitPendingTouch`: the card's own answer, about 15 s, then its release), so
 the card is released and reset by this process; only then does the process end. The wait was
@@ -903,10 +902,15 @@ used (`settings.json`, `lastArchiveFolder`); a chosen path where a file already 
 in place — "A file is already there. Enfold never overwrites; choose another name." — whatever
 the dialog's own replace prompt said; a cancelled dialog creates nothing — the Tampered state, the status strip with the countdown and Lock). Archive (the breadcrumb drawn from `Page`'s `Crumbs` alone — ids, never a path — its first crumb
 the archive's name and its last the folder being shown, paged table with pending markers, preview pane — image, video, audio through the
-loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, the toolbar:
+loopback URL, text through `PreviewText`, everything else "Extract…" — the operation strip (the
+running operation's name, a bar that moves by bytes, *Cancel* for an add or a replace; no pending
+bar, no Save, no Discard: every operation commits at its end, §2.3), the toolbar:
 one *Add* button whose menu holds *Add files*, *Add folder* and *Create folder* (a staged
 directory record, written at save whether or not a file was added into it — FORMAT R39), *Extract all* (the whole archive, whatever is selected — the pane's *Extract…* is the
-selection's), *Rename*, *Delete*; a drag of the selection onto a folder row or a crumb is `Move`,
+selection's), *Rename*, *Delete* (a dialog first — "Permanently delete 3 files and 1 folder from ECON 280? A
+folder takes everything beneath it. This cannot be undone." — then the operation), the pane's
+*Extract…* and the toolbar's *Extract all* through the extract dialog (§3); a drag of the
+selection onto a folder row or a crumb is `Move`,
 refused in place with the reason (§3) and never a half-moved selection — the reason sits under
 the target row until the next click; an op of the open archive that reports a failed or skipped
 item opens a *What happened* dialog listing each with its code's copy, beside the summary line
@@ -963,7 +967,11 @@ ways in; Tampered is a banner over any.
 **The recovery key's dialog** — after a create, after enrolling a recovery key, and after *Show
 recovery key…* on the Keys page — shows the eight groups and three ways out (§3 Keys): *Save as
 a text file…*, which first says what place to choose and then opens the native Save dialog;
-*Print…*; and *I have written it down*. The last two ask once more, in a second dialog over the
+*Print…*; and *I have written it down*. The saved file and the print's suggested name are both
+`Enfold Keystore Recovery Key <ID>.txt` — BitLocker's own shape, "BitLocker Recovery Key
+<id>", with the key's ID (FORMAT §18.4) and never the vault's name, which says nothing about
+which sheet this is; the same string heads the text file and the sheet, and the page sets
+`document.title` to it for the print, which is what Print to PDF offers as the file name. The last two ask once more, in a second dialog over the
 first with a distinct button, never a tick beside the same one: "Did it print, with all 48
 digits legible?" / "Have you written down all 48 digits, checked against the screen?" — *Go
 back*, or *Yes, I have the page* / *Yes, I have it*; after a save the core acknowledged the
@@ -1163,7 +1171,11 @@ and a filter box. The details pane keeps what it shows and adds an editable *Des
 Explorer* or *Locate…* — worded "last seen on another system at …" when the path's syntax is not
 this platform's — *Created*, the current *KID*, and *Details…*, a modal with the versions table
 (KID · created · retired · state), `archive_id`, revision, last writer, `last_seq` /
-`hash_at_seq`, the ciphertext hash, the policy bits, each with *Copy*. The pane's data is
+`hash_at_seq`, the ciphertext hash, the policy bits — every value selectable (`user-select:
+text`) with a right-click *Copy* on it and no *Copy* buttons, the hash wrapping onto a second
+line rather than being cut and reading *N/A* while it is all zero (no commit yet), the modal
+scrolling as a whole and the versions table showing at least three rows before it scrolls on
+its own. The pane's data is
 `Archives.Details(id)` (below), read when the selection changes, not when the modal opens.
 Tooltips only where text is cut short. There is no raw archive-key reveal: nothing opens an
 archive from a bare key, and the way to hand one archive to someone is a later *export one
@@ -1180,8 +1192,8 @@ are checked only for the one record the user acts on — `last_path` reaches the
 so is an outbound authentication to a host someone else named. Until a pass has run the column
 is blank, never "missing".
 
-**Forget and delete.** *Forget key…* drops the record softly. The archive is closed first,
-unsaved changes asked about as for a delete; then `forgotten_at` is set (FORMAT §7.1, §18.2) and
+**Forget and delete.** *Forget key…* drops the record softly. The archive is closed first (a running operation is
+cancelled); then `forgotten_at` is set (FORMAT §7.1, §18.2) and
 the record shows under *Show hidden* as "forgotten — restore it to open this archive again; its
 key is dropped at the first unlock after <date>" with *Restore*, which clears `forgotten_at`.
 While forgotten the record still holds the keys, so `Open`, `Rename`, `SetDescription`,
@@ -1205,9 +1217,8 @@ forgotten; *absent* is decided on the parent folder and never on the open of the
 **Anything else** — the file is held, access denied, a short read, a wrong magic, an envelope
 checksum that does not match: `archive.busy` or `archive.invalid`, **nothing removed and nothing
 forgotten**, with *Retry*, *Locate…* and *Forget the key only* offered, because a record dropped
-against a file that could not be read destroys the keys of an archive that is still intact. The
-Archive page's own *Delete archive…* is the same action on the archive it shows, closing it
-first — asking about unsaved changes — and is disabled while the vault is locked with the
+against a file that could not be read destroys the keys of an archive that is still intact. The Archive page's own *Delete archive…* is the same action on the archive it shows, closing it
+first, and is disabled while the vault is locked with the
 archive open (§2.3).
 
 Both confirm by the archive's name typed (compared trimmed and exactly, case and all), and the

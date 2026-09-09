@@ -57,9 +57,10 @@ func TestCreateVaultFailureFromNone(t *testing.T) {
 	}
 }
 
-// An add in which every file is skipped stages nothing and leaves the
-// archive clean; un-staging the last staged add does the same.
-func TestNothingStagedIsClean(t *testing.T) {
+// An add in which every file is skipped writes nothing and commits nothing:
+// the archive's sequence stands where it was, and Verify — which wants a
+// file that agrees with its record — runs.
+func TestAnAddThatWritesNothingCommitsNothing(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
@@ -68,38 +69,26 @@ func TestNothingStagedIsClean(t *testing.T) {
 	os.WriteFile(f, []byte("once"), 0o600)
 	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	h.rec.waitOp(t, opID)
-	opID, _ = h.c.Save(id)
-	h.rec.waitOp(t, opID)
-	// The same name again, skipped: nothing staged.
+	before := h.stat(t, id)
+
+	// The same name again, skipped: nothing written, nothing committed.
 	opID, _ = h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	if o := h.rec.waitOp(t, opID); len(o.Results) != 1 || o.Results[0].Outcome != "skipped" {
 		t.Fatalf("second add: %+v", o)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 0 || st.State != "open" {
-		t.Fatalf("skipped add left the archive dirty: %+v", st)
+	st := h.stat(t, id)
+	if st.Seq != before.Seq || st.State != "open" || st.Size != before.Size {
+		t.Fatalf("a skipped add committed: %+v, was %+v", st, before)
 	}
-	// Stage one add and un-stage it.
-	g := filepath.Join(h.dir, "g.txt")
-	os.WriteFile(g, []byte("twice"), 0o600)
-	opID, _ = h.c.AddFiles(id, rootID, []string{g}, PolicySkip)
-	h.rec.waitOp(t, opID)
-	page, _ := h.c.Page(id, rootID, "name", 0, 10)
-	var staged string
-	for _, r := range page.Rows {
-		if r.Pending == "added" {
-			staged = r.ID
-		}
+	// A source that cannot be read is one refused outcome, and again
+	// nothing is committed.
+	opID, _ = h.c.AddFiles(id, rootID, []string{filepath.Join(h.dir, "gone.txt")}, PolicySkip)
+	if o := h.rec.waitOp(t, opID); len(o.Results) != 1 || o.Results[0].Outcome != "failed" {
+		t.Fatalf("an add of a source that is not there: %+v", o)
 	}
-	if staged == "" {
-		t.Fatalf("no staged row: %+v", page.Rows)
+	if st := h.stat(t, id); st.Seq != before.Seq {
+		t.Fatalf("a refused add committed: %+v", st)
 	}
-	if e := h.c.DeleteRecords(id, []string{staged}); e != nil {
-		t.Fatal(e)
-	}
-	if st, _ := h.c.Stat(id); st.Dirty != 0 || st.State != "open" || st.CapAt != 0 {
-		t.Fatalf("un-staging the last add left the archive dirty: %+v", st)
-	}
-	// Verify is allowed again on a clean archive.
 	opID, e := h.c.Verify(id)
 	if e != nil {
 		t.Fatalf("verify: %v", e)

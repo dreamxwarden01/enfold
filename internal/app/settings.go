@@ -28,9 +28,12 @@ type settingsFile struct {
 	RecoveryRecordPct int    `json:"recoveryRecordPct"`
 	DictionaryBelow   int64  `json:"dictionaryBelow"`
 	// LastArchiveFolder is the folder the last archive was created in, so
-	// that the next New archive dialog opens there (APP.md §6). A
-	// convenience the page reads and never sets.
+	// that the next New archive dialog opens there (APP.md §6), and
+	// LastExtractFolder the folder last extracted to, which the extract
+	// dialog's destination is prefilled with (§3). Conveniences the page
+	// reads and never sets.
 	LastArchiveFolder string `json:"lastArchiveFolder,omitempty"`
+	LastExtractFolder string `json:"lastExtractFolder,omitempty"`
 
 	LastExport *lastExport `json:"lastExportAt,omitempty"`
 }
@@ -70,6 +73,7 @@ func loadSettings(dir string) settingsFile {
 	// Permissively, as a hint: whatever is there is offered to the dialog,
 	// which copes with a folder that has gone.
 	s.LastArchiveFolder = f.LastArchiveFolder
+	s.LastExtractFolder = f.LastExtractFolder
 	// Permissively: a stamp is kept only when it names a vault id at all
 	// and does not run backwards. Everything else about it is judged at
 	// LastExportAt, against the vault actually kept.
@@ -139,6 +143,7 @@ func (c *Core) GetSettings() Settings {
 		VaultPath: c.settings.VaultPath, DisplayName: c.settings.DisplayName, CloseToTray: c.settings.CloseToTray,
 		Theme: c.settings.Theme, Look: c.settings.Look, RecoveryRecordPct: c.settings.RecoveryRecordPct,
 		DictionaryBelow: c.settings.DictionaryBelow, LastArchiveFolder: c.settings.LastArchiveFolder,
+		LastExtractFolder: c.settings.LastExtractFolder,
 	}
 	if c.vault.state == StateUnlocked && c.vault.sess != nil {
 		g := c.vault.sess.Registry()

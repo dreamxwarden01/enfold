@@ -34,7 +34,9 @@ export interface ArchiveDetails {
 }
 
 /**
- * ArchiveStat is the open archive's status strip.
+ * ArchiveStat is the open archive's status strip. There is no Dirty, no
+ * CapAt and no SessionAlive since 2026-09-09: every operation is its own
+ * transaction, so the archive is clean between them (APP.md §2.3).
  */
 export interface ArchiveStat {
     "seq": number;
@@ -42,27 +44,23 @@ export interface ArchiveStat {
     "name": string;
     "size": number;
     "files": number;
+
+    /**
+     * Records counts live files and directories together, which is what
+     * Extract all is greyed on: the file count alone cannot say whether the
+     * tree holds anything (APP.md §3).
+     */
+    "records": number;
     "freeSpace": number;
     "keyVersion": number;
     "lastSavedAt": number;
-    "dirty": number;
     "state": string;
 
     /**
      * the archive's own idle deadline
      */
     "expiresAt": number;
-
-    /**
-     * the dirty cap, 0 when clean
-     */
-    "capAt": number;
     "receiptOwed": boolean;
-
-    /**
-     * Save is possible now
-     */
-    "sessionAlive": boolean;
 
     /**
      * the file is not the copy the vault last saw
@@ -82,7 +80,6 @@ export interface ArchiveSummary {
     "lastWrittenAt": number;
     "keyVersion": number;
     "open": boolean;
-    "dirty": number;
     "receiptOwed": boolean;
 
     /**
@@ -114,7 +111,7 @@ export interface ArchiveSummary {
     "freeSpace": number;
 
     /**
-     * open | dirty | compacting | needs_reopen
+     * open | compacting | needs_reopen
      */
     "state"?: string;
 }
@@ -356,6 +353,12 @@ export enum Code {
      */
     CodeArchiveNotOpen = "archive.not_open",
     CodeArchiveOpen = "archive.already_open",
+
+    /**
+     * archive.dirty is archive.ErrTxOpen alone since 2026-09-09: two
+     * transactions on one handle, a bug and not a state (APP.md §2.3 — an
+     * archive is clean between operations, so no user can be in this one).
+     */
     CodeArchiveDirty = "archive.dirty",
     CodeArchiveBusy = "archive.busy",
     CodeArchiveCompacting = "archive.compacting",
@@ -469,7 +472,6 @@ export interface Collision {
     "isDir": boolean;
     "existing": string;
     "existingIsDir": boolean;
-    "pending": boolean;
 }
 
 /**
@@ -569,12 +571,12 @@ export interface FileOutcome {
 }
 
 /**
- * FileRow is one row of a page: one record of the merged view, file or
- * directory alike (APP.md §3). ID and ParentID are the record's own ids —
- * 32 lowercase hex digits, the all-zero id being the root — Name is the
- * record's own name and Path the joined one (FORMAT.md R20, R39). A
- * directory's Size is the sum beneath it and its ModifiedAt the record's
- * own.
+ * FileRow is one row of a page: one committed record, file or directory
+ * alike (APP.md §3). ID and ParentID are the record's own ids — 32 lowercase
+ * hex digits, the all-zero id being the root — Name is the record's own name
+ * and Path the joined one (FORMAT.md R20, R39). A directory's Size is the
+ * sum beneath it and its ModifiedAt the record's own. A row is committed or
+ * it is not listed: there is no pending word since 2026-09-09.
  */
 export interface FileRow {
     "id": string;
@@ -590,11 +592,6 @@ export interface FileRow {
     "storage": string;
     "savedPercent": number;
     "modifiedAt": number;
-
-    /**
-     * added | replaced | renamed | moved | deleted
-     */
-    "pending"?: string;
 }
 
 /**
@@ -683,10 +680,13 @@ export interface Settings {
 
     /**
      * LastArchiveFolder is where the last archive was created, for the New
-     * archive dialog (APP.md §6). Read-only: Set ignores it, since only a
-     * create writes it.
+     * archive dialog (APP.md §6), and LastExtractFolder is where the last
+     * extraction went, for the extract dialog's destination (§3). Both are
+     * read-only: Set ignores them, since only a create and an extract write
+     * them.
      */
     "lastArchiveFolder": string;
+    "lastExtractFolder": string;
 
     /**
      * from the registry; 0 = default
@@ -843,7 +843,6 @@ export interface VaultStatus {
     "ceremony"?: CeremonyState | null;
     "ops": OpView[] | null;
     "openArchives": number;
-    "dirtyArchives": number;
     "hasPasswordSlot": boolean;
     "hasHardwareSlot": boolean;
 

@@ -383,8 +383,8 @@ func (c *Core) DiscardRecords(handle string) *Error {
 // MergeRecords takes the ticked records into this vault's registry: an
 // ordinary registry write on the session, no ceremony (APP.md §13). Refused
 // with vault.archives_open while any archive is open, ceremony.in_progress
-// while a ceremony runs and op.in_progress while a save, verify, compact or
-// rotation runs. Every record it changes is written with
+// while a ceremony runs and op.in_progress while an operation, a verification,
+// a compaction or a rotation runs. Every record it changes is written with
 // revision = max(local, incoming) + 1 and this vault's device_id as
 // last_writer, so a merge in the other direction sees a descendant rather
 // than a rival (SYNC.md §5).

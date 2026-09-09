@@ -1,8 +1,6 @@
 <script lang="ts">
-  import { Archive, CeremonyStep, VaultState, errorOf } from "./lib/api";
+  import { CeremonyStep, VaultState } from "./lib/api";
   import { store } from "./lib/state.svelte";
-  import { codeText } from "./lib/strings";
-  import { dateTime } from "./lib/format";
   import Icons from "./components/Icons.svelte";
   import Toasts from "./components/Toasts.svelte";
   import Rail from "./components/Rail.svelte";
@@ -12,7 +10,6 @@
   import KeysPage from "./components/KeysPage.svelte";
   import SettingsPage from "./components/SettingsPage.svelte";
   import RecoveryReveal from "./components/RecoveryReveal.svelte";
-  import Dialog from "./components/Dialog.svelte";
   import LayerFoot from "./components/LayerFoot.svelte";
   import { fade, fly } from "svelte/transition";
   import { motion, delay, enter, GAP, OUT, MOVE } from "./lib/motion";
@@ -55,32 +52,9 @@
     return c.slotLabel;
   });
 
-  // A dirty archive about to close asks wherever the user is.
-  const expiring = $derived(store.expiring);
-  const expiringName = $derived(store.archives.find((a) => a.id === store.expiring?.id)?.name ?? "An archive");
-
-  async function keepOpen() {
-    const id = store.expiring?.id;
-    store.expiring = null;
-    if (!id) return;
-    try {
-      await Archive.KeepOpen(id);
-    } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
-    }
-  }
-
-  async function saveNow() {
-    const id = store.expiring?.id;
-    store.expiring = null;
-    if (!id) return;
-    try {
-      await Archive.Save(id);
-    } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
-    }
-  }
-
+  // Nothing asks about an archive whose time is running out any more: it
+  // is clean between operations, so the idle expiry simply closes it
+  // (APP.md §2.3, DESIGN.md §10).
   const activity = () => store.activity();
 </script>
 
@@ -123,16 +97,6 @@
   {#key reveal}
     <RecoveryReveal url={reveal} kind={store.ceremony?.kind ?? ""} vaultName={store.status?.displayName ?? ""} recoveryId={store.ceremony?.recoveryId ?? ""} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
   {/key}
-{/if}
-
-{#if expiring}
-  <Dialog title="Unsaved changes are waiting" onclose={() => (store.expiring = null)}>
-    <p>{expiringName} has {expiring.dirty} unsaved change{expiring.dirty === 1 ? "" : "s"} and has been idle. It closes at {dateTime(expiring.closesAt).slice(11)} unless you keep it open or save.</p>
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={keepOpen}>Keep open</button>
-      <button type="button" class="btn accent" disabled={!store.unlocked} onclick={saveNow}>Save now</button>
-    {/snippet}
-  </Dialog>
 {/if}
 
 <Toasts />

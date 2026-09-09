@@ -37,31 +37,24 @@ export function CheckNames(id: string, parentID: string, names: string[] | null)
 }
 
 /**
- * CreateFolder stages a directory record and returns its id: a folder is a
- * record, so an empty one survives the save (FORMAT.md R39).
+ * CreateFolder commits a directory record and returns its id: a folder is a
+ * record, so an empty one is a real thing (FORMAT.md R39).
  */
 export function CreateFolder(id: string, parentID: string, name: string): $CancellablePromise<string> {
     return $Call.ByID(3241529081, id, parentID, name);
 }
 
 /**
- * Delete stages a deletion of each record; a directory takes its subtree,
- * tombstoned in the same write and counted as one change.
+ * Delete removes each record in one commit; a directory takes its subtree,
+ * tombstoned in the same write. The page asks first — a delete cannot be
+ * undone (APP.md §3, §6).
  */
 export function Delete(id: string, recordIDs: string[] | null): $CancellablePromise<void> {
     return $Call.ByID(3839303214, id, recordIDs);
 }
 
-export function Discard(id: string): $CancellablePromise<void> {
-    return $Call.ByID(2715197693, id);
-}
-
 export function Extract(id: string, recordIDs: string[] | null, dir: string, policy: string): $CancellablePromise<string> {
     return $Call.ByID(585645538, id, recordIDs, dir, policy);
-}
-
-export function KeepOpen(id: string): $CancellablePromise<void> {
-    return $Call.ByID(2470395052, id);
 }
 
 /**
@@ -77,7 +70,7 @@ export function Op(opID: string): $CancellablePromise<app$0.OpView> {
 }
 
 /**
- * Page lists the live children of one directory in the merged view. dirID
+ * Page lists the children of one directory of the committed snapshot. dirID
  * is a record id — the all-zero id is the archive's root — never a path, and
  * one that no longer names a live directory is file.not_found.
  */
@@ -102,10 +95,6 @@ export function Rename(id: string, recordID: string, newName: string): $Cancella
 
 export function Replace(id: string, fileID: string, path: string): $CancellablePromise<string> {
     return $Call.ByID(3231340199, id, fileID, path);
-}
-
-export function Save(id: string): $CancellablePromise<string> {
-    return $Call.ByID(3912183196, id);
 }
 
 export function Stat(id: string): $CancellablePromise<app$0.ArchiveStat> {

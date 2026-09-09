@@ -10,6 +10,7 @@
   import type { DragState, DropTarget } from "../lib/tree";
   import { summaryLine, tally, troubles } from "../lib/results";
   import Dialog from "./Dialog.svelte";
+  import ExtractDialog from "./ExtractDialog.svelte";
   import MenuButton from "./MenuButton.svelte";
   import type { MenuItem } from "./MenuButton.svelte";
   import OpsBar from "./OpsBar.svelte";
@@ -24,8 +25,10 @@
   const rows = $derived(store.page?.rows ?? []);
   const crumbs = $derived(store.page?.crumbs ?? []);
   const dirId = $derived(store.dirId);
-  const alive = $derived(stat?.sessionAlive ?? false);
-  const dirty = $derived(stat?.dirty ?? 0);
+  // Everything on this page except *Delete archive...* stays usable after
+  // a lock (APP.md §2.3): Page, Stat, the previews, Extract and every
+  // operation - each committing the archive and owing its receipt until
+  // the vault comes back. Only the registry write needs the session.
   const tampered = $derived(store.status?.tampered ?? false);
 
   let selected = $state<Set<string>>(new Set());
@@ -34,10 +37,6 @@
   // The selection may hold folders as well as files (APP.md §6): a folder
   // is extracted, deleted and renamed like anything else.
   const chosen = $derived(rows.filter((r) => selected.has(r.id)));
-  // A row already staged for deletion is not deleted again, and a staged
-  // add or replace is not in the file yet, so it is not extracted (§3).
-  const deletable = $derived(chosen.filter((r) => r.pending !== "deleted"));
-  const extractable = $derived(chosen.filter((r) => r.pending !== "deleted" && r.pending !== "added" && r.pending !== "replaced"));
 
   let previewUrl = $state("");
   let previewText = $state<{ text: string; truncated: boolean } | null>(null);
@@ -50,14 +49,12 @@
   let newFolderValid = $state(true);
   let newFolderAttempt = $state(0);
   // The names this folder already holds, so *Create folder* cannot make a
-  // second row of one name. A tombstone is not a live sibling and reserves
-  // no name (FORMAT.md R39), so a row staged for deletion is left out.
-  const taken = $derived(rows.filter((r) => r.pending !== "deleted").map((r) => r.name));
+  // second row of one name. Every row on the page is a committed record
+  // now, so every one of them holds its name (FORMAT.md R39).
+  const taken = $derived(rows.map((r) => r.name));
   const judgeFolder = $derived((v: string) => newNameProblem(v, taken));
   let deleting = $state<FileRow[]>([]);
   let extracting = $state<{ ids: string[]; label: string } | null>(null);
-  let extractDir = $state("");
-  let extractPolicy = $state<"skip" | "rename">("skip");
   let collisions = $state<{ at: string; plan: AddPlan; list: Collision[] } | null>(null);
   const kindsDiffer = $derived((collisions?.list ?? []).some((c) => c.isDir !== c.existingIsDir));
   let dropping = $state(false);
@@ -134,21 +131,22 @@
     }
   }
 
-  // Entering a folder is its id, never its name: a folder staged for
-  // deletion keeps its row and is not enterable (APP.md §3).
+  // Entering a folder is its id, never its name (APP.md §3).
   function open(r: FileRow) {
-    if (!r.isDir || r.pending === "deleted") return;
+    if (!r.isDir) return;
     selected = new Set();
     void store.enterDir(r.id, r.name);
   }
 
-  // The preview follows the single selection: committed files only.
+  // The preview follows the single selection. Every row is committed - an
+  // operation commits at its end (APP.md §2.3) - so nothing here waits
+  // for a save.
   $effect(() => {
     const r = one;
     previewUrl = "";
     previewText = null;
     kind = "none";
-    if (!r || r.isDir || r.pending === "added" || r.pending === "replaced" || r.pending === "deleted") return;
+    if (!r || r.isDir) return;
     const k = previewKind(r.name);
     kind = k;
     if (k === "text") {
@@ -231,10 +229,10 @@
     creating = true;
   }
 
-  // CreateFolder returns synchronously with the new record's id: the
-  // folder is immediately a real parent — files may be dropped into it,
-  // records moved into it, and it survives the save empty (FORMAT.md R39).
-  // Discard drops it.
+  // CreateFolder commits at once and returns the new record's id: the
+  // folder is immediately a real parent - files may be dropped into it and
+  // records moved into it - and an empty folder is a record of its own
+  // (FORMAT.md R39).
   async function makeFolder() {
     newFolderAttempt++;
     if (!newFolderValid) return;
@@ -284,13 +282,9 @@
   let moveError = $state<{ id: string; text: string } | null>(null);
 
   function dragStart(e: DragEvent, r: FileRow) {
-    if (!alive || r.pending === "deleted") {
-      e.preventDefault();
-      return;
-    }
     // Dragging a row outside the selection takes that row alone, the way
     // a file manager does.
-    const ids = selected.has(r.id) ? deletable.map((x) => x.id) : [r.id];
+    const ids = selected.has(r.id) ? chosen.map((x) => x.id) : [r.id];
     if (ids.length === 0) {
       e.preventDefault();
       return;
@@ -337,27 +331,6 @@
     }
   }
 
-  async function save() {
-    try {
-      await Archive.Save(id);
-      await store.refreshArchive();
-    } catch (e) {
-      fail(e);
-    }
-  }
-
-  // Discard drops every staged change, the folders this transaction
-  // created among them: the page may be standing in one, and the listing
-  // that follows walks the crumbs upwards when it is (lib/tree.ts).
-  async function discard() {
-    try {
-      await Archive.Discard(id);
-      await store.refreshArchive();
-    } catch (e) {
-      fail(e);
-    }
-  }
-
   async function doRename() {
     const r = renaming;
     if (!r) return;
@@ -370,8 +343,11 @@
     }
   }
 
-  // Delete takes files and folders alike; a folder is one staged change
-  // however large the subtree, and leaves one greyed row (APP.md §3).
+  // Delete takes files and folders alike. The page asks first - naming
+  // files and folders apart, saying that a folder takes everything beneath
+  // it and that this cannot be undone - and the operation then commits at
+  // once: there is no undo, deletion being cryptographic erasure (APP.md
+  // §3, FORMAT.md R32).
   async function doDelete() {
     const ids = deleting.map((r) => r.id);
     deleting = [];
@@ -384,11 +360,11 @@
     }
   }
 
-  async function startExtract(ids: string[], label: string) {
+  // Both ways in open the same dialog (APP.md §3): the destination lives
+  // in it, prefilled from the folder last extracted to, rather than in a
+  // native picker the page opens first.
+  function startExtract(ids: string[], label: string) {
     if (ids.length === 0) return;
-    const p = await Shell.PickFolder("Extract to");
-    if (!p) return;
-    extractDir = p;
     extracting = { ids, label };
   }
 
@@ -399,12 +375,12 @@
     void startExtract([ROOT_ID], "everything in this archive");
   }
 
-  async function doExtract() {
+  async function doExtract(dir: string, policy: string) {
     const x = extracting;
     extracting = null;
     if (!x) return;
     try {
-      await Archive.Extract(id, x.ids, extractDir, extractPolicy);
+      await Archive.Extract(id, x.ids, dir, policy);
     } catch (e) {
       fail(e);
     }
@@ -421,26 +397,15 @@
   }
 
   // Delete archive… is the same act as the Archives page's, on the archive
-  // this page shows (APP.md §13): the archive is closed first — unsaved
-  // changes asked about — and, since closing leaves this page, the id is
-  // handed to the Archives page, which opens the one dialog. It is
-  // disabled while the vault is locked with the archive open (§2.3): the
-  // registry write needs the session's key.
-  let deleteAsk = $state(false);
-
-  async function askDelete() {
-    if (dirty > 0) {
-      deleteAsk = true;
-      return;
-    }
-    await closeThenDelete();
-  }
-
-  async function closeThenDelete(saveFirst = false) {
-    deleteAsk = false;
+  // this page shows (APP.md §13): the archive is closed first and, since
+  // closing leaves this page, the id is handed to the Archives page, which
+  // opens the one dialog. It is disabled while the vault is locked with
+  // the archive open (§2.3): the registry write needs the session's key.
+  // Nothing is asked about unfinished changes — there are none between
+  // operations — and a running one is cancelled by the close.
+  async function closeThenDelete() {
     const archiveId = id;
     try {
-      if (saveFirst) await Archive.Save(archiveId);
       await Archives.Close(archiveId);
     } catch (e) {
       fail(e);
@@ -462,7 +427,7 @@
   // locked and the archive still open, when it closes.
   $effect(() => {
     let note = stat ? `${count(stat.files)} files · ${bytes(stat.size)} · key v${stat.keyVersion}${stat.lastSavedAt ? ` · last saved ${dateTime(stat.lastSavedAt)}` : ""}` : "";
-    if (!alive && stat?.expiresAt) note += ` · archive closes in ${countdown(stat.expiresAt, store.now)}`;
+    if (!store.unlocked && stat?.expiresAt) note += ` · archive closes in ${countdown(stat.expiresAt, store.now)}`;
     store.footNote = note;
   });
 </script>
@@ -489,7 +454,7 @@
     {/each}
   </nav>
   <div class="grow"></div>
-  <button type="button" class="btn sm" onclick={close} disabled={dirty > 0 && stat?.state !== "needs_reopen"}>Close archive</button>
+  <button type="button" class="btn sm" onclick={close}>Close archive</button>
 </div>
 
 <div class="layer-body">
@@ -497,27 +462,26 @@
     <div class="move-note">Not moved: {moveError.text}</div>
   {/if}
   <div class="cmdbar">
-    <MenuButton id="add" label="Add" icon="i-plus" items={addItems} disabled={!alive} />
-    <!-- Not gated on stat.files: since the index became a tree that counts
-         files alone (a folder occupies no data region), an archive of
-         folders reports 0 while holding real records, and a plan of
-         folders alone is a valid extraction (APP.md §3). An Extract of an
-         empty archive plans nothing and reports nothing. -->
-    <button type="button" class="btn subtle" onclick={extractAll}><svg class="i i-14"><use href="#i-extract" /></svg>Extract all</button>
-    <button type="button" class="btn subtle" disabled={!one || one.pending === "deleted" || !alive} onclick={() => { if (one) { renaming = one; renameTo = one.name; } }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename</button>
-    <button type="button" class="btn subtle danger" disabled={deletable.length === 0 || !alive} onclick={() => (deleting = deletable)}><svg class="i i-14"><use href="#i-trash" /></svg>Delete</button>
+    <MenuButton id="add" label="Add" icon="i-plus" items={addItems} />
+    <!-- Greyed on Records, never on Files: a record count is the only
+         thing that can say whether the tree holds anything, since a
+         folder occupies no data region and an archive of folders alone
+         reports 0 files while holding real records (APP.md §3). -->
+    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} onclick={extractAll}><svg class="i i-14"><use href="#i-extract" /></svg>Extract all</button>
+    <button type="button" class="btn subtle" disabled={!one} onclick={() => { if (one) { renaming = one; renameTo = one.name; } }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename</button>
+    <button type="button" class="btn subtle danger" disabled={chosen.length === 0} onclick={() => (deleting = chosen)}><svg class="i i-14"><use href="#i-trash" /></svg>Delete</button>
     <div class="grow"></div>
     <!-- Tampered disables it here as it does on the Archives page (APP.md
          §13, R25): the flow closes the archive before the write is even
          attempted, so a refusal at the end would have shut the user's
          archive for nothing. -->
-    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? "Unlock the vault first: the record is the vault's." : tampered ? "The vault's slot region does not verify; every change is disabled." : undefined} onclick={askDelete}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
+    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? "Unlock the vault first: the record is the vault's." : tampered ? "The vault's slot region does not verify; every change is disabled." : undefined} onclick={() => void closeThenDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
   </div>
 
-  {#if !alive}
+  {#if !store.unlocked}
     <div class="bar">
       <svg class="i i-14"><use href="#i-lock" /></svg>
-      <span class="grow">The vault is locked. You can browse and extract; adding, renaming and saving need the vault.</span>
+      <span class="grow">The vault is locked. This archive stays open until it goes idle — you can browse it, change it and extract from it; what you change is recorded in the vault at the next unlock.</span>
       <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button>
     </div>
   {/if}
@@ -527,19 +491,8 @@
   {#if stat?.copyMismatch}
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("archive.copy_mismatch")}</span></div>
   {/if}
-  {#if dirty > 0}
-    <div class="pending">
-      <svg class="i i-14"><use href="#i-save" /></svg>
-      <!-- The space before "Discarded" is written out: whitespace at the
-           start of a block is not kept, and the two sentences ran into
-           one another. -->
-      <div class="txt"><b class="num">{dirty} change{dirty === 1 ? "" : "s"} not yet saved</b> — written as one step, or not at all.{#if stat?.capAt}{" "}Discarded at {dateTime(stat.capAt).slice(11)} if not saved.{/if}</div>
-      <div class="acts">
-        <button type="button" class="btn accent sm" disabled={!alive} onclick={save}>Save changes</button>
-        <button type="button" class="btn sm" onclick={discard}>Discard</button>
-      </div>
-    </div>
-  {/if}
+  <!-- The operation strip and nothing else: no pending bar, no Save, no
+       Discard, since every operation commits at its end (APP.md §2.3). -->
   <OpsBar />
 
   <div class="file-split" class:dropping>
@@ -565,24 +518,22 @@
               <tr
                 tabindex={selected.has(r.id) || (selected.size === 0 && i === 0) ? 0 : -1}
                 aria-selected={selected.has(r.id)}
-                class:pending-deleted={r.pending === "deleted"}
                 class:drop-into={dropTarget === r.id}
                 class:refused={moveError?.id === r.id}
-                draggable={alive && r.pending !== "deleted"}
+                draggable={true}
                 onclick={(e) => click(e, r)}
                 ondblclick={() => open(r)}
                 onkeydown={(e) => keydown(e, r)}
                 ondragstart={(e) => dragStart(e, r)}
                 ondragend={dragEnd}
-                ondragover={(e) => over(e, { id: r.id, isDir: r.isDir, pending: r.pending })}
-                ondragleave={() => leave({ id: r.id, isDir: r.isDir, pending: r.pending })}
-                ondrop={(e) => void dropOn(e, { id: r.id, isDir: r.isDir, pending: r.pending })}
+                ondragover={(e) => over(e, { id: r.id, isDir: r.isDir })}
+                ondragleave={() => leave({ id: r.id, isDir: r.isDir })}
+                ondrop={(e) => void dropOn(e, { id: r.id, isDir: r.isDir })}
               >
                 <td class="sel-mark">
                   <div class="fname">
                     <svg class="i i-14"><use href="#{fileIcon(r)}" /></svg>
                     <span>{r.name}</span>
-                    {#if r.pending}<span class="chip">{r.pending}</span>{/if}
                   </div>
                   {#if moveError && moveError.id === r.id}<span class="move-note">Not moved: {moveError.text}</span>{/if}
                 </td>
@@ -616,8 +567,6 @@
           <pre>{previewText.text}{previewText.truncated ? "\n…" : ""}</pre>
         {:else if one && one.isDir}
           <span class="none">Folder · {bytes(one.size)} inside</span>
-        {:else if one && (one.pending === "added" || one.pending === "replaced")}
-          <span class="none">Preview after saving</span>
         {:else if one}
           <span class="none">No preview for this type — extract it</span>
         {:else}
@@ -636,7 +585,7 @@
         </dl>
       {/if}
       <div class="preview-actions">
-        <button type="button" class="btn accent" disabled={extractable.length === 0} onclick={() => void startExtract(extractable.map((r) => r.id), countPhrase(deleteCounts(extractable)))}>Extract…</button>
+        <button type="button" class="btn accent" disabled={chosen.length === 0} onclick={() => startExtract(chosen.map((r) => r.id), countPhrase(deleteCounts(chosen)))}>Extract…</button>
       </div>
     </aside>
   </div>
@@ -659,7 +608,7 @@
 {#if creating}
   <Dialog title="Create folder" onclose={() => (creating = false)}>
     <TextField id="cf-name" label="Name" bind:value={newFolder} bind:valid={newFolderValid} attempt={newFolderAttempt} judge={judgeFolder} placeholder="Receipts" />
-    <p>A folder is a record of its own: it is staged now and written when you save, whether or not anything is put into it.</p>
+    <p>A folder is a record of its own: it is written now, and it stays whether or not anything is put into it.</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (creating = false)}>Cancel</button>
       <button type="button" class="btn accent" onclick={makeFolder}>Create</button>
@@ -667,39 +616,27 @@
   </Dialog>
 {/if}
 
+<!-- The delete dialog (APP.md §3, §6): files and folders counted apart,
+     the folder sentence only when a folder is in the selection, and no
+     undo anywhere in the copy - deletion is cryptographic erasure. -->
 {#if deleting.length > 0}
-  <Dialog title={deleteTitle(deleting)} onclose={() => (deleting = [])}>
+  <Dialog title={deleteTitle(deleting, stat?.name ?? "")} onclose={() => (deleting = [])}>
     <p>{deleteBody(deleting)}</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (deleting = [])}>Cancel</button>
-      <button type="button" class="btn accent" onclick={doDelete}>Delete</button>
+      <button type="button" class="btn accent danger" onclick={doDelete}>Delete</button>
     {/snippet}
   </Dialog>
 {/if}
 
-{#if deleteAsk}
-  <Dialog title="Save the unsaved changes first?" onclose={() => (deleteAsk = false)}>
-    <p>{stat?.name ?? "This archive"} has {dirty} unsaved change{dirty === 1 ? "" : "s"}. Deleting the archive removes the file, so anything not saved goes with it either way — saving first only puts the changes into the file that is about to be removed.</p>
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (deleteAsk = false)}>Cancel</button>
-      <button type="button" class="btn" onclick={() => void closeThenDelete(true)}>Save, then continue</button>
-      <button type="button" class="btn accent" onclick={() => void closeThenDelete(false)}>Discard and continue</button>
-    {/snippet}
-  </Dialog>
-{/if}
-
-{#if extracting && extractDir}
-  <Dialog title="Extract {extracting.label}" onclose={() => (extracting = null)}>
-    <p>To <span class="mono">{extractDir}</span>. Existing files are never overwritten.</p>
-    <div class="field">
-      <div class="field-top"><label for="xp">If a file already exists</label></div>
-      <select id="xp" class="input" bind:value={extractPolicy}><option value="skip">Skip it</option><option value="rename">Extract under a new name</option></select>
-    </div>
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (extracting = null)}>Cancel</button>
-      <button type="button" class="btn accent" onclick={doExtract}>Extract</button>
-    {/snippet}
-  </Dialog>
+{#if extracting}
+  <ExtractDialog
+    label={extracting.label}
+    archiveName={stat?.name ?? ""}
+    initial={store.settings?.lastExtractFolder ?? ""}
+    onextract={(dir, policy) => void doExtract(dir, policy)}
+    oncancel={() => (extracting = null)}
+  />
 {/if}
 
 <!-- The collision dialog says the kind on both sides — "Photos is a file

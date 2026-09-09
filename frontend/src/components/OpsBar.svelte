@@ -1,15 +1,35 @@
 <script lang="ts">
-  import { Archive } from "../lib/api";
-  import { store, opLabel } from "../lib/state.svelte";
+  // The operation strip (APP.md §2.3, §6): the running operation's name, a
+  // bar that moves by *bytes* — an add, a replace and an extract count the
+  // bytes of the file in hand, so a single large file moves it — and
+  // *Cancel* for an add or a replace, which aborts its transaction and
+  // publishes nothing. There is no pending bar, no Save and no Discard:
+  // every operation commits at its end.
+  import { Archive, errorOf } from "../lib/api";
+  import { store } from "../lib/state.svelte";
+  import { cancellable, opLabel } from "../lib/ops";
+  import { codeText } from "../lib/strings";
+  import { bytes } from "../lib/format";
+
+  async function cancel(opId: string) {
+    try {
+      await Archive.CancelOp(opId);
+    } catch (e) {
+      store.toast(codeText(errorOf(e).code), "error");
+    }
+  }
 </script>
 
 {#if store.runningOps.length > 0}
   <div class="ops">
     {#each store.runningOps as o (o.id)}
       <div class="op">
-        <span>{opLabel(o.kind)}{o.phase ? ` — ${o.phase}` : ""}</span>
+        <span class="opname">{opLabel(o.kind)}{o.phase ? ` — ${o.phase}` : ""}</span>
         <progress value={o.total > 0 ? o.done : undefined} max={o.total > 0 ? o.total : undefined}></progress>
-        <button type="button" class="btn sm" onclick={() => void Archive.CancelOp(o.id)}>Cancel</button>
+        {#if o.total > 0}<span class="num opbytes">{bytes(o.done)} of {bytes(o.total)}</span>{/if}
+        {#if cancellable(o.kind)}
+          <button type="button" class="btn sm" onclick={() => void cancel(o.id)}>Cancel</button>
+        {/if}
       </div>
     {/each}
   </div>

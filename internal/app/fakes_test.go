@@ -94,6 +94,10 @@ type recorder struct {
 	mu     sync.Mutex
 	events []event
 	cursor int
+	// hook lets a test act inside an event, on the goroutine that emitted
+	// it: the only way to reach a running operation at a known point —
+	// cancelling one mid-add, for instance — without racing it.
+	hook func(name string, payload any)
 }
 
 type event struct {
@@ -104,6 +108,17 @@ type event struct {
 func (r *recorder) Emit(name string, payload any) {
 	r.mu.Lock()
 	r.events = append(r.events, event{name, payload})
+	hook := r.hook
+	r.mu.Unlock()
+	if hook != nil {
+		hook(name, payload)
+	}
+}
+
+// onEvent installs the hook; nil clears it.
+func (r *recorder) onEvent(f func(name string, payload any)) {
+	r.mu.Lock()
+	r.hook = f
 	r.mu.Unlock()
 }
 

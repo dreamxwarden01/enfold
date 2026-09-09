@@ -103,3 +103,14 @@ export function storageLabel(storage: string, savedPercent: number): string {
   }
   return storage || "—";
 }
+
+// hashText is the details modal's ciphertext hash (APP.md §13). A hash of
+// all zeros is no commit yet — the record was written before the archive
+// ever was — and reads "N/A" rather than sixty-four zeros the reader has
+// to count. The value itself is never shortened here: the modal wraps it
+// onto a second line rather than cutting it.
+export function hashText(hex: string | undefined): string {
+  const h = (hex ?? "").trim();
+  if (h === "" || /^0+$/.test(h)) return "N/A";
+  return h;
+}

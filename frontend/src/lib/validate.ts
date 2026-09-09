@@ -102,6 +102,17 @@ export function nameProblem(text: string): string {
   return new TextEncoder().encode(text).length > NAME_MAX ? NAME_RULE : "";
 }
 
+// A name inside an archive — a file renamed, a folder created (APP.md §6,
+// the Archive page). The stored name is a path whose separator is "/", so
+// a leaf that carries one would be two segments and not the name it looks
+// like; a leaf is required, and that is the whole rule. The archive's own
+// name is a different thing and has its own (nameProblem).
+export const LEAF_RULE = "A name cannot contain a slash.";
+export function fileNameProblem(name: string): string {
+  if (!name.trim()) return REQUIRED;
+  return name.includes("/") ? LEAF_RULE : "";
+}
+
 // confirmSecretProblem judges the second field of a chosen secret: one
 // core prompt, two fields on the page, one submission (APP.md §13).
 export const CONFIRM_SECRET = "The two do not match.";

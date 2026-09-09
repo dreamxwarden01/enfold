@@ -313,13 +313,27 @@ arithmetic far from overflow; the others keep a hostile superblock from directin
 read. A reader also checks that the registry, index and free-map extents lie inside the file and,
 for the archive, do not overlap each other.
 
-**R20 — File names.** A live file record's `name` is a relative path with `/` separators, at most
-4096 bytes of valid UTF-8, with no empty, `.` or `..` elements, no control character, none of
-`\ : * ? " < > |`, no element ending in a space or a dot, and no Windows reserved device name
-(`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, with or without an extension) as an
-element. The reader enforces this, not only the writer: an archive from an untrusted place must
-not be able to name a file `..\..\something`. Tombstones keep whatever name they had. Names are
-stored as given, not normalised — a filesystem does not normalise them either.
+**R20 — Names.** A live record's `name` — a file's or a directory's (§11) — is **one path
+element**: valid UTF-8 of at most **255 UTF-16 code units** (Go: `len(utf16.Encode([]rune(name)))`), with no `/`, not empty, not `.` or `..`, no control
+character, none of `\ : * ? " < > |`, not ending in a space or a dot, and not a Windows reserved
+device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, with or without an
+extension). The path a record is extracted to is its ancestors' names and its own, joined by `/`,
+at most 4096 bytes (R39). The code unit, not the byte, is what NTFS, ReFS and SMB count a path
+component in, so no name is refused *for its length* that the volume it came from could hold: a
+200-character CJK folder name is 200 units but 600 bytes, legal on every Windows volume and
+legal under the path-wide bound this rule replaced. No second byte rule is needed — 255 code
+units of valid UTF-8 is at most 765 bytes, a BMP scalar being one unit and at most three bytes
+and a non-BMP scalar two units and four — which is what bounds the record on the wire. APFS and
+ext4 count a component in 255 bytes instead, so a name this format accepts may not extract on the
+platforms the container is kept portable to; that is a per-record extraction failure there,
+never an archive that will not open. The other rules below still refuse names a `\\?\` path or a
+share can present — a trailing dot or space, `CON`, a `:` from an alternate data stream — because
+Enfold must be able to write back every name it stores. The reader enforces this, not only the
+writer: an archive from an
+untrusted place must not be able to name a file `..\..\something`. Tombstones keep whatever name
+they had. Names are stored as given, not normalised — a filesystem does not normalise them
+either — but live siblings are unique under simple Unicode case folding (R39): the platforms
+this project extracts to would put `A.txt` and `a.txt` on one file.
 
 **R21 — Canonical slot records.** `key_source` is on the wire for every slot type and must be
 zero for software slots; the reserved value 2 fails closed on every slot type. `credential_id`
@@ -477,9 +491,20 @@ sets `state = 2` and advances `revision`, `last_writer` and `modified_at`; it ke
 cleared once no live record uses it. Deletion is cryptographic erasure: the ciphertext stays in
 the freed extent until it is reused or compacted away, unreadable because its wrapped DEK is gone.
 
-**R33 — Compaction and key rotation, what they keep.** Compaction writes a fresh file with the
-same `archive_id` and `kid`, every record — live and tombstone, unchanged apart from a live
-record's `data_off` — and the dictionary; live extents are copied verbatim, since every chunk
+**A directory tombstone is the same rule with one field short.** Deleting a directory — the same
+write tombstoning every live record beneath it, R39 — sets `state = 2` on the directory record and
+advances `revision` and `last_writer` **only**: it keeps `dir_id`, `parent_id` and `name`, so the
+shape a merge needs in order to explain what went is still there; it has nothing to zero; and it
+leaves `modified_at` exactly as it was, because a folder's `modified_at` is the folder's own time
+and not a clock (§11). Files swept up by that write follow the file rule above, their
+`modified_at` advanced like any other deletion's. Keeping a tombstone's name costs nothing: R39
+folds names among *live* children only, so a tombstone reserves nothing.
+
+**R33 — Compaction and key rotation, what they keep.** Compaction writes a fresh file with the same `archive_id` and `kid`, every record — directory and
+file, live and tombstone, unchanged apart from a live file record's `data_off` — and the
+dictionary; the records are re-encoded in the order §11 requires, directories before the files
+that name them, and no `dir_id` or `file_id` changes under compaction or key rotation, so the
+tree a caller was holding is the tree it gets back (`APP.md` §3); live extents are copied verbatim, since every chunk
 AAD and every wrapped DEK binds `archive_id` and `file_id` and would fail under any other. Key
 rotation re-wraps every live DEK under the new archive key's wrap key with a fresh nonce and the
 same `dek_epoch` (the DEK AAD does not include the kid), re-seals the index with the new kid in
@@ -551,6 +576,64 @@ records belong to the vault, not to a slot, and no slot-region write ever drops 
 exception is an export, which by R28 leaves the `entangled_key` behind and takes the history. A
 record that does not unwrap fails the rotation (§1, fail closed), and two records of the same
 kind with the same `id` are invalid.
+
+**R39 — The tree.** The root is implicit: id zero, never a record, the parent of every top-level
+record. A live file's or directory's `parent_id` is the root or a **live** directory record of the
+same index; a tombstone's may name anything. No record's id is all-zero and no id names two
+records: a `dir_id` is unique among the index's directory records, a `file_id` among its file
+records, and no `file_id` equals a `dir_id`, tombstones counted alongside live records in all
+three. The all-zero id is the root, which has no record — a record claiming it would be a second
+root whose children could not be told from the top level — and it is what the app reads as *the
+root* wherever it takes an id (`APP.md` §3). One id therefore names one record for as long as the
+archive keeps it: it is what a `parent_id` resolves against, what a merge keys on (`SYNC.md` §5),
+and the single id space `Delete`, `Rename`, `Move` and `Extract` address. A writer mints a fresh
+random 128-bit value the way a KID is minted (§7.2), never one the index already holds and never
+one it has freed — a recycled id would let a peer's delete land on a new record. An all-zero id, a
+repeated one, or an id standing in both tables is invalid, and is never settled by taking the
+first record found; `parent_id` carries another record's id or the root's zero, and `pack_id` and
+`last_writer` are not identities of the record that carries them. Among the live children of one
+parent, files and directories share one namespace and their names are unique under simple
+Unicode case folding (Go's `strings.EqualFold`). Every live directory reaches the root by
+following `parent_id` in at most 255 steps without meeting itself — a longer chain or a cycle is
+invalid — and the joined path of every live record is at most 4096 bytes (R20). A reader checks
+all of this before the index is used (§1, fail closed), identities first — no id resolved until
+they are known distinct, since every check below assumes one id names one record — then the
+directories' chains to the root, then the files against them, each `file_id` checked against the
+directory ids as well as its `parent_id`.
+
+**The writer holds the same invariants, ahead of the work.** The index encoder refuses a tree that
+breaks any rule of this R, so no commit, compaction or key rotation publishes an index the next
+open would reject on these grounds; the index is encoded whole — unlike the slot region, whose
+set rules R34 leaves to the keystore because no slot encoder sees more than one record at a time
+— so the walk has one place to live and compaction and rotation inherit it by re-encoding through
+it. Neither check stands in for the other: the reader's answers an archive from an untrusted place
+and is never skipped because a writer is presumed to have checked; the writer's answers a bug of
+our own, and the cost of its absence is not a refusal but an archive that does not open — R31's
+fallback opens one commit behind when a superblock is torn, not when a live index decrypts,
+decodes and then fails this rule. Two of these bounds are properties of a whole subtree, so a
+writer's blast radius is never the one record it was handed: every staged change that creates a
+record, or that changes a live record's `name` or its `parent_id`, re-checks that record **and
+every live record beneath it** — each live directory among them still reaching the root in at
+most 255 steps, and each of them, file or directory, still joining to a path of at most 4096
+bytes. Renaming `a` to a 250-byte name lengthens every descendant's path; moving a subtree
+re-depths all of it; walking a folder in does both to records that do not exist yet — and in each
+case the record the caller named looks fine. Sibling uniqueness is the writing layer's rule too,
+and not its caller's: every operation that gives a live record a name or a parent refuses a name
+that folds onto a live child of the target parent, compared against the index the transaction is
+building rather than the one last committed, so a directory staged a moment ago is as real a
+parent as any. A record is not its own sibling — changing only the case of a name is a rename,
+never a collision; a tombstone is not a live sibling, so a deleted record's name is free; and
+replacing a live record's content leaves its name and parent alone and cannot collide. A change
+that would break any of this is refused before the working index is touched, and a merge that
+would produce a collision or a cycle resolves it before it encodes (`SYNC.md` §5) rather than
+leaving the next open to find it. The app's own pre-flight (`APP.md` §3) is there to put the
+question to the user once, never to be the only guard.
+
+Deleting a directory tombstones it and every live record beneath it in the same write, so a live
+record never stands under a tombstone; moving a directory into itself or into a descendant is
+refused. Nothing is ever derived from a path: extraction creates a directory because its record is
+live, never because a file's name has a prefix, and a `name` with a `/` is invalid.
+
 
 ---
 
@@ -1061,11 +1144,32 @@ AAD = archive_id ‖ kid ‖ index_off ‖ index_len ‖ index_nonce ‖ format_
 Plaintext:
 
 ```
-u32    index_version          1
+u32    index_version          2 — the only version read (directories, ruled 2026-09-08); a 1 is refused
 bytes  dict (u32 len)         zstd trained dictionary; empty when unused
+u32    dir_count
+       … directory records, each prefixed with u32 record_len (R15)
 u32    file_count
        … file records, each prefixed with u32 record_len (R15)
 ```
+
+**The index is a tree, not a list of keys** (ruled 2026-09-08, DECISIONS). A directory is a
+record of its own and a file hangs off a directory by id: nothing is derived from a path, an
+empty folder exists, a folder's modified time survives, and moving or renaming a folder changes
+one record. Directory records come first so that a reader validates every parent in one pass
+(R39). The first design kept a full path in each file record and derived folders from the
+prefixes — object-store keys — and that is `DESIGN.md` trap 31 now.
+
+Directory record:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `dir_id` | `u8[16]` | Stable identity; the value every child's `parent_id` names. Never all-zero, and unique across both record tables (R39) |
+| `state` | `u8` | `1` live · `2` tombstone — a deleted folder leaves its record, as a deleted file does |
+| `parent_id` | `u8[16]` | The containing directory; all-zero is the root, which has no record (R39) |
+| `name` | `string` | One path element (R20) |
+| `modified_at` | `i64` | The folder's own time, not a change clock: the source folder's time when it was added, the time of creation when it was made in the app, and nothing writes it again — a rename, a move, a child added or removed beneath it, and the tombstoning of the record all leave it alone (R32). Extraction sets it on a folder the extraction created, after that folder's contents; a folder that was already there keeps its own (`APP.md` §3) |
+| `revision` | `u64` | Merge |
+| `last_writer` | `u8[16]` | Merge |
 
 `storage = 3` requires a non-empty dictionary, and the dictionary itself is bounded and checked
 by R27. A live file with `storage` 2 or 3 has `orig_size` ≥ 1: an empty file is stored raw
@@ -1077,9 +1181,10 @@ R20; a tombstone may have any.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `file_id` | `u8[16]` | Stable across edits; the identity used in merge |
+| `file_id` | `u8[16]` | Stable across edits; the identity used in merge. Never all-zero, and unique across both record tables (R39) |
 | `state` | `u8` | `1` live · `2` tombstone — the record survives deletion so a sync cannot resurrect it |
-| `name` | `string` | |
+| `parent_id` | `u8[16]` | The containing directory; all-zero is the root (R39) |
+| `name` | `string` | One path element (R20), never a path |
 | `orig_size` | `u64` | Plaintext length; `stored_size` is what tells the reader which chunk is final (R26) |
 | `stored_size` | `u64` | |
 | `storage` | `u8` | `1` raw · `2` zstd · `3` zstd + dictionary |
@@ -1094,7 +1199,7 @@ R20; a tombstone may have any.
 | `pack_id` | `u8[16]` | Reserved for small-file packing; all-zero when unused |
 | `revision` | `u64` | Merge |
 | `last_writer` | `u8[16]` | Merge |
-| `modified_at` | `i64` | Display and last-resort tie-break |
+| `modified_at` | `i64` | Display and last-resort tie-break, and a change clock: every mutation of the record advances it (R32), so it is neither the source file's time nor set on an extracted file — a directory's is the opposite (above) |
 
 `content_hash` is over the **plaintext** because that is the question the AEAD does not already
 answer: whether the content changed as distinct from whether the key changed (`dek_epoch`), and

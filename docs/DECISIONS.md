@@ -3155,3 +3155,48 @@ a directory argument (Wails' `SetDirectory`). A test-runner flake was found and 
 about one `go test -short ./internal/app/` in four ends with a `TempDir` cleanup error under
 `%LOCALAPPDATA%\Temp` — the on-access scanner holding a freshly written file — and is clean with
 `TMP` pointed at the excluded folder.
+
+## 2026-09-08 — The archive index is a tree: directories are records, files hang off them by id
+
+The user, seeing *Create folder* specified as a page-side fiction, asked whether the index was
+"the object key of an object store" — it was: every file record carried a full path and folders
+were the prefixes, so an empty folder could not exist, a folder's modified time was lost, a
+folder rename rewrote every record under it, and a created folder vanished at save unless a file
+landed in it. The user ruled that a standalone folder must exist on its own, indexed without
+reference to any key. Two shapes were weighed: explicit directory records beside path-keyed files
+(RAR's and zip's: a directory entry per folder, files still by path), which keeps two sources of
+truth and still rewrites every file on a folder rename; and a real tree, files and directories
+hanging off a parent by id, the path a derived thing. **The tree was chosen**: one record per
+directory (`dir_id`, `state`, `parent_id`, one-element `name`, `modified_at`, `revision`,
+`last_writer`), `parent_id` on every file record, the root implicit at id zero, R20 reduced to
+one path element with the 4096-byte bound moved to the joined path, and R39 stating the tree's
+invariants — live parents only, sibling names unique under simple case folding (the platforms
+this project extracts to would fold `A.txt` and `a.txt` onto one file), no cycles, depth at most
+255, a deletion tombstoning the subtree in one write, nothing ever derived from a prefix.
+`index_version` becomes 2 and 1 is refused: only test archives exist. What it buys beyond the
+user's ask: a file or folder move is one record (`Move` ships, closing the deferred "folder move
+as one operation"), folder times round-trip through extraction, and a future file-level merge
+sees a rename as one field change. Compression, the STREAM layer, the free map and the keystore
+are untouched: the change is the index alone — the encrypted metadata, as the user guessed.
+DESIGN trap 31 records the model that was left behind. To be critiqued, then implemented.
+
+**Critiqued the same night** (three Opus lenses — format, archive layer, app — 14 findings
+confirmed by paired verifiers, 12 after merging, all folded in place). What it added: R39 now
+binds identities (no all-zero id, no repeated id, one id space across both tables, fresh random
+ids never recycled) and states the reader's order (identities, then chains, then files); the
+writer holds the same invariants — the index encoder refuses a bad tree, and every staged change
+that names or re-parents a record re-checks the whole subtree beneath it for depth, joined path
+and case-folded sibling uniqueness against the transaction's own index; R20's element bound is
+255 UTF-16 code units (what NTFS counts) rather than bytes, with the APFS/ext4 cost written down;
+a directory's `modified_at` is the folder's own time and no change advances it (R32 gained the
+directory tombstone's rule; SYNC notes that a directory has no tie-break); R33 keeps the record
+order and every id under compaction and rotation. In APP: the root is the all-zero hex id at the
+bound boundary and is never acted on; `Crumbs` runs root-inclusive down to the folder shown and
+the page draws the breadcrumb from it alone, walking it upwards when a folder it stands in went;
+`AddFolder` enters an existing directory whatever the policy and kinds that differ never replace
+(`file.kind_mismatch`); `Move` and `Rename` are pre-flighted whole against R39 (`file.exists`,
+`file.move_into_self`, `file.tree_bounds`, `file.not_found`); a deleted directory is one overlay
+entry and one greyed row, nothing may be staged beneath it, and un-staging a staged directory
+returns what was moved into it; extraction plans a set ordered parents-first, creates folders
+because their records are live, sets times deepest-last on folders it made, and fails whole at
+plan time on a containment miss; the file drop carries a directory id, never a path.

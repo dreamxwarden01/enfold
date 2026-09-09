@@ -1,20 +1,51 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { Archive, Archives, Shell, errorOf } from "../lib/api";
   import type { FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText } from "../lib/strings";
   import { bytes, count, countdown, dateTime, previewKind, storageLabel } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
+  import { fileNameProblem } from "../lib/validate";
+  import { addPending, createProblem, dropTo, leafOf, parentOf, pendingIn, reconcile } from "../lib/pending";
   import Dialog from "./Dialog.svelte";
+  import MenuButton from "./MenuButton.svelte";
+  import type { MenuItem } from "./MenuButton.svelte";
   import OpsBar from "./OpsBar.svelte";
+  import TextField from "./TextField.svelte";
 
   const id = $derived(store.current ?? "");
   const stat = $derived(store.stat);
-  const rows = $derived(store.page?.rows ?? []);
+  const saved = $derived(store.page?.rows ?? []);
   const crumbs = $derived(store.folder ? store.folder.split("/") : []);
   const alive = $derived(stat?.sessionAlive ?? false);
   const dirty = $derived(stat?.dirty ?? 0);
   const tampered = $derived(store.status?.tampered ?? false);
+
+  // Folders created here (APP.md §6, lib/pending.ts). The format keeps
+  // paths, not folders, so a created folder is a row of this page and
+  // nothing else until a file is added into it; then the archive lists it
+  // itself and the page lets go of it. Kept per archive: the list is
+  // dropped when another archive is opened, at Save and at Discard.
+  let pending = $state<string[]>([]);
+  const realFolders = $derived(saved.filter((r) => r.isFolder).map((r) => r.name));
+  const live = $derived(reconcile(pending, store.folder, realFolders));
+  const rows = $derived([...pendingIn(live, store.folder).map(folderRow), ...saved]);
+
+  // A created folder's row: a folder with nothing in it, marked pending
+  // the way an added file is.
+  function folderRow(path: string): FileRow {
+    return { fileId: "", path, name: leafOf(path), size: 0, storage: "", savedPercent: 0, modifiedAt: 0, isFolder: true, files: 0, pending: "added" };
+  }
+
+  // A listing that names a folder the page created is the archive taking
+  // it over: the page's copy goes, so the folder is one row, not two.
+  $effect(() => {
+    void store.folder;
+    void realFolders;
+    const next = untrack(() => reconcile(pending, store.folder, realFolders));
+    if (next.length !== untrack(() => pending).length) pending = next;
+  });
 
   // Rows are keyed by kind and path: folder rows carry no file id.
   function rowKey(r: FileRow): string {
@@ -30,6 +61,20 @@
 
   let renaming = $state<FileRow | null>(null);
   let renameTo = $state("");
+  let creating = $state(false);
+  let newFolder = $state("");
+  let newFolderValid = $state(true);
+  let newFolderAttempt = $state(0);
+  // The names this folder already holds — its rows, the created ones
+  // among them — so that Create folder cannot make a second row of one
+  // folder (lib/pending.ts). These are the rows the listing loaded (the
+  // store asks for 2000): a name that exists only beyond them is not
+  // seen. The core has no check to borrow — CheckNames matches a file of
+  // that exact name, and a folder is a prefix, not a record — so the
+  // page's rule is the rows it shows, and a folder past the page's limit
+  // is the listing's own limit, not this rule's.
+  const taken = $derived(rows.map((r) => r.name));
+  const judgeFolder = $derived((v: string) => createProblem(v, taken));
   let deleting = $state<FileRow[]>([]);
   let extracting = $state<FileRow[]>([]);
   let extractDir = $state("");
@@ -95,6 +140,15 @@
     }
   }
 
+  // The list's blank area: everything in the pane that is neither a row
+  // nor the header — a header is a control of the list, not its blank
+  // area, and sorting from one must not drop the selection. The row's own
+  // click has already run by the time this one does.
+  function blank(e: MouseEvent) {
+    const t = e.target as HTMLElement;
+    if (!t.closest("tbody tr") && !t.closest("thead")) selected = new Set();
+  }
+
   function open(r: FileRow) {
     if (r.isFolder) {
       selected = new Set();
@@ -123,6 +177,13 @@
     void id;
     void store.folder;
     selected = new Set();
+  });
+
+  // Created folders belong to the archive they were created in: another
+  // archive starts with none.
+  $effect(() => {
+    void id;
+    untrack(() => (pending = []));
   });
 
   async function addFiles(paths: string[], dir = false) {
@@ -160,6 +221,28 @@
     if (p) await addFiles([p], true);
   }
 
+  // One *Add* button, three ways to add (APP.md §6): the two pickers, and
+  // a folder made here that waits for a file.
+  const addItems: MenuItem[] = $derived([
+    { label: "Add files", icon: "i-plus", run: () => void pickFiles() },
+    { label: "Add folder", icon: "i-folder-add", run: () => void pickFolder() },
+    { label: "Create folder", icon: "i-folder", run: askFolder },
+  ]);
+
+  function askFolder() {
+    newFolder = "";
+    newFolderValid = true;
+    newFolderAttempt = 0;
+    creating = true;
+  }
+
+  function makeFolder() {
+    newFolderAttempt++;
+    if (!newFolderValid) return;
+    pending = addPending(pending, store.folder, newFolder);
+    creating = false;
+  }
+
   $effect(() => {
     const d = store.drop;
     if (!d) return;
@@ -174,14 +257,42 @@
   async function save() {
     try {
       await Archive.Save(id);
+      // A created folder a file was added into is the archive's now and
+      // is listed as that file's prefix; one that never got a file is
+      // written nowhere and goes with the save. The page may be standing
+      // in one of those: the archive's own listing says which, so the
+      // page asks it after the save rather than guessing, and steps out
+      // the way Discard does.
+      const stood = dropTo(pending, store.folder) !== store.folder ? store.folder : "";
+      pending = [];
+      if (stood) await standWhereItExists(stood);
     } catch (e) {
       fail(e);
     }
   }
 
+  // The nearest folder at or above `from` that the archive itself lists —
+  // a created folder a file was added into is there, one that was written
+  // nowhere is not — and the page moves there if it is not there already.
+  async function standWhereItExists(from: string) {
+    let at = from;
+    while (at) {
+      const up = parentOf(at);
+      const page = await Archive.Page(id, up, "name", 0, PAGE_LIMIT);
+      if ((page.rows ?? []).some((r) => r.isFolder && r.name === leafOf(at))) break;
+      at = up;
+    }
+    if (at !== store.folder) await store.enterFolder(at);
+  }
+
   async function discard() {
     try {
       await Archive.Discard(id);
+      // Discard drops every staged add, so every created folder is empty
+      // and gone — the page steps out of one it was standing in.
+      const to = dropTo(pending, store.folder);
+      pending = [];
+      if (to !== store.folder) await store.enterFolder(to);
       await store.refreshArchive();
     } catch (e) {
       fail(e);
@@ -210,12 +321,50 @@
 
   async function startExtract(list: FileRow[]) {
     extracting = list.filter((r) => !r.isFolder);
+    if (extracting.length === 0) return;
     const p = await Shell.PickFolder("Extract to");
     if (!p) {
       extracting = [];
       return;
     }
     extractDir = p;
+  }
+
+  // *Extract all* is the archive's, not the selection's (APP.md §6): every
+  // file under every folder. The core hands out one folder at a time, so
+  // the page walks them — a page at a time, the core's own limit — and
+  // gives startExtract the whole list. A staged add or replace is not in
+  // the archive yet and the core skips it (ops.go, Extract), so the page
+  // skips it too: the destination dialog then counts what will be
+  // written, and an archive that is nothing but staged adds falls into
+  // startExtract's empty guard rather than failing with file_not_found.
+  const PAGE_LIMIT = 1000;
+
+  async function everyFile(): Promise<FileRow[]> {
+    const out: FileRow[] = [];
+    const walk = [""];
+    while (walk.length > 0) {
+      const folder = walk.shift() as string;
+      for (let offset = 0; ; ) {
+        const page = await Archive.Page(id, folder, "name", offset, PAGE_LIMIT);
+        const got = page.rows ?? [];
+        for (const r of got) {
+          if (r.isFolder) walk.push(r.path);
+          else if (r.pending !== "added" && r.pending !== "replaced") out.push(r);
+        }
+        offset += got.length;
+        if (got.length === 0 || offset >= page.total) break;
+      }
+    }
+    return out;
+  }
+
+  async function extractAll() {
+    try {
+      await startExtract(await everyFile());
+    } catch (e) {
+      fail(e);
+    }
   }
 
   async function doExtract() {
@@ -270,7 +419,12 @@
   }
 
   // selectedRows are the files in the selection; folders are containers
-  // here, not things to extract or delete.
+  // here, not things to extract or delete. Known limitation, following
+  // the ruling as written: a folder created here is a folder row, so
+  // *Delete* does not see it and *Rename* is off for it — a typo in its
+  // name is undone by creating the right one and letting the wrong one go
+  // at Save or Discard, both of which drop a folder no file was added
+  // into.
   const selectedRows = $derived(rows.filter((r) => !r.isFolder && selected.has(rowKey(r))));
 
   // The foot's note (LayerFoot): the archive's figures; while the vault is
@@ -298,9 +452,8 @@
 
 <div class="layer-body">
   <div class="cmdbar">
-    <button type="button" class="btn subtle" disabled={!alive} onclick={pickFiles}><svg class="i i-14"><use href="#i-plus" /></svg>Add files</button>
-    <button type="button" class="btn subtle" disabled={!alive} onclick={pickFolder}><svg class="i i-14"><use href="#i-folder-add" /></svg>Add folder</button>
-    <button type="button" class="btn subtle" disabled={selectedRows.length === 0} onclick={() => startExtract(selectedRows)}><svg class="i i-14"><use href="#i-extract" /></svg>Extract</button>
+    <MenuButton id="add" label="Add" icon="i-plus" items={addItems} disabled={!alive} />
+    <button type="button" class="btn subtle" disabled={(stat?.files ?? 0) === 0} onclick={() => void extractAll()}><svg class="i i-14"><use href="#i-extract" /></svg>Extract all</button>
     <button type="button" class="btn subtle" disabled={!one || one.isFolder || !alive} onclick={() => { if (one) { renaming = one; renameTo = one.name; } }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename</button>
     <button type="button" class="btn subtle danger" disabled={selectedRows.length === 0 || !alive} onclick={() => (deleting = selectedRows)}><svg class="i i-14"><use href="#i-trash" /></svg>Delete</button>
     <div class="grow"></div>
@@ -327,7 +480,10 @@
   {#if dirty > 0}
     <div class="pending">
       <svg class="i i-14"><use href="#i-save" /></svg>
-      <div class="txt"><b class="num">{dirty} change{dirty === 1 ? "" : "s"} not yet saved</b> — written as one step, or not at all.{#if stat?.capAt} Discarded at {dateTime(stat.capAt).slice(11)} if not saved.{/if}</div>
+      <!-- The space before "Discarded" is written out: whitespace at the
+           start of a block is not kept, and the two sentences ran into
+           one another. -->
+      <div class="txt"><b class="num">{dirty} change{dirty === 1 ? "" : "s"} not yet saved</b> — written as one step, or not at all.{#if stat?.capAt}{" "}Discarded at {dateTime(stat.capAt).slice(11)} if not saved.{/if}</div>
       <div class="acts">
         <button type="button" class="btn accent sm" disabled={!alive} onclick={save}>Save changes</button>
         <button type="button" class="btn sm" onclick={discard}>Discard</button>
@@ -337,8 +493,12 @@
   <OpsBar />
 
   <div class="file-split" class:dropping>
+    <!-- A click on the list's blank area — under the last row, or in the
+         container beside the table — clears the selection (APP.md §6); a
+         click that lands on a row is the row's. -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
     <div class="tablewrap" data-file-drop-target="true" data-archive-id={id} data-folder={store.folder}
-      role="region" aria-label="Files"
+      role="region" aria-label="Files" onclick={blank}
       ondragenter={() => (dropping = true)} ondragleave={() => (dropping = false)} ondrop={() => (dropping = false)}>
       {#if rows.length === 0}
         <div class="empty">{store.folder ? "This folder is empty." : "Nothing here yet. Add files, or drop them here."}</div>
@@ -358,7 +518,11 @@
                   </div>
                 </td>
                 <td class="num">{r.isFolder ? `${count(r.files)} files` : bytes(r.size)}</td>
-                <td>{r.isFolder ? "" : storageLabel(r.storage, r.savedPercent)}</td>
+                <!-- The column is fixed at what "zstd, 79% smaller" needs
+                     (APP.md §6), so a longer label — a dictionary's —
+                     ellipsizes; the cell carries the whole of it, so a
+                     hover reads the part that was cut. -->
+                <td title={r.isFolder ? undefined : storageLabel(r.storage, r.savedPercent)}>{r.isFolder ? "" : storageLabel(r.storage, r.savedPercent)}</td>
                 <td class="num">{r.isFolder ? "" : dateTime(r.modifiedAt)}</td>
               </tr>
             {/each}
@@ -412,7 +576,21 @@
     <div class="field"><div class="field-top"><label for="rn">New name</label></div><input id="rn" class="input" bind:value={renameTo} /></div>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (renaming = null)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!renameTo || renameTo.includes("/")} onclick={doRename}>Rename</button>
+      <button type="button" class="btn accent" disabled={!!fileNameProblem(renameTo)} onclick={doRename}>Rename</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+<!-- Create folder (APP.md §6): the name is judged by the rename's own
+     rule, and against the names this folder already holds. The button is
+     never disabled for an empty field — pressing it marks the field. -->
+{#if creating}
+  <Dialog title="Create folder" onclose={() => (creating = false)}>
+    <TextField id="cf-name" label="Name" bind:value={newFolder} bind:valid={newFolderValid} attempt={newFolderAttempt} judge={judgeFolder} placeholder="Receipts" />
+    <p>Enfold stores paths, not folders: this one is the page's until you add a file into it. Add none and it is gone when you save or discard.</p>
+    {#snippet actions()}
+      <button type="button" class="btn" onclick={() => (creating = false)}>Cancel</button>
+      <button type="button" class="btn accent" onclick={makeFolder}>Create</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -463,9 +641,3 @@
     {/snippet}
   </Dialog>
 {/if}
-
-<style>
-  .w-size { width: 90px; }
-  .w-store { width: 200px; }
-  .w-date { width: 130px; }
-</style>

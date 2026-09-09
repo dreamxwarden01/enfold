@@ -484,6 +484,14 @@ Deletions propagate as **tombstones**, not as absent records — otherwise a uni
 everything the peer deleted. Tombstones are garbage-collected only after every enrolled peer has
 acknowledged a sync point past them.
 
+Directory records (`FORMAT.md` §11, R39) carry the same `revision`, `last_writer` and tombstone
+fields as file records, for the day file-level merge exists: a rename or a move is one field of
+one record, and a live child whose parent the other side tombstoned is a conflict to surface,
+never resolved silently — deletion never wins silently applies to folders too. A directory has no
+timestamp to fall back on: its `modified_at` is the folder's own time, frozen when the record was
+made and never advanced by a change (`FORMAT.md` §11, R32), so `(revision, last_writer)` either
+decides or the merge surfaces the conflict — the final tie-break above is the file rule alone.
+
 **Version lists union rather than taking a winner**, which is worth stating separately because the
 instinct is to treat a longer list as newer. It is not a version history in the ordinary sense: it
 is the set of keys that open copies of this archive that may exist anywhere in the world. Losing

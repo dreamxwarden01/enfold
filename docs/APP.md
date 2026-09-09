@@ -427,11 +427,21 @@ Closed ──Open──▶ Open ──first staged change──▶ Dirty ──S
   `Session.UnwrapArchiveKey`, handed to `archive.Open` as candidates, zeroed after. The core keeps
   per archive: the committed **snapshot** (`Files()` taken once per open and re-taken after every
   index-republishing operation), the **overlay** of staged changes keyed by file id
-  (added / replaced / renamed / deleted, with the new name or `FileInfo`), a **folder projection**
-  over the merged view, a preview **token** (32 random bytes, minted at Open, forgotten at
+  (added / replaced / renamed / moved / deleted, files and directories alike, with the new name,
+  parent or `FileInfo`) — one entry per record and one word per entry, which is also what a row's
+  `Pending` reads in §3: `added` outlives every later change to a staged-added record, `replaced`
+  outranks `renamed` and `moved`, a record both renamed and moved reads `moved`, and `deleted`
+  never sits on a staged add, which un-stages instead; a deleted directory is one entry, keyed by
+  the directory, and the subtree it takes gets none, the **tree** — the directory records plus the overlay's staged
+  directories, from which the breadcrumb and the rows come (FORMAT R39; never a prefix
+  projection) — a preview **token** (32 random bytes, minted at Open, forgotten at
   Close), a reader count and a last-served time, and two clocks.
 - **Dirty**: the first change calls `Begin()`; `Tx.Add` writes at once, so "3 changes not yet
-  saved" means three recorded changes whose data is in the file but not published. Save =
+  saved" means three recorded changes whose data is in the file but not published. One overlay entry is one
+  change, so a deleted folder of 900 files is one change and not 901, and an entry the deletion
+  swallows — a rename staged under the folder before it was deleted — leaves the overlay with it.
+  `Stat.Dirty`, the pending bar and the warning that names what a discard threw away all read
+  that one number. Save =
   `Commit` → receipt → one `Session.UpdateRegistry` (`LastStoredSize`, `LastWrittenAt`,
   `LastSeq`, `Revision`); Discard = `Abort`. Closing the window keeps the transaction; a lock
   keeps it. **Save and Compact are gated on `Session.Live()`** before they start
@@ -450,7 +460,8 @@ Closed ──Open──▶ Open ──first staged change──▶ Dirty ──S
   warning naming what was discarded. A preview range request resets the archive's clock, never
   the session's.
 - **What stays usable after a lock** (DESIGN §10): `Page`, `Stat`, `PreviewText`, `Extract`,
-  `PreviewURL`, in-flight readers, `AddFiles`/`Delete`/`Rename` into the staged transaction;
+  `PreviewURL`, in-flight readers, `CreateFolder`/`AddFiles`/`AddFolder`/`Delete`/`Rename`/`Move`
+  into the staged transaction;
   Save, Compact, RotateKey, Open and Create need the session. The frontend keeps an open
   archive's view mounted across a lock (a locked banner; nothing new can be opened).
 - **Compacting**: refused unless Open and clean; previews for the archive are quiesced by
@@ -491,8 +502,18 @@ recreated mid-operation recovers progress; operation events are deltas over that
 ## 3. Services
 
 Methods are synchronous from the frontend's side and return quickly; long work runs in the core
-under an operation id and reports through events. Ids are hex strings; times are Unix seconds;
-sizes are `uint64`. **Every service method returns `*app.Error`** — `{Code, Retries?, Slot?}`
+under an operation id and reports through events. **Ids are hex strings**: 32 lowercase hex digits, and the all-zero id
+`00000000000000000000000000000000` is the archive's root directory — the same value the format
+writes as a top-level record's `parent_id` (FORMAT R39), so nothing is special-cased at this
+boundary and the core, the page, the generated bindings and `tools/uimock/server.py` all spell it
+one way. The root is a directory only where a directory is *named* — `Page`'s `dirID`, the
+`parentID` of `CreateFolder`, `AddFiles`, `AddFolder`, `CheckNames` and `Move`, and among
+`Extract`'s `recordIDs`, where it means the whole archive; where a record is *acted on* —
+`Delete`, `Rename`, `Move`'s `recordIDs`, `Replace`, `PreviewURL`, `PreviewText` — it is
+`params`, so the root is never renamed, moved, previewed or tombstoned. An id that is not 32 hex
+digits is `params`. A well-formed id that names nothing live in the merged view, or names a file
+where a directory is wanted, is `file.not_found`, and no call ever falls back to the root when an
+id does not resolve. Times are Unix seconds; sizes are `uint64`. **Every service method returns `*app.Error`** — `{Code, Retries?, Slot?}`
 whose `Error()` is the code and nothing else, produced by one `classify(err)` over every
 sentinel of every package with a catch-all `internal` — and services are registered with a
 `MarshalError` that emits only that shape; the original error goes to the core-side log.
@@ -549,25 +570,131 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Results []FileOutcome}`.
 
 **Archive** (an open one)
-- `Page(id, folder, sort, offset, limit) Page{Seq, Rows []FileRow{FileID, Path, Name, Size,
-  Storage, SavedPercent, ModifiedAt, Pending}, Total, Folders}` over the merged view; `Name` is
-  the leaf within `folder`, `Path` the full stored name. A name that is both a file and a prefix
-  (`a` and `a/b`) shows as both. `Stat(id) ArchiveStat`.
-- `AddFiles(id, folder, paths, policy) opID`, `AddFolder(id, folder, path, policy) opID` —
-  composed names validated with `format.ValidateFileName` and checked against the merged view
-  **before** the first `Tx.Add`; `policy` is `skip | replace | keep-both`; `CheckNames(id, folder,
-  names) []Collision` lets the UI ask once. `Replace(id, fileID, path) opID` is the in-place
-  edit (never Delete + Add). `Delete(id, fileIDs)`, `Rename(id, fileID, newLeaf)` (a `/` in the
-  leaf is refused; folder rename is one rename per record under the prefix, pre-flighted),
-  `Extract(id, fileIDs, dir, policy) opID` (target `filepath.Join(dir, FromSlash(name))` with a
-  containment assertion, `MkdirAll` per parent, `skip | rename` on `os.ErrExist` — never
-  pre-`Lstat`, never overwrite by unlinking; case-folded destinations de-duplicated by the
-  planner before the first file; each file all-or-nothing, the batch not), `Save(id) opID`,
+- `Page(id, dirID, sort, offset, limit) Page{Seq, Rows []FileRow{ID, ParentID, IsDir, Name,
+  Path, Size, Storage, SavedPercent, ModifiedAt, Pending}, Total, Crumbs []Crumb{ID, Name}}` —
+  the live children of `dirID` (the all-zero id is the root, §3's ids) in the merged view,
+  directories and files in one list; `Name` is the record's own, `Path` the joined one (R20, R39,
+  bounded as R39 bounds it), and `Total` counts that directory's children, not its subtree.
+  `Crumbs` is the chain from the root down to `dirID` **inclusive** and is never empty: its first
+  entry is the root, `{ID: <the all-zero id>, Name: <the archive's name, the same string as
+  ArchiveStat.Name>}`, its last is `dirID` itself, and a staged directory stands in it like any
+  other — so the page draws the whole breadcrumb from `Crumbs` alone and takes no name from
+  `Stat`. A directory row's `Size` is the sum beneath it and its `ModifiedAt` the record's own.
+  The page holds a `dirID` across events and can hold one that is gone — `Discard` drops the
+  folders that transaction staged, a `Delete` takes a subtree the page may be standing in — so an
+  id that no longer names a live directory of the merged view answers `file.not_found`, never an
+  empty listing under a breadcrumb that still names the place: the page walks the `Crumbs` it
+  last held upwards, retrying until one answers (the root always does), and says which folder
+  went. A live directory with nothing in it is not that case — it answers zero rows with `Total`
+  zero, which is what an empty folder is. `Compact` and `RotateKey` change no id (FORMAT R33),
+  so a reopen leaves the page where it was.
+  `Stat(id) ArchiveStat`.
+- `CreateFolder(id, parentID, name) recordID` stages a directory record (empty is fine — it is
+  a record, FORMAT R39, its name validated and matched like any other's); `AddFiles(id, parentID,
+  paths, policy) opID`, `AddFolder(id, parentID, path, policy) opID` — every directory the walk
+  **creates** becomes a record with its own time, so an empty subfolder and every folder's
+  modified time survive; every name is one element, validated with `format.ValidateName` and
+  matched case folded against the live children of its parent in the merged view (R39, which is
+  where the rule is kept: the archive layer refuses a folded collision again at every staged add,
+  rename and move, against the transaction's own index). A source name `format.ValidateName`
+  refuses is one `FileOutcome` of `failed` with `file.name`, named in the results and never
+  silently skipped; when the refused name is a directory's, the walk reports that one outcome
+  against the folder, adds nothing beneath it, and goes on with the folder's siblings. A
+  tombstone is not a live sibling, so a deleted folder's name is free and the walk makes a new
+  record. Everything the walk found is pre-flighted — names, kinds, the folded matches, and
+  R39's depth and joined-path bounds over the deepest record the walk would create — **before**
+  the first `Tx.Add`, so the user is asked once for the whole batch; a source that changed
+  underneath between the walk and the add is one `FileOutcome`, not a failed operation.
+  `policy` — `skip | replace | keep-both` — decides what happens when the incoming item and the
+  item in the way are the **same kind**. Two files: `skip`, `replace` (`Tx.Replace` on that
+  record, never Delete + Add) or `keep-both`. Two directories: the incoming one is **entered**
+  whatever the policy — the walk descends into the existing record, which keeps its `dir_id` and
+  its own `modified_at`, and `policy` goes on applying to what the walk carries inside — so one
+  source folder is never split across two records and no policy ever tombstones a subtree the
+  user was never shown. **Kinds that differ never replace**, in either direction: `skip` leaves
+  the item out, a directory's whole subtree with it; `keep-both` takes the next free name —
+  `name (2)`, `name (3)`, …, before the extension for a file and at the end of the whole name for
+  a directory, the first that no live sibling holds under case folding — and everything under a
+  directory goes there; `replace` fails that one item with `file.kind_mismatch` while the rest of
+  the batch runs, because replacing a folder with a file would tombstone its subtree in one write
+  (R39) and replacing a file with a folder is not an edit of that file. `FileOutcome` carries
+  `IsDir` and, beside `added`, the outcomes `created` (a directory record made) and `entered` (an
+  existing directory descended into); a subtree left out is one `skipped` entry, for its top.
+  `CheckNames(id, parentID, names) []Collision` lets the UI ask once; `Collision` carries the
+  kind on both sides — what is being offered and what is in the way, `Existing` being the record
+  id it collides with — so the dialog can say "*Photos* is a file here" and grey *Replace*
+  whenever the two differ. `Replace(id, fileID, path)
+  opID` is the in-place edit (never Delete + Add). `Delete(id, recordIDs)` — a directory takes its subtree as the merged view has it, tombstoned in
+  the same write (FORMAT R39): a record moved into it during this transaction goes with it, one
+  moved out before the deletion does not. It is **one** staged change however large the subtree,
+  and one row: the directory keeps its place in its parent's listing marked `deleted`, greyed and
+  not enterable, and nothing beneath it is listed, previewed or extracted while the deletion
+  stands; nothing may be added, created or moved into it or beneath it (`file.not_found`), so a
+  live record is never staged under a tombstone. A tombstone is not a live sibling and reserves
+  no name (R39 folds names among live children only), so a new record of that name may be made
+  beside it, and the sibling check and `CheckNames` ignore staged-deleted siblings. Deleting a
+  record whose whole existence is staged un-stages it instead of tombstoning — for a directory
+  the records staged under it go with it, and a committed record that was moved into it goes back
+  where the move found it, its move un-staged too, so no record is left naming a parent that is
+  not there. A committed directory deleted with staged adds beneath it takes them into the
+  tombstoning; their bytes are already in the file and the free map reclaims them at the commit.
+  There is no per-row undo: `Discard` is what brings a deletion back, with everything else the
+  transaction holds — `Rename(id, recordID, newName)` (one record, file or directory; a `/` is refused, and a name that
+  folds onto a live sibling of the record's own parent is `file.exists` — a change of case alone
+  is not one, since a record is not its own sibling), `Move(id, recordIDs, parentID)` re-parents
+  each record, one record written per item whatever subtree hangs beneath it. Both, like
+  `CreateFolder` and the adds, are pre-flighted against R39 on the merged view **before anything
+  is staged**, and a move batch is refused whole and in place, so nothing the encoder would
+  reject is ever staged and the user retries with a name rather than finding half a selection
+  moved: a destination that is not the root or a directory live in the merged view — a folder
+  staged by `CreateFolder` counts, one staged for deletion does not — is `file.not_found`, as is
+  a `recordID` that is not live; a directory moved into itself or into one of its descendants is
+  `file.move_into_self`; a name a live child of the destination already holds under case
+  folding, or that two records of the same batch would both take, is `file.exists`, naming the
+  record; and a moved or created subtree whose deepest live directory would then stand more than
+  255 parents from the root, or any of whose records would then join to a path over 4096 bytes,
+  is `file.tree_bounds` — those two bounds are the subtree's and not the named record's, so they
+  are caught here rather than at the seal (FORMAT R39, which binds the encoder as well). A record
+  whose own ancestor is in the same batch travels with that ancestor and is dropped from the
+  batch; a record already under `parentID` is a no-op. A rename writes `name`, a move writes
+  `parent_id`, both advance `revision` and `last_writer`, and neither writes `modified_at` — a
+  folder's time is the folder's own (FORMAT §11). `file.kind_mismatch`, `file.move_into_self` and
+  `file.tree_bounds` are per-item codes in the `file.*` namespace, declared here where they are
+  used. `Extract(id, recordIDs, dir, policy) opID` — the plan is a **set** of records live in the
+  merged view: each selected record, every live record beneath a selected directory, and the
+  ancestor directories of all of them up to the root (the all-zero id among `recordIDs` is the
+  root and extracts everything — the page's *Extract all* — which makes any other id in the call
+  redundant; an empty `recordIDs` is `params`, never everything). A record reached twice is
+  planned once, a staged rename or move carries its target with it, and staged adds and replaces
+  are not extractable until Save, as with `PreviewURL`. The plan is ordered **parents before
+  anything under them**, and a directory is in it because its record is live, never because a
+  file needed a parent (DESIGN trap 31): an empty folder extracts as an empty folder, and no path
+  is ever inferred into existence. Every target is `filepath.Join(dir, FromSlash(path))`, all of
+  them resolved before the first byte, case-folded destinations de-duplicated there, each
+  asserted after `filepath.Clean` to lie under `dir` — every record satisfying R20 and R39 does,
+  so a failure means the index is not the one the reader validated and the whole operation fails
+  with `file.name` before anything is written (§1, fail closed): a plan-time invariant, not an
+  item's outcome. `dir` itself is `MkdirAll`ed once; below it each directory is created into the
+  parent the order has already made, and an existing folder is used as it stands — never renamed
+  (which would fork its whole subtree), never pre-`Lstat`ed, never emptied; a directory that
+  cannot be created takes its subtree with it, each record beneath it failing in turn. A file is
+  written all-or-nothing into its already-created parent, `skip | rename` on `os.ErrExist` —
+  never pre-`Lstat`, never overwrite by unlinking. Each directory **this extraction created**
+  then takes its `modified_at` through `os.Chtimes`, deepest first and only once everything
+  beneath it has landed; a folder that was already there keeps its own time (DESIGN trap 28 —
+  Enfold does not alter what it did not make), and a time that will not set leaves the folder
+  `created` with `io` in its `Code`. Directories appear in `Results` as `created | skipped |
+  failed` and add no bytes to the progress `Total`, which counts file plaintext only, so a plan
+  of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not), `Save(id) opID`,
   `Discard(id)`, `PreviewURL(id, fileID)` (only for committed rows; staged adds and replaces are
   not previewable until Save), `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
   `OpenReader` + `LimitReader`; no cross-origin fetch exists). `Stat` carries `CopyMismatch` and the
   list a `Note` of `archive.copy_mismatch` when the file's seq is not the one the registry last
-  saw (an older copy restored): shown, never adopted silently; a save records this copy.
+  saw (an older copy restored): shown, never adopted silently; a save records this copy. The archive layer's transaction takes the tree with it: `Tx.Add` and
+  `Tx.Replace` carry the record's `parent_id`, a delete collects the subtree from the index rather
+  than from the caller, sibling checks are per parent and case folded against the transaction's
+  own index (FORMAT R39), and nothing is looked up by a path — there is no whole-name lookup any
+  more.
 - Events: `archive.changed {ID, Seq}`, `archive.expiring {ID, ClosesAt}`, progress as above.
 
 **Keys**
@@ -668,10 +795,14 @@ dialog is "nothing chosen", never an error; a submitted secret that found no pro
 back as the `secret.refused {Code}` event. Tray and menu callbacks run on the Wails main thread
 and leave it (a goroutine) before touching the window or a dialog. The service lives in `internal/app/api` like the others and holds the Wails
 calls behind an unexported `Hooks` value the shell supplies, so nothing of Wails is reflected. File
-drop: the window is created with `EnableFileDrop`; the shell re-emits the dropped paths and the
-drop target's `data-archive-id` / `data-folder` to the frontend, which calls `AddFiles`; the
-core validates that the archive is open and the folder exists in the projection, and refuses
-loudly. Dropped paths carry no authority beyond what a file dialog would.
+drop: the window is created with `EnableFileDrop`; the shell re-emits the dropped paths and the drop target's `data-archive-id` / `data-dir-id` —
+the id the page is showing, from `Page`'s `dirID` and `Crumbs`, never a path — to the frontend,
+which calls `AddFiles(id, parentID, …)` for the dropped files and `AddFolder` for each dropped
+directory; the core validates that the archive is open and that the id is the root or a
+directory live in the merged view (a folder staged by *Create folder* counts, one staged for
+deletion does not), answering `file.not_found` otherwise, and refuses loudly. The target carries
+an id and never a name for that reason: a stale id is refused, where a stale path would resolve
+to whatever folder now happens to carry that name (FORMAT R39, DESIGN trap 31). Dropped paths carry no authority beyond what a file dialog would.
 
 ## 4. The preview server
 
@@ -770,10 +901,16 @@ other level already-compressed media is detected by sampling and stored raw by i
 §9), and on *Create* opens the native Save dialog with `<name>.efd` prefilled in the folder last
 used (`settings.json`, `lastArchiveFolder`); a chosen path where a file already exists is refused
 in place — "A file is already there. Enfold never overwrites; choose another name." — whatever
-the dialog's own replace prompt said; a cancelled dialog creates nothing — the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
-projection, paged table with pending markers, preview pane — image, video, audio through the
-loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
-drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
+the dialog's own replace prompt said; a cancelled dialog creates nothing — the Tampered state, the status strip with the countdown and Lock). Archive (the breadcrumb drawn from `Page`'s `Crumbs` alone — ids, never a path — its first crumb
+the archive's name and its last the folder being shown, paged table with pending markers, preview pane — image, video, audio through the
+loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, the toolbar:
+one *Add* button whose menu holds *Add files*, *Add folder* and *Create folder* (a staged
+directory record, written at save whether or not a file was added into it — FORMAT R39), *Extract all* (the whole archive, whatever is selected — the pane's *Extract…* is the
+selection's), *Rename*, *Delete*; a drag of the selection onto a folder row or a crumb is `Move`,
+refused in place with the reason (§3) and never a half-moved selection; a click on the list's blank area clears the
+selection; the name column takes the width the others do not need, so a name is never squeezed
+while *Stored as* stands empty — Size, Stored as and Modified are fixed and Modified goes first
+when the pane is narrow; drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
 Remove — greyed while the invariant would refuse — Rotate now (its dialog says every way in is
 rewrapped here and now, and asks for a backup first, §13), the entangled password's row (§13),
 *Show recovery key…* — shown only while a recovery
@@ -926,7 +1063,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   layer's body is narrower than 840 px, and a settings row stacks — the title, its line, then
   the control on a line of its own — when its card is narrower than 470 px; both are container
   queries, not viewport ones, so a narrow column stacks its rows while a wide one keeps them
-  side by side. The save bar wraps its chips onto their own line at the same width.
+  side by side. The save bar wraps its chips onto their own line at the same width. The Archive
+  page's file table is the same kind of rule: it drops *Modified* at 840 px and *Stored as* at
+  700 px, so the name column always keeps room.
 - *Controls.* Every dialog and popover enters over 140 ms (the box also scales from 97%) and
   leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
   steps, the lock screen's three cards — fades the new content in over 140 ms and the cards
@@ -1001,8 +1140,7 @@ ceremony states and the "never 0 attempts" rule.
 
 pdf.js preview; memguard for the session keys; an entropy estimate for a chosen
 password (SCOPE: "with an entropy estimate shown"; the minimum of 8 stands in for it);
-folder move
-as one operation;
+(folder move is `Move` since the tree, §3);
 `overwrite` on extraction (an archive-layer change); an unelevated BitLocker check (measure
 first — if none exists, the SCOPE bullet or the least-privilege ruling has to move); the
 permitted range of the timeouts beyond the clamps.

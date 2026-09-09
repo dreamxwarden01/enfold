@@ -71,6 +71,24 @@ state = {
             {"fileId": "f4" * 16, "path": "trip-notes.md", "name": "trip-notes.md", "size": 12_300, "storage": "zstd+dict", "savedPercent": 71, "modifiedAt": NOW - 70000, "isFolder": False, "files": 0, "pending": "added"},
             {"fileId": "f5" * 16, "path": "itinerary.pdf", "name": "itinerary.pdf", "size": 1_260_000, "storage": "zstd", "savedPercent": 18, "modifiedAt": NOW - 60000, "isFolder": False, "files": 0},
             {"fileId": "f6" * 16, "path": "receipts.csv", "name": "receipts.csv", "size": 49_000, "storage": "zstd+dict", "savedPercent": 84, "modifiedAt": NOW - 50000, "isFolder": False, "files": 0, "pending": "deleted"},
+            # A name longer than any column can hold, wearing a pending
+            # chip: the name ellipsizes, the chip does not (APP.md 6).
+            {"fileId": "f7" * 16, "path": "2024-07-14 Reykjavik to Vik - the long way round, with the puffins.HEIC",
+             "name": "2024-07-14 Reykjavik to Vik - the long way round, with the puffins.HEIC", "size": 6_820_000,
+             "storage": "raw", "savedPercent": 0, "modifiedAt": NOW - 40000, "isFolder": False, "files": 0, "pending": "replaced"},
+        ],
+        # Files in a folder, and a folder inside it: the walk *Extract all*
+        # makes over the pages the core hands out one folder at a time.
+        "2024": [
+            {"fileId": "e0" * 16, "path": "2024/Trips", "name": "Trips", "size": 0, "storage": "", "savedPercent": 0, "modifiedAt": 0, "isFolder": True, "files": 2},
+            {"fileId": "e1" * 16, "path": "2024/IMG_0001.HEIC", "name": "IMG_0001.HEIC", "size": 3_900_000, "storage": "raw", "savedPercent": 0, "modifiedAt": NOW - 900000, "isFolder": False, "files": 0},
+            {"fileId": "e2" * 16, "path": "2024/IMG_0002.HEIC", "name": "IMG_0002.HEIC", "size": 4_120_000, "storage": "raw", "savedPercent": 0, "modifiedAt": NOW - 890000, "isFolder": False, "files": 0},
+            {"fileId": "e3" * 16, "path": "2024/packing.txt", "name": "packing.txt", "size": 2_100, "storage": "zstd", "savedPercent": 79, "modifiedAt": NOW - 880000, "isFolder": False, "files": 0},
+            {"fileId": "e4" * 16, "path": "2024/budget.csv", "name": "budget.csv", "size": 31_000, "storage": "zstd+dict", "savedPercent": 84, "modifiedAt": NOW - 870000, "isFolder": False, "files": 0},
+        ],
+        "2024/Trips": [
+            {"fileId": "d1" * 16, "path": "2024/Trips/day-one.md", "name": "day-one.md", "size": 4_400, "storage": "zstd", "savedPercent": 66, "modifiedAt": NOW - 860000, "isFolder": False, "files": 0},
+            {"fileId": "d2" * 16, "path": "2024/Trips/day-two.md", "name": "day-two.md", "size": 5_100, "storage": "zstd", "savedPercent": 68, "modifiedAt": NOW - 850000, "isFolder": False, "files": 0},
         ],
     },
     # A slot carries no entangled, stale or escrowed since Revision 2: the

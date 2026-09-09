@@ -957,6 +957,13 @@ Correct in this document, and easy to lose during implementation.
     — what it must never do is let a secret be reached by less than the VMK (`FORMAT.md` §7.6,
     R28: an export carries no `K_P`), and where the secret is a human one the price is a third
     step in the answer to an exposure (§5).
+31. **A directory is a record, never a prefix** (`FORMAT.md` §11, R39). The first design kept a
+    full path in every file record and derived folders from the prefixes, the way an object
+    store does: an empty folder could not exist, a folder's time was lost, a folder rename
+    touched every file under it, and *Create folder* was a fiction of the page. The index is a
+    tree now — directories are records with ids, files and directories hang off a parent by id —
+    and everything that lists, extracts or merges reads the tree. Anything that infers a folder
+    from a name, or joins a path to decide what exists, is the old model coming back.
 
 ## 12. Deferred
 

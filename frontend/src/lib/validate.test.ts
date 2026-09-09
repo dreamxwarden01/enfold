@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem } from "./validate";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -119,5 +119,15 @@ describe("recoveryGroupProblem", () => {
     expect(recoveryGroupProblem("000001")).toBe(GROUP_MISTYPED);
     expect(recoveryGroupProblem("720896")).toBe(GROUP_MISTYPED);
     expect(recoveryGroupProblem("12a456")).toBe(GROUP_MISTYPED);
+  });
+});
+
+describe("fileNameProblem", () => {
+  it("asks for a leaf, and refuses one that is really two", () => {
+    expect(fileNameProblem("notes.md")).toBe("");
+    expect(fileNameProblem("")).toBe(REQUIRED);
+    expect(fileNameProblem("   ")).toBe(REQUIRED);
+    expect(fileNameProblem("2024/notes.md")).toBe(LEAF_RULE);
+    expect(fileNameProblem("/notes.md")).toBe(LEAF_RULE);
   });
 });

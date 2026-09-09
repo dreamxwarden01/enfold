@@ -8,15 +8,18 @@
   // line sums the rows shown and says so, beside the vault file's own size
   // and the registry's date (§2.1).
   import { untrack } from "svelte";
-  import { Archive, Archives, Shell, errorOf } from "../lib/api";
+  import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, warningCopy } from "../lib/strings";
   import { bytes, count, date, dateTime } from "../lib/format";
+  import { DEFAULT_METHOD, METHODS, METHOD_NOTE, methodWord } from "../lib/method";
   import { foreignPath } from "../lib/paths";
   import { purgeAfter } from "../lib/retention";
   import { DESCRIPTION_RULE, descriptionProblem, nameProblem } from "../lib/validate";
   import Dialog from "./Dialog.svelte";
+  import Segmented from "./Segmented.svelte";
+  import TextField from "./TextField.svelte";
   import OpsBar from "./OpsBar.svelte";
   import SaveBar from "./SaveBar.svelte";
   import type { PendingItem } from "./SaveBar.svelte";
@@ -35,8 +38,19 @@
 
   let creating = $state(false);
   let newName = $state("");
-  let newPath = $state("");
-  let newRaw = $state(false);
+  // The compression method the archive is created with (FORMAT.md §7.1,
+  // the ruling of 2026-09-08): chosen here, carried in the record, obeyed
+  // by every later writer. Normal is preselected.
+  let newMethod = $state<string>(DEFAULT_METHOD);
+  const methodOptions = METHODS.map((m) => ({ value: m.value, label: m.word }));
+  let newNameValid = $state(true);
+  let newAttempt = $state(0);
+  // The path is never a field: *Create* opens the save dialog, and a place
+  // that already holds a file is refused here rather than overwritten
+  // (APP.md §6). The refused name is kept, so the line goes the moment the
+  // name is changed and never outlives what it is about.
+  let newExists = $state("");
+  const existsShown = $derived(!!newExists && newName.trim() === newExists);
   let confirm = $state<null | { title: string; body: string; button: string; run: () => Promise<unknown> }>(null);
   let showDetails = $state(false);
   // The Forget/Delete dialog runs off a snapshot of the record, never off
@@ -220,19 +234,40 @@
   }
 
   // ---- the commands -----------------------------------------------------
-  async function pickNewPath() {
-    const p = await Shell.SaveFile("Where to keep the archive", `${newName || "archive"}.efd`);
-    if (p) newPath = p;
+  function openCreate() {
+    newName = "";
+    newMethod = DEFAULT_METHOD;
+    newAttempt = 0;
+    newExists = "";
+    creating = true;
   }
 
+  // create asks for the name and the method here and for the place in the
+  // native save dialog, prefilled with <name>.efd in the folder last used
+  // (APP.md §6). A cancelled dialog creates nothing and leaves this one
+  // standing; only a create that succeeded closes it.
   async function create() {
-    creating = false;
+    newAttempt++;
+    if (!newNameValid) return;
+    const name = newName.trim();
+    const p = await Shell.SaveFile("Where to keep the archive", `${name}.efd`, store.settings?.lastArchiveFolder ?? "");
+    if (!p) return;
     try {
-      const id = await Archives.Create(newPath, newName, newRaw);
+      const id = await Archives.Create(p, name, newMethod);
+      creating = false;
+      newExists = "";
       selected = id;
-      newName = "";
-      newPath = "";
+      await store.refreshArchives();
+      await store.refreshSettings(); // the folder this create remembered
     } catch (e) {
+      const code = errorOf(e).code;
+      // Said in place, with the name field to correct: Enfold never
+      // overwrites a file it did not make, whatever the dialog offered.
+      if (code === Code.CodeArchiveExists) {
+        newExists = name;
+        document.getElementById("na-name")?.focus();
+        return;
+      }
       fail(e);
     }
   }
@@ -360,7 +395,7 @@
 <div class="layer-body">
   <div class="cmdbar">
     <button type="button" class="btn accent" disabled={!sel || (!unlocked && !sel.open)} onclick={() => sel && store.openArchive(sel.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
-    <button type="button" class="btn" disabled={!unlocked || tampered} onclick={() => (creating = true)}><svg class="i i-14"><use href="#i-plus" /></svg>New archive</button>
+    <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive</button>
     <div class="sep"></div>
     <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} onclick={() => sel && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(sel.id) })}>Compact</button>
     <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} onclick={() => sel && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(sel.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key</button>
@@ -470,7 +505,7 @@
           <div class="fact"><dt>Last saved</dt><dd>{dateTime(sel.lastWrittenAt)}</dd></div>
           <div class="fact"><dt>Key version</dt><dd>v{sel.keyVersion}</dd></div>
           <div class="fact"><dt>KID</dt><dd class="mono" title={det?.currentKid}>{det?.currentKid || "—"}</dd></div>
-          <div class="fact"><dt>Compression</dt><dd>{sel.noCompression ? "off (stored raw)" : "on"}</dd></div>
+          <div class="fact"><dt>Compression</dt><dd>{methodWord(sel.method)}</dd></div>
           {#if sel.receiptOwed}<div class="fact"><dt>Receipt</dt><dd>pending</dd></div>{/if}
           {#if sel.hashBehind > 0}<div class="fact"><dt>Verified</dt><dd>{sel.hashBehind} save(s) ago</dd></div>{/if}
           {#if sel.open && sel.storedSize > 0 && sel.freeSpace > sel.storedSize * 0.3}<div class="fact"><dt>Free space</dt><dd>compact when convenient</dd></div>{/if}
@@ -510,15 +545,21 @@
 
 {#if creating}
   <Dialog title="New archive" onclose={() => (creating = false)}>
-    <div class="field"><div class="field-top"><label for="na-name">Name</label></div><input id="na-name" class="input" bind:value={newName} placeholder="Photos 2026" /></div>
+    <!-- judged by the rename's rule too: a name over the bound is said
+         here, before a file is made for it (APP.md §6). -->
+    <TextField id="na-name" label="Name" bind:value={newName} bind:valid={newNameValid} attempt={newAttempt} judge={nameProblem} placeholder="Photos 2026" />
     <div class="field">
-      <div class="field-top"><label for="na-path">File</label></div>
-      <div class="row"><input id="na-path" class="input grow" readonly value={newPath} placeholder="Choose where the archive file lives" /><button type="button" class="btn" onclick={pickNewPath}>Choose…</button></div>
+      <div class="field-top"><span class="lbl">Compression</span></div>
+      <Segmented id="na-method" label="Compression" options={methodOptions} bind:value={newMethod} />
+      <div class="pin-note">{METHOD_NOTE}</div>
     </div>
-    <label class="check"><input type="checkbox" bind:checked={newRaw} />Store files raw (for already-compressed media)</label>
+    {#if existsShown}
+      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(Code.CodeArchiveExists)}</span></div>
+    {/if}
+    <p><em>Create</em> asks where to keep it, with the name above and <span class="mono">.efd</span> already filled in.</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (creating = false)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!newName || !newPath} onclick={create}>Create</button>
+      <button type="button" class="btn accent" onclick={create}>Create…</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -577,6 +618,7 @@
   .w-date { width: 130px; }
   .w-key { width: 56px; }
   .w-status { width: 148px; }
+  .lbl { font-size: 12.5px; font-weight: 600; color: var(--ink); }
   .pad { padding: 0 16px 12px; }
   .fields { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
   .area { height: auto; min-height: 52px; padding: 7px 10px; resize: vertical; line-height: 1.35; }

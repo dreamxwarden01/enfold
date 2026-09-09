@@ -261,8 +261,11 @@ func TestTokenUnlock(t *testing.T) {
 	if e := h.c.SubmitSecret("pin", again.PromptID, "123456"); e != nil {
 		t.Fatal(e)
 	}
+	// One agreement: the wrong PIN was refused by the card before the
+	// token was made, so the key was asked for exactly one operation
+	// (APP.md §2.2 Probing).
 	touch := h.rec.waitCeremony(t, StepTouch, false)
-	if touch.N != 2 || !touch.PINAsked {
+	if touch.N != 1 || !touch.PINAsked {
 		t.Fatalf("touch: %+v", touch)
 	}
 	h.rec.waitCeremony(t, StepReleasing, false)
@@ -413,10 +416,10 @@ func TestArchiveRoundTrip(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	ap := filepath.Join(h.dir, "photos.enf")
-	if _, e := h.c.CreateArchive("relative.enf", "Photos", false); !isCode(e, CodeParams) {
+	if _, e := h.c.CreateArchive("relative.enf", "Photos", compressionNormal); !isCode(e, CodeParams) {
 		t.Fatalf("relative path: %v", e)
 	}
-	id, e := h.c.CreateArchive(ap, "Photos", false)
+	id, e := h.c.CreateArchive(ap, "Photos", compressionNormal)
 	if e != nil {
 		t.Fatalf("create: %v", e)
 	}
@@ -618,7 +621,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 func TestArchiveIdleClockAndDirtyCap(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	id, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false)
+	id, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -687,7 +690,7 @@ func TestArchiveIdleClockAndDirtyCap(t *testing.T) {
 func TestShutdownCommitsDirtyArchives(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false)
+	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	h.c.OpenArchive(id)
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("saved at exit"), 0o600)

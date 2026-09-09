@@ -45,7 +45,7 @@ func TestLockCancelsMutationCeremony(t *testing.T) {
 func TestRegistryWritesWaitForMutation(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	id, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false)
+	id, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -187,7 +187,7 @@ func TestEnrollTokenSwapsKeys(t *testing.T) {
 func TestMutationGuards(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false)
+	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	h.c.OpenArchive(id)
 	// Verify on an archive runs the hash and then writes the registry.
 	opID, e := h.c.Verify(id)

@@ -3084,3 +3084,74 @@ one implementation constraint (NFC without `x/text`), all resolved by the inputs
 Not yet done: the hardware test on the test key (the existing test vault is a registry-v2 file
 with the old header and will be refused; it is recreated), and the user's pass over the new
 screens.
+
+## 2026-09-08 — After the first look at Revision 2: password and PIN on one card, the touch cached five minutes, a compression method per archive, the create flow
+
+The user's first pass over the built Revision 2 changed three things on sight.
+
+*Password and PIN on one card.* The lock screen asked the vault's password on card 2, then the
+PIN, with a button reading "Unlock with YubiKey — the vault's password first" (truncated at the
+width it was given). Ruled: one card, two fields, one *Continue*; the PIN goes first and is
+verified at the card (`Card.VerifyPIN`, a VERIFY with no touch) before the password is used, so
+a wrong PIN marks only the PIN field and moves nothing else — the password stays in its field as
+an ordinary editable masked input and goes out, in whatever state it is in then, only once the
+PIN is right; a wrong password, known only after the touch, empties and marks its field and asks
+no PIN again; the button says *Unlock with YubiKey* whatever the switch. The user's own
+refinement: "verify the PIN first; if it is wrong nothing needs to go further, the UI does not
+jump, the password just stays there." The
+security question was raised and settled by the user's own reading: the password already lives
+in the core's attempt for the whole unlock and `H` beside it, so a PIN held a second longer in
+the page moves no boundary; the core's prompt contract is untouched and the PIN still crosses
+the raw channel once.
+
+*The touch cached, with a clock.* A wrong entangled password can only be known after the touch:
+`K_P` is under the VMK, and a verifier for it is deliberately absent (it would be an offline
+oracle for the password, the one thing R2's trade did not give away). So a wrong password cost
+a second touch. Ruled: the attempt caches the touch's `H` per `epk` in the token wrapper it
+hands the keystore, releases the card, and re-derives on the retry — no PIN, no touch — for
+**five minutes from the touch**, whatever happens in between; the deadline zeroes the cache and
+ends the ceremony at the lock screen's first step. The user's own framing of what the clock is
+for: not a defence against reading memory (five minutes is a window nothing stops) but a bound
+on how long a hardware-verified state can be used without the password. No keystore change:
+the token the keystore calls is the app's, and memoising `ECDH(epk)` there is where the cache
+belongs.
+
+*A compression method per archive.* "Store files raw (for already-compressed media)" was a
+checkbox whose label described the default — already-compressed media is detected by sampling
+and stored raw by itself, per file (DESIGN §9) — while the bit itself was trap 8's "every file
+raw". Ruled: a five-segment method control (Store · Fast · Normal · Better · Best, Normal
+preselected) in the create dialog, the level carried in the record's policy bits 3–5 so that
+every writer of the archive compresses the same way (the level was a writer property until now,
+recorded nowhere). What the compression layer offers, checked: four presets (the pure-Go zstd's,
+not 22 levels), a match window from 1 KiB to 512 MiB that stays automatic by preset and is not
+recorded (DESIGN trap 16 caps the reader at what this program writes), and the small-file
+dictionary whose threshold the Settings page already carries. The window may become an advanced
+per-archive choice later; not now.
+
+*The create flow.* Name and File side by side let the path be chosen before the name and fell
+back to `archive.efd`. Ruled: name and method first, then *Create* opens the native Save dialog
+with `<name>.efd` prefilled in the folder last used; a chosen path where a file already exists is
+refused in place — the archive layer creates with `O_EXCL`, and Enfold never overwrites a file it
+did not make, whatever the dialog's own replace prompt said — and the user is asked for another
+name.
+
+Hardware: the user recreated the test vault on the test key with the entangled password on; the
+unlock chain (password, PIN, touch, adoption) runs on the real key.
+
+**Landed the same evening** (one Go implementer, one frontend implementer, one reviewer: four
+minors, applied). Facts the code fixed that the ruling left open: the ceremony's own VERIFY sets a
+one-shot *fresh verify* in `internal/piv` that the next agreement spends — a key whose PIN policy
+is *always* consumes the card's verified state on one operation, so "skip the VERIFY when
+verified by us" alone would have looped on a second agreement; `Card.VerifyPIN` answers
+`Verified: true` with no retry count (a verified card answers the empty VERIFY with success, the
+rule `PINStatus` already states); a matched key the design refuses is refused straight after
+probing, before any PIN is typed; the deadline reaches the page on `VaultStatus.Note`, since the
+ceremony is gone by then; the clock is armed only when the attempt carries a password; the
+enrolment's proof of a *new* key keeps its in-`ECDH` PIN (it is not a way in and asks no
+password). On the page the card's body is keyed on what it shows, not on the step, so the
+password field survives the PIN prompt's departure and the password prompt's arrival; the
+auto-send judges the field first (an empty password is marked, not sent). `Shell.SaveFile` gained
+a directory argument (Wails' `SetDirectory`). A test-runner flake was found and is not the code's:
+about one `go test -short ./internal/app/` in four ends with a `TempDir` cleanup error under
+`%LOCALAPPDATA%\Temp` — the on-access scanner holding a freshly written file — and is clean with
+`TMP` pointed at the excluded folder.

@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dreamxwarden01/enfold/internal/archive"
+	"github.com/dreamxwarden01/enfold/internal/compress"
 	"github.com/dreamxwarden01/enfold/internal/format"
 	"github.com/dreamxwarden01/enfold/internal/kdf"
 )
@@ -849,9 +851,26 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 	}), nil
 }
 
-// CreateArchive makes a new archive file and its registry record.
-func (c *Core) CreateArchive(p, name string, noCompression bool) (string, *Error) {
-	if name == "" || !filepath.IsAbs(p) {
+// CreateArchive makes a new archive file and its registry record. method
+// is the compression the archive is created with — store · fastest ·
+// normal · better · best — written into the record's policy (FORMAT.md
+// §7.1 bits 2–5) so that every later writer of it, on any machine,
+// compresses the same way; anything else is params. A path where a file
+// already exists is refused with archive.exists: the archive layer
+// creates with O_EXCL and Enfold never overwrites a file it did not make
+// (APP.md §6). The folder is remembered for the next create's dialog.
+func (c *Core) CreateArchive(p, name, method string) (string, *Error) {
+	if !filepath.IsAbs(p) {
+		return "", coded(CodeParams)
+	}
+	// The same rule a rename applies (records.go, FORMAT §7.1): the name is the
+	// trusted one and the typed consent for Forget and Delete, so it is bounded
+	// before a file exists for it.
+	if name == "" || len(name) > maxNameLen || !utf8.ValidString(name) {
+		return "", coded(CodeArchiveName)
+	}
+	policy, ok := policyForMethod(method)
+	if !ok {
 		return "", coded(CodeParams)
 	}
 	var id, kid [16]byte
@@ -877,12 +896,19 @@ func (c *Core) CreateArchive(p, name string, noCompression bool) (string, *Error
 		c.mu.Unlock()
 		return "", c.fail("wrap", err)
 	}
-	opts := archive.Options{DeviceID: sess.Registry().DeviceID, NoCompression: noCompression, DictBelow: c.settings.DictionaryBelow}
+	opts := archive.Options{
+		DeviceID:      sess.Registry().DeviceID,
+		NoCompression: policy&format.PolicyNoCompression != 0,
+		Compress:      compress.Params{Level: compressLevelOf(policy)},
+		DictBelow:     c.settings.DictionaryBelow,
+	}
 	c.mu.Unlock()
 	a, err := archive.Create(p, id, kid, key, opts)
 	if err != nil {
 		if os.IsExist(err) {
-			return "", coded(CodeFileExists)
+			// O_EXCL: something is there already, and Enfold never writes
+			// over a file it did not make (DESIGN.md trap 28).
+			return "", coded(CodeArchiveExists)
 		}
 		return "", c.fail("create archive", err)
 	}
@@ -890,10 +916,6 @@ func (c *Core) CreateArchive(p, name string, noCompression bool) (string, *Error
 	size, _, _ := a.Stat()
 	a.Close()
 	now := c.now().Unix()
-	var policy uint32
-	if noCompression {
-		policy |= format.PolicyNoCompression
-	}
 	if e := c.updateRegistry(func(g *registry) error {
 		g.Archives = append(g.Archives, format.ArchiveRecord{
 			ArchiveID: id, Name: name, LastPath: p, Policy: policy, CreatedAt: now, CurrentKID: kid,
@@ -905,8 +927,27 @@ func (c *Core) CreateArchive(p, name string, noCompression bool) (string, *Error
 		os.Remove(p)
 		return "", e
 	}
+	c.rememberArchiveFolder(filepath.Dir(p))
 	c.emitArchivesChanged()
 	return hexID(id), nil
+}
+
+// rememberArchiveFolder records where the last archive was made, so that
+// the next New archive dialog opens there (APP.md §6, settings.json's
+// lastArchiveFolder). A convenience: a folder that could not be written
+// down is logged and nothing else — the archive is made either way.
+func (c *Core) rememberArchiveFolder(dir string) {
+	c.mu.Lock()
+	if c.settings.LastArchiveFolder == dir {
+		c.mu.Unlock()
+		return
+	}
+	c.settings.LastArchiveFolder = dir
+	file := c.settings
+	c.mu.Unlock()
+	if err := saveSettings(c.deps.DataDir, file); err != nil {
+		c.log("settings: recording the archive folder: %v", err)
+	}
 }
 
 // HideArchive and UnhideArchive flip the hidden policy bit.

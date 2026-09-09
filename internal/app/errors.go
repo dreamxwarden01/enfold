@@ -79,13 +79,19 @@ const (
 	CodeTokenPINAgain   Code = "token.pin_required"
 	CodeTokenTouch      Code = "token.touch"
 	CodeTokenPending    Code = "token.pending" // a cancelled ceremony's key call is still answering: the file or the card is held until it does
-	CodeTokenTooMany    Code = "token.too_many_operations"
-	CodeTokenReset      Code = "token.reset_failed"
-	CodeTokenOccupied   Code = "token.slot_occupied"
-	CodeTokenFull       Code = "token.no_empty_slot"
-	CodeTokenNoMgmtKey  Code = "token.no_protected_management_key"
-	CodeTokenMgmtKey    Code = "token.management_key"
-	CodeTokenTwoKeys    Code = "token.two_keys"
+	// CodePasswordDeadline: the five minutes from the touch ran out with
+	// the vault's password not given, so the kept shared secret went and
+	// the ceremony ended at the lock screen's first step (APP.md §2.2).
+	// "The password was not given within five minutes; unlock again from
+	// the key."
+	CodePasswordDeadline Code = "token.password_deadline"
+	CodeTokenTooMany     Code = "token.too_many_operations"
+	CodeTokenReset       Code = "token.reset_failed"
+	CodeTokenOccupied    Code = "token.slot_occupied"
+	CodeTokenFull        Code = "token.no_empty_slot"
+	CodeTokenNoMgmtKey   Code = "token.no_protected_management_key"
+	CodeTokenMgmtKey     Code = "token.management_key"
+	CodeTokenTwoKeys     Code = "token.two_keys"
 
 	// Archives.
 	CodeArchiveNotOpen      Code = "archive.not_open"
@@ -120,7 +126,12 @@ const (
 	// CodeArchiveName: an empty name, one over 1 024 bytes or one that is
 	// not UTF-8. Bounded app-side only: the confirmation for Forget and
 	// Delete is the archive's name typed (APP.md §13, FORMAT.md §7.4).
-	CodeArchiveName   Code = "archive.name_invalid"
+	CodeArchiveName Code = "archive.name_invalid"
+	// CodeArchiveExists: the path a create was given already holds a file.
+	// The archive layer creates with O_EXCL and Enfold never overwrites a
+	// file it did not make (APP.md §6, DESIGN.md trap 28). "A file is
+	// already there. Enfold never overwrites; choose another name."
+	CodeArchiveExists Code = "archive.exists"
 	CodeFileExists    Code = "file.exists"
 	CodeFileNotFound  Code = "file.not_found"
 	CodeFileName      Code = "file.name"
@@ -251,7 +262,10 @@ var classifyTable = []struct {
 	{format.ErrTruncated, CodeArchiveInvalid},
 	{kdf.ErrParams, CodeParams},
 
-	// The file system, when a path the user gave is the problem.
+	// The file system, when a path the user gave is the problem. An
+	// O_EXCL refusal reaches here only from a create (archive.ErrExists,
+	// a file inside an archive, is matched above).
+	{fs.ErrExist, CodeArchiveExists},
 	{fs.ErrNotExist, CodeFileNotFound},
 	{fs.ErrPermission, CodeIO},
 }

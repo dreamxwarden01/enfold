@@ -38,7 +38,7 @@ func TestBoundSurface(t *testing.T) {
 			"Close(string) error",
 			"CloseAll() []string",
 			"Compact(string) (string, error)",
-			"Create(string, string, bool) (string, error)",
+			"Create(string, string, string) (string, error)",
 			"Delete(string, bool) error",
 			"Details(string) (app.ArchiveDetails, error)",
 			"Forget(string) error",
@@ -95,7 +95,7 @@ func TestBoundSurface(t *testing.T) {
 			"PickFolder(string) (string, error)",
 			"Quit()",
 			"Reveal(string) error",
-			"SaveFile(string, string) (string, error)",
+			"SaveFile(string, string, string) (string, error)",
 			"ShowWindow()",
 		},
 	}

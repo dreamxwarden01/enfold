@@ -11,7 +11,10 @@ type Hooks struct {
 	// PickFiles and PickFolder return nil/"" and no error when cancelled.
 	PickFiles  func(title string, multiple bool) ([]string, error)
 	PickFolder func(title string) (string, error)
-	SaveFile   func(title, filename string) (string, error)
+	// SaveFile opens the Save dialog; dir, when given, is the folder it
+	// opens in (APP.md §6's lastArchiveFolder), empty for the shell's own
+	// last place.
+	SaveFile func(title, filename, dir string) (string, error)
 	// Reveal shows a path in the file manager.
 	Reveal func(path string) error
 	// Quit runs the shell's quit flow: ask about unsaved changes, resolve,
@@ -50,8 +53,8 @@ func (s *Shell) PickFolder(title string) (string, error) {
 	return p, nil
 }
 
-func (s *Shell) SaveFile(title, filename string) (string, error) {
-	p, err := s.h.SaveFile(title, filename)
+func (s *Shell) SaveFile(title, filename, dir string) (string, error) {
+	p, err := s.h.SaveFile(title, filename, dir)
 	if err != nil {
 		return "", &app.Error{Code: app.CodeInternal}
 	}

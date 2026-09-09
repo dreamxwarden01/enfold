@@ -35,8 +35,13 @@ export function Compact(id: string): $CancellablePromise<string> {
     return $Call.ByID(2111968017, id);
 }
 
-export function Create(path: string, name: string, noCompression: boolean): $CancellablePromise<string> {
-    return $Call.ByID(1162996984, path, name, noCompression);
+/**
+ * Create makes an archive at path with the compression method chosen in
+ * the dialog: store · fastest · normal · better · best (APP.md §3, §6).
+ * A path where a file already exists is archive.exists.
+ */
+export function Create(path: string, name: string, method: string): $CancellablePromise<string> {
+    return $Call.ByID(1162996984, path, name, method);
 }
 
 /**

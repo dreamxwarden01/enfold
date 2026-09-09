@@ -190,6 +190,11 @@ func (a *ArchiveRecord) validate(kids map[[16]byte]struct{}) error {
 	if a.Policy&^knownPolicyBits != 0 {
 		return invalidf("archive %x policy 0x%x carries unknown bits", a.ArchiveID, a.Policy)
 	}
+	if lvl := PolicyLevel(a.Policy); lvl > PolicyLevelBest {
+		// 5–7 are not defined: fail closed (§1) rather than compress at a
+		// level this program cannot name.
+		return invalidf("archive %x compression level %d is not one of 0–4", a.ArchiveID, lvl)
+	}
 	if len(a.Versions) == 0 {
 		return invalidf("archive %x has no versions", a.ArchiveID)
 	}

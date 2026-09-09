@@ -171,6 +171,9 @@ func (c *Core) BeginUnlock(method UnlockMethod) *Error {
 // newCeremonyLocked installs a ceremony. Caller holds the state mutex.
 func (c *Core) newCeremonyLocked(kind string) *ceremony {
 	ctx, cancel := context.WithCancel(context.Background())
+	// The lock screen's note belongs to the ceremony that ended: a new one
+	// starting is what clears it (APP.md §2.2).
+	c.vault.note = ""
 	cer := &ceremony{kind: kind, ctx: ctx, cancel: cancel, c: c, done: make(chan struct{}), restore: c.vault.state}
 	if cer.restore != StateNone {
 		cer.restore = StateLocked
@@ -505,9 +508,14 @@ func (cer *ceremony) park(step CeremonyStep, code Code) error {
 // answer is a cancel (APP.md §2.2).
 type ceremonyPrompter struct {
 	label string
-	mu    sync.Mutex
-	cer   *ceremony
-	att   *attempt
+	// pinAccepted: the ceremony verified the PIN at the card before this
+	// token was made (APP.md §2.2), so the touch that follows is the one
+	// DESIGN.md §10 wants announced as "PIN accepted", even though the
+	// agreement itself asked for nothing.
+	pinAccepted bool
+	mu          sync.Mutex
+	cer         *ceremony
+	att         *attempt
 }
 
 // attach points the prompter at the attempt's owner (nil: nobody).
@@ -560,6 +568,9 @@ func (cer *ceremony) takePINNote() Code {
 }
 
 func (p *ceremonyPrompter) Touch(req TouchRequest) {
+	if p.pinAccepted {
+		req.PINAsked = true
+	}
 	p.mu.Lock()
 	att := p.att
 	p.mu.Unlock()
@@ -796,10 +807,14 @@ func (cer *ceremony) matchSlot(card Card, slots []keystore.SlotInfo) (keystore.S
 }
 
 // tokenCredentialFor runs the token part of the flow and returns a
-// credential the keystore can take, with the Card to close afterwards. The
-// vault's password — entangled is the file's own switch, never a slot's
-// (FORMAT.md §6, §18.1) — is collected before the PIN: the credential is
-// assembled whole, and the PIN prompt fires inside ECDH.
+// credential the keystore can take, with the Card to close afterwards.
+// The order is one on every vault (APP.md §2.2 Probing, DESIGN.md §10):
+// the PIN first, shown with the retries and verified at the card before
+// anything else moves, so that a wrong one is asked again in place with
+// nothing else touched; then, on an entangled vault — the file's own
+// switch, never a slot's (FORMAT.md §6, §18.1) — the vault's password;
+// then the credential, whose ECDH finds the card verified and waits for
+// the touch alone.
 func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled bool) (keystore.HardwareCredential, Card, keystore.SlotInfo, error) {
 	reader, err := cer.waitForOneReader()
 	if err != nil {
@@ -828,6 +843,21 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled boo
 		card.Close()
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepNoMatch, CodeTokenNoKey)
 	}
+	if !key.Usable {
+		// What the key's policies allow is a probing fact — Keys costs no
+		// PIN and no touch — so it is refused before anything is typed
+		// (APP.md §2.2 Probing). Card.Token refuses it again below.
+		cer.c.log("ceremony %s: the matched key is not usable: %s", cer.kind, key.WhyNot)
+		cer.unhold(card)
+		card.Close()
+		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepFailed, CodeTokenNotUsable)
+	}
+	cer.set(func(s *CeremonyState) { s.SlotLabel = slot.Label })
+	if err := cer.verifyPIN(card); err != nil {
+		cer.unhold(card)
+		card.Close()
+		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
+	}
 	cred := keystore.HardwareCredential{}
 	if entangled {
 		pw, err := cer.ask("password", StepPassword, PINStatus{})
@@ -838,7 +868,7 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled boo
 		}
 		cred.Password = pw
 	}
-	p := &ceremonyPrompter{cer: cer, label: slot.Label}
+	p := &ceremonyPrompter{cer: cer, label: slot.Label, pinAccepted: true}
 	tok, err := card.Token(key.PublicKey, p)
 	if err != nil {
 		cer.unhold(card)
@@ -853,6 +883,45 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled boo
 	cer.prompter, cer.slot = p, slot
 	cer.c.mu.Unlock()
 	return cred, card, slot, nil
+}
+
+// verifyPIN asks for the PIN and checks it at the card, before anything
+// else moves (APP.md §2.2 Probing). The retries are read and shown first
+// (DESIGN.md §10); a wrong PIN is said and asked again in place, with
+// nothing else asked for and nothing else begun; a card with no retries
+// left parks, after the caller has released it. The card is held
+// throughout, so the prompt's keep-alive probe runs and trap 25 holds.
+// On success the card is verified for the agreement that follows, which
+// then sends no VERIFY of its own.
+func (cer *ceremony) verifyPIN(card Card) error {
+	var note Code
+	for {
+		st, err := card.PINState()
+		if err != nil {
+			cer.c.log("ceremony %s: PIN state: %v", cer.kind, err)
+			return err
+		}
+		if st.Blocked() {
+			return &parkAt{StepBlocked, CodeTokenPINBlocked}
+		}
+		pin, err := cer.askNote("pin", StepPIN, st, note)
+		if err != nil {
+			return err
+		}
+		_, err = card.VerifyPIN(pin)
+		var pe *TokenPINError
+		switch {
+		case err == nil:
+			return nil
+		case errors.As(err, &pe):
+			note = CodeTokenPIN
+			continue
+		case errors.Is(err, ErrTokenPINBlocked):
+			return &parkAt{StepBlocked, CodeTokenPINBlocked}
+		}
+		cer.c.log("ceremony %s: verifying the PIN: %v", cer.kind, err)
+		return err
+	}
 }
 
 // describeKeys lists what a token holds, for the log: slots, usability,
@@ -943,6 +1012,7 @@ func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.Hardware
 		// verification's is another file's (and the path is the vault's
 		// only by coincidence of the copy), so it is never adoptable.
 		a = &attempt{adoptable: cer.kind == "unlock" || cer.mutation, path: cer.vaultPath(), slot: slot, card: card, ks: ks, ownsKS: own, vaultHandle: !own, hc: hc, prompter: p}
+		a.wrapToken() // the keystore gets the attempt's own token, which keeps the touch (APP.md §2.2)
 		a.op = func() (*keystore.Unlocked, error) { return ks.Unlock(a.credential()) }
 		cer.startAttempt(a)
 	}

@@ -4,8 +4,11 @@
   import { CeremonyStep, Code, Vault } from "../lib/api";
   import type { CeremonyState } from "../lib/api";
   import { fade } from "svelte/transition";
+  import { untrack } from "svelte";
+  import { store } from "../lib/state.svelte";
   import { codeText, retriesText, stepText } from "../lib/strings";
   import { motion } from "../lib/motion";
+  import { NO_TRACK, key as formKey, track } from "../lib/pinform";
   import SecretInput from "./SecretInput.svelte";
   import RecoveryInput from "./RecoveryInput.svelte";
 
@@ -17,6 +20,35 @@
 
   const over = $derived(c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed);
   const copy = $derived(stepText(c.step));
+
+  // The same two fields as the lock screen's card 2 (APP.md §6): every
+  // token ceremony on the Keys page asks the PIN and the vault's password
+  // in one form, in the order the core asks them (APP.md §2.2). A chosen
+  // password — an enrolment's, the entangle acts' — is never merged.
+  const merged = $derived(!!store.status?.entangled && (c.method || store.unlockMethod) === "token" && !c.choose);
+  let tracked = $state(NO_TRACK);
+  $effect(() => {
+    const next = track(untrack(() => tracked), c, untrack(() => merged));
+    if (next !== tracked) tracked = next;
+  });
+  const form = $derived(tracked.form);
+  // The step's own key, except that the merged card and the password
+  // alone share one: the password typed beside the PIN must survive the
+  // prompt an accepted PIN brings (lib/pinform).
+  const k = $derived(form.shows === "none" ? c.step : formKey(form));
+  const secretLabel = $derived(
+    form.shows === "pin" ? "PIN" : c.choose ? (c.kind === "entangle" ? "Choose the vault's password" : "Choose a password") : "The vault's password",
+  );
+  const secretNote = $derived(
+    form.shows === "pin"
+      ? stepText(CeremonyStep.StepPIN).body
+      : c.choose
+        ? c.kind === "entangle"
+          ? "Every YubiKey in this vault will ask for it. Longer is better; a passphrase of several words is best."
+          : "The new way in's password. Longer is better; a passphrase of several words is best."
+        : "",
+  );
+  const secretError = $derived(form.shows === "pin" ? (form.pinError ? "Wrong PIN." : "") : form.passwordError ? "Wrong password." : "");
 
   // The act, not the mechanism (APP.md §6): what the user asked for.
   function kindTitle(kind: string): string {
@@ -67,7 +99,7 @@
 
 <div class="panel">
   <div class="t-quiet">{kindTitle(c.kind)}</div>
-  {#key c.step}
+  {#key k}
   <div class="stepbox" in:fade={motion()}>
   {#if c.step === CeremonyStep.StepTouch}
     <div class="touchbox">
@@ -76,13 +108,23 @@
       <p class="touch-sub">{copy.body}</p>
       {#if c.n > 1}<p class="touch-sub num">Touch {c.n} of this key handle</p>{/if}
     </div>
-  {:else if c.step === CeremonyStep.StepPIN && c.promptId}
-    {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-    <SecretInput kind="pin" promptId={c.promptId} label="PIN" hint={retriesText(c)} note={copy.body} error={c.error === "token.pin" ? "Wrong PIN." : ""} />
-  {:else if c.step === CeremonyStep.StepPassword && c.promptId}
+  {:else if form.shows !== "none"}
     <!-- Since Revision 2 the entangled password is the vault's, never a
-         slot's (FORMAT.md §3.1): one switch, one password. -->
-    <SecretInput kind="password" promptId={c.promptId} label={c.choose ? (c.kind === "entangle" ? "Choose the vault's password" : "Choose a password") : "The vault's password"} choose={c.choose} note={c.choose ? (c.kind === "entangle" ? "Every YubiKey in this vault will ask for it. Longer is better; a passphrase of several words is best." : "The new way in's password. Longer is better; a passphrase of several words is best.") : ""} error={c.error === "vault.auth" ? "Wrong password." : ""} />
+         slot's (FORMAT.md §3.1): one switch, one password — and since the
+         ruling of 2026-09-08 it stands on the PIN's own card, the PIN
+         verified at the key before it is used (APP.md §2.2, §6). -->
+    {#if c.slotLabel && form.shows !== "password"}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
+    <SecretInput
+      kind={form.shows === "pin" ? "pin" : "password"}
+      promptId={form.promptId}
+      send={form.send === "password"}
+      pin={form.shows === "both" ? { label: "PIN", hint: retriesText(c), note: stepText(CeremonyStep.StepPIN).body, error: form.pinError ? "Wrong PIN." : "" } : null}
+      label={secretLabel}
+      hint={form.shows === "pin" ? retriesText(c) : ""}
+      note={secretNote}
+      choose={form.shows === "password" && c.choose}
+      error={secretError}
+    />
   {:else if c.step === CeremonyStep.StepRecovery && c.promptId}
     <!-- Whose key is being asked for follows the act (APP.md §13): a check
          of a backup and an import prove the incoming file with the file's

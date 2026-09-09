@@ -17,13 +17,18 @@
     hint?: string;
     placeholder?: string;
     required?: boolean;
+    // judge: what this field's value is missing, when being filled in is
+    // not all that is asked of it — an archive's name is bounded in bytes
+    // as well (APP.md §6), and a bound the app knows is judged here rather
+    // than paid for with a file on disk. Required-only by default.
+    judge?: (value: string) => string;
   }
-  let { id, label, value = $bindable(""), valid = $bindable(true), attempt = 0, hint = "", placeholder = "", required = true }: Props = $props();
+  let { id, label, value = $bindable(""), valid = $bindable(true), attempt = 0, hint = "", placeholder = "", required = true, judge = requiredProblem }: Props = $props();
   let left = $state(false);
   let pressed = $state(false);
   let seen = $state(untrack(() => attempt)); // only a press made while this field is on screen counts
 
-  const problem = $derived(required ? requiredProblem(value) : "");
+  const problem = $derived(required ? judge(value) : "");
   const show = $derived((left || pressed) && !!problem);
 
   $effect(() => {
@@ -37,7 +42,7 @@
   });
 
   function typed() {
-    if (!(required ? requiredProblem(value) : "")) {
+    if (!(required ? judge(value) : "")) {
       left = false;
       pressed = false;
     }

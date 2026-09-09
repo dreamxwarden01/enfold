@@ -50,7 +50,12 @@ type VaultStatus struct {
 	HasHardwareSlot bool           `json:"hasHardwareSlot"`
 	// PendingTouch: a cancelled ceremony's key call is still answering —
 	// the key waits for a touch — and an unlock can pick it up (§2.2).
-	PendingTouch    bool   `json:"pendingTouch"`
+	PendingTouch bool `json:"pendingTouch"`
+	// Note is the quiet line the lock screen carries from a ceremony that
+	// has already ended: token.password_deadline, the five minutes from
+	// the touch running out with the vault's password not given (§2.2).
+	// The next ceremony clears it.
+	Note            Code   `json:"note,omitempty"`
 	SetupNeeded     bool   `json:"setupNeeded"`     // only a recovery slot: FinishSetup is the one action
 	DefaultPath     string `json:"defaultPath"`     // where the vault lives unless kept elsewhere
 	MissingPath     string `json:"missingPath"`     // a configured vault that could not be opened at start
@@ -160,10 +165,13 @@ type ArchiveSummary struct {
 	Open          bool   `json:"open"`
 	Dirty         int    `json:"dirty"`
 	ReceiptOwed   bool   `json:"receiptOwed"`
-	NoCompression bool   `json:"noCompression"`
-	Hidden        bool   `json:"hidden"`
-	HashBehind    uint64 `json:"hashBehind"` // commits since the hash was refreshed
-	Note          Code   `json:"note,omitempty"`
+	// Method is how the archive is compressed — store | fastest | normal |
+	// better | best — read from the record's policy (FORMAT.md §7.1 bits
+	// 2–5) and followed by every writer of it.
+	Method     string `json:"method"`
+	Hidden     bool   `json:"hidden"`
+	HashBehind uint64 `json:"hashBehind"` // commits since the hash was refreshed
+	Note       Code   `json:"note,omitempty"`
 	// Description is the record's own second line and ForgottenAt is zero
 	// unless the record was forgotten, in which case it is the modified_at
 	// of the write that forgot it (FORMAT.md §7.1, §18.2; APP.md §13).
@@ -189,24 +197,26 @@ type VersionView struct {
 // It carries no wrapped_archive_key, no nonce and no offset, so §1's boundary
 // holds.
 type ArchiveDetails struct {
-	ArchiveID             string        `json:"archiveId"`
-	Name                  string        `json:"name"`
-	Description           string        `json:"description"`
-	CreatedAt             int64         `json:"createdAt"`
-	LastPath              string        `json:"lastPath"`
-	CurrentKID            string        `json:"currentKid"`
-	Revision              uint64        `json:"revision"`
-	LastWriter            string        `json:"lastWriter"`
-	LastSeq               uint64        `json:"lastSeq"`
-	HashAtSeq             uint64        `json:"hashAtSeq"`
-	LastCiphertextHash    string        `json:"lastCiphertextHash"`
-	LastStoredSize        uint64        `json:"lastStoredSize"`
-	LastWrittenAt         int64         `json:"lastWrittenAt"`
-	ForgottenAt           int64         `json:"forgottenAt"`
-	AlwaysRequireFullAuth bool          `json:"alwaysRequireFullAuth"`
-	Hidden                bool          `json:"hidden"`
-	NoCompression         bool          `json:"noCompression"`
-	Versions              []VersionView `json:"versions"`
+	ArchiveID             string `json:"archiveId"`
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	CreatedAt             int64  `json:"createdAt"`
+	LastPath              string `json:"lastPath"`
+	CurrentKID            string `json:"currentKid"`
+	Revision              uint64 `json:"revision"`
+	LastWriter            string `json:"lastWriter"`
+	LastSeq               uint64 `json:"lastSeq"`
+	HashAtSeq             uint64 `json:"hashAtSeq"`
+	LastCiphertextHash    string `json:"lastCiphertextHash"`
+	LastStoredSize        uint64 `json:"lastStoredSize"`
+	LastWrittenAt         int64  `json:"lastWrittenAt"`
+	ForgottenAt           int64  `json:"forgottenAt"`
+	AlwaysRequireFullAuth bool   `json:"alwaysRequireFullAuth"`
+	Hidden                bool   `json:"hidden"`
+	// Method is the compression the archive was created with — store |
+	// fastest | normal | better | best (FORMAT.md §7.1 bits 2–5).
+	Method   string        `json:"method"`
+	Versions []VersionView `json:"versions"`
 }
 
 // Difference is one field an incoming record holds differently: the local
@@ -339,13 +349,17 @@ const (
 
 // Settings is the machine-local settings file plus the registry's timeouts.
 type Settings struct {
-	VaultPath          string `json:"vaultPath"`
-	DisplayName        string `json:"displayName"`
-	CloseToTray        string `json:"closeToTray"` // destroy | hide
-	Theme              string `json:"theme"`       // system | light | dark
-	Look               string `json:"look"`        // native
-	RecoveryRecordPct  int    `json:"recoveryRecordPct"`
-	DictionaryBelow    int64  `json:"dictionaryBelow"`
+	VaultPath         string `json:"vaultPath"`
+	DisplayName       string `json:"displayName"`
+	CloseToTray       string `json:"closeToTray"` // destroy | hide
+	Theme             string `json:"theme"`       // system | light | dark
+	Look              string `json:"look"`        // native
+	RecoveryRecordPct int    `json:"recoveryRecordPct"`
+	DictionaryBelow   int64  `json:"dictionaryBelow"`
+	// LastArchiveFolder is where the last archive was created, for the New
+	// archive dialog (APP.md §6). Read-only: Set ignores it, since only a
+	// create writes it.
+	LastArchiveFolder  string `json:"lastArchiveFolder"`
 	IdleMinutes        int    `json:"idleMinutes"`     // from the registry; 0 = default
 	AbsoluteMinutes    int    `json:"absoluteMinutes"` // from the registry; 0 = default
 	TimeoutsFromVault  bool   `json:"timeoutsFromVault"`

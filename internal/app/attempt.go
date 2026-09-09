@@ -1,10 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/dreamxwarden01/enfold/internal/kdf"
 	"github.com/dreamxwarden01/enfold/internal/keystore"
 )
 
@@ -37,7 +40,12 @@ type attempt struct {
 	ownsKS      bool
 	vaultHandle bool
 	hc          keystore.HardwareCredential
-	prompter    *ceremonyPrompter
+	// cache is the token the keystore is actually given: the wrapper that
+	// keeps the shared secret one touch produced, so that a wrong
+	// entangled password costs neither a PIN nor a second touch (APP.md
+	// §2.2). nil for an attempt with no token of its own.
+	cache    *cachedToken
+	prompter *ceremonyPrompter
 	// op is one agreement: an unlock's keystore.Unlock, or a proof's ECDH
 	// checked against the key's public point (nil Unlocked then). cleanup
 	// runs after the release when nobody owned the attempt at its end.
@@ -115,6 +123,10 @@ func (cer *ceremony) pendingOwns(ks *keystore.Keystore) bool {
 // answer is closed unused and everything released.
 func (a *attempt) run() {
 	unl, err := a.loop()
+	// The touch's shared secret never outlives the attempt: this is the
+	// success, the cancel, the lock trigger and the ordinary end of
+	// APP.md §2.2's list in one place (the deadline zeroes it itself).
+	a.zeroCache()
 	c := a.c
 	c.mu.Lock()
 	a.finished = true
@@ -170,6 +182,11 @@ func (a *attempt) loop() (*keystore.Unlocked, error) {
 			if o == nil {
 				return nil, ErrTokenCancelled
 			}
+			// A wrong entangled password is knowable only after the touch
+			// (APP.md §2.2): the wrapper kept the shared secret, so the
+			// retry wants nothing more from the key — the card goes back
+			// now rather than being held through the prompt.
+			a.releaseCardForRetry()
 			pw, aerr := o.askNote("password", StepPassword, PINStatus{}, CodeAuth)
 			if aerr != nil {
 				return nil, aerr
@@ -182,6 +199,169 @@ func (a *attempt) loop() (*keystore.Unlocked, error) {
 		}
 		return nil, err
 	}
+}
+
+// tokenCacheLife is how long the shared secret one touch produced may be
+// used without the vault's password (APP.md §2.2, ruled 2026-09-08). It
+// is not a defence against a read of memory — five minutes is a window
+// nothing stops — it bounds how long a hardware-verified state stands
+// while the password is not given.
+const tokenCacheLife = 5 * time.Minute
+
+// cachedToken is the token the keystore is given: the attempt's own
+// memo of ECDH(epk) → H, one entry per epk. A wrong entangled password
+// can be known only after the touch — K_P is under the VMK and a
+// verifier for it is deliberately absent — so the retry re-derives from
+// what the touch already produced, with no PIN and no touch, however
+// many times the password is wrong. The whole cache dies five minutes
+// after the touch that filled it, and at the attempt's end.
+type cachedToken struct {
+	a     *attempt
+	inner keystore.Token
+
+	mu     sync.Mutex
+	byEPK  map[string][]byte
+	timer  Timer
+	zeroed bool
+}
+
+func (t *cachedToken) PublicKey() []byte { return t.inner.PublicKey() }
+
+// ECDH answers from the memo when it can, and otherwise asks the key and
+// keeps what it answers. What the caller gets is always a copy: the
+// keystore zeroes its own, and the entry stays for the retry.
+func (t *cachedToken) ECDH(epk []byte) ([]byte, error) {
+	t.mu.Lock()
+	if h, ok := t.byEPK[string(epk)]; ok {
+		out := bytes.Clone(h)
+		t.mu.Unlock()
+		return out, nil
+	}
+	t.mu.Unlock()
+	h, err := t.inner.ECDH(epk)
+	if err != nil {
+		return nil, err
+	}
+	// Read before the wrapper's own lock is taken: nothing here may hold
+	// two locks at once, since the deadline takes them the other way.
+	entangled := t.a.entangled()
+	t.mu.Lock()
+	if t.zeroed {
+		// The cache died while the key was answering: nothing is kept, and
+		// the secret is the caller's to use and zero.
+		t.mu.Unlock()
+		return h, nil
+	}
+	if t.byEPK == nil {
+		t.byEPK = map[string][]byte{}
+	}
+	t.byEPK[string(epk)] = h
+	if t.timer == nil && entangled {
+		// The deadline is stamped by the touch that produced the first H
+		// and never extended — not by an adoption, not by a second wrong
+		// password. Only a vault whose password can be asked again has one.
+		t.timer = t.a.c.deps.Clock.AfterFunc(tokenCacheLife, t.a.cacheDeadline)
+	}
+	out := bytes.Clone(h)
+	t.mu.Unlock()
+	return out, nil
+}
+
+// zero clears every kept secret's bytes, not merely the reference, and
+// stops the deadline. Idempotent.
+func (t *cachedToken) zero() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for k, h := range t.byEPK {
+		kdf.Zero(h)
+		delete(t.byEPK, k)
+	}
+	t.zeroed = true
+	if t.timer != nil {
+		t.timer.Stop()
+		t.timer = nil
+	}
+}
+
+// held reports whether the wrapper is keeping a secret — the guard the
+// tests read, and what says whether a retry needs the key at all.
+func (t *cachedToken) held() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.byEPK)
+}
+
+// wrapToken puts the wrapper between the keystore and the key, so that
+// the touch is the attempt's to keep.
+func (a *attempt) wrapToken() {
+	if a.hc.Token == nil {
+		return
+	}
+	a.cache = &cachedToken{a: a, inner: a.hc.Token}
+	a.hc.Token = a.cache
+}
+
+// zeroCache ends the kept touch.
+func (a *attempt) zeroCache() {
+	if a.cache != nil {
+		a.cache.zero()
+	}
+}
+
+// entangled reports whether this attempt carries the vault's password,
+// which is the only case in which the touch can be wanted a second time.
+func (a *attempt) entangled() bool {
+	c := a.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return a.hc.Password != ""
+}
+
+// cacheDeadline is the five minutes running out with the password still
+// not given (APP.md §2.2): the kept touch is zeroed, the ceremony ends
+// where a cancel ends it — the lock screen's first step, the panel gone
+// — and the lock screen's note says why, so the next unlock starts from
+// the key.
+func (a *attempt) cacheDeadline() {
+	c := a.c
+	c.mu.Lock()
+	o, done := a.owner, a.finished
+	if o != nil && !done {
+		c.vault.note = CodePasswordDeadline
+	}
+	c.mu.Unlock()
+	a.zeroCache()
+	if o == nil || done {
+		return
+	}
+	c.log("ceremony %s: the password was not given within %v: the kept touch is gone", o.kind, tokenCacheLife)
+	o.cancelWith("password_deadline")
+	c.emitState()
+}
+
+// releaseCardForRetry gives the key back before the password is asked
+// again: the retry re-derives from the kept touch, so nothing more is
+// wanted from the card, and a card kept open would hold its exclusive
+// connection through a prompt for nothing (DESIGN.md §11 trap 25). The
+// ceremony's own record of the held card goes with it, so no probe
+// follows it. Nothing is released while the wrapper holds nothing: the
+// retry would then still need the key.
+func (a *attempt) releaseCardForRetry() {
+	if a.cache == nil || a.cache.held() == 0 {
+		return
+	}
+	c := a.c
+	c.mu.Lock()
+	card := a.card
+	a.card = nil
+	if o := a.owner; o != nil && o.held == card {
+		o.held = nil
+	}
+	c.mu.Unlock()
+	if card == nil {
+		return
+	}
+	c.releaseCard(card, a.kind)
 }
 
 // credential is the token's credential as it stands: the entangled

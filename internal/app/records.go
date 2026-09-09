@@ -128,7 +128,7 @@ func (c *Core) ArchiveDetails(id string) (ArchiveDetails, *Error) {
 		ForgottenAt:           a.ForgottenAt,
 		AlwaysRequireFullAuth: a.Policy&format.PolicyAlwaysRequireFullAuth != 0,
 		Hidden:                a.Policy&format.PolicyHidden != 0,
-		NoCompression:         a.Policy&format.PolicyNoCompression != 0,
+		Method:                methodOf(a.Policy),
 		Versions:              []VersionView{},
 	}
 	for i := range a.Versions {

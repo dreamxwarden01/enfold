@@ -29,7 +29,7 @@ export function outcomeAfter(prev: Outcome | null, c: CeremonyState): Outcome | 
 // recovery (APP.md §2.2) — which decides the strip's wording for the rest
 // of it. It is the ceremony's own Method and not a guess from what was
 // asked: with the vault's entangled password on, a token unlock asks for a
-// password before the PIN and is still a token way in (APP.md §13). Empty
+// password beside the PIN and is still a token way in (APP.md §13). Empty
 // until the core has chosen, and forgotten at the next opening.
 export function methodAfter(prev: string, c: CeremonyState): string {
   if (opening(c)) return c.method ?? "";

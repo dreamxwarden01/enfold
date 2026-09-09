@@ -24,7 +24,12 @@ export interface ArchiveDetails {
     "forgottenAt": number;
     "alwaysRequireFullAuth": boolean;
     "hidden": boolean;
-    "noCompression": boolean;
+
+    /**
+     * Method is the compression the archive was created with — store |
+     * fastest | normal | better | best (FORMAT.md §7.1 bits 2–5).
+     */
+    "method": string;
     "versions": VersionView[] | null;
 }
 
@@ -79,7 +84,13 @@ export interface ArchiveSummary {
     "open": boolean;
     "dirty": number;
     "receiptOwed": boolean;
-    "noCompression": boolean;
+
+    /**
+     * Method is how the archive is compressed — store | fastest | normal |
+     * better | best — read from the record's policy (FORMAT.md §7.1 bits
+     * 2–5) and followed by every writer of it.
+     */
+    "method": string;
     "hidden": boolean;
 
     /**
@@ -323,6 +334,15 @@ export enum Code {
      * a cancelled ceremony's key call is still answering: the file or the card is held until it does
      */
     CodeTokenPending = "token.pending",
+
+    /**
+     * CodePasswordDeadline: the five minutes from the touch ran out with
+     * the vault's password not given, so the kept shared secret went and
+     * the ceremony ended at the lock screen's first step (APP.md §2.2).
+     * "The password was not given within five minutes; unlock again from
+     * the key."
+     */
+    CodePasswordDeadline = "token.password_deadline",
     CodeTokenTooMany = "token.too_many_operations",
     CodeTokenReset = "token.reset_failed",
     CodeTokenOccupied = "token.slot_occupied",
@@ -385,6 +405,14 @@ export enum Code {
      * Delete is the archive's name typed (APP.md §13, FORMAT.md §7.4).
      */
     CodeArchiveName = "archive.name_invalid",
+
+    /**
+     * CodeArchiveExists: the path a create was given already holds a file.
+     * The archive layer creates with O_EXCL and Enfold never overwrites a
+     * file it did not make (APP.md §6, DESIGN.md trap 28). "A file is
+     * already there. Enfold never overwrites; choose another name."
+     */
+    CodeArchiveExists = "archive.exists",
     CodeFileExists = "file.exists",
     CodeFileNotFound = "file.not_found",
     CodeFileName = "file.name",
@@ -614,6 +642,13 @@ export interface Settings {
     "dictionaryBelow": number;
 
     /**
+     * LastArchiveFolder is where the last archive was created, for the New
+     * archive dialog (APP.md §6). Read-only: Set ignores it, since only a
+     * create writes it.
+     */
+    "lastArchiveFolder": string;
+
+    /**
      * from the registry; 0 = default
      */
     "idleMinutes": number;
@@ -777,6 +812,14 @@ export interface VaultStatus {
      * the key waits for a touch — and an unlock can pick it up (§2.2).
      */
     "pendingTouch": boolean;
+
+    /**
+     * Note is the quiet line the lock screen carries from a ceremony that
+     * has already ended: token.password_deadline, the five minutes from
+     * the touch running out with the vault's password not given (§2.2).
+     * The next ceremony clears it.
+     */
+    "note"?: Code;
 
     /**
      * only a recovery slot: FinishSetup is the one action

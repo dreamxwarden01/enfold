@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -964,7 +965,13 @@ func TestRegistryRoundTripAndValidation(t *testing.T) {
 	})
 	bad("retired without retired_at", func(g *Registry) { g.Archives[0].Versions[0].RetiredAt = 0 })
 	bad("no versions", func(g *Registry) { g.Archives[0].Versions = nil })
-	bad("unknown policy bit", func(g *Registry) { g.Archives[0].Policy = 1 << 4 })
+	bad("unknown policy bit", func(g *Registry) { g.Archives[0].Policy = 1 << 6 })
+	// The level field is bits 3–5; 5, 6 and 7 are not defined (§7.1).
+	for lvl := uint32(5); lvl <= 7; lvl++ {
+		bad(fmt.Sprintf("compression level %d", lvl), func(g *Registry) {
+			g.Archives[0].Policy = lvl << PolicyLevelShift
+		})
+	}
 	bad("hash ahead of last_seq", func(g *Registry) { g.Archives[0].LastSeq = 3; g.Archives[0].HashAtSeq = 4 })
 	bad("duplicate archive", func(g *Registry) {
 		g.Archives = append(g.Archives, g.Archives[0])
@@ -1019,6 +1026,49 @@ func TestRegistryRoundTripAndValidation(t *testing.T) {
 		other[0] = v
 		if _, err := DecodeRegistry(other); !errors.Is(err, ErrInvalid) {
 			t.Errorf("registry_version %d accepted: %v", v, err)
+		}
+	}
+}
+
+// The compression level of §7.1's bits 3–5 survives a round trip beside
+// the other policy bits, and a value the field cannot name is refused
+// rather than compressed at (§1).
+func TestArchivePolicyCompressionLevel(t *testing.T) {
+	levels := []uint32{PolicyLevelUnset, PolicyLevelFastest, PolicyLevelNormal, PolicyLevelBetter, PolicyLevelBest}
+	for _, lvl := range levels {
+		policy, err := SetPolicyLevel(PolicyHidden|PolicyAlwaysRequireFullAuth, lvl)
+		if err != nil {
+			t.Fatalf("level %d: %v", lvl, err)
+		}
+		if got := PolicyLevel(policy); got != lvl {
+			t.Fatalf("level %d read back as %d", lvl, got)
+		}
+		// The level lives in its own bits: the others are untouched.
+		if policy&PolicyHidden == 0 || policy&PolicyAlwaysRequireFullAuth == 0 || policy&PolicyNoCompression != 0 {
+			t.Fatalf("level %d disturbed the other bits: 0x%x", lvl, policy)
+		}
+		g := sampleRegistry()
+		g.Archives[0].Policy = policy
+		b, err := g.Encode()
+		if err != nil {
+			t.Fatalf("level %d: encode: %v", lvl, err)
+		}
+		d, err := DecodeRegistry(b)
+		if err != nil {
+			t.Fatalf("level %d: decode: %v", lvl, err)
+		}
+		if got := PolicyLevel(d.Archives[0].Policy); got != lvl {
+			t.Fatalf("level %d came back as %d", lvl, got)
+		}
+	}
+	// Replacing a level replaces it, rather than or-ing into it.
+	policy, err := SetPolicyLevel(PolicyLevelBest<<PolicyLevelShift, PolicyLevelFastest)
+	if err != nil || PolicyLevel(policy) != PolicyLevelFastest {
+		t.Fatalf("replacing a level: 0x%x %v", policy, err)
+	}
+	for _, lvl := range []uint32{5, 6, 7, 8, 1 << 20} {
+		if _, err := SetPolicyLevel(0, lvl); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("level %d was accepted: %v", lvl, err)
 		}
 	}
 }

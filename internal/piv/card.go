@@ -73,7 +73,13 @@ type Card struct {
 	closed       bool
 	dirty        dirtyReason // what this Card left on the card, to reset on Close
 	verifiedHere bool        // this Card sent the VERIFY that verified the card
-	resetFailed  bool
+	// freshVerify: a VERIFY sent by VerifyPIN that no operation has spent
+	// yet. It is what lets the ceremony verify the PIN before the password
+	// (APP.md §2.2) and the agreement that follows send none — even for a
+	// key whose PIN policy is always, whose verified state one operation
+	// spends.
+	freshVerify bool
+	resetFailed bool
 	// fallback: Close could not reset the card on the exclusive handle
 	// and took the long way (DESIGN.md §11 trap 27); the reason, for the
 	// caller's log.
@@ -237,6 +243,24 @@ func (c *Card) verifiedByUs() bool {
 	return c.verifiedHere
 }
 
+// markFreshVerify records the VERIFY VerifyPIN just sent: verified by us,
+// and not yet spent by an operation.
+func (c *Card) markFreshVerify() {
+	c.st.Lock()
+	c.verifiedHere, c.freshVerify = true, true
+	c.st.Unlock()
+}
+
+// takeFreshVerify reports whether such a VERIFY still stands and spends
+// it, so that the next agreement asks again.
+func (c *Card) takeFreshVerify() bool {
+	c.st.Lock()
+	defer c.st.Unlock()
+	fresh := c.freshVerify
+	c.freshVerify = false
+	return fresh
+}
+
 func (c *Card) isClosed() bool {
 	c.st.Lock()
 	defer c.st.Unlock()
@@ -269,7 +293,7 @@ func (c *Card) reconnectLocked() error {
 	}
 	c.dev = dev
 	c.st.Lock()
-	c.verifiedHere = false
+	c.verifiedHere, c.freshVerify = false, false
 	c.st.Unlock()
 	return nil
 }
@@ -428,6 +452,39 @@ func (c *Card) pinState() (PINStatus, error) {
 		return PINStatus{Verified: true}, nil
 	}
 	return PINStatus{}, mapErr(err)
+}
+
+// VerifyPIN sends one real VERIFY, so that a wrong PIN is known before
+// anything else moves: the ceremony asks the PIN first and verifies it at
+// the card — no touch, since VERIFY is the PIN alone — and only then asks
+// for the vault's password (APP.md §2.2 Probing). A right PIN marks the
+// card verified by this Card, which is the only verified state a Token
+// trusts, and stands for the agreement that follows, so ECDH sends no
+// VERIFY of its own. A wrong PIN costs a retry and answers *PINError with
+// the count the card reports; a card with none left answers ErrPINBlocked.
+// There is no second attempt inside: the ceremony asks again.
+//
+// Errors: *PINError, ErrPINBlocked, ErrNoCard, ErrClosed, ErrInUse,
+// ErrParams.
+func (c *Card) VerifyPIN(pin string) (PINStatus, error) {
+	if err := checkPIN(pin); err != nil {
+		return PINStatus{}, err
+	}
+	release, err := c.acquire()
+	if err != nil {
+		return PINStatus{}, err
+	}
+	defer release()
+	// Whatever the card answers, a VERIFY reached it: Close resets.
+	c.markDirty(dirtyPIN)
+	if err := c.retryReset(func() error { return mapErr(c.dev.VerifyPIN(pin)) }); err != nil {
+		return PINStatus{}, err
+	}
+	c.markFreshVerify()
+	// The card is verified now, so the retry count cannot be read back
+	// (PINStatus): it is at the configured maximum, which a correct PIN
+	// restored.
+	return PINStatus{Verified: true}, nil
 }
 
 // Inspect describes what the slot holds. ErrEmpty when nothing does;

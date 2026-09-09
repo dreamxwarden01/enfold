@@ -58,11 +58,13 @@ type openArchive struct {
 	capAt      time.Time
 	extensions int
 	// Registry facts.
-	kid           [16]byte
-	keyVersion    int
-	noCompression bool
-	receiptOwed   bool
-	lastSavedAt   int64
+	kid        [16]byte
+	keyVersion int
+	// method is the archive's compression as the views name it: one of
+	// the five words of APP.md §3, read from the record's policy.
+	method      string
+	receiptOwed bool
+	lastSavedAt int64
 	// Preview quiescing for Compact.
 	quiesced bool
 }
@@ -152,7 +154,7 @@ func (c *Core) ListArchives(showHidden bool) ([]ArchiveSummary, *Error) {
 			s := ArchiveSummary{
 				ID: hexID(a.ArchiveID), Name: a.Name, Path: a.LastPath, StoredSize: a.LastStoredSize,
 				LastWrittenAt: a.LastWrittenAt, KeyVersion: len(a.Versions),
-				NoCompression: a.Policy&format.PolicyNoCompression != 0, Hidden: a.Policy&format.PolicyHidden != 0,
+				Method: methodOf(a.Policy), Hidden: a.Policy&format.PolicyHidden != 0,
 				HashBehind: a.LastSeq - a.HashAtSeq, Description: a.Description, ForgottenAt: a.ForgottenAt,
 			}
 			if _, owed := c.owed[a.ArchiveID]; owed {
@@ -170,7 +172,7 @@ func (c *Core) ListArchives(showHidden bool) ([]ArchiveSummary, *Error) {
 		if seen[id] {
 			continue
 		}
-		s := ArchiveSummary{ID: hexID(id), Name: oa.name, Path: oa.path, KeyVersion: oa.keyVersion, NoCompression: oa.noCompression, LastWrittenAt: oa.lastSavedAt}
+		s := ArchiveSummary{ID: hexID(id), Name: oa.name, Path: oa.path, KeyVersion: oa.keyVersion, Method: oa.method, LastWrittenAt: oa.lastSavedAt}
 		c.decorateLocked(&s, id)
 		out = append(out, s)
 	}
@@ -251,12 +253,86 @@ func zeroKeys(keys []archive.Key) {
 	}
 }
 
+// The compression methods a create chooses between (APP.md §3, §6): the
+// five words the New archive dialog's segments carry. store is the
+// policy's no_compression bit — every file raw, DESIGN.md trap 8 — and
+// the other four are the level of FORMAT.md §7.1 bits 3–5, which every
+// later writer of the archive follows, on any machine.
+const (
+	compressionStore   = "store"
+	compressionFastest = "fastest"
+	compressionNormal  = "normal"
+	compressionBetter  = "better"
+	compressionBest    = "best"
+)
+
+// policyForMethod turns one of those words into the record's policy bits;
+// ok is false for anything else.
+func policyForMethod(method string) (uint32, bool) {
+	var level uint32
+	switch method {
+	case compressionStore:
+		return format.PolicyNoCompression, true
+	case compressionFastest:
+		level = format.PolicyLevelFastest
+	case compressionNormal:
+		// Written explicitly rather than left unset, so that the record
+		// says what it was created with and not what a writer defaults to.
+		level = format.PolicyLevelNormal
+	case compressionBetter:
+		level = format.PolicyLevelBetter
+	case compressionBest:
+		level = format.PolicyLevelBest
+	default:
+		return 0, false
+	}
+	p, err := format.SetPolicyLevel(0, level)
+	if err != nil {
+		return 0, false
+	}
+	return p, true
+}
+
+// methodOf names a record's compression for the views: the raw bit first,
+// since it decides on its own, then the level — an unset one reading as
+// the writer's default, Normal (FORMAT.md §7.1).
+func methodOf(policy uint32) string {
+	if policy&format.PolicyNoCompression != 0 {
+		return compressionStore
+	}
+	switch format.PolicyLevel(policy) {
+	case format.PolicyLevelFastest:
+		return compressionFastest
+	case format.PolicyLevelBetter:
+		return compressionBetter
+	case format.PolicyLevelBest:
+		return compressionBest
+	}
+	return compressionNormal
+}
+
+// compressLevelOf maps the record's level onto the compressor's presets;
+// an unset field is the default, as FORMAT.md §7.1 says.
+func compressLevelOf(policy uint32) compress.Level {
+	switch format.PolicyLevel(policy) {
+	case format.PolicyLevelFastest:
+		return compress.Fastest
+	case format.PolicyLevelBetter:
+		return compress.Better
+	case format.PolicyLevelBest:
+		return compress.Best
+	}
+	return compress.Default
+}
+
 // archiveOptions builds the writer options from the record and settings.
+// The archive's own policy decides how it is written, whoever opens it:
+// the raw bit and the level of FORMAT.md §7.1 travel with the archive.
 func (c *Core) archiveOptionsLocked(rec *format.ArchiveRecord) archive.Options {
 	return archive.Options{
 		DeviceID:      c.deviceIDLocked(),
 		NoCompression: rec.Policy&format.PolicyNoCompression != 0,
-		Compress:      compress.Params{Level: compress.Default},
+		Compress:      compress.Params{Level: compressLevelOf(rec.Policy)},
 		DictBelow:     c.settings.DictionaryBelow,
 	}
 }
@@ -308,7 +384,7 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 		return ArchiveStat{}, e
 	}
 	opts := c.archiveOptionsLocked(rec)
-	path, name, kid, nv, noComp, lastAt, lastSeq := rec.LastPath, rec.Name, rec.CurrentKID, len(rec.Versions), rec.Policy&format.PolicyNoCompression != 0, rec.LastWrittenAt, rec.LastSeq
+	path, name, kid, nv, method, lastAt, lastSeq := rec.LastPath, rec.Name, rec.CurrentKID, len(rec.Versions), methodOf(rec.Policy), rec.LastWrittenAt, rec.LastSeq
 	c.mu.Unlock()
 
 	a, err := archive.Open(path, keys, opts)
@@ -319,7 +395,7 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 		}
 		return ArchiveStat{}, c.fail("open archive", err)
 	}
-	oa := &openArchive{id: aid, path: path, name: name, a: a, kid: kid, keyVersion: nv, noCompression: noComp, lastSavedAt: lastAt}
+	oa := &openArchive{id: aid, path: path, name: name, a: a, kid: kid, keyVersion: nv, method: method, lastSavedAt: lastAt}
 	oa.token = newToken()
 	oa.refreshSnapshot()
 	c.mu.Lock()

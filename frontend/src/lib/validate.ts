@@ -41,6 +41,17 @@ export function secretProblem(kind: SecretKind, value: string, choose = false): 
   return "";
 }
 
+// autoSendable judges the one secret the page sends without a click: the
+// password prompt an accepted PIN brings, answered from the field as the
+// user left it (APP.md §6, the ruling of 2026-09-08). It is judged by the
+// same rule the button applies, so a field the form would refuse — an
+// empty one, cleared in the moment between the press and the prompt — is
+// marked and waited on rather than sent: every typed secret is judged
+// before it is sent, this one included.
+export function autoSendable(kind: SecretKind, value: string, choose = false): boolean {
+  return !secretProblem(kind, value, choose);
+}
+
 // rule is the static requirement shown under a field, when there is one.
 export function secretRule(kind: SecretKind, choose = false): string {
   switch (kind) {

@@ -146,8 +146,11 @@ func (a *Archives) Hide(id string) error      { return asErr(a.c.HideArchive(id,
 func (a *Archives) Unhide(id string) error    { return asErr(a.c.HideArchive(id, false)) }
 func (a *Archives) Locate(id, p string) error { return asErr(a.c.Locate(id, p)) }
 
-func (a *Archives) Create(path, name string, noCompression bool) (string, error) {
-	id, e := a.c.CreateArchive(path, name, noCompression)
+// Create makes an archive at path with the compression method chosen in
+// the dialog: store · fastest · normal · better · best (APP.md §3, §6).
+// A path where a file already exists is archive.exists.
+func (a *Archives) Create(path, name, method string) (string, error) {
+	id, e := a.c.CreateArchive(path, name, method)
 	return id, asErr(e)
 }
 

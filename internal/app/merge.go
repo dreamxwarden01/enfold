@@ -345,6 +345,8 @@ func policyText(p uint32) string {
 	}
 	if p&format.PolicyNoCompression != 0 {
 		add("no compression")
+	} else if lvl := format.PolicyLevel(p); lvl != format.PolicyLevelUnset {
+		add("level " + methodOf(p))
 	}
 	if s == "" {
 		return "none"

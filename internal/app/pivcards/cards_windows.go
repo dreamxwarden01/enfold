@@ -44,6 +44,11 @@ func (k *card) PINState() (app.PINStatus, error) {
 	return app.PINStatus{Verified: st.Verified, Retries: st.Retries, RetriesKnown: st.RetriesKnown}, wrap(err)
 }
 
+func (k *card) VerifyPIN(pin string) (app.PINStatus, error) {
+	st, err := k.c.VerifyPIN(pin)
+	return app.PINStatus{Verified: st.Verified, Retries: st.Retries, RetriesKnown: st.RetriesKnown}, wrap(err)
+}
+
 func (k *card) Keys() ([]app.KeyInfo, error) {
 	keys, err := k.c.Keys()
 	if err != nil {

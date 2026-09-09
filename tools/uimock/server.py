@@ -25,23 +25,23 @@ state = {
     "archives": [
         {"id": "a1" * 16, "name": "Photos 2024", "path": "D:/Archives/photos-2024.efd", "storedSize": 51_700_000_000,
          "lastWrittenAt": NOW - 7200, "keyVersion": 3, "open": False, "dirty": 0, "receiptOwed": False,
-         "noCompression": False, "hidden": False, "hashBehind": 2, "files": 12406, "freeSpace": 3_100_000_000,
+         "method": "normal", "hidden": False, "hashBehind": 2, "files": 12406, "freeSpace": 3_100_000_000,
          "description": "Iceland, the Dolomites, and everything off the phone.", "forgottenAt": 0},
         {"id": "b2" * 16, "name": "Family videos", "path": "/Volumes/Media/family-videos.efd", "storedSize": 227_000_000_000,
          "lastWrittenAt": NOW - 600000, "keyVersion": 1, "open": False, "dirty": 0, "receiptOwed": False,
-         "noCompression": True, "hidden": False, "hashBehind": 0, "files": 96, "freeSpace": 0,
+         "method": "store", "hidden": False, "hashBehind": 0, "files": 96, "freeSpace": 0,
          "description": "", "forgottenAt": 0},
         {"id": "c3" * 16, "name": "Tax returns", "path": "D:/Archives/tax.efd", "storedSize": 193_000_000,
          "lastWrittenAt": NOW - 2000000, "keyVersion": 2, "open": False, "dirty": 0, "receiptOwed": False,
-         "noCompression": False, "hidden": True, "hashBehind": 0, "files": 231, "freeSpace": 0,
+         "method": "best", "hidden": True, "hashBehind": 0, "files": 231, "freeSpace": 0,
          "description": "Scans and the filed returns, 2016 onwards.", "forgottenAt": 0},
         {"id": "d4" * 16, "name": "Passport scans", "path": "E:/missing/passports.efd", "storedSize": 10_300_000,
          "lastWrittenAt": NOW - 5000000, "keyVersion": 2, "open": False, "dirty": 0, "receiptOwed": False,
-         "noCompression": False, "hidden": False, "hashBehind": 0, "note": "archive.file_missing", "files": 0, "freeSpace": 0,
+         "method": "fastest", "hidden": False, "hashBehind": 0, "note": "archive.file_missing", "files": 0, "freeSpace": 0,
          "description": "", "forgottenAt": 0},
         {"id": "e5" * 16, "name": "Old laptop backup", "path": "\\\\nas\\backups\\laptop.efd", "storedSize": 8_900_000_000,
          "lastWrittenAt": NOW - 26_000_000, "keyVersion": 1, "open": False, "dirty": 0, "receiptOwed": False,
-         "noCompression": False, "hidden": False, "hashBehind": 0, "files": 0, "freeSpace": 0,
+         "method": "better", "hidden": False, "hashBehind": 0, "files": 0, "freeSpace": 0,
          "description": "The 2019 machine, kept until the photos are checked.", "forgottenAt": NOW - 400_000},
     ],
     # One incoming set behind a merge handle, one row per action the core
@@ -86,8 +86,47 @@ state = {
     "lastExportAt": NOW - 1_900_000,
     "settings": {"vaultPath": "D:/Vaults/personal.eks", "displayName": "Personal vault", "closeToTray": "destroy", "theme": "system",
                  "look": "native", "recoveryRecordPct": 3, "dictionaryBelow": 262144, "idleMinutes": 0, "absoluteMinutes": 0,
-                 "timeoutsFromVault": True, "timeoutsAdjustable": True},
+                 "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives"},
     "text": {"text": "# Iceland, July 2024\n\nDay 1: Reykjavik...\n", "truncated": False},
+}
+
+# Scenes the lock screen cannot reach on its own here (the mock dispatches
+# no events): POST /mock/preview {"name": "..."} puts one on the vault
+# status, then reload the page. "pin" is the merged card of the ruling of
+# 2026-09-08 — an entangled vault, a token ceremony parked at the PIN, with
+# the vault's password waiting in the field beside it; "deadline" is the
+# note the status carries when the five minutes from the touch ran out
+# (APP.md 2.2); "locked" puts it back.
+PREVIEWS = {
+    "pin": {
+        "state": "unlocking", "entangled": True, "note": "",
+        "ceremony": {
+            "seq": 2, "kind": "unlock", "method": "token", "step": "pin", "promptId": "pin-1",
+            "choose": False, "slotLabel": "YubiKey 5C - desk", "recoveryId": "", "retries": 3,
+            "retriesKnown": True, "verified": False, "readerCount": 1, "n": 0, "pinAsked": False,
+            "error": "", "removeLabel": "", "insertLabel": "", "archives": 0,
+        },
+    },
+    "wrong_pin": {
+        "state": "unlocking", "entangled": True, "note": "",
+        "ceremony": {
+            "seq": 3, "kind": "unlock", "method": "token", "step": "pin", "promptId": "pin-2",
+            "choose": False, "slotLabel": "YubiKey 5C - desk", "recoveryId": "", "retries": 2,
+            "retriesKnown": True, "verified": False, "readerCount": 1, "n": 0, "pinAsked": False,
+            "error": "token.pin", "removeLabel": "", "insertLabel": "", "archives": 0,
+        },
+    },
+    "wrong_password": {
+        "state": "unlocking", "entangled": True, "note": "",
+        "ceremony": {
+            "seq": 4, "kind": "unlock", "method": "token", "step": "password", "promptId": "pw-2",
+            "choose": False, "slotLabel": "YubiKey 5C - desk", "recoveryId": "", "retries": 0,
+            "retriesKnown": False, "verified": True, "readerCount": 1, "n": 1, "pinAsked": True,
+            "error": "vault.auth", "removeLabel": "", "insertLabel": "", "archives": 0,
+        },
+    },
+    "deadline": {"state": "locked", "entangled": True, "note": "token.password_deadline", "ceremony": None},
+    "locked": {"state": "locked", "entangled": True, "note": "", "ceremony": None},
 }
 
 def archive(archive_id):
@@ -109,7 +148,7 @@ def details(archive_id):
         "revision": 7, "lastWriter": "9f" * 8, "lastSeq": 812, "hashAtSeq": 810,
         "lastCiphertextHash": a["id"][::-1], "lastStoredSize": a["storedSize"],
         "lastWrittenAt": a["lastWrittenAt"], "forgottenAt": a.get("forgottenAt", 0),
-        "alwaysRequireFullAuth": False, "hidden": a["hidden"], "noCompression": a["noCompression"],
+        "alwaysRequireFullAuth": False, "hidden": a["hidden"], "method": a["method"],
         "versions": [
             {"kid": a["id"][:32], "createdAt": NOW - 900_000, "retiredAt": 0, "state": "current"},
         ] + [
@@ -133,6 +172,34 @@ def forget(args, at):
     return None
 
 
+class Err:
+    """A coded refusal, answered the way the Wails runtime reads one: a
+    non-2xx JSON body whose `cause` carries the app's code (APP.md 3)."""
+
+    def __init__(self, code):
+        self.code = code
+
+
+def create_archive(args):
+    """Archives.Create(path, name, method) since the ruling of 2026-09-08:
+    the compression method is the record's, chosen once and obeyed by every
+    later writer (FORMAT.md 7.1). A path that already holds a file is
+    refused with archive.exists, as the core's O_EXCL create is - Enfold
+    never overwrites a file it did not make."""
+    path, name, method = (list(args) + ["", "", "normal"])[:3]
+    if any(a["path"] == path for a in state["archives"]):
+        return Err("archive.exists")
+    a = {
+        "id": ("%02x" % (len(state["archives"]) + 16)) * 16, "name": name or "New archive",
+        "path": path or "D:/Archives/new.efd", "storedSize": 0, "lastWrittenAt": NOW,
+        "keyVersion": 1, "open": False, "dirty": 0, "receiptOwed": False,
+        "method": method or "normal", "hidden": False, "hashBehind": 0, "files": 0,
+        "freeSpace": 0, "description": "", "forgottenAt": 0,
+    }
+    state["archives"].append(a)
+    return a["id"]
+
+
 def listed(show_hidden):
     return [a for a in state["archives"] if show_hidden or (not a["hidden"] and not a.get("forgottenAt"))]
 
@@ -153,7 +220,7 @@ METHODS = {
     4176692468: lambda a: listed(bool(a and a[0])),             # archives.List
     923201420: lambda a: state["stat"],                         # archives.Open
     1388822288: lambda a: None, 2300343171: lambda a: [], 2169725132: lambda a: None, 474530495: lambda a: None,
-    422512670: lambda a: None, 1162996984: lambda a: "e5" * 16, 2111968017: lambda a: "op1", 3689812034: lambda a: "op2",
+    422512670: lambda a: None, 1162996984: create_archive, 2111968017: lambda a: "op1", 3689812034: lambda a: "op2",
     3359801409: lambda a: "op3",
     2601627082: lambda a: {"seq": 1, "folder": a[1], "rows": state["rows"].get(a[1], []), "total": len(state["rows"].get(a[1], []))},
     2565212395: lambda a: state["stat"],
@@ -214,6 +281,12 @@ class H(SimpleHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")
+        if self.path.startswith("/mock/preview"):
+            over = PREVIEWS.get(body.get("name", ""))
+            if over is None:
+                return self.reply({"ok": False, "names": sorted(PREVIEWS)})
+            state["vault"].update(over)
+            return self.reply({"ok": True})
         if self.path.startswith("/mock/state"):
             for k, v in body.items():
                 if isinstance(state.get(k), dict) and isinstance(v, dict):
@@ -223,8 +296,19 @@ class H(SimpleHTTPRequestHandler):
             return self.reply({"ok": True})
         args = body.get("args") or {}
         if isinstance(args, dict) and "methodID" in args:
-            return self.reply(handle(args["methodID"], args.get("args") or []))
+            out = handle(args["methodID"], args.get("args") or [])
+            if isinstance(out, Err):
+                return self.refuse(out.code)
+            return self.reply(out)
         return self.reply({})
+
+    def refuse(self, code):
+        data = json.dumps({"kind": "Error", "message": code, "cause": {"code": code}}).encode()
+        self.send_response(500)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def reply(self, obj):
         data = json.dumps(obj).encode()

@@ -290,6 +290,12 @@ type fakeCard struct {
 	removed   bool // pulled: every operation answers ErrTokenNoCard
 	verified  bool // PIN-once: a VERIFY stands for this handle, as on the card
 	proofLies bool // the agreement the token computes is not its key's: the proof must refuse it
+	// verifies counts the VERIFYs the card was sent — the ceremony's own
+	// (VerifyPIN) and the token's — and ecdhs every agreement asked for, so
+	// that a test can prove the agreement sends no VERIFY after the
+	// ceremony's, and a retry from the cached H reaches no card at all.
+	verifies int
+	ecdhs    int
 	// touchFails: this many ECDH calls answer "not touched in time" first,
 	// as a key nobody touches does when its wait runs out; -1 for ever.
 	touchFails int
@@ -373,6 +379,47 @@ func (f *fakeCard) PINState() (PINStatus, error) {
 		return PINStatus{}, ErrTokenNoCard
 	}
 	return PINStatus{Retries: f.retries, RetriesKnown: true}, nil
+}
+
+// VerifyPIN is the card's own VERIFY: the PIN alone, no touch. A right
+// one leaves the handle verified, as on the card, so the agreement that
+// follows sends none.
+func (f *fakeCard) VerifyPIN(pin string) (PINStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return PINStatus{}, ErrTokenClosed
+	}
+	if f.removed {
+		return PINStatus{}, ErrTokenNoCard
+	}
+	f.verifies++
+	if f.retries == 0 {
+		return PINStatus{}, ErrTokenPINBlocked
+	}
+	if pin != f.pin {
+		f.retries--
+		if f.retries == 0 {
+			return PINStatus{}, ErrTokenPINBlocked
+		}
+		return PINStatus{}, &TokenPINError{Retries: f.retries}
+	}
+	f.verified = true
+	return PINStatus{Verified: true}, nil
+}
+
+// verifyCount is how many VERIFYs the card has been sent.
+func (f *fakeCard) verifyCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.verifies
+}
+
+// ecdhCount is how many agreements the card has been asked for.
+func (f *fakeCard) ecdhCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ecdhs
 }
 
 func (f *fakeCard) info(slot Slot) KeyInfo {
@@ -501,6 +548,7 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 		return nil, ErrTokenTooMany
 	}
 	t.card.mu.Lock()
+	t.card.ecdhs++
 	closed, verified := t.card.closed, t.card.verified
 	st := PINStatus{Retries: t.card.retries, RetriesKnown: true}
 	t.card.mu.Unlock()
@@ -511,7 +559,9 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 		return nil, ErrTokenPINBlocked
 	}
 	// PIN once, as on the card: a VERIFY that stands is not asked again
-	// on the same handle.
+	// on the same handle. asked is what the real Token reports in its
+	// touch request: whether this agreement asked for the PIN itself.
+	asked := !verified
 	if !verified {
 		pin, err := t.p.PIN(st)
 		if err != nil {
@@ -519,6 +569,7 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 			return nil, fmt.Errorf("%w: %w", ErrTokenCancelled, err)
 		}
 		t.card.mu.Lock()
+		t.card.verifies++
 		if pin != t.card.pin {
 			t.card.retries--
 			left := t.card.retries
@@ -536,18 +587,18 @@ func (t *fakeToken) ECDH(epk []byte) ([]byte, error) {
 		if t.card.touchFails > 0 {
 			t.card.touchFails--
 		}
-		t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: true})
+		t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: asked})
 		t.card.mu.Unlock()
-		t.p.Touch(TouchRequest{N: t.n, PINAsked: true})
+		t.p.Touch(TouchRequest{N: t.n, PINAsked: asked})
 		time.Sleep(300 * time.Millisecond) // the key's own wait, in miniature
 		return nil, ErrTokenTouch
 	}
 	hold := t.card.holdTouch
 	t.card.ops++
-	t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: true})
+	t.card.touches = append(t.card.touches, TouchRequest{N: t.n, PINAsked: asked})
 	priv := t.card.keys[t.slot]
 	t.card.mu.Unlock()
-	t.p.Touch(TouchRequest{N: t.n, PINAsked: true})
+	t.p.Touch(TouchRequest{N: t.n, PINAsked: asked})
 	if hold {
 		// The key waits, and nothing but the touch, its own timeout or
 		// its removal ends the call.
@@ -667,7 +718,7 @@ func (h *harness) unlockWithPassword() {
 }
 
 // unlockWithToken unlocks through the fake card's PIN and touch, answering
-// the vault's password first when its switch is on.
+// the vault's password after the PIN when its switch is on.
 func (h *harness) unlockWithToken() {
 	h.t.Helper()
 	h.rec.reset()
@@ -680,10 +731,15 @@ func (h *harness) unlockWithToken() {
 }
 
 // answerTokenUnlock answers the unlock half of any ceremony that opens a
-// hardware vault: the vault's password first when its switch is on
-// (FORMAT.md §6), then the key's PIN.
+// hardware vault, in the one order of APP.md §2.2: the key's PIN first,
+// verified at the card, then the vault's password when its switch is on
+// (FORMAT.md §6).
 func (h *harness) answerTokenUnlock(pin string) {
 	h.t.Helper()
+	p := h.rec.waitCeremony(h.t, StepPIN, true)
+	if e := h.c.SubmitSecret("pin", p.PromptID, pin); e != nil {
+		h.t.Fatalf("submit the PIN: %v", e)
+	}
 	if h.entangled != "" {
 		pw := h.rec.waitCeremony(h.t, StepPassword, true)
 		if pw.Choose {
@@ -693,13 +749,20 @@ func (h *harness) answerTokenUnlock(pin string) {
 			h.t.Fatalf("submit the vault's password: %v", e)
 		}
 	}
-	p := h.rec.waitCeremony(h.t, StepPIN, true)
-	if e := h.c.SubmitSecret("pin", p.PromptID, pin); e != nil {
-		h.t.Fatalf("submit the PIN: %v", e)
-	}
 }
 
 func (h *harness) status() VaultStatus { return h.c.Status() }
+
+// attempt is the agreement the running ceremony waits on, or the pending
+// touch when none does: the handle a test reads the kept touch through.
+func (h *harness) attempt() *attempt {
+	h.c.mu.Lock()
+	defer h.c.mu.Unlock()
+	if h.c.cer != nil && h.c.cer.att != nil {
+		return h.c.cer.att
+	}
+	return h.c.pending
+}
 
 func isCode(e *Error, c Code) bool { return e != nil && e.Code == c }
 

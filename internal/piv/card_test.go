@@ -407,6 +407,120 @@ func TestTokenCeremonyAlways(t *testing.T) {
 	}
 }
 
+// The ceremony's own VERIFY (APP.md §2.2 Probing): the PIN is checked at
+// the card before anything else, and the agreement that follows sends none.
+func TestVerifyPINThenTheAgreementSendsNoVerify(t *testing.T) {
+	fx := newFixture(t)
+	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	c := open(t)
+	defer c.Close()
+	if _, err := c.VerifyPIN(""); !errors.Is(err, ErrParams) || fx.dev.verifies != 0 {
+		t.Fatalf("empty PIN: %v verifies=%d", err, fx.dev.verifies)
+	}
+	st, err := c.VerifyPIN("123456")
+	if err != nil || !st.Verified || st.RetriesKnown {
+		t.Fatalf("verify: %+v %v", st, err)
+	}
+	if fx.dev.verifies != 1 || !c.verifiedByUs() {
+		t.Fatalf("verifies=%d verifiedByUs=%v", fx.dev.verifies, c.verifiedByUs())
+	}
+	// The agreement finds the card verified: no prompt, no VERIFY, a touch.
+	p := &testPrompter{}
+	tok, err := c.Token(pubBytes(k), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eph, _ := ecdh.P256().GenerateKey(rand.Reader)
+	want, _ := eph.ECDH(mustECDH(k))
+	got, err := tok.ECDH(eph.PublicKey().Bytes())
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("ecdh: %x %v", got, err)
+	}
+	if fx.dev.verifies != 1 || len(p.statuses) != 0 {
+		t.Fatalf("the agreement verified again: verifies=%d prompts=%+v", fx.dev.verifies, p.statuses)
+	}
+	if len(p.touches) != 1 || p.touches[0].PINAsked {
+		t.Fatalf("touch prompts: %+v", p.touches)
+	}
+	// The verified state is the card's now: Close resets it away.
+	if err := c.Close(); err != nil || fx.resets != 1 || fx.dev.verified {
+		t.Fatalf("close: %v resets=%d verified=%v", err, fx.resets, fx.dev.verified)
+	}
+}
+
+// A key whose PIN policy is always spends the ceremony's VERIFY on the one
+// agreement that follows; the next one asks again through the prompter.
+func TestVerifyPINCoversOneAlwaysPolicyAgreement(t *testing.T) {
+	fx := newFixture(t)
+	k := fx.dev.addKey(0x9d, pivgo.PINPolicyAlways, pivgo.TouchPolicyAlways)
+	c := open(t)
+	defer c.Close()
+	if _, err := c.VerifyPIN("123456"); err != nil {
+		t.Fatal(err)
+	}
+	p := &testPrompter{pins: []string{"123456"}}
+	tok, err := c.Token(pubBytes(k), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eph, _ := ecdh.P256().GenerateKey(rand.Reader)
+	if _, err := tok.ECDH(eph.PublicKey().Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if fx.dev.verifies != 1 || len(p.statuses) != 0 {
+		t.Fatalf("the first agreement: verifies=%d prompts=%+v", fx.dev.verifies, p.statuses)
+	}
+	if _, err := tok.ECDH(eph.PublicKey().Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if fx.dev.verifies != 2 || len(p.statuses) != 1 {
+		t.Fatalf("the second agreement: verifies=%d prompts=%+v", fx.dev.verifies, p.statuses)
+	}
+}
+
+// A wrong PIN answers the retries and marks nothing: the next agreement
+// asks for the PIN itself, as it would have without the explicit VERIFY.
+func TestVerifyPINWrongAndBlocked(t *testing.T) {
+	fx := newFixture(t)
+	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)
+	c := open(t)
+	defer c.Close()
+	var pe *PINError
+	st, err := c.VerifyPIN("000000")
+	if !errors.As(err, &pe) || pe.Retries != 2 || st.Verified {
+		t.Fatalf("wrong PIN: %+v %v", st, err)
+	}
+	if c.verifiedByUs() || fx.dev.verified {
+		t.Fatalf("a wrong PIN marked the card verified")
+	}
+	// No second attempt inside: exactly one VERIFY per call.
+	if fx.dev.verifies != 1 {
+		t.Fatalf("verifies=%d", fx.dev.verifies)
+	}
+	// The agreement asks for the PIN, since nothing stands.
+	p := &testPrompter{pins: []string{"123456"}}
+	tok, err := c.Token(pubBytes(k), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eph, _ := ecdh.P256().GenerateKey(rand.Reader)
+	if _, err := tok.ECDH(eph.PublicKey().Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.statuses) != 1 || p.statuses[0].Retries != 2 || fx.dev.verifies != 2 {
+		t.Fatalf("the agreement's own prompt: %+v verifies=%d", p.statuses, fx.dev.verifies)
+	}
+
+	// A card with no retries left refuses without a prompt anywhere.
+	fx2 := newFixture(t)
+	fx2.dev.retries = 0
+	c2 := open(t)
+	defer c2.Close()
+	if _, err := c2.VerifyPIN("123456"); !errors.Is(err, ErrPINBlocked) {
+		t.Fatalf("blocked: %v", err)
+	}
+}
+
 func TestTokenErrors(t *testing.T) {
 	fx := newFixture(t)
 	k := fx.dev.addKey(0x9d, pivgo.PINPolicyOnce, pivgo.TouchPolicyAlways)

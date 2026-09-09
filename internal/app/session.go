@@ -52,6 +52,11 @@ type vaultState struct {
 	absTimer       Timer
 	lastGrant      time.Time // last accepted activity reset
 
+	// note is the one quiet line the lock screen carries from a ceremony
+	// that has already ended — today token.password_deadline, beside the
+	// pending touch's own line (APP.md §2.2, §6). The next ceremony clears
+	// it.
+	note      Code
 	warnings  map[Code]bool
 	broken    error
 	missing   string            // a configured vault that could not be opened at start
@@ -290,6 +295,7 @@ func (c *Core) statusLocked() VaultStatus {
 		st.Ceremony = &cs
 	}
 	st.PendingTouch = c.pending != nil
+	st.Note = v.note
 	for _, o := range c.ops {
 		st.Ops = append(st.Ops, o.view())
 	}

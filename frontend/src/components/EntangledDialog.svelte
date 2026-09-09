@@ -1,7 +1,7 @@
 <script lang="ts">
   // The vault's entangled password, turned on, changed or turned off
   // (APP.md §13, FORMAT.md §3.1). One switch for the whole vault: every
-  // hardware key asks for the password before its PIN, the standalone
+  // hardware key asks for the password beside its PIN, the standalone
   // password and the recovery key never do. The new password is chosen in
   // the ceremony that follows — a typed secret never rides a bound-method
   // argument (APP.md §1) — and **the old password is never a field here**
@@ -39,7 +39,7 @@
 
 <Dialog {title} {onclose}>
   {#if mode === "on"}
-    <p>Every YubiKey in this vault will ask for this password before its PIN. A stolen key alone will not open the vault; a forgotten password will not shut you out, because the recovery key and any standalone password are untouched by it.</p>
+    <p>Every YubiKey in this vault will ask for this password beside its PIN. A stolen key alone will not open the vault; a forgotten password will not shut you out, because the recovery key and any standalone password are untouched by it.</p>
     <p>You choose it in the next step and type it twice. The vault asks for a way in first, then re-wraps every YubiKey without needing one present.</p>
   {:else if mode === "change"}
     <p>You choose the new password in the next step and type it twice. Every YubiKey is re-wrapped to it at once, and none needs to be present.</p>

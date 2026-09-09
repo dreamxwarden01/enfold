@@ -67,7 +67,11 @@ func (t *Token) Info() KeyInfo { return t.info }
 // trap 25) — and verified by this package when the key's policy needs it:
 // always, or once and not verified by this Card (a verified state this
 // Card did not create — a reset that did not take, another program's
-// VERIFY — is not trusted), with no second attempt inside; the touch
+// VERIFY — is not trusted), with no second attempt inside. A VERIFY the
+// caller already sent through Card.VerifyPIN spends itself here instead,
+// so the ceremony that asked the PIN first (APP.md §2.2) reaches the
+// touch with no prompt at all; the prompt is then only the fallback for a
+// card that lost that state. The touch
 // prompt goes up; the token does the agreement. When the host reset the
 // card under the connection, the package reconnects and repeats once,
 // with the PIN already collected: it never reached the card. The result
@@ -129,7 +133,16 @@ func (t *Token) ecdhOnce(peer *ecdh.PublicKey, pin *string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	needPIN := t.info.PINPolicy == PINPolicyAlways || !st.Verified || !t.c.verifiedByUs()
+	// A VERIFY the caller sent through Card.VerifyPIN stands for this
+	// agreement (APP.md §2.2): the PIN was asked and checked at the card
+	// before the password, so nothing is prompted for and nothing is sent
+	// here — whatever the key's policy, since a policy-always key spends
+	// exactly that state on the operation that follows. It is spent here,
+	// so a second agreement on the same Token asks again; a card that lost
+	// it meanwhile — a reset healed by a reconnect — clears it too, and
+	// the prompt below is the fallback that fires then.
+	fresh := t.c.takeFreshVerify()
+	needPIN := !fresh && (t.info.PINPolicy == PINPolicyAlways || !st.Verified || !t.c.verifiedByUs())
 	if needPIN && *pin == "" {
 		if st.Blocked() {
 			return nil, ErrPINBlocked

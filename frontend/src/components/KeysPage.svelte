@@ -76,7 +76,7 @@
   }
 
   async function exportBackup(): Promise<boolean> {
-    const p = await Shell.SaveFile("Export a backup of the vault", `backup-${new Date().toISOString().slice(0, 10)}.eks`);
+    const p = await Shell.SaveFile("Export a backup of the vault", `backup-${new Date().toISOString().slice(0, 10)}.eks`, "");
     if (!p) return false;
     store.dismissCeremony();
     try {

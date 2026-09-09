@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem } from "./validate";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -33,6 +33,24 @@ describe("secretProblem", () => {
   it("requires a name once whitespace is gone", () => {
     expect(requiredProblem("   ")).toBe(REQUIRED);
     expect(requiredProblem("Mine")).toBe("");
+  });
+});
+
+describe("autoSendable", () => {
+  // The password prompt an accepted PIN brings is answered from the field
+  // as the user left it, with no click — and judged all the same: an
+  // empty field is refused and marked, not sent (APP.md §6).
+  it("refuses an empty password and passes a typed one", () => {
+    expect(autoSendable("password", "")).toBe(false);
+    expect(autoSendable("password", "x")).toBe(true); // an existing secret is never measured
+  });
+  it("judges by the same rule the button applies", () => {
+    for (const k of ["pin", "password", "recovery", "mgmtkey"] as const) {
+      for (const v of ["", "1234", "short", "0123456789abcdef".repeat(2)]) {
+        expect(autoSendable(k, v), `${k}:${v}`).toBe(!secretProblem(k, v));
+      }
+    }
+    expect(autoSendable("password", "short", true)).toBe(false); // a chosen one is
   });
 });
 

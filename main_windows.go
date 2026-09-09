@@ -369,8 +369,14 @@ func (s *shell) pickFolder(title string) (string, error) {
 	return p, nil
 }
 
-func (s *shell) saveFile(title, filename string) (string, error) {
+// saveFile opens the native Save dialog. dir, when given, is the folder
+// it opens in — the folder the last archive was made in (APP.md §6);
+// empty leaves the choice to the shell's own last place.
+func (s *shell) saveFile(title, filename, dir string) (string, error) {
 	d := s.app.Dialog.SaveFile().SetMessage(title).SetFilename(filename).CanCreateDirectories(true)
+	if dir != "" {
+		d.SetDirectory(dir)
+	}
 	if w := s.window(); w != nil {
 		d.AttachToWindow(w)
 	}

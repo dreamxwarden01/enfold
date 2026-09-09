@@ -30,8 +30,8 @@ export function Reveal(path: string): $CancellablePromise<void> {
     return $Call.ByID(842300112, path);
 }
 
-export function SaveFile(title: string, filename: string): $CancellablePromise<string> {
-    return $Call.ByID(1923582270, title, filename);
+export function SaveFile(title: string, filename: string, dir: string): $CancellablePromise<string> {
+    return $Call.ByID(1923582270, title, filename, dir);
 }
 
 export function ShowWindow(): $CancellablePromise<void> {

@@ -189,12 +189,12 @@ func TestRevealHoldsTheHandle(t *testing.T) {
 		t.Fatal(e)
 	}
 	h.rec.waitCeremony(t, StepPassword, true)
-	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false); !isCode(e, CodeCeremonyRunning) {
+	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal); !isCode(e, CodeCeremonyRunning) {
 		t.Fatalf("a registry write during the reveal: %v", e)
 	}
 	h.c.CancelUnlock()
 	h.rec.waitCeremony(t, StepFailed, false)
-	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false); e != nil {
+	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal); e != nil {
 		t.Fatalf("after the reveal: %v", e)
 	}
 }

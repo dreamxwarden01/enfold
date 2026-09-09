@@ -148,8 +148,40 @@ const (
 	// §11 trap 8); a writer's choice that must travel with the archive.
 	PolicyNoCompression uint32 = 1 << 2
 
-	knownPolicyBits = PolicyAlwaysRequireFullAuth | PolicyHidden | PolicyNoCompression
+	// Bits 3–5 are the compression level: the zstd preset every compressed
+	// file of this archive is written with, chosen once at creation and
+	// carried here so that every writer compresses the same way. The match
+	// window is not recorded and follows the preset (DESIGN.md trap 16).
+	PolicyLevelShift        = 3
+	PolicyLevelMask  uint32 = 0x7 << PolicyLevelShift
+
+	knownPolicyBits = PolicyAlwaysRequireFullAuth | PolicyHidden | PolicyNoCompression | PolicyLevelMask
 )
+
+// The values the level field may carry (§7.1). Anything above
+// PolicyLevelBest — 5, 6, 7 — is undefined and refused on decode (§1).
+const (
+	PolicyLevelUnset   uint32 = 0 // the writer's default, Normal
+	PolicyLevelFastest uint32 = 1
+	PolicyLevelNormal  uint32 = 2
+	PolicyLevelBetter  uint32 = 3
+	PolicyLevelBest    uint32 = 4
+)
+
+// PolicyLevel reads the compression level out of a policy word.
+func PolicyLevel(policy uint32) uint32 {
+	return (policy & PolicyLevelMask) >> PolicyLevelShift
+}
+
+// SetPolicyLevel returns policy with the compression level replaced.
+// ErrInvalid for a level a reader would refuse, so that this program
+// never writes one.
+func SetPolicyLevel(policy, level uint32) (uint32, error) {
+	if level > PolicyLevelBest {
+		return 0, invalidf("compression level %d is not one of 0–4", level)
+	}
+	return policy&^PolicyLevelMask | level<<PolicyLevelShift, nil
+}
 
 // VersionState is the state of a version record (§7.2).
 type VersionState uint8

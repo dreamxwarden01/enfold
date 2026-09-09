@@ -78,7 +78,7 @@ func TestVaultStatusCarriesTheVaultFileSize(t *testing.T) {
 	if got := h.status().VaultFileSize; got != st.VaultFileSize {
 		t.Fatalf("the size changed at the unlock: %d, was %d", got, st.VaultFileSize)
 	}
-	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false); e != nil {
+	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal); e != nil {
 		t.Fatal(e)
 	}
 	fi2, err := os.Stat(h.vault)
@@ -90,16 +90,32 @@ func TestVaultStatusCarriesTheVaultFileSize(t *testing.T) {
 	}
 }
 
-// The lock screen asks for the password from the vault's switch, once,
-// before the PIN (APP.md §13). The wording follows the way in chosen, which
-// the ceremony reports as Method — with the switch on, "did a secret get
-// asked" no longer tells a token flow from a password one.
-func TestLockScreenAsksThePasswordFromTheVaultsSwitch(t *testing.T) {
-	h, _, _ := entangledHarness(t, "the vault password")
+// The lock screen asks for the PIN first, verified at the card, and only
+// then for the password from the vault's switch, once (APP.md §2.2, §13).
+// The wording follows the way in chosen, which the ceremony reports as
+// Method — with the switch on, "did a secret get asked" no longer tells a
+// token flow from a password one.
+func TestLockScreenAsksThePINBeforeTheVaultsPassword(t *testing.T) {
+	h, card, _ := entangledHarness(t, "the vault password")
 	h.rec.reset()
 	if e := h.c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	if pin.Method != string(MethodToken) {
+		t.Fatalf("the PIN prompt does not say which way in: %+v", pin)
+	}
+	if !pin.RetriesKnown || pin.Retries != 3 {
+		t.Fatalf("the PIN prompt does not show the retries: %+v", pin)
+	}
+	// Nothing else has been asked for yet: the password prompt is minted
+	// only after the card has accepted the PIN.
+	for _, e := range h.rec.snapshot() {
+		if s, ok := e.payload.(CeremonyState); ok && s.Step == StepPassword {
+			t.Fatalf("the password was asked before the PIN: %+v", s)
+		}
+	}
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
 	pw := h.rec.waitCeremony(t, StepPassword, true)
 	if pw.Choose {
 		t.Fatalf("the vault's own password marked choose: %+v", pw)
@@ -107,16 +123,15 @@ func TestLockScreenAsksThePasswordFromTheVaultsSwitch(t *testing.T) {
 	if pw.Method != string(MethodToken) {
 		t.Fatalf("the token flow's password prompt does not say which way in: %+v", pw)
 	}
-	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
-	pin := h.rec.waitCeremony(t, StepPIN, true)
-	if pin.Method != string(MethodToken) {
-		t.Fatalf("the PIN prompt does not say which way in: %+v", pin)
+	if card.verifyCount() != 1 {
+		t.Fatalf("VERIFYs before the password prompt: %d", card.verifyCount())
 	}
-	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
 	h.rec.waitCeremony(t, StepDone, false)
 	h.rec.waitState(t, StateUnlocked)
 
-	// Asked once: one password prompt in the whole unlock.
+	// Asked once each, and the agreement sent no VERIFY of its own: the
+	// card was verified by the ceremony before the touch.
 	prompts := 0
 	for _, e := range h.rec.snapshot() {
 		if s, ok := e.payload.(CeremonyState); ok && s.Kind == "unlock" && s.Step == StepPassword && s.PromptID != "" {
@@ -126,20 +141,119 @@ func TestLockScreenAsksThePasswordFromTheVaultsSwitch(t *testing.T) {
 	if prompts != 1 {
 		t.Fatalf("password prompts in one token unlock: %d", prompts)
 	}
+	if card.verifyCount() != 1 || card.ecdhCount() != 1 {
+		t.Fatalf("verifies=%d ecdh=%d in one unlock", card.verifyCount(), card.ecdhCount())
+	}
+}
 
-	// A wrong one is said and asked again in place, and the typed value
-	// lives with the attempt rather than being asked for from the start.
-	h.c.Lock()
-	h.rec.waitState(t, StateLocked)
+// A wrong PIN is said and asked again in place, with the retries, and
+// nothing else moves: no password prompt is minted, and the card is asked
+// for nothing else (APP.md §2.2 Probing).
+func TestAWrongPINAsksThePINAgainAndNothingElse(t *testing.T) {
+	h, card, _ := entangledHarness(t, "the vault password")
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "000000")
+	again := h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPIN && s.PromptID != "" && s.PromptID != pin.PromptID
+	}).(CeremonyState)
+	if again.Error != CodeTokenPIN || !again.RetriesKnown || again.Retries != 2 {
+		t.Fatalf("the second PIN prompt: %+v", again)
+	}
+	if card.ecdhCount() != 0 {
+		t.Fatalf("a wrong PIN reached the agreement: ecdh=%d", card.ecdhCount())
+	}
+	for _, e := range h.rec.snapshot() {
+		if s, ok := e.payload.(CeremonyState); ok && s.Step == StepPassword && s.PromptID != "" {
+			t.Fatalf("a wrong PIN minted the password prompt: %+v", s)
+		}
+	}
+	// The right PIN then moves the flow on to the password.
+	h.c.SubmitSecret("pin", again.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
+	h.rec.waitState(t, StateUnlocked)
+	if card.verifyCount() != 2 || card.ecdhCount() != 1 {
+		t.Fatalf("verifies=%d ecdh=%d", card.verifyCount(), card.ecdhCount())
+	}
+}
+
+// With the switch off the password step is simply absent: the same order,
+// one step shorter (APP.md §2.2).
+func TestAVaultWithNoPasswordAsksThePINThenTheTouch(t *testing.T) {
+	card := newFakeCard("123456")
+	pub := card.addKey(0x9d, true)
+	card.holdTouch = true
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	h.rec.waitCeremony(t, StepTouch, false)
+	card.press()
+	h.rec.waitCeremony(t, StepDone, false)
+	h.rec.waitState(t, StateUnlocked)
+	for _, e := range h.rec.snapshot() {
+		if s, ok := e.payload.(CeremonyState); ok && s.Step == StepPassword {
+			t.Fatalf("a vault with the switch off asked for a password: %+v", s)
+		}
+	}
+	if card.verifyCount() != 1 || card.ecdhCount() != 1 {
+		t.Fatalf("verifies=%d ecdh=%d", card.verifyCount(), card.ecdhCount())
+	}
+}
+
+// A mutation ceremony on the Keys page takes the same order (APP.md §2.2):
+// its unlock half asks the PIN, verifies it, then asks the password.
+func TestAMutationCeremonyAsksThePINBeforeThePassword(t *testing.T) {
+	h, card, _ := entangledHarness(t, "the vault password")
+	h.unlockWithToken()
+	h.rec.reset()
+	mark := len(h.rec.snapshot())
+	if e := h.c.ExportBackup(filepath.Join(h.dir, "backup.eks")); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	if pin.Method != string(MethodToken) {
+		t.Fatalf("the mutation's PIN prompt does not say which way in: %+v", pin)
+	}
+	for _, e := range h.rec.snapshot()[mark:] {
+		if s, ok := e.payload.(CeremonyState); ok && s.Step == StepPassword {
+			t.Fatalf("the mutation asked for the password before the PIN: %+v", s)
+		}
+	}
+	before := card.verifyCount()
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	if card.verifyCount() != before+1 {
+		t.Fatalf("the password prompt stands on no VERIFY: %d → %d", before, card.verifyCount())
+	}
+	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
+	h.rec.waitCeremony(t, StepDone, false)
+}
+
+// A wrong vault password is said and asked again in place, and the typed
+// value lives with the attempt: the PIN is not asked again, the key is
+// given back and the retry costs no touch (APP.md §2.2's cached H).
+func TestAWrongVaultPasswordIsAskedAgainWithoutTheKey(t *testing.T) {
+	h, card, _ := entangledHarness(t, "the vault password")
 	h.rec.reset()
 	mark := len(h.rec.snapshot())
 	if e := h.c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
-	pw = h.rec.waitCeremony(t, StepPassword, true)
-	h.c.SubmitSecret("password", pw.PromptID, "not the vault password")
-	pin = h.rec.waitCeremony(t, StepPIN, true)
+	pin := h.rec.waitCeremony(t, StepPIN, true)
 	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", pw.PromptID, "not the vault password")
 	again := h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
 		s, ok := x.(CeremonyState)
 		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != pw.PromptID
@@ -147,9 +261,30 @@ func TestLockScreenAsksThePasswordFromTheVaultsSwitch(t *testing.T) {
 	if again.Error != CodeAuth {
 		t.Fatalf("a wrong vault password was not said in place: %+v", again)
 	}
-	h.c.SubmitSecret("password", again.PromptID, "the vault password")
+	// The card went back the moment the password was refused: the retry
+	// needs nothing from it.
+	if card.closeCount() == 0 {
+		t.Fatal("the key was still held while the password was asked again")
+	}
+	touches, ecdh := card.touchCount(), card.ecdhCount()
+	att := h.attempt()
+	if att == nil || att.cache == nil || att.cache.held() != 1 {
+		t.Fatalf("the touch was not kept for the retry: %+v", att)
+	}
+	// A second wrong password still costs no touch.
+	h.c.SubmitSecret("password", again.PromptID, "still not it")
+	third := h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != again.PromptID
+	}).(CeremonyState)
+	h.c.SubmitSecret("password", third.PromptID, "the vault password")
 	h.rec.waitState(t, StateUnlocked)
-	// The PIN was not asked a second time: the attempt kept the token.
+	if att.cache.held() != 0 {
+		t.Fatalf("the unlock that succeeded left the touch kept: %d", att.cache.held())
+	}
+	if card.touchCount() != touches || card.ecdhCount() != ecdh {
+		t.Fatalf("the retries went back to the key: touches %d → %d, ecdh %d → %d", touches, card.touchCount(), ecdh, card.ecdhCount())
+	}
 	pins := 0
 	for _, e := range h.rec.snapshot()[mark:] {
 		if s, ok := e.payload.(CeremonyState); ok && s.Step == StepPIN && s.PromptID != "" {
@@ -158,6 +293,93 @@ func TestLockScreenAsksThePasswordFromTheVaultsSwitch(t *testing.T) {
 	}
 	if pins != 1 {
 		t.Fatalf("PIN prompts while the password was asked again: %d", pins)
+	}
+	if card.verifyCount() != 1 {
+		t.Fatalf("VERIFYs in one unlock with two wrong passwords: %d", card.verifyCount())
+	}
+}
+
+// The kept touch dies five minutes after it was given (APP.md §2.2): the
+// ceremony ends where a cancel ends it, the lock screen says why, and the
+// next unlock starts from the key.
+func TestTheKeptTouchExpiresFiveMinutesAfterIt(t *testing.T) {
+	h, card, _ := entangledHarness(t, "the vault password")
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", pw.PromptID, "not the vault password")
+	again := h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != pw.PromptID
+	}).(CeremonyState)
+	att := h.attempt()
+	if att == nil || att.cache == nil || att.cache.held() != 1 {
+		t.Fatalf("the touch was not kept: %+v", att)
+	}
+	// The five minutes run out while the password prompt stands.
+	h.clk.Advance(tokenCacheLife + time.Second)
+	h.rec.waitState(t, StateLocked)
+	h.waitStatus(func(s VaultStatus) bool { return s.Note == CodePasswordDeadline && !s.PendingTouch })
+	if att.cache.held() != 0 {
+		t.Fatalf("the kept touch outlived its deadline: %d", att.cache.held())
+	}
+	if e := h.c.SubmitSecret("password", again.PromptID, "the vault password"); !isCode(e, CodeNoCeremony) {
+		t.Fatalf("the ceremony outlived the deadline: %v", e)
+	}
+	// The next unlock starts from the key and costs a touch again.
+	touches := card.touchCount()
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	if st := h.rec.waitCeremony(t, StepWaitingForKey, false); st.Error == CodePasswordDeadline {
+		t.Fatalf("the note rode into the next ceremony: %+v", st)
+	}
+	if got := h.status().Note; got != "" {
+		t.Fatalf("the note outlived the next ceremony's start: %q", got)
+	}
+	h.answerTokenUnlock("123456")
+	h.rec.waitState(t, StateUnlocked)
+	if card.touchCount() != touches+1 {
+		t.Fatalf("the second unlock did not cost a touch: %d → %d", touches, card.touchCount())
+	}
+}
+
+// A cancel while the password prompt stands zeroes the kept touch
+// (APP.md §2.2).
+func TestCancelWhileThePasswordStandsZeroesTheKeptTouch(t *testing.T) {
+	h, _, _ := entangledHarness(t, "the vault password")
+	h.rec.reset()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", pw.PromptID, "not the vault password")
+	h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
+		s, ok := x.(CeremonyState)
+		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != pw.PromptID
+	})
+	att := h.attempt()
+	if att == nil || att.cache == nil || att.cache.held() != 1 {
+		t.Fatalf("the touch was not kept: %+v", att)
+	}
+	h.c.CancelUnlock()
+	h.rec.waitState(t, StateLocked)
+	deadline := time.Now().Add(2 * time.Second)
+	for att.cache.held() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the cancelled ceremony left the touch kept")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := h.status().Note; got != "" {
+		t.Fatalf("a cancel left a note: %q", got)
 	}
 }
 
@@ -213,10 +435,10 @@ func TestAdoptedTouchKeepsTheTypedEntangledPassword(t *testing.T) {
 	if e := h.c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
-	pw := h.rec.waitCeremony(t, StepPassword, true)
-	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
 	pin := h.rec.waitCeremony(t, StepPIN, true)
 	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
 	h.rec.waitCeremony(t, StepTouch, false)
 
 	// Cancelled at the touch: the card call goes on as the pending touch,
@@ -254,23 +476,24 @@ func TestEnrollIntoAnEntangledVaultAsksNoPassword(t *testing.T) {
 	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "Travel key"}); e != nil {
 		t.Fatal(e)
 	}
-	// The unlock half asks for the vault's password (it opens with a token)
-	// and the PIN; nothing after that asks for a secret the user chooses.
-	pw := h.rec.waitCeremony(t, StepPassword, true)
-	if pw.Choose {
-		t.Fatalf("the unlock half's password marked choose: %+v", pw)
-	}
-	// The way in is a token even though the first prompt is a password:
-	// Method is the only field that says so (§5.1).
-	if pw.Method != string(MethodToken) {
-		t.Fatalf("the mutation's password prompt: method %q, want token: %+v", pw.Method, pw)
-	}
-	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
+	// The unlock half asks for the PIN and then the vault's password (it
+	// opens with a token); nothing after that asks for a secret the user
+	// chooses.
 	pin := h.rec.waitCeremony(t, StepPIN, true)
 	if pin.Method != string(MethodToken) {
 		t.Fatalf("the mutation's PIN prompt: method %q, want token", pin.Method)
 	}
 	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := h.rec.waitCeremony(t, StepPassword, true)
+	if pw.Choose {
+		t.Fatalf("the unlock half's password marked choose: %+v", pw)
+	}
+	// The way in is a token even though a password is asked for at all:
+	// Method is the only field that says so (§5.1).
+	if pw.Method != string(MethodToken) {
+		t.Fatalf("the mutation's password prompt: method %q, want token: %+v", pw.Method, pw)
+	}
+	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
 	swap := h.rec.waitCeremony(t, StepSwapKey, false)
 	if swap.RemoveLabel != "Test key" {
 		t.Fatalf("swap step: %+v", swap)
@@ -306,10 +529,10 @@ func TestEnrollIntoAnEntangledVaultAsksNoPassword(t *testing.T) {
 	if e := h.c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
-	pw = h.rec.waitCeremony(t, StepPassword, true)
-	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
 	pin = h.rec.waitCeremony(t, StepPIN, true)
 	h.c.SubmitSecret("pin", pin.PromptID, "654321")
+	pw = h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", pw.PromptID, "the vault password")
 	h.rec.waitCeremony(t, StepDone, false)
 	h.rec.waitState(t, StateUnlocked)
 }
@@ -425,10 +648,10 @@ func TestSetEntangledNeverAsksTheOldPassword(t *testing.T) {
 	if e := h.c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
-	old := h.rec.waitCeremony(t, StepPassword, true)
-	h.c.SubmitSecret("password", old.PromptID, "the first password")
 	pin := h.rec.waitCeremony(t, StepPIN, true)
 	h.c.SubmitSecret("pin", pin.PromptID, "123456")
+	old := h.rec.waitCeremony(t, StepPassword, true)
+	h.c.SubmitSecret("password", old.PromptID, "the first password")
 	again := h.rec.waitFor(t, EventVaultCeremony, func(x any) bool {
 		s, ok := x.(CeremonyState)
 		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != old.PromptID
@@ -524,10 +747,10 @@ func TestChangeEntangledPasswordRewrapsEveryHardwareSlotOffline(t *testing.T) {
 	if e := c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
-	pw := rec.waitCeremony(t, StepPassword, true)
-	c.SubmitSecret("password", pw.PromptID, "the first password")
 	pin := rec.waitCeremony(t, StepPIN, true)
 	c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw := rec.waitCeremony(t, StepPassword, true)
+	c.SubmitSecret("password", pw.PromptID, "the first password")
 	rec.waitState(t, StateUnlocked)
 
 	rec.reset()
@@ -535,10 +758,10 @@ func TestChangeEntangledPasswordRewrapsEveryHardwareSlotOffline(t *testing.T) {
 	if e := c.ChangeEntangledPassword(); e != nil {
 		t.Fatal(e)
 	}
-	pw = rec.waitCeremony(t, StepPassword, true)
-	c.SubmitSecret("password", pw.PromptID, "the first password") // the unlock half
 	pin = rec.waitCeremony(t, StepPIN, true)
 	c.SubmitSecret("pin", pin.PromptID, "123456")
+	pw = rec.waitCeremony(t, StepPassword, true)
+	c.SubmitSecret("password", pw.PromptID, "the first password") // the unlock half
 	chosen := rec.waitCeremony(t, StepPassword, true)
 	if !chosen.Choose {
 		t.Fatalf("the new password is not marked choose: %+v", chosen)
@@ -566,10 +789,10 @@ func TestChangeEntangledPasswordRewrapsEveryHardwareSlotOffline(t *testing.T) {
 	if e := c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
-	pw = rec.waitCeremony(t, StepPassword, true)
-	c.SubmitSecret("password", pw.PromptID, "the second password")
 	pin = rec.waitCeremony(t, StepPIN, true)
 	c.SubmitSecret("pin", pin.PromptID, "654321")
+	pw = rec.waitCeremony(t, StepPassword, true)
+	c.SubmitSecret("password", pw.PromptID, "the second password")
 	rec.waitState(t, StateUnlocked)
 
 	// And the recovery key still opens it, untouched by the change.
@@ -770,7 +993,7 @@ func TestLastExportAtIsWrittenOnlyByExport(t *testing.T) {
 	p := h.rec.waitCeremony(t, StepPassword, true)
 	h.c.SubmitSecret("password", p.PromptID, testPassword)
 	h.rec.waitCeremony(t, StepDone, false)
-	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false); e != nil {
+	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal); e != nil {
 		t.Fatal(e)
 	}
 	if got := h.c.LastExportAt(); got != 0 {

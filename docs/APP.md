@@ -269,9 +269,15 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   A failed `Open` is never fed back into the poll (DESIGN trap 24): `ErrBusy` parks the ceremony
   in `Busy` until the user cancels or retries.
 - Probing: `Card.Keys()` (no PIN, no touch) matched by public key against the keystore's
-  hardware slots; R34 makes the match unique. No match → `NoMatch`. The vault's `Entangled`
-  (FORMAT §6) decides whether `Password` comes first — the credential is assembled before
-  any prompt, because `keystore.Unlock` takes it whole and the PIN prompt fires inside `ECDH`.
+  hardware slots; R34 makes the match unique. No match → `NoMatch`. **PIN first, verified at
+  the card before anything else** (ruled 2026-09-08): the ceremony asks the PIN and calls
+  `Card.VerifyPIN` — a VERIFY, no touch — so a wrong PIN is asked again with the retries and
+  nothing else moves; then, on an entangled vault (`Entangled`, FORMAT §6), it asks the password,
+  which the page answers at once from the field the user filled beside the PIN, in whatever state
+  that field is in at that moment; then it assembles the credential and calls `keystore.Unlock`,
+  whose `ECDH` finds the card verified and waits for the touch only. One order on every vault:
+  with the switch off the password step is simply absent, and the PIN prompt inside `ECDH` is a
+  fallback that fires only if the card lost its verification between the two calls.
 - **The card is never left idle.** The host resets an exclusive connection that carries nothing
   for about five seconds (DESIGN §11 trap 25), so while any prompt stands with a card open — the
   entangled password, the PIN inside `ECDH`, an enrolment's PIN or management key — the ceremony
@@ -384,9 +390,21 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   derivation shows again after the corrected answer. A note describes its prompt only: taken,
   gone or cancelled, the prompt clears it. The management-key PIN of an enrolment follows the
   same rule. Only a token's refusal (a damaged record) parks.
-- Wrong password (`ErrAuth` from Deriving) returns to `Password` with the Card kept open, so the
-  retry costs a touch but no PIN on a PIN-once key; the copy says so. `MaxOperations` exhausted →
-  "remove and reinsert the key" (WaitingForKey).
+- Wrong password (`ErrAuth` from Deriving): the attempt keeps the shared secret `H` the touch
+  produced — one per `epk`, in the token wrapper the attempt hands the keystore — releases the
+  card, and asks the password again (the page empties and marks the password field; the PIN is
+  not asked); the retry re-derives from the cached `H` with no PIN and no touch, however many
+  times the password is wrong. **The cache lives five minutes from the touch
+  that produced it**, whatever happens in between: it is zeroed at success, at cancel, at lock, at
+  the attempt's end and at the deadline, and a deadline that passes ends the ceremony at the lock
+  screen's first step with the note "the password was not given within five minutes; unlock again
+  from the key" — carried as `VaultStatus.Note` (`token.password_deadline`), beside
+  `PendingTouch`, because the ceremony is gone as a cancel leaves it and no ceremony event
+  survives that; the next ceremony clears it. The clock is armed only when the attempt carries a
+  password: with the switch off there is nothing to wait for, and the memo is zeroed when the
+  attempt ends, milliseconds after the touch. The cache is not a defence against a read of memory — five minutes is a window
+  nothing stops — it bounds how long a hardware-verified state can be used without the password
+  (ruled 2026-09-08). `MaxOperations` exhausted → "remove and reinsert the key" (WaitingForKey).
 - Deriving: `keystore.Unlock(HardwareCredential{Token, Password})` → `Unlocked` → `Session()` →
   `Unlocked.Close()`. Then the ceremony goroutine's deferred `Card.Close()` runs (Releasing);
   `ErrResetFailed` is a warning event, never a failure. The publish point checks the lock latch.
@@ -482,7 +500,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
 
 **Vault**
 - `Status() VaultStatus{Seq, State, Path, DisplayName, LastUnlockedAt, LocksAt, AbsoluteAt,
-  Entangled, VaultFileSize, Tampered, TamperedReason Code, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
+  Entangled, VaultFileSize, Tampered, TamperedReason Code, Note Code, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
   OpenArchives int}` plus the one-vault facts of §2.1 (`SetupNeeded`, `DefaultPath`,
   `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`);
   `Readers() []Reader{Name}`.
@@ -517,7 +535,13 @@ sentinel of every package with a catch-all `internal` — and services are regis
   KeyVersion, Open, Dirty, ReceiptOwed, NoCompression, ForgottenAt, Note Code}` — hidden and
   forgotten records are filtered unless `showHidden`. `Open(id)`, `Close(id)`, `Create(path,
   name, noCompression)`, `Hide(id)`, `Unhide(id)`, `Locate(id, newPath)`, `Compact(id) opID`,
-  `RotateKey(id) opID`, `Verify(id) opID`, `CloseAll()`; and the inspector's `Rename`,
+  `RotateKey(id) opID`, `Verify(id) opID`, `CloseAll()` — `Create(path, name, method)` takes the
+  compression method, `store` · `fastest` · `normal` · `better` · `best`, written into the
+  record's policy (FORMAT §7.1 bits 2–5) and applied to every later open of the archive on any
+  machine; `ArchiveSummary.Method` and `ArchiveDetails.Method` carry it back (they replace
+  `NoCompression`); a path where a file already exists is refused with `archive.exists` — the
+  archive layer creates with `O_EXCL`, Enfold never overwrites a file it did not make (DESIGN
+  trap 28) — and the inspector's `Rename`,
   `SetDescription`, `Details`, `Forget`, `Restore`, `Delete` and `CheckFiles` of §13, where
   Forget and Delete — the registry record holds the only copy of the archive keys, so dropping
   it destroys the archive — are specified with their brakes.
@@ -635,7 +659,9 @@ registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
 
-**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile`, `Reveal`, `Quit`
+**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile(title, filename,
+dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
+`Reveal`, `Quit`
 (names the unsaved changes in a native Yes/No question — the only buttons a Windows message box
 has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
 dialog is "nothing chosen", never an error; a submitted secret that found no prompt is reported
@@ -719,7 +745,16 @@ during which no program can reach the card anyway.
 ## 6. Screens (the Native look)
 
 Lock screen (one panel, three-step line, the states of §2.2 including TwoKeys, NoMatch, Busy,
-Blocked; `SwapKey` is the enrolment's alone since §13; secondary: recovery key, password, open a
+Blocked; `SwapKey` is the enrolment's alone since §13; on a vault whose entangled password is on,
+the token way in's card 2 is **Password and PIN**: two fields under one *Continue*. The PIN goes
+first and is verified at the card before anything else (§2.2): a wrong PIN marks only the PIN
+field, with the retries, and nothing else moves — the password field keeps whatever was typed, as
+an ordinary masked field the user may still edit, and is sent only once the PIN is right, in the
+state it is in at that moment, by the page and with no further click. A wrong password, known
+only after the touch, comes back with the password field emptied and marked and the PIN not
+asked again (§2.2's cached `H`). The button reads *Unlock with YubiKey* whatever the switch, and
+the card's dim line says both are needed. The same two-field form serves every token ceremony on
+the Keys page. Secondary: recovery key, password, open a
 backup — never a second vault; the
 "workstation-lock detection unavailable" and BitLocker warnings; while the status says
 `pendingTouch` from a cancelled unlock, one quiet line under the key card: the key is still
@@ -729,7 +764,13 @@ cancelled slot change or reveal is said by the next ceremony's own `token.pendin
 waits, and on the first-run card a create or an import begun while a cancelled create's touch
 stands is answered with `token.pending`, a toast). Archives (list with details
 pane, commands Open / New archive / Compact / Rotate key / Verify / Hide and the inspector's of
-§13, the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
+§13 — *New archive* asks the name and the compression method, a five-segment control (Store ·
+Fast · Normal · Better · Best, Normal preselected; *Store* keeps every file as is, and at every
+other level already-compressed media is detected by sampling and stored raw by itself, DESIGN
+§9), and on *Create* opens the native Save dialog with `<name>.efd` prefilled in the folder last
+used (`settings.json`, `lastArchiveFolder`); a chosen path where a file already exists is refused
+in place — "A file is already there. Enfold never overwrites; choose another name." — whatever
+the dialog's own replace prompt said; a cancelled dialog creates nothing — the Tampered state, the status strip with the countdown and Lock). Archive (breadcrumb
 projection, paged table with pending markers, preview pane — image, video, audio through the
 loopback URL, text through `PreviewText`, everything else "Extract…" — pending bar, toolbar,
 drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,

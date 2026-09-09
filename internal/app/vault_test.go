@@ -62,7 +62,7 @@ func TestCreateVaultFailureFromNone(t *testing.T) {
 func TestNothingStagedIsClean(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false)
+	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	h.c.OpenArchive(id)
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("once"), 0o600)
@@ -155,13 +155,13 @@ func TestCreateVaultTokenEntangled(t *testing.T) {
 	if e := c.BeginUnlock(MethodToken); e != nil {
 		t.Fatal(e)
 	}
+	pin = rec.waitCeremony(t, StepPIN, true)
+	c.SubmitSecret("pin", pin.PromptID, "123456")
 	pw = rec.waitCeremony(t, StepPassword, true)
 	if pw.Choose {
 		t.Fatalf("an existing password marked choose: %+v", pw)
 	}
 	c.SubmitSecret("password", pw.PromptID, "entangled words")
-	pin = rec.waitCeremony(t, StepPIN, true)
-	c.SubmitSecret("pin", pin.PromptID, "123456")
 	rec.waitCeremony(t, StepDone, false)
 	rec.waitState(t, StateUnlocked)
 }
@@ -450,13 +450,13 @@ func TestImportVaultProvesThenInstalls(t *testing.T) {
 	if e := c3.ImportFile(src, "Theirs", MethodToken, EnrollOptions{}, false); e != nil {
 		t.Fatal(e)
 	}
+	pin := rec3.waitCeremony(t, StepPIN, true)
+	c3.SubmitSecret("pin", pin.PromptID, "123456")
 	pw := rec3.waitCeremony(t, StepPassword, true)
 	if pw.Choose {
 		t.Fatalf("the incoming vault's own password marked choose: %+v", pw)
 	}
 	c3.SubmitSecret("password", pw.PromptID, "the incoming vault password")
-	pin := rec3.waitCeremony(t, StepPIN, true)
-	c3.SubmitSecret("pin", pin.PromptID, "123456")
 	rec3.waitCeremony(t, StepDone, false)
 	rec3.waitState(t, StateLocked)
 	if st := c3.Status(); !st.Entangled {
@@ -557,10 +557,10 @@ func TestImportBackupChoosesTheEntanglementAfresh(t *testing.T) {
 	// again in place, and the password chosen at adoption opens it.
 	rec.reset()
 	c.BeginUnlock(MethodToken)
-	pw := rec.waitCeremony(t, StepPassword, true)
-	c.SubmitSecret("password", pw.PromptID, "the source vault password")
 	pin = rec.waitCeremony(t, StepPIN, true)
 	c.SubmitSecret("pin", pin.PromptID, "654321")
+	pw := rec.waitCeremony(t, StepPassword, true)
+	c.SubmitSecret("password", pw.PromptID, "the source vault password")
 	again := rec.waitFor(t, EventVaultCeremony, func(x any) bool {
 		s, ok := x.(CeremonyState)
 		return ok && s.Step == StepPassword && s.PromptID != "" && s.PromptID != pw.PromptID
@@ -588,7 +588,7 @@ func TestImportReplaceRules(t *testing.T) {
 	}
 	// An open archive refuses a replacement.
 	h.unlockWithPassword()
-	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false)
+	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	h.c.OpenArchive(id)
 	h.c.Lock()
 	h.rec.waitState(t, StateLocked)
@@ -673,7 +673,7 @@ func TestFinishSetup(t *testing.T) {
 func TestVerifyBackup(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false); e != nil {
+	if _, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal); e != nil {
 		t.Fatal(e)
 	}
 	h.c.Lock()
@@ -946,7 +946,7 @@ func TestCreateOverUnreadableFile(t *testing.T) {
 
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", false)
+	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	h.c.OpenArchive(id)
 	h.c.Lock()
 	h.rec.waitState(t, StateLocked)

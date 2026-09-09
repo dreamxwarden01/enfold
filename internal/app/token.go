@@ -23,6 +23,13 @@ type Card interface {
 	Serial() uint32
 	// PINState: retries and whether the card is verified; no retry consumed.
 	PINState() (PINStatus, error)
+	// VerifyPIN sends one VERIFY — the PIN alone, no touch — so that the
+	// ceremony knows a wrong PIN before anything else moves (APP.md §2.2
+	// Probing). A right PIN stands for the agreement that follows, which
+	// then sends none; a wrong one costs a retry and answers
+	// *TokenPINError, a card with none left ErrTokenPINBlocked. No second
+	// attempt inside: the ceremony asks again.
+	VerifyPIN(pin string) (PINStatus, error)
 	// Keys lists every allowlisted slot holding a key; no PIN, no touch.
 	Keys() ([]KeyInfo, error)
 	Inspect(slot Slot) (KeyInfo, error)

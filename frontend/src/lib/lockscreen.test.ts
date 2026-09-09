@@ -54,8 +54,9 @@ describe("tokenWording", () => {
 
   it("words the strip for the key through an entangled vault's password prompt", () => {
     // The silent breakage this replaces: with VaultStatus.Entangled on, a
-    // token unlock hits StepPassword first, and the old rule read that as
-    // "a secret was asked" and stopped describing the flow the user is in.
+    // token unlock reaches StepPassword before the touch, and the old rule
+    // read that as "a secret was asked" and stopped describing the flow the
+    // user is in.
     const c = ev("unlock", CeremonyStep.StepPassword, "p1", 0, "token");
     expect(wordedForToken(methodAfter("token", c), c)).toBe(true);
     const pin = ev("unlock", CeremonyStep.StepPIN, "p2", 0, "token");

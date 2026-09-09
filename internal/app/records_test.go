@@ -72,7 +72,7 @@ func (h *harness) editRecord(id string, mut func(a *format.ArchiveRecord, modifi
 func (h *harness) newArchive(name string) (string, string) {
 	h.t.Helper()
 	p := filepath.Join(h.dir, name+".enf")
-	id, e := h.c.CreateArchive(p, name, false)
+	id, e := h.c.CreateArchive(p, name, compressionNormal)
 	if e != nil {
 		h.t.Fatalf("create %s: %v", name, e)
 	}

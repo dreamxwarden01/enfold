@@ -56,7 +56,7 @@
   async function save() {
     ask = "";
     const name = (vaultName || "vault").replace(/[\\/:*?"<>|]+/g, "-");
-    const p = await Shell.SaveFile("Save the recovery key", `enfold-recovery-key-${name}.txt`);
+    const p = await Shell.SaveFile("Save the recovery key", `enfold-recovery-key-${name}.txt`, "");
     if (!p) return;
     try {
       await Keys.SaveRecoveryKey(handle, p);

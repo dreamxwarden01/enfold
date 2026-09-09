@@ -631,7 +631,12 @@ across a lock, aborts and closes it (`APP.md` §2.3).
 
 ### The token ceremony, in the order the user experiences it
 
-PIN first, then touch: the YubiKey asks for a touch only after the PIN has been accepted, and the
+With the vault's entangled password on, the password and the PIN are typed together on one card;
+the PIN is verified at the card before the password is used, so a wrong PIN moves nothing, and
+the touch follows (`APP.md` §6); a wrong password is known only after the touch — nothing can
+verify `K_P` before the VMK is reached, and nothing may, since a verifier would be an offline
+oracle for the password — so the attempt keeps the touch's `H` for five minutes and the retry
+costs neither PIN nor touch (`APP.md` §2.2). PIN first, then touch: the YubiKey asks for a touch only after the PIN has been accepted, and the
 person who just typed the PIN is then waiting with no cue (observed 2026-09-04 — "left standing"
 after the PIN). The moment the PIN is accepted the UI must switch to an unmistakable "now touch
 the key" prompt. Before asking for the PIN it must show the retries remaining: the counter is 3,

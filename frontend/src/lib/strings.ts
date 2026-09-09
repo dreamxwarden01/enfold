@@ -97,6 +97,10 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeTokenPINAgain]: "The key wants the PIN again.",
   [Code.CodeTokenTouch]: "The key was not touched in time. Try again, and touch it when it blinks.",
   [Code.CodeTokenPending]: "The key is still answering the cancelled request. Touch it, or pull it out, to end that now.",
+  // The touch is kept for five minutes so that a wrong password costs no
+  // second one; past that the ceremony ends where a cancel ends it and the
+  // lock screen carries this line (APP.md §2.2, the ruling of 2026-09-08).
+  [Code.CodePasswordDeadline]: "The password was not given within five minutes; unlock again from the key.",
   [Code.CodeTokenTooMany]: "Too many operations on one key handle. Start again.",
   [Code.CodeTokenReset]: "The key was released but may still be PIN-verified for a few seconds.",
   [Code.CodeTokenOccupied]: "That slot on the key holds something already.",
@@ -114,6 +118,10 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeArchiveReadOnly]: "The archive is read-only.",
   [Code.CodeArchiveNotFound]: "The archive is not in this vault.",
   [Code.CodeArchiveInvalid]: "The file is not an archive, or it is damaged.",
+  // The archive layer creates with O_EXCL: Enfold never overwrites a file
+  // it did not make, whatever the save dialog's own replace prompt said
+  // (APP.md §3, §6).
+  [Code.CodeArchiveExists]: "A file is already there. Enfold never overwrites; choose another name.",
   [Code.CodeArchiveMissing]: "The archive file is not where the vault last saw it.",
   [Code.CodeArchiveCopyMismatch]: "This file is not the copy the vault last saved: an older backup, or one written elsewhere. Saving records this copy.",
   [Code.CodeArchiveForgotten]: "This archive was forgotten. Restore it to use it again; its key is dropped thirty days after it was forgotten.",

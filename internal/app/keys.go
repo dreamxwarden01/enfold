@@ -284,8 +284,9 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 	}
 	if hasToken && c.deps.Cards != nil {
 		// The way in, recorded before the first prompt: on an entangled
-		// vault this branch asks for the password first, so nothing else
-		// distinguishes it from a standalone-password way in (§5.1).
+		// vault this branch asks for the vault's password too — after the
+		// PIN (§2.2) — so nothing else distinguishes it from a
+		// standalone-password way in (§5.1).
 		cer.setMethod(MethodToken)
 		for {
 			h, card, slot, err := cer.tokenCredential(slots, entangled)

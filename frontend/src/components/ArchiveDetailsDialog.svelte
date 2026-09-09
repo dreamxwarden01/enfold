@@ -7,6 +7,7 @@
   import { Clipboard } from "@wailsio/runtime";
   import type { ArchiveDetails } from "../lib/api";
   import { bytes, date, dateTime } from "../lib/format";
+  import { methodWord } from "../lib/method";
   import { purgeAfter } from "../lib/retention";
   import Dialog from "./Dialog.svelte";
 
@@ -36,7 +37,7 @@
   }
 
   const policy = $derived(
-    [d.alwaysRequireFullAuth ? "always asks for a full unlock" : "", d.hidden ? "hidden" : "", d.noCompression ? "stored raw" : ""].filter(Boolean).join(" · ") || "none set",
+    [d.alwaysRequireFullAuth ? "always asks for a full unlock" : "", d.hidden ? "hidden" : ""].filter(Boolean).join(" · ") || "none set",
   );
   const purge = $derived(purgeAfter(d.forgottenAt));
 
@@ -60,6 +61,9 @@
     { key: "writer", label: "Last writer", value: d.lastWriter || "—", mono: true, long: true },
     { key: "seq", label: "Last seq / hash at seq", value: `${d.lastSeq} / ${d.hashAtSeq}` },
     { key: "hash", label: "Ciphertext hash", value: d.lastCiphertextHash || "—", mono: true, long: true },
+    // The compression the archive was created with, by its word: every
+    // writer of this archive follows it (FORMAT.md §7.1 bits 2-5).
+    { key: "method", label: "Compression", value: methodWord(d.method) },
     { key: "policy", label: "Policy", value: policy },
   ]);
 </script>

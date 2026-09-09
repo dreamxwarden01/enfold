@@ -801,7 +801,7 @@ One per archive, carrying **all of its versions**.
 | `archive_id` | `u8[16]` | Stable identity. **Never match on filename** |
 | `name` | `string` | The trusted name — see §7.4 |
 | `last_path` | `string` | Where it was last seen. A hint, never an identity |
-| `policy` | `u32` | bit0 `always_require_full_auth` (ignores the session cache) · bit1 `hidden` (not listed; the record and its keys stay) · bit2 `no_compression` (every file stored raw, trap 8) |
+| `policy` | `u32` | bit0 `always_require_full_auth` (ignores the session cache) · bit1 `hidden` (not listed; the record and its keys stay) · bit2 `no_compression` (every file stored raw, trap 8) · bits 3–5 `level`: the zstd preset every compressed file of this archive is written with — 0 unset (the writer's default, Normal), 1 Fastest, 2 Normal, 3 Better, 4 Best; 5–7 invalid (§1). Chosen per archive at creation and carried here so that every writer of this archive compresses the same way; the match window is not recorded and follows the preset (`DESIGN.md` trap 16). Bits 6–31 reserved, zero |
 | `created_at` | `i64` | |
 | `current_kid` | `u8[16]` | Which version record is in use now |
 | `last_ciphertext_hash` | `u8[32]` | SHA-256 of the whole archive file as of `hash_at_seq` — refreshed by compaction and by an explicit verify, never by an ordinary save (R36) |

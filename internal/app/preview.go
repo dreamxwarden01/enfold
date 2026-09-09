@@ -121,12 +121,12 @@ func (p *previewServer) serveFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if k := oa.pendingKind(fid); k == "added" || k == "replaced" || k == "deleted" {
+	if k := oa.pendingKind(fid); k == pendingAdded || k == pendingReplaced || k == pendingDeleted {
 		c.mu.Unlock()
 		http.NotFound(w, r)
 		return
 	}
-	info, found := oa.currentInfo(fid)
+	info, found := oa.currentFile(fid)
 	if !found {
 		c.mu.Unlock()
 		http.NotFound(w, r)

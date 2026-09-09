@@ -8,11 +8,33 @@
 // know about the keystore: the archive key is a parameter, and the caller
 // looks it up in the registry by the envelope's archive_id and kid.
 //
+// # The index is a tree
+//
+// A directory is a record with an id and a file hangs off its parent by that
+// id (FORMAT.md §11, R39, DESIGN.md trap 31): an empty folder exists, a
+// folder's time survives, and moving or renaming a folder changes one record.
+// Nothing is derived from a path and nothing is looked up by one — Children
+// lists a directory's live children, Path joins a record's ancestors' names
+// with its own, and format.RootID is the implicit root, which has no record.
+// The transaction holds R39's invariants ahead of the work: every staged
+// change that creates a record or gives a live one a new name or parent is
+// checked against the index the transaction is building — one valid path
+// element, a parent that is the root or a live directory, no live sibling
+// folding onto the name — and re-checks that record and every live record
+// beneath it against the depth and joined-path bounds, because renaming a
+// folder lengthens every descendant's path and moving one re-depths all of
+// it. format.Index.Encode runs the same walk over the whole index at the
+// seal, which is the backstop, not the substitute: it answers a bug of our
+// own at save rather than at the operation the caller performed.
+//
 // # Transactions
 //
 // Every change to an archive is a transaction ending in one superblock flip.
-// Begin opens one; Add, Replace, Delete, Rename and SetDictionary record
-// changes on it; Commit writes them. The single-operation methods on Archive
+// Begin opens one; Add, AddDir, Replace, Delete, Rename, Move and
+// SetDictionary record changes on it; Commit writes them. Deleting a
+// directory tombstones it and every live record beneath it in the same write,
+// the subtree taken from the transaction's own index rather than from the
+// caller. The single-operation methods on Archive
 // are one-transaction conveniences. Within a transaction data is written into
 // extents that no superblock references — free space, or past the end of the
 // file — so a crash before the flip leaves the previous state intact, and the

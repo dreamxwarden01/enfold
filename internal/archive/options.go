@@ -56,9 +56,12 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// FileInfo describes a live file without its keys.
+// FileInfo describes a live file without its keys. Name is the record's own
+// one path element, never a path (R20); ParentID is the directory it hangs
+// off, format.RootID for a top-level file (R39). The path is Archive.Path.
 type FileInfo struct {
 	ID          [16]byte
+	ParentID    [16]byte
 	Name        string
 	Size        uint64 // plaintext length
 	StoredSize  uint64 // bytes in the data region, tags included
@@ -72,8 +75,32 @@ type FileInfo struct {
 
 func infoOf(f *format.FileRecord) FileInfo {
 	return FileInfo{
-		ID: f.FileID, Name: f.Name, Size: f.OrigSize, StoredSize: f.StoredSize, Storage: f.Storage,
+		ID: f.FileID, ParentID: f.ParentID, Name: f.Name, Size: f.OrigSize, StoredSize: f.StoredSize, Storage: f.Storage,
 		ContentHash: f.ContentHash, DEKEpoch: f.DEKEpoch, Revision: f.Revision, LastWriter: f.LastWriter, ModifiedAt: f.ModifiedAt,
+	}
+}
+
+// DirInfo describes a live directory. A folder is a record of its own, never
+// a prefix of a name (FORMAT §11, R39, DESIGN.md trap 31), so an empty folder
+// exists and a folder's time survives.
+type DirInfo struct {
+	ID       [16]byte
+	ParentID [16]byte
+	Name     string
+	// ModifiedAt is the folder's own time, not a change clock: the source
+	// folder's time when it was added, the time of creation when it was made,
+	// and nothing writes it again — a rename, a move, a child added or
+	// removed beneath it and the tombstoning of the record all leave it alone
+	// (R32).
+	ModifiedAt int64
+	Revision   uint64
+	LastWriter [16]byte
+}
+
+func dirInfoOf(d *format.DirRecord) DirInfo {
+	return DirInfo{
+		ID: d.DirID, ParentID: d.ParentID, Name: d.Name,
+		ModifiedAt: d.ModifiedAt, Revision: d.Revision, LastWriter: d.LastWriter,
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -1551,17 +1552,43 @@ func TestArchiveSuperblockAndIndexAAD(t *testing.T) {
 	}
 }
 
+// idN is a distinct record id for n ≥ 1, so that a test can build a chain
+// longer than the 255 values fill16 offers.
+func idN(n int) (a [16]byte) {
+	binary.LittleEndian.PutUint64(a[:8], uint64(n))
+	return
+}
+
+func dirRec(id [16]byte, parent [16]byte, name string) DirRecord {
+	return DirRecord{DirID: id, State: FileLive, ParentID: parent, Name: name, ModifiedAt: 90, Revision: 1, LastWriter: fill16(0xA1)}
+}
+
+func fileRec(id [16]byte, parent [16]byte, name string) FileRecord {
+	return FileRecord{FileID: id, State: FileLive, ParentID: parent, Name: name,
+		OrigSize: 0, StoredSize: RawStoredSize(0), Storage: StorageRaw, DataOff: ArchiveDataStart,
+		ChunkSize: ChunkSize, Alg: AlgAES256GCM, DEKEpoch: 1, Revision: 1}
+}
+
+// sampleIndex is a small tree (§11): one live directory under the root, one
+// tombstoned directory under it, and three files — one in the live directory,
+// one tombstone under the tombstoned directory, one at the root.
 func sampleIndex() *Index {
-	f := FileRecord{FileID: fill16(0xF1), State: FileLive, Name: "video/holiday.mp4", OrigSize: 3*ChunkSize + 17,
-		Storage: StorageRaw, ContentHash: fill32(0x99), DataOff: 0x5000, ChunkSize: ChunkSize, Alg: AlgAES256GCM,
-		DEKEpoch: 2, DEKCreatedAt: 100, Revision: 1, LastWriter: fill16(0xD1), ModifiedAt: 101}
+	video := dirRec(fill16(0xD1), RootID, "video")
+	old := DirRecord{DirID: fill16(0xD2), State: FileTombstone, ParentID: fill16(0xD1), Name: "old",
+		ModifiedAt: 80, Revision: 3, LastWriter: fill16(0xA2)}
+	f := FileRecord{FileID: fill16(0xF1), State: FileLive, ParentID: fill16(0xD1), Name: "holiday.mp4",
+		OrigSize: 3*ChunkSize + 17, Storage: StorageRaw, ContentHash: fill32(0x99), DataOff: 0x5000,
+		ChunkSize: ChunkSize, Alg: AlgAES256GCM, DEKEpoch: 2, DEKCreatedAt: 100, Revision: 1,
+		LastWriter: fill16(0xD1), ModifiedAt: 101} // last_writer is not an identity (R39)
 	f.StoredSize = RawStoredSize(f.OrigSize)
 	copy(f.DEKNonce[:], seq(1, 12))
 	copy(f.WrappedDEK[:], seq(0x30, 48))
-	g := FileRecord{FileID: fill16(0xF2), State: FileTombstone, Name: "", Storage: StorageZstdDict, ChunkSize: ChunkSize, Alg: AlgAES256GCM}
-	z := FileRecord{FileID: fill16(0xF3), State: FileLive, Name: "empty.txt", OrigSize: 0, StoredSize: RawStoredSize(0),
-		Storage: StorageRaw, DataOff: 0x9000, ChunkSize: ChunkSize, Alg: AlgAES256GCM}
-	return &Index{Dict: fakeDict(1, 100), Files: []FileRecord{f, g, z}}
+	g := FileRecord{FileID: fill16(0xF2), State: FileTombstone, ParentID: fill16(0xD2), Name: "",
+		Storage: StorageZstdDict, ChunkSize: ChunkSize, Alg: AlgAES256GCM}
+	z := FileRecord{FileID: fill16(0xF3), State: FileLive, ParentID: RootID, Name: "empty.txt",
+		OrigSize: 0, StoredSize: RawStoredSize(0), Storage: StorageRaw, DataOff: 0x9000,
+		ChunkSize: ChunkSize, Alg: AlgAES256GCM}
+	return &Index{Dict: fakeDict(1, 100), Dirs: []DirRecord{video, old}, Files: []FileRecord{f, g, z}}
 }
 
 // fakeDict is a byte string with a zstd dictionary's magic and ID (R27) and
@@ -1580,6 +1607,15 @@ func TestIndexRoundTripAndValidation(t *testing.T) {
 	d, err := DecodeIndex(b)
 	if err != nil || !reflect.DeepEqual(x, d) {
 		t.Fatalf("round trip: %v", err)
+	}
+	// A directory record's own fields survive the trip (§11).
+	if got := d.Dirs[0]; got.DirID != fill16(0xD1) || got.State != FileLive || got.ParentID != RootID ||
+		got.Name != "video" || got.ModifiedAt != 90 || got.Revision != 1 || got.LastWriter != fill16(0xA1) {
+		t.Fatalf("directory record: %+v", got)
+	}
+	if got := d.Dirs[1]; got.State != FileTombstone || got.ParentID != fill16(0xD1) || got.Name != "old" ||
+		got.ModifiedAt != 80 || got.Revision != 3 || got.LastWriter != fill16(0xA2) {
+		t.Fatalf("directory tombstone: %+v", got)
 	}
 	if RawStoredSize(0) != 16 || RawStoredSize(1) != 17 || RawStoredSize(ChunkSize) != ChunkSize+16 || RawStoredSize(ChunkSize+1) != ChunkSize+1+32 {
 		t.Fatal("RawStoredSize")
@@ -1608,16 +1644,31 @@ func TestIndexRoundTripAndValidation(t *testing.T) {
 	bad("dict too short", func(x *Index) { x.Dict = fakeDict(1, 8)[:7] })
 	bad("empty file compressed", func(x *Index) { x.Files[2].Storage = StorageZstd })
 	bad("live file without name", func(x *Index) { x.Files[0].Name = "" })
-	bad("duplicate file id", func(x *Index) { x.Files[2].FileID = x.Files[0].FileID })
+	bad("live directory without name", func(x *Index) { x.Dirs[0].Name = "" })
 	bad("data in fixed region", func(x *Index) { x.Files[0].DataOff = 0x1000 })
 	bad("unknown storage", func(x *Index) { x.Files[0].Storage = 9 })
-	bad("unknown state", func(x *Index) { x.Files[0].State = 0 })
+	bad("unknown file state", func(x *Index) { x.Files[0].State = 0 })
+	bad("unknown directory state", func(x *Index) { x.Dirs[0].State = 0 })
 	if _, err := DecodeIndex(append(b, 1)); !errors.Is(err, ErrTrailing) {
 		t.Errorf("trailing: %v", err)
 	}
+	// index_version 1 — the object-key model — is refused, never migrated (§11).
+	v1 := append([]byte(nil), b...)
+	binary.LittleEndian.PutUint32(v1[:4], 1)
+	if _, err := DecodeIndex(v1); !errors.Is(err, ErrInvalid) {
+		t.Errorf("index_version 1 accepted: %v", err)
+	}
 	// pack_id is reserved: non-zero bytes on the wire are ignored, and the record still decodes.
-	rec0 := 4 + 4 + 100 + 4 + 4 // first record body offset
-	packOff := rec0 + 16 + 1 + 2 + len("video/holiday.mp4") + 8 + 8 + 1 + 32 + 8 + 4 + 2 + NonceSize + WrappedKeySize + 4 + 8
+	off := 4 + 4 + len(x.Dict) + 4 // version, dict, dir_count
+	for i := range x.Dirs {
+		body, err := x.Dirs[i].body()
+		if err != nil {
+			t.Fatal(err)
+		}
+		off += 4 + len(body)
+	}
+	off += 4 + 4 // file_count and the first file's record_len
+	packOff := off + 16 + 1 + 16 + 2 + len(x.Files[0].Name) + 8 + 8 + 1 + 32 + 8 + 4 + 2 + NonceSize + WrappedKeySize + 4 + 8
 	junk := append([]byte(nil), b...)
 	junk[packOff] = 0xAB
 	if d, err := DecodeIndex(junk); err != nil || !reflect.DeepEqual(x, d) {
@@ -1625,23 +1676,200 @@ func TestIndexRoundTripAndValidation(t *testing.T) {
 	}
 }
 
-func TestValidateFileName(t *testing.T) {
-	good := []string{"a", "dir/file.txt", "深/层/目录.mp4", "COM", "COM10", "LPT0", "config.txt", "a b/c d.e"}
+// TestIndexTreeReaderRefusals patches valid bytes so that the tree breaks
+// without the encoder's help: R39 is the reader's rule as much as the
+// writer's, and an archive from an untrusted place never reaches Encode.
+func TestIndexTreeReaderRefusals(t *testing.T) {
+	x := sampleIndex()
+	b, err := x.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body0, err := x.Dirs[0].body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir0 := 4 + 4 + len(x.Dict) + 4 + 4 // version, dict, dir_count, first record_len
+	dir1 := dir0 + len(body0) + 4
+	patch := func(name string, off int, v []byte) {
+		t.Helper()
+		p := append([]byte(nil), b...)
+		copy(p[off:], v)
+		if _, err := DecodeIndex(p); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s accepted on decode: %v", name, err)
+		}
+	}
+	patch("all-zero dir_id", dir0, make([]byte, 16))
+	patch("duplicate dir_id", dir1, x.Dirs[0].DirID[:])
+	unknown := fill16(0xEE)
+	patch("unknown parent", dir0+16+1, unknown[:])
+}
+
+func TestIndexTree(t *testing.T) {
+	root := RootID
+	ok := func(name string, x *Index) {
+		t.Helper()
+		if _, err := x.Encode(); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+	bad := func(name string, x *Index) {
+		t.Helper()
+		if _, err := x.Encode(); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s accepted: err = %v", name, err)
+		}
+	}
+
+	// Identities (R39): no all-zero id, no id twice, one id space across both
+	// record tables.
+	bad("all-zero dir_id", &Index{Dirs: []DirRecord{dirRec(RootID, root, "a")}})
+	bad("all-zero file_id", &Index{Files: []FileRecord{fileRec(RootID, root, "a")}})
+	bad("duplicate dir_id", &Index{Dirs: []DirRecord{dirRec(idN(1), root, "a"), dirRec(idN(1), root, "b")}})
+	bad("duplicate file_id", &Index{Files: []FileRecord{fileRec(idN(1), root, "a"), fileRec(idN(1), root, "b")}})
+	bad("file_id equals a dir_id", &Index{
+		Dirs:  []DirRecord{dirRec(idN(1), root, "a")},
+		Files: []FileRecord{fileRec(idN(1), root, "b")},
+	})
+	// A tombstone counts alongside the live records in all three.
+	dup := dirRec(idN(1), root, "gone")
+	dup.State = FileTombstone
+	bad("duplicate id against a tombstone", &Index{Dirs: []DirRecord{dirRec(idN(1), root, "a"), dup}})
+
+	// Chains (R39): a live record's parent is the root or a live directory.
+	bad("unknown parent, directory", &Index{Dirs: []DirRecord{dirRec(idN(1), idN(9), "a")}})
+	bad("unknown parent, file", &Index{Files: []FileRecord{fileRec(idN(1), idN(9), "a")}})
+	bad("file parented on a file", &Index{Files: []FileRecord{fileRec(idN(1), root, "a"), fileRec(idN(2), idN(1), "b")}})
+	tomb := dirRec(idN(1), root, "gone")
+	tomb.State = FileTombstone
+	bad("tombstoned parent of a live directory", &Index{Dirs: []DirRecord{tomb, dirRec(idN(2), idN(1), "a")}})
+	bad("tombstoned parent of a live file", &Index{
+		Dirs:  []DirRecord{tomb},
+		Files: []FileRecord{fileRec(idN(2), idN(1), "a")},
+	})
+	// A tombstone's parent may name anything, including another tombstone.
+	deadChild := dirRec(idN(2), idN(1), "child")
+	deadChild.State = FileTombstone
+	deadFile := fileRec(idN(3), idN(9), "x")
+	deadFile.State = FileTombstone
+	deadFile.StoredSize, deadFile.DataOff = 0, 0
+	ok("tombstones under anything", &Index{Dirs: []DirRecord{tomb, deadChild}, Files: []FileRecord{deadFile}})
+
+	// Cycles.
+	bad("self-parent", &Index{Dirs: []DirRecord{dirRec(idN(1), idN(1), "a")}})
+	bad("2-cycle", &Index{Dirs: []DirRecord{dirRec(idN(1), idN(2), "a"), dirRec(idN(2), idN(1), "b")}})
+	bad("3-cycle", &Index{Dirs: []DirRecord{
+		dirRec(idN(1), idN(3), "a"), dirRec(idN(2), idN(1), "b"), dirRec(idN(3), idN(2), "c"),
+	}})
+
+	// Depth: MaxTreeDepth steps to the root are enough, one more is not.
+	chain := func(n int) *Index {
+		dirs := make([]DirRecord, 0, n)
+		parent := root
+		for i := 1; i <= n; i++ {
+			dirs = append(dirs, dirRec(idN(i), parent, "d"))
+			parent = idN(i)
+		}
+		return &Index{Dirs: dirs}
+	}
+	ok("depth 255", chain(MaxTreeDepth))
+	bad("depth 256", chain(MaxTreeDepth+1))
+
+	// The joined path of a live record is at most MaxPathLen bytes (R20).
+	ok("joined path of 4096", indexWithPath(MaxPathLen))
+	bad("joined path of 4097", indexWithPath(MaxPathLen+1))
+
+	// Sibling uniqueness among the live children of one parent, files and
+	// directories in one namespace, under simple case folding.
+	bad("A.txt beside a.txt", &Index{Files: []FileRecord{fileRec(idN(1), root, "A.txt"), fileRec(idN(2), root, "a.txt")}})
+	bad("two folders folding onto one name", &Index{Dirs: []DirRecord{dirRec(idN(1), root, "Photos"), dirRec(idN(2), root, "photos")}})
+	bad("a file and a directory sharing a folded name", &Index{
+		Dirs:  []DirRecord{dirRec(idN(1), root, "Notes")},
+		Files: []FileRecord{fileRec(idN(2), root, "notes")},
+	})
+	ok("the same two names under different parents", &Index{
+		Dirs: []DirRecord{dirRec(idN(1), root, "a"), dirRec(idN(2), root, "b"),
+			dirRec(idN(3), idN(1), "x"), dirRec(idN(4), idN(2), "x")},
+		Files: []FileRecord{fileRec(idN(5), idN(1), "n.txt"), fileRec(idN(6), idN(2), "n.txt")},
+	})
+	// A tombstone is not a live sibling, so a deleted record's name is free
+	// (R32: keeping a tombstone's name reserves nothing).
+	freed := dirRec(idN(1), root, "Report")
+	freed.State = FileTombstone
+	ok("a tombstone's name is not reserved", &Index{
+		Dirs:  []DirRecord{freed},
+		Files: []FileRecord{fileRec(idN(2), root, "report")},
+	})
+	// Changing only the case of a name is a rename, not a collision: one
+	// record is not its own sibling.
+	ok("one record, one name", &Index{Files: []FileRecord{fileRec(idN(1), root, "Report.TXT")}})
+}
+
+// indexWithPath builds an index holding one file whose joined path is exactly
+// n bytes: a chain of directories, each name as long as R20 allows, and a last
+// one sized to make up the difference.
+func indexWithPath(n int) *Index {
+	remain := n - 1 // the file's own name, "f"
+	var dirs []DirRecord
+	parent := RootID
+	for i := 1; remain > 0; i++ {
+		l := remain - 1
+		if l > MaxNameUnits {
+			l = MaxNameUnits
+		}
+		if l < 1 {
+			panic("indexWithPath: no room for a directory name")
+		}
+		d := dirRec(idN(i), parent, strings.Repeat("d", l))
+		dirs = append(dirs, d)
+		parent = d.DirID
+		remain -= l + 1
+	}
+	return &Index{Dirs: dirs, Files: []FileRecord{fileRec(idN(len(dirs)+1), parent, "f")}}
+}
+
+// R39 folds live sibling names with strings.EqualFold, and Validate compares
+// a map key instead of every pair; the key has to answer the same question.
+func TestFoldKeyMatchesEqualFold(t *testing.T) {
+	names := []string{"a", "A", "report.txt", "Report.TXT", "k", "K", "K", "s", "S", "ſ",
+		"straße", "STRAẞE", "ß", "ẞ", "i", "I", "İ", "ı",
+		"Α", "α", "ς", "σ", "ab", "abc", "世界", "世"}
+	for _, a := range names {
+		for _, b := range names {
+			if got, want := foldKey(a) == foldKey(b), strings.EqualFold(a, b); got != want {
+				t.Errorf("foldKey(%q)==foldKey(%q) is %v, EqualFold is %v", a, b, got, want)
+			}
+		}
+	}
+}
+
+func TestValidateName(t *testing.T) {
+	good := []string{"a", "file.txt", "目录.mp4", "COM", "COM10", "LPT0", "config.txt", "a b.e",
+		"..a", strings.Repeat("世", MaxNameUnits), strings.Repeat("a", MaxNameUnits)}
 	for _, n := range good {
-		if err := ValidateFileName(n); err != nil {
+		if err := ValidateName(n); err != nil {
 			t.Errorf("%q rejected: %v", n, err)
 		}
 	}
-	badNames := []string{"", "/abs", "a/", "a//b", ".", "..", "a/../b", "./a", `a\b`, "C:x", "a:b", "a*", "q?", "<", ">", "|", `"`,
-		"nul", "NUL.txt", "con", "Com1", "LPT9.log", "aux", "prn.", "x.", "x ", "a\x00b", "a\tb", "a\x7fb", strings.Repeat("a", MaxFileNameLen+1)}
+	badNames := []string{"", "/", "a/b", "dir/file.txt", "/abs", "a/", ".", "..", `a\b`, "C:x", "a:b",
+		"a*", "q?", "<", ">", "|", `"`, "nul", "NUL.txt", "con", "Com1", "LPT9.log", "aux", "prn.",
+		"x.", "x ", "a\x00b", "a\tb", "a\x7fb", strings.Repeat("世", MaxNameUnits+1),
+		strings.Repeat("a", MaxNameUnits+1), "\U0001F600" + strings.Repeat("a", MaxNameUnits-1)}
 	for _, n := range badNames {
-		if err := ValidateFileName(n); !errors.Is(err, ErrInvalid) {
+		if err := ValidateName(n); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%q accepted", n)
 		}
 	}
-	// Tombstones keep whatever name they had, even an empty one.
+	// A non-BMP scalar is two UTF-16 code units, so 128 of them are 256.
+	if err := ValidateName(strings.Repeat("\U0001F600", 128)); !errors.Is(err, ErrInvalid) {
+		t.Errorf("256 code units accepted")
+	}
+	if err := ValidateName(strings.Repeat("\U0001F600", 127) + "a"); err != nil {
+		t.Errorf("255 code units rejected: %v", err)
+	}
+	// Tombstones keep whatever name they had, even an empty one or a path.
 	x := sampleIndex()
-	x.Files[1].Name = "../was-here"
+	x.Dirs[1].Name = "../was-here"
+	x.Files[1].Name = "a/b\\c"
 	if _, err := x.Encode(); err != nil {
 		t.Errorf("tombstone name rejected: %v", err)
 	}

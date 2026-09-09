@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -19,20 +18,26 @@ import (
 )
 
 // openArchive is one archive the core holds open (APP.md §2.3): the
-// committed snapshot, the staged overlay, the folder projection, the
-// preview token, the reader count and the two clocks. Fields are guarded by
-// Core.mu; opMu serialises operations that touch the handle.
+// committed snapshot — the files and the directories, re-taken after every
+// index-republishing operation — the staged overlay keyed by record id, the
+// tree the two make together, the preview token, the reader count and the
+// two clocks. Fields are guarded by Core.mu; opMu serialises operations that
+// touch the handle.
 type openArchive struct {
-	id      [16]byte
-	path    string
-	name    string
-	a       *archive.Archive
-	opMu    sync.Mutex // one operation on the handle at a time
-	tx      *archive.Tx
+	id   [16]byte
+	path string
+	name string
+	a    *archive.Archive
+	opMu sync.Mutex // one operation on the handle at a time
+	tx   *archive.Tx
+	// The committed snapshot is both record tables: a directory is a record
+	// of its own (FORMAT.md R39) and no folder is projected from a name.
 	snap    []archive.FileInfo
+	dirSnap []archive.DirInfo
 	byID    map[[16]byte]int
+	dirByID map[[16]byte]int
 	overlay map[[16]byte]*pendingChange
-	adds    []*pendingChange // ordered staged adds
+	adds    []*pendingChange // ordered staged creations, files and folders
 	seq     uint64
 	state   string // open | dirty | compacting | needs_reopen
 	token   string
@@ -69,27 +74,80 @@ type openArchive struct {
 	quiesced bool
 }
 
-// pendingChange is one staged change, keyed by file id.
+// pendingChange is one staged change (APP.md §2.3): one entry per record and
+// one word per entry, keyed by the record's id, files and directories alike.
+// name and parentID are the record's as the merged view has it — what a
+// rename and a move write — and file or dir is the staged record itself for
+// a creation or a replace.
 type pendingChange struct {
-	kind string // added | replaced | renamed | deleted
-	name string // the new name for renamed; the name for added
-	info archive.FileInfo
+	kind     string // added | replaced | renamed | moved | deleted
+	id       [16]byte
+	isDir    bool
+	name     string
+	parentID [16]byte
+	file     archive.FileInfo // files
+	dir      archive.DirInfo  // directories
 }
 
-// stageReplace records a replaced record in the overlay. A record that is
-// itself a staged add stays one object — the same pendingChange in the
-// overlay and in adds — so that it can still be renamed or un-staged.
-// Caller holds the state mutex.
-func (oa *openArchive) stageReplace(info archive.FileInfo) {
-	if p := oa.overlay[info.ID]; p != nil && p.kind == "added" {
-		p.info = info
+// The staging helpers keep §2.3's precedence. Caller holds the state mutex.
+
+// stageAdd records a creation — a file added or a folder made — as one
+// staged add: the same pendingChange in the overlay and in adds, so it can
+// still be renamed, moved, replaced or un-staged as one thing.
+func (oa *openArchive) stageAdd(p *pendingChange) {
+	oa.overlay[p.id] = p
+	oa.adds = append(oa.adds, p)
+}
+
+// stageReplace records a replaced record. `added` outlives every later
+// change to a staged-added record, so replacing one leaves it an add;
+// otherwise `replaced` outranks the renamed or moved word that stood there.
+func (oa *openArchive) stageReplace(r *mergedRec, info archive.FileInfo) {
+	if p := oa.overlay[r.id]; p != nil {
+		p.file = info
+		if p.kind != pendingAdded {
+			p.kind = pendingReplaced
+		}
 		return
 	}
-	name := info.Name
-	if p := oa.overlay[info.ID]; p != nil && p.kind == "renamed" {
-		name = p.name
+	oa.overlay[r.id] = &pendingChange{kind: pendingReplaced, id: r.id, name: r.name, parentID: r.parentID, file: info}
+}
+
+// stageRename writes the new name onto whatever entry stands: an add stays
+// an add, a replace stays a replace, and a record renamed twice is renamed.
+func (oa *openArchive) stageRename(r *mergedRec, name string) {
+	if p := oa.overlay[r.id]; p != nil {
+		p.name = name
+		return
 	}
-	oa.overlay[info.ID] = &pendingChange{kind: "replaced", name: name, info: info}
+	oa.overlay[r.id] = &pendingChange{kind: pendingRenamed, id: r.id, isDir: r.isDir, name: name, parentID: r.parentID}
+}
+
+// stageMove writes the new parent. A record both renamed and moved reads
+// `moved`; an add and a replace keep their word.
+func (oa *openArchive) stageMove(r *mergedRec, parentID [16]byte) {
+	if p := oa.overlay[r.id]; p != nil {
+		p.parentID = parentID
+		if p.kind == pendingRenamed {
+			p.kind = pendingMoved
+		}
+		return
+	}
+	oa.overlay[r.id] = &pendingChange{kind: pendingMoved, id: r.id, isDir: r.isDir, name: r.name, parentID: parentID}
+}
+
+// committed is the record as the last published index has it — where an
+// un-staged move puts it back.
+func (oa *openArchive) committed(id [16]byte) (parent [16]byte, name string, ok bool) {
+	if i, found := oa.dirByID[id]; found {
+		d := &oa.dirSnap[i]
+		return d.ParentID, d.Name, true
+	}
+	if i, found := oa.byID[id]; found {
+		f := &oa.snap[i]
+		return f.ParentID, f.Name, true
+	}
+	return [16]byte{}, "", false
 }
 
 // owedReceipt is a Save's receipt a lock stranded (APP.md §2.3).
@@ -101,7 +159,8 @@ type owedReceipt struct {
 	hash      *[32]byte
 }
 
-// dirty is the number of staged changes.
+// dirty is the number of staged changes: one overlay entry is one change,
+// so a deleted folder of 900 files is one and not 901 (APP.md §2.3).
 func (oa *openArchive) dirty() int {
 	if oa.tx == nil {
 		return 0
@@ -448,13 +507,19 @@ func newToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-// refreshSnapshot re-takes the committed view. Caller holds opMu or is the
-// opener.
+// refreshSnapshot re-takes the committed view — both record tables, since
+// the index is a tree — after every index-republishing operation (APP.md
+// §2.3). Caller holds opMu or is the opener.
 func (oa *openArchive) refreshSnapshot() {
 	oa.snap = oa.a.Files()
+	oa.dirSnap = oa.a.Dirs()
 	oa.byID = make(map[[16]byte]int, len(oa.snap))
 	for i := range oa.snap {
 		oa.byID[oa.snap[i].ID] = i
+	}
+	oa.dirByID = make(map[[16]byte]int, len(oa.dirSnap))
+	for i := range oa.dirSnap {
+		oa.dirByID[oa.dirSnap[i].ID] = i
 	}
 	oa.size, oa.files, oa.free = oa.a.Stat()
 }
@@ -541,7 +606,7 @@ func (c *Core) CloseAllArchives() []string {
 func (c *Core) statLocked(oa *openArchive) ArchiveStat {
 	st := ArchiveStat{ID: hexID(oa.id), Name: oa.name, Seq: oa.seq, KeyVersion: oa.keyVersion, Dirty: oa.dirty(), State: oa.state, LastSavedAt: oa.lastSavedAt, ReceiptOwed: oa.receiptOwed, CopyMismatch: oa.copyMismatch}
 	if oa.state != "needs_reopen" && oa.state != "compacting" {
-		st.Size, st.Files, st.FreeSpace = oa.size, oa.files+len(oa.adds), oa.free
+		st.Size, st.Files, st.FreeSpace = oa.size, oa.files+oa.stagedFiles(), oa.free
 	}
 	if !oa.expiresAt.IsZero() {
 		st.ExpiresAt = oa.expiresAt.Unix()
@@ -708,31 +773,10 @@ func (c *Core) clearDirtyLocked(oa *openArchive) {
 	}
 }
 
-// The folder projection (APP.md §3, "Names and folders").
+// The tree the page reads (APP.md §2.3, §3): the merged view of tree.go,
+// listed one directory at a time. Nothing is projected from a name.
 
-// mergedView is the committed snapshot with the overlay applied.
-func (oa *openArchive) mergedView() []archive.FileInfo {
-	out := make([]archive.FileInfo, 0, len(oa.snap)+len(oa.adds))
-	for i := range oa.snap {
-		f := oa.snap[i]
-		if p := oa.overlay[f.ID]; p != nil {
-			switch p.kind {
-			case "deleted":
-				continue
-			case "renamed":
-				f.Name = p.name
-			case "replaced":
-				f = p.info
-			}
-		}
-		out = append(out, f)
-	}
-	for _, p := range oa.adds {
-		out = append(out, p.info)
-	}
-	return out
-}
-
+// pendingKind is the staged word on a record, or "".
 func (oa *openArchive) pendingKind(id [16]byte) string {
 	if p := oa.overlay[id]; p != nil {
 		return p.kind
@@ -740,54 +784,67 @@ func (oa *openArchive) pendingKind(id [16]byte) string {
 	return ""
 }
 
-// Page projects the merged view onto one folder. folder is "" for the
-// root or a `/`-separated prefix without a trailing slash.
-func (c *Core) Page(id, folder, sortBy string, offset, limit int) (Page, *Error) {
+// stagedFiles counts the staged adds that are files: a folder occupies no
+// data region, so counting one among the files would make the number mean
+// neither thing (the archive layer's Stat draws the same line).
+func (oa *openArchive) stagedFiles() int {
+	n := 0
+	for _, p := range oa.adds {
+		if !p.isDir {
+			n++
+		}
+	}
+	return n
+}
+
+// currentFile is the live file as the merged view has it. Only a file has
+// content, so a directory's id answers false, as an unknown one does.
+func (oa *openArchive) currentFile(fid [16]byte) (archive.FileInfo, bool) {
+	r := oa.merge().live(fid)
+	if r == nil || r.isDir {
+		return archive.FileInfo{}, false
+	}
+	if p := oa.overlay[fid]; p != nil && (p.kind == pendingAdded || p.kind == pendingReplaced) {
+		f := p.file
+		f.Name, f.ParentID = r.name, r.parentID
+		return f, true
+	}
+	if i, ok := oa.byID[fid]; ok {
+		f := oa.snap[i]
+		f.Name, f.ParentID = r.name, r.parentID
+		return f, true
+	}
+	return archive.FileInfo{}, false
+}
+
+// Page lists the live children of one directory in the merged view, files
+// and folders in one list, with the breadcrumb from the root down to it
+// (APP.md §3). dirID is a record id — the all-zero id is the root — never a
+// path, and one that no longer names a live directory answers file.not_found
+// rather than an empty listing under a breadcrumb that still names the
+// place: the page walks the Crumbs it last held upwards until one answers.
+func (c *Core) Page(id, dirID, sortBy string, offset, limit int) (Page, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return Page{}, e
 	}
-	folder = strings.Trim(folder, "/")
+	did, ok := parseID(dirID)
+	if !ok {
+		return Page{}, coded(CodeParams)
+	}
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.touchArchiveLocked(oa)
-	prefix := ""
-	if folder != "" {
-		prefix = folder + "/"
+	m := oa.merge()
+	if !m.dirUsable(did) {
+		return Page{}, coded(CodeFileNotFound)
 	}
-	type folderAgg struct {
-		files int
-		size  uint64
-		mod   int64
-	}
-	folders := map[string]*folderAgg{}
-	var rows []FileRow
-	for _, f := range oa.mergedView() {
-		if !strings.HasPrefix(f.Name, prefix) {
-			continue
-		}
-		rest := f.Name[len(prefix):]
-		if i := strings.IndexByte(rest, '/'); i >= 0 {
-			name := rest[:i]
-			agg := folders[name]
-			if agg == nil {
-				agg = &folderAgg{}
-				folders[name] = agg
-			}
-			agg.files++
-			agg.size += f.Size
-			if f.ModifiedAt > agg.mod {
-				agg.mod = f.ModifiedAt
-			}
-			continue
-		}
-		rows = append(rows, fileRow(f, rest, oa.pendingKind(f.ID)))
-	}
-	for name, agg := range folders {
-		rows = append(rows, FileRow{Path: prefix + name, Name: name, IsFolder: true, Files: agg.files, Size: agg.size, ModifiedAt: agg.mod})
+	rows := make([]FileRow, 0, len(m.kids[did]))
+	for _, r := range m.kids[did] {
+		rows = append(rows, fileRow(m, r))
 	}
 	sortRows(rows, sortBy)
 	total := len(rows)
@@ -801,34 +858,44 @@ func (c *Core) Page(id, folder, sortBy string, offset, limit int) (Page, *Error)
 	if end > total {
 		end = total
 	}
-	page := Page{Seq: oa.seq, Folder: folder, Rows: rows[offset:end], Total: total}
+	page := Page{Seq: oa.seq, Rows: rows[offset:end], Total: total, Crumbs: m.crumbs(did, oa.name)}
 	if page.Rows == nil {
 		page.Rows = []FileRow{}
 	}
 	return page, nil
 }
 
-func fileRow(f archive.FileInfo, leaf, pending string) FileRow {
-	r := FileRow{FileID: hexID(f.ID), Path: f.Name, Name: leaf, Size: f.Size, ModifiedAt: f.ModifiedAt, Pending: pending}
-	switch f.Storage {
+// fileRow renders one record. A directory's Size is the sum beneath it and
+// its ModifiedAt the record's own; it has no storage of its own.
+func fileRow(m *merged, r *mergedRec) FileRow {
+	row := FileRow{
+		ID: hexID(r.id), ParentID: hexID(r.parentID), IsDir: r.isDir,
+		Name: r.name, Path: m.path(r.id), ModifiedAt: r.modifiedAt, Pending: r.pending,
+	}
+	if r.isDir {
+		row.Size = m.sizeBeneath(r.id)
+		return row
+	}
+	row.Size = r.size
+	switch r.storage {
 	case format.StorageZstd:
-		r.Storage = "zstd"
+		row.Storage = "zstd"
 	case format.StorageZstdDict:
-		r.Storage = "zstd+dict"
+		row.Storage = "zstd+dict"
 	default:
-		r.Storage = "raw"
+		row.Storage = "raw"
 	}
-	if f.Storage != format.StorageRaw && f.Size > 0 && f.StoredSize < f.Size {
-		r.SavedPercent = int((f.Size - f.StoredSize) * 100 / f.Size)
+	if r.storage != format.StorageRaw && r.size > 0 && r.storedSize < r.size {
+		row.SavedPercent = int((r.size - r.storedSize) * 100 / r.size)
 	}
-	return r
+	return row
 }
 
 func sortRows(rows []FileRow, by string) {
 	less := func(i, j int) bool {
 		a, b := rows[i], rows[j]
-		if a.IsFolder != b.IsFolder {
-			return a.IsFolder
+		if a.IsDir != b.IsDir {
+			return a.IsDir
 		}
 		switch by {
 		case "size", "-size":
@@ -847,52 +914,47 @@ func sortRows(rows []FileRow, by string) {
 	sort.SliceStable(rows, less)
 }
 
-// composeName joins a folder and a leaf into a stored name and validates
-// it under R20.
-func composeName(folder, leaf string) (string, error) {
-	folder = strings.Trim(folder, "/")
-	if leaf == "" || strings.ContainsRune(leaf, '/') {
-		return "", format.ErrInvalid
-	}
-	name := leaf
-	if folder != "" {
-		name = folder + "/" + leaf
-	}
-	if err := format.ValidateFileName(name); err != nil {
-		return "", err
-	}
-	return name, nil
-}
-
-// lookupMerged finds a live name in the merged view.
-func (oa *openArchive) lookupMerged(name string) (archive.FileInfo, bool) {
-	for _, f := range oa.mergedView() {
-		if f.Name == name {
-			return f, true
-		}
-	}
-	return archive.FileInfo{}, false
-}
-
-// CheckNames reports which of the names, composed under folder, collide
-// with the merged view, so the UI can ask once before an add.
-func (c *Core) CheckNames(id, folder string, names []string) ([]Collision, *Error) {
+// CheckNames reports which of the offered names collide with a live child of
+// parentID, so the UI can ask once before an add (APP.md §3). A name given
+// with a trailing "/" is offered as a directory — R20 keeps a "/" out of
+// every real name, so the mark is unambiguous — and the collision carries
+// the kind on both sides, so the dialog can say "Photos is a file here" and
+// grey Replace whenever the two differ. A staged-deleted sibling reserves no
+// name and is ignored. An offered name format.ValidateName refuses is not a
+// collision and is not reported here: a Collision names the record in the way
+// and there is none, and the add says so where APP.md §3 puts it — one
+// FileOutcome of `failed` with `file.name`, named in the results and never
+// silently skipped.
+func (c *Core) CheckNames(id, parentID string, names []string) ([]Collision, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return nil, e
 	}
+	pid, ok := parseID(parentID)
+	if !ok {
+		return nil, coded(CodeParams)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	m := oa.merge()
+	if !m.dirUsable(pid) {
+		return nil, coded(CodeFileNotFound)
+	}
 	out := []Collision{}
 	for _, n := range names {
-		full, err := composeName(folder, path.Base(strings.ReplaceAll(n, "\\", "/")))
-		if err != nil {
-			out = append(out, Collision{Name: n, Existing: "", Pending: false})
+		offered := strings.TrimSuffix(n, "/")
+		isDir := offered != n
+		if format.ValidateName(offered) != nil {
+			continue // a name the walk will refuse, not a collision
+		}
+		x := m.sibling(pid, offered, [16]byte{})
+		if x == nil {
 			continue
 		}
-		if f, ok := oa.lookupMerged(full); ok {
-			out = append(out, Collision{Name: n, Existing: hexID(f.ID), Pending: oa.pendingKind(f.ID) != ""})
-		}
+		out = append(out, Collision{
+			Name: n, IsDir: isDir, Existing: hexID(x.id),
+			ExistingIsDir: x.isDir, Pending: x.pending != "",
+		})
 	}
 	return out, nil
 }
@@ -913,11 +975,72 @@ func (c *Core) beginLocked(oa *openArchive) error {
 	return nil
 }
 
-// DeleteFiles stages deletions.
-func (c *Core) DeleteFiles(id string, fileIDs []string) *Error {
+// CreateFolder stages a directory record under parentID (APP.md §3): a
+// folder is a record, so an empty one survives the commit and is never a
+// fiction of the page (FORMAT.md R39, DESIGN.md trap 31). It is staged at
+// once, as Tx.Add is, and its modified_at is the time it was made — nothing
+// writes it again (R32). The name is validated and matched like any other's.
+func (c *Core) CreateFolder(id, parentID, name string) (string, *Error) {
+	oa, e := c.findArchive(id)
+	if e != nil {
+		return "", e
+	}
+	pid, ok := parseID(parentID)
+	if !ok {
+		return "", coded(CodeParams)
+	}
+	oa.opMu.Lock()
+	defer oa.opMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := oa.merge()
+	if !m.dirUsable(pid) {
+		return "", coded(CodeFileNotFound)
+	}
+	if format.ValidateName(name) != nil {
+		return "", coded(CodeFileName)
+	}
+	if m.sibling(pid, name, [16]byte{}) != nil {
+		return "", coded(CodeFileExists)
+	}
+	if e := m.boundsNew(pid, true, name); e != nil {
+		return "", e
+	}
+	if err := c.beginLocked(oa); err != nil {
+		return "", c.fail("begin", err)
+	}
+	info, err := oa.tx.AddDir(pid, name, c.now().Unix())
+	if err != nil {
+		c.settleLocked(oa)
+		return "", c.fail("create folder", err)
+	}
+	oa.stageAdd(&pendingChange{kind: pendingAdded, id: info.ID, isDir: true, name: name, parentID: pid, dir: info})
+	c.touchArchiveLocked(oa)
+	oa.seq++
+	go c.emit(EventArchiveChanged, ArchiveChanged{ID: hexID(oa.id), Seq: oa.seq})
+	go c.emitState()
+	return hexID(info.ID), nil
+}
+
+// DeleteRecords stages deletions (APP.md §3). A directory takes its subtree
+// as the merged view has it, tombstoned in the same write (FORMAT.md R39):
+// one staged change however large the subtree, and one row — the folder
+// keeps its place in its parent's listing, greyed and not enterable, and
+// nothing beneath it is listed while the deletion stands. A record whose
+// whole existence is staged is un-staged instead, and a record whose own
+// ancestor is in the same batch goes with that ancestor.
+func (c *Core) DeleteRecords(id string, recordIDs []string) *Error {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return e
+	}
+	ids := make([][16]byte, 0, len(recordIDs))
+	for _, str := range recordIDs {
+		rid, ok := parseID(str)
+		if !ok || rid == format.RootID {
+			return coded(CodeParams)
+		}
+		ids = append(ids, rid)
 	}
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
@@ -926,34 +1049,203 @@ func (c *Core) DeleteFiles(id string, fileIDs []string) *Error {
 	if err := c.beginLocked(oa); err != nil {
 		return c.fail("begin", err)
 	}
-	for _, s := range fileIDs {
-		fid, ok := parseID(s)
-		if !ok {
-			return coded(CodeParams)
-		}
-		if p := oa.overlay[fid]; p != nil && p.kind == "added" {
-			// A staged add: un-stage it (the transaction's bytes are
-			// reclaimed at Commit's free map or Abort).
-			if err := oa.tx.Delete(fid); err != nil {
-				return c.fail("delete", err)
-			}
-			delete(oa.overlay, fid)
-			oa.removeAdd(fid)
+	m := oa.merge()
+	targets, e := m.batch(ids)
+	if e != nil {
+		c.settleLocked(oa)
+		return e
+	}
+	// The un-stages are pre-flighted whole before anything is staged: a
+	// committed record that was moved into a staged folder needs somewhere to
+	// go back to, and the parent the move found it under may itself be staged
+	// for deletion by now, so the fallback and the collision are settled here
+	// rather than half-way through the batch (APP.md §3 — no record is left
+	// naming a parent that is not there).
+	back := map[[16]byte][16]byte{}
+	unstaged := 0
+	for _, r := range targets {
+		if r.pending != pendingAdded {
 			continue
 		}
-		if _, ok := oa.byID[fid]; !ok {
-			return coded(CodeFileNotFound)
+		if e := c.planDetachLocked(oa, m, r, back); e != nil {
+			c.settleLocked(oa)
+			return e
 		}
-		if err := oa.tx.Delete(fid); err != nil {
-			return c.fail("delete", err)
+		unstaged++
+	}
+	// Un-stage before tombstoning: a record whose way back leads into a
+	// folder this same batch deletes goes with that deletion, never the other
+	// way round, and the deletions then read a view that has it there.
+	for _, r := range targets {
+		if r.pending != pendingAdded {
+			continue
 		}
-		oa.overlay[fid] = &pendingChange{kind: "deleted"}
+		if e := c.unstageLocked(oa, m, r, back); e != nil {
+			c.settleLocked(oa)
+			return e
+		}
+	}
+	if unstaged > 0 {
+		m = oa.merge()
+	}
+	for _, r := range targets {
+		if r.pending == pendingAdded {
+			continue
+		}
+		cur := m.live(r.id)
+		if cur == nil {
+			continue // it went with an un-stage
+		}
+		if e := c.stageDeleteLocked(oa, m, cur); e != nil {
+			c.settleLocked(oa)
+			return e
+		}
 	}
 	c.settleLocked(oa)
 	c.touchArchiveLocked(oa)
 	oa.seq++
 	go c.emit(EventArchiveChanged, ArchiveChanged{ID: hexID(oa.id), Seq: oa.seq})
 	go c.emitState()
+	return nil
+}
+
+// stageDeleteLocked tombstones a record and, for a directory, its whole
+// subtree in one write. An entry the deletion swallows — a rename staged
+// under the folder before it was deleted — leaves the overlay with it
+// (APP.md §2.3).
+func (c *Core) stageDeleteLocked(oa *openArchive, m *merged, r *mergedRec) *Error {
+	if err := oa.tx.Delete(r.id); err != nil {
+		return c.fail("delete", err)
+	}
+	if r.isDir {
+		for _, k := range m.subtree(r.id) {
+			delete(oa.overlay, k.id)
+			oa.removeAdd(k.id)
+		}
+	}
+	oa.overlay[r.id] = &pendingChange{kind: pendingDeleted, id: r.id, isDir: r.isDir, name: r.name, parentID: r.parentID}
+	return nil
+}
+
+// unstageLocked drops a staged creation (APP.md §3): for a directory the
+// records staged under it go with it, and a committed record that was moved
+// into it goes back where the move found it, its move un-staged too, so no
+// record is left naming a parent that is not there. The archive tombstones
+// rather than un-stages — the transaction's bytes are reclaimed at Commit's
+// free map or at Abort — so one Tx.Delete takes the whole staged subtree.
+func (c *Core) unstageLocked(oa *openArchive, m *merged, r *mergedRec, back map[[16]byte][16]byte) *Error {
+	if e := c.detachLocked(oa, m, r, back); e != nil {
+		return e
+	}
+	if err := oa.tx.Delete(r.id); err != nil {
+		return c.fail("un-stage", err)
+	}
+	delete(oa.overlay, r.id)
+	oa.removeAdd(r.id)
+	return nil
+}
+
+// planDetachLocked settles, before anything is staged, where every committed
+// record beneath a staged directory goes when that directory is un-staged:
+// the parent the move found it under when that is still a directory live in
+// the view, and the root when it is not — a folder tombstoned since the move
+// is not a parent any more, and the record must not be left naming it
+// (APP.md §3). A name the destination already holds under case folding, that
+// record's own included, is file.exists and refuses the whole call: nothing
+// is dropped and nothing is renamed behind the user's back.
+func (c *Core) planDetachLocked(oa *openArchive, m *merged, r *mergedRec, back map[[16]byte][16]byte) *Error {
+	if !r.isDir {
+		return nil
+	}
+	for _, k := range m.kids[r.id] {
+		switch {
+		case k.pending == pendingDeleted:
+			// Its tombstone is staged already and a tombstone's parent may
+			// name anything (FORMAT.md R32): the deletion stands.
+		case k.pending == pendingAdded:
+			if e := c.planDetachLocked(oa, m, k, back); e != nil {
+				return e
+			}
+		default:
+			was, _, ok := oa.committed(k.id)
+			if !ok {
+				return c.internalf("un-stage move", errors.New("no committed record for a moved id"))
+			}
+			if !m.dirUsable(was) {
+				was = format.RootID
+			}
+			if m.sibling(was, k.name, k.id) != nil {
+				return coded(CodeFileExists)
+			}
+			for id, dest := range back {
+				o := m.rec(id)
+				if dest == was && o != nil && strings.EqualFold(o.name, k.name) {
+					return coded(CodeFileExists) // two records back to one name
+				}
+			}
+			back[k.id] = was
+		}
+	}
+	return nil
+}
+
+// detachLocked walks a staged directory's children before it is un-staged: a
+// staged one loses its overlay entry, a committed one goes back out to the
+// parent the plan gave it, and a record already staged for deletion stays
+// deleted.
+func (c *Core) detachLocked(oa *openArchive, m *merged, r *mergedRec, back map[[16]byte][16]byte) *Error {
+	if !r.isDir {
+		return nil
+	}
+	for _, k := range m.kids[r.id] {
+		switch {
+		case k.pending == pendingDeleted:
+			// Its tombstone is staged already and a tombstone's parent may
+			// name anything (FORMAT.md R32): the deletion stands.
+		case k.pending == pendingAdded:
+			if e := c.detachLocked(oa, m, k, back); e != nil {
+				return e
+			}
+			delete(oa.overlay, k.id)
+			oa.removeAdd(k.id)
+		default:
+			to, planned := back[k.id]
+			if !planned {
+				return c.internalf("un-stage move", errors.New("no planned parent for a moved id"))
+			}
+			if e := c.moveBackLocked(oa, k, to); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
+// moveBackLocked returns a committed record to the parent the plan gave it
+// and un-stages the move when that is the parent the move found it under; a
+// rename staged with it stands, and a replace keeps its word. A record whose
+// old parent went stays `moved`, since the row must say where the record
+// actually is.
+func (c *Core) moveBackLocked(oa *openArchive, k *mergedRec, to [16]byte) *Error {
+	was, name, ok := oa.committed(k.id)
+	if !ok {
+		return c.internalf("un-stage move", errors.New("no committed record for a moved id"))
+	}
+	if err := oa.tx.Move(k.id, to); err != nil {
+		return c.fail("un-stage move", err)
+	}
+	p := oa.overlay[k.id]
+	if p == nil {
+		return nil
+	}
+	p.parentID = to
+	if p.kind == pendingMoved && to == was {
+		if p.name == name {
+			delete(oa.overlay, k.id)
+		} else {
+			p.kind = pendingRenamed
+		}
+	}
 	return nil
 }
 
@@ -968,58 +1260,155 @@ func (c *Core) settleLocked(oa *openArchive) {
 	c.clearDirtyLocked(oa)
 }
 
-func (oa *openArchive) removeAdd(fid [16]byte) {
+func (oa *openArchive) removeAdd(id [16]byte) {
 	for i, p := range oa.adds {
-		if p.info.ID == fid {
+		if p.id == id {
 			oa.adds = append(oa.adds[:i], oa.adds[i+1:]...)
 			return
 		}
 	}
 }
 
-// RenameFile stages a rename of the leaf; the folder stays.
-func (c *Core) RenameFile(id, fileID, newLeaf string) *Error {
+// RenameRecord stages a rename of one record, file or directory (APP.md §3):
+// a "/" is refused, a name that folds onto a live sibling of the record's own
+// parent is file.exists — a change of case alone is not one, since a record
+// is not its own sibling — and a folder whose new name would push a record
+// beneath it past R39's path bound is file.tree_bounds. It writes name, and
+// never modified_at.
+func (c *Core) RenameRecord(id, recordID, newName string) *Error {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return e
 	}
-	fid, ok := parseID(fileID)
-	if !ok {
+	rid, ok := parseID(recordID)
+	if !ok || rid == format.RootID {
 		return coded(CodeParams)
 	}
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	cur, found := oa.currentInfo(fid)
-	if !found {
+	m := oa.merge()
+	r := m.live(rid)
+	if r == nil {
 		return coded(CodeFileNotFound)
 	}
-	folder := ""
-	if i := strings.LastIndexByte(cur.Name, '/'); i >= 0 {
-		folder = cur.Name[:i]
-	}
-	name, err := composeName(folder, newLeaf)
-	if err != nil {
+	if format.ValidateName(newName) != nil {
 		return coded(CodeFileName)
 	}
-	if name == cur.Name {
-		return nil
+	if newName == r.name {
+		return nil // already that name: no change, nothing staged
 	}
-	if _, exists := oa.lookupMerged(name); exists {
+	if m.sibling(r.parentID, newName, r.id) != nil {
 		return coded(CodeFileExists)
+	}
+	if e := m.bounds(r.id, r.isDir, r.parentID, newName); e != nil {
+		return e
 	}
 	if err := c.beginLocked(oa); err != nil {
 		return c.fail("begin", err)
 	}
-	if err := oa.tx.Rename(fid, name); err != nil {
+	if err := oa.tx.Rename(rid, newName); err != nil {
+		c.settleLocked(oa)
 		return c.fail("rename", err)
 	}
-	if p := oa.overlay[fid]; p != nil && (p.kind == "added" || p.kind == "replaced") {
-		p.info.Name = name
-		p.name = name
-	} else {
-		oa.overlay[fid] = &pendingChange{kind: "renamed", name: name}
+	oa.stageRename(r, newName)
+	c.touchArchiveLocked(oa)
+	oa.seq++
+	go c.emit(EventArchiveChanged, ArchiveChanged{ID: hexID(oa.id), Seq: oa.seq})
+	go c.emitState()
+	return nil
+}
+
+// MoveRecords re-parents each record, one record written whatever subtree
+// hangs beneath it (APP.md §3). The batch is pre-flighted against R39 on the
+// merged view before anything is staged and is refused whole and in place, so
+// the user retries with a name rather than finding half a selection moved: a
+// destination that is not the root or a live directory is file.not_found, as
+// is a record that is not live; a directory moved into itself or into a
+// descendant is file.move_into_self; a name a live child of the destination
+// already holds under case folding, or that two records of the batch would
+// both take, is file.exists; and a subtree that would then stand too deep or
+// join to too long a path is file.tree_bounds. A record whose own ancestor is
+// in the batch travels with it, and one already under parentID is a no-op. It
+// writes parent_id, and never modified_at.
+func (c *Core) MoveRecords(id string, recordIDs []string, parentID string) *Error {
+	oa, e := c.findArchive(id)
+	if e != nil {
+		return e
+	}
+	pid, ok := parseID(parentID)
+	if !ok {
+		return coded(CodeParams)
+	}
+	if len(recordIDs) == 0 {
+		return coded(CodeParams)
+	}
+	ids := make([][16]byte, 0, len(recordIDs))
+	for _, str := range recordIDs {
+		rid, ok := parseID(str)
+		if !ok || rid == format.RootID {
+			return coded(CodeParams)
+		}
+		ids = append(ids, rid)
+	}
+	oa.opMu.Lock()
+	defer oa.opMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := oa.merge()
+	if !m.dirUsable(pid) {
+		return coded(CodeFileNotFound)
+	}
+	batch, e := m.batch(ids)
+	if e != nil {
+		return e
+	}
+	var moving []*mergedRec
+	for _, r := range batch {
+		if r.parentID == pid {
+			continue // already there
+		}
+		if r.isDir && m.isBelow(pid, r.id) {
+			return coded(CodeMoveIntoSelf)
+		}
+		if m.sibling(pid, r.name, r.id) != nil {
+			return coded(CodeFileExists)
+		}
+		for _, o := range moving {
+			if strings.EqualFold(o.name, r.name) {
+				return coded(CodeFileExists) // two of the batch, one name
+			}
+		}
+		if e := m.bounds(r.id, r.isDir, pid, r.name); e != nil {
+			return e
+		}
+		moving = append(moving, r)
+	}
+	if len(moving) == 0 {
+		return nil // every record was already there
+	}
+	if err := c.beginLocked(oa); err != nil {
+		return c.fail("begin", err)
+	}
+	// The staging loop is all-or-nothing as well: the pre-flight has proved
+	// the batch legal, so a refusal here is the archive disagreeing with the
+	// view the user was shown — and the batch is still refused whole and in
+	// place, never left half moved (APP.md §3).
+	done := make([]stagedMove, 0, len(moving))
+	for _, r := range moving {
+		u := stagedMove{id: r.id, parent: r.parentID}
+		if p := oa.overlay[r.id]; p != nil {
+			was := *p
+			u.before = &was
+		}
+		if err := oa.tx.Move(r.id, pid); err != nil {
+			oa.rollbackMoves(done)
+			c.settleLocked(oa)
+			return c.fail("move", err)
+		}
+		oa.stageMove(r, pid)
+		done = append(done, u)
 	}
 	c.touchArchiveLocked(oa)
 	oa.seq++
@@ -1028,26 +1417,34 @@ func (c *Core) RenameFile(id, fileID, newLeaf string) *Error {
 	return nil
 }
 
-// currentInfo is the file as the merged view has it.
-func (oa *openArchive) currentInfo(fid [16]byte) (archive.FileInfo, bool) {
-	if p := oa.overlay[fid]; p != nil {
-		switch p.kind {
-		case "deleted":
-			return archive.FileInfo{}, false
-		case "added", "replaced":
-			return p.info, true
-		case "renamed":
-			if i, ok := oa.byID[fid]; ok {
-				f := oa.snap[i]
-				f.Name = p.name
-				return f, true
-			}
+// stagedMove is one record a move batch has already staged: where it stood
+// and the overlay entry that stood on it, which is what a refused batch is
+// put back to.
+type stagedMove struct {
+	id     [16]byte
+	parent [16]byte
+	before *pendingChange // a copy of the entry that stood; nil when none did
+}
+
+// rollbackMoves undoes the moves a refused batch had already staged, newest
+// first. The parent each record came from was legal a moment ago, so a
+// refusal from the archive here would be a bug of our own and there is
+// nothing further to do about it; the overlay is put back either way, and a
+// staged add's entry is restored in place because oa.adds holds the same
+// pointer. Caller holds opMu and the state mutex.
+func (oa *openArchive) rollbackMoves(done []stagedMove) {
+	for i := len(done) - 1; i >= 0; i-- {
+		u := done[i]
+		_ = oa.tx.Move(u.id, u.parent)
+		switch p := oa.overlay[u.id]; {
+		case u.before == nil:
+			delete(oa.overlay, u.id)
+		case p != nil:
+			*p = *u.before
+		default:
+			oa.overlay[u.id] = u.before
 		}
 	}
-	if i, ok := oa.byID[fid]; ok {
-		return oa.snap[i], true
-	}
-	return archive.FileInfo{}, false
 }
 
 // Discard aborts the transaction.
@@ -1073,14 +1470,15 @@ func (c *Core) Discard(id string) *Error {
 	return nil
 }
 
-// PreviewURL is the loopback URL of a committed file.
+// PreviewURL is the loopback URL of a committed file. It acts on a record, so
+// the root is params and never previewed (APP.md §3).
 func (c *Core) PreviewURL(id, fileID string) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return "", e
 	}
 	fid, ok := parseID(fileID)
-	if !ok {
+	if !ok || fid == format.RootID {
 		return "", coded(CodeParams)
 	}
 	c.mu.Lock()
@@ -1088,24 +1486,28 @@ func (c *Core) PreviewURL(id, fileID string) (string, *Error) {
 	if oa.quiesced {
 		return "", coded(CodeArchiveCompacting)
 	}
-	if k := oa.pendingKind(fid); k == "added" || k == "replaced" || k == "deleted" {
+	if k := oa.pendingKind(fid); k == pendingAdded || k == pendingReplaced || k == pendingDeleted {
 		return "", coded(CodeFileNotFound)
 	}
-	if _, ok := oa.byID[fid]; !ok {
+	// A committed file live in the merged view: nothing beneath a folder
+	// staged for deletion is previewed while the deletion stands, and a
+	// directory's id has no content to serve (APP.md §3).
+	if _, ok := oa.currentFile(fid); !ok {
 		return "", coded(CodeFileNotFound)
 	}
 	c.touchArchiveLocked(oa)
 	return c.preview.url(oa.token, fid), nil
 }
 
-// PreviewText reads up to maxBytes of a committed file's plaintext.
+// PreviewText reads up to maxBytes of a committed file's plaintext. The root
+// is params here too, for the same reason (APP.md §3).
 func (c *Core) PreviewText(id, fileID string, maxBytes int) (string, bool, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return "", false, e
 	}
 	fid, ok := parseID(fileID)
-	if !ok {
+	if !ok || fid == format.RootID {
 		return "", false, coded(CodeParams)
 	}
 	if maxBytes <= 0 || maxBytes > 1<<20 {
@@ -1116,7 +1518,11 @@ func (c *Core) PreviewText(id, fileID string, maxBytes int) (string, bool, *Erro
 		c.mu.Unlock()
 		return "", false, coded(CodeArchiveCompacting)
 	}
-	if k := oa.pendingKind(fid); k == "added" || k == "replaced" || k == "deleted" {
+	if k := oa.pendingKind(fid); k == pendingAdded || k == pendingReplaced || k == pendingDeleted {
+		c.mu.Unlock()
+		return "", false, coded(CodeFileNotFound)
+	}
+	if _, ok := oa.currentFile(fid); !ok {
 		c.mu.Unlock()
 		return "", false, coded(CodeFileNotFound)
 	}

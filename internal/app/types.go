@@ -265,40 +265,63 @@ type ArchiveStat struct {
 	CopyMismatch bool   `json:"copyMismatch"` // the file is not the copy the vault last saw
 }
 
-// FileRow is one row of a page.
+// FileRow is one row of a page: one record of the merged view, file or
+// directory alike (APP.md §3). ID and ParentID are the record's own ids —
+// 32 lowercase hex digits, the all-zero id being the root — Name is the
+// record's own name and Path the joined one (FORMAT.md R20, R39). A
+// directory's Size is the sum beneath it and its ModifiedAt the record's
+// own.
 type FileRow struct {
-	FileID       string `json:"fileId"`
-	Path         string `json:"path"` // the full stored name
-	Name         string `json:"name"` // the leaf within the folder asked for
+	ID           string `json:"id"`
+	ParentID     string `json:"parentId"`
+	IsDir        bool   `json:"isDir"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
 	Size         uint64 `json:"size"`
 	Storage      string `json:"storage"` // raw | zstd | zstd+dict
 	SavedPercent int    `json:"savedPercent"`
 	ModifiedAt   int64  `json:"modifiedAt"`
-	Pending      string `json:"pending,omitempty"` // added | replaced | renamed | deleted
-	IsFolder     bool   `json:"isFolder"`
-	Files        int    `json:"files"` // folders: files under it
+	Pending      string `json:"pending,omitempty"` // added | replaced | renamed | moved | deleted
 }
 
-// Page is one screenful of an archive folder.
+// Crumb is one step of the breadcrumb: a directory's id and its name, the
+// root's being the archive's own name (APP.md §3).
+type Crumb struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Page is one screenful of one directory. Total counts that directory's
+// children, not its subtree, and Crumbs is the chain from the root down to
+// the folder shown, inclusive and never empty — the page draws the whole
+// breadcrumb from it and takes no name from Stat.
 type Page struct {
 	Seq    uint64    `json:"seq"`
-	Folder string    `json:"folder"`
 	Rows   []FileRow `json:"rows"`
 	Total  int       `json:"total"`
+	Crumbs []Crumb   `json:"crumbs"`
 }
 
-// Collision is what CheckNames reports.
+// Collision is what CheckNames reports: the kind on both sides — what is
+// being offered and what is in the way — so the dialog can say "Photos is a
+// file here" and grey Replace whenever the two differ (APP.md §3).
 type Collision struct {
-	Name     string `json:"name"`
-	Existing string `json:"existing"` // the file id of the row it collides with
-	Pending  bool   `json:"pending"`
+	Name          string `json:"name"`  // the name as it was offered
+	IsDir         bool   `json:"isDir"` // the kind offered: a name given with a trailing "/"
+	Existing      string `json:"existing"`
+	ExistingIsDir bool   `json:"existingIsDir"`
+	Pending       bool   `json:"pending"`
 }
 
-// FileOutcome is one file's result inside a batch operation.
+// FileOutcome is one record's result inside a batch operation. IsDir tells a
+// directory's outcome from a file's: created (a directory record made) and
+// entered (an existing one descended into) are a directory's, added and
+// replaced a file's (APP.md §3).
 type FileOutcome struct {
 	Path    string `json:"path"`
 	Name    string `json:"name"`
-	Outcome string `json:"outcome"` // added | replaced | renamed | skipped | extracted | failed
+	IsDir   bool   `json:"isDir"`
+	Outcome string `json:"outcome"` // added | replaced | created | entered | skipped | extracted | failed
 	Code    Code   `json:"code,omitempty"`
 }
 

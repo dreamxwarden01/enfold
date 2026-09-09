@@ -435,47 +435,58 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatalf("stat: %+v", st)
 	}
 
-	// Stage two files and a folder, then look at the projection.
+	// Stage two files, a folder made in the app and a source folder walked
+	// into it: a folder is a record, never a prefix of a name.
 	src := filepath.Join(h.dir, "src")
 	os.MkdirAll(filepath.Join(src, "sub"), 0o700)
 	os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello archive\n"), 0o600)
 	os.WriteFile(filepath.Join(src, "b.txt"), []byte(strings.Repeat("b", 5000)), 0o600)
 	os.WriteFile(filepath.Join(src, "sub", "c.txt"), []byte("nested"), 0o600)
-	opID, e := h.c.AddFiles(id, "", []string{filepath.Join(src, "a.txt"), filepath.Join(src, "b.txt")}, PolicySkip)
+	opID, e := h.c.AddFiles(id, rootID, []string{filepath.Join(src, "a.txt"), filepath.Join(src, "b.txt")}, PolicySkip)
 	if e != nil {
 		t.Fatalf("add: %v", e)
 	}
 	if o := h.rec.waitOp(t, opID); o.Error != "" || len(o.Results) != 2 {
 		t.Fatalf("add op: %+v", o)
 	}
-	opID, e = h.c.AddFolder(id, "docs", filepath.Join(src, "sub"), PolicySkip)
+	docs, e := h.c.CreateFolder(id, rootID, "docs")
+	if e != nil {
+		t.Fatalf("create folder: %v", e)
+	}
+	opID, e = h.c.AddFolder(id, docs, filepath.Join(src, "sub"), PolicySkip)
 	if e != nil {
 		t.Fatalf("add folder: %v", e)
 	}
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
 		t.Fatalf("add folder op: %+v", o)
 	}
-	page, e := h.c.Page(id, "", "name", 0, 100)
+	page, e := h.c.Page(id, rootID, "name", 0, 100)
 	if e != nil {
 		t.Fatalf("page: %v", e)
 	}
-	names := map[string]FileRow{}
-	for _, r := range page.Rows {
-		names[r.Name] = r
-	}
-	if len(page.Rows) != 3 || names["a.txt"].Pending != "added" || !names["docs"].IsFolder {
+	names := rowsByName(page)
+	if len(page.Rows) != 3 || names["a.txt"].Pending != "added" || !names["docs"].IsDir {
 		t.Fatalf("staged page: %+v", page.Rows)
 	}
-	if st, _ := h.c.Stat(id); st.Dirty != 3 || st.State != "dirty" || st.CapAt == 0 {
+	// Two files, the folder made, the folder the walk created and its file:
+	// five records staged, five changes.
+	if st, _ := h.c.Stat(id); st.Dirty != 5 || st.State != "dirty" || st.CapAt == 0 {
 		t.Fatalf("dirty stat: %+v", st)
 	}
-	// A second add of the same name is a collision under skip.
-	col, e := h.c.CheckNames(id, "", []string{"a.txt", "new.txt"})
-	if e != nil || len(col) != 1 || col[0].Name != "a.txt" || !col[0].Pending {
+	// A second add of the same name is a collision under skip; the kind on
+	// both sides is what the dialog greys Replace from.
+	col, e := h.c.CheckNames(id, rootID, []string{"a.txt", "new.txt", "docs/"})
+	if e != nil || len(col) != 2 {
 		t.Fatalf("collisions: %+v %v", col, e)
 	}
+	if col[0].Name != "a.txt" || !col[0].Pending || col[0].IsDir || col[0].ExistingIsDir {
+		t.Fatalf("file collision: %+v", col[0])
+	}
+	if col[1].Name != "docs/" || !col[1].IsDir || !col[1].ExistingIsDir {
+		t.Fatalf("folder collision: %+v", col[1])
+	}
 	// Preview of a staged file is refused (not committed yet).
-	if _, e := h.c.PreviewURL(id, names["a.txt"].FileID); e == nil {
+	if _, e := h.c.PreviewURL(id, names["a.txt"].ID); e == nil {
 		t.Fatal("preview of a staged file")
 	}
 
@@ -494,16 +505,26 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if list[0].Files != 3 || list[0].ReceiptOwed || list[0].LastWrittenAt == 0 {
 		t.Fatalf("list after save: %+v", list[0])
 	}
-	// A dropped folder keeps its own name under the target folder.
-	page, _ = h.c.Page(id, "docs", "name", 0, 100)
-	if len(page.Rows) != 1 || !page.Rows[0].IsFolder || page.Rows[0].Name != "sub" || page.Rows[0].Files != 1 {
+	// The walked folder keeps its own name under the folder the app made,
+	// and its file hangs off it by id.
+	page, e = h.c.Page(id, docs, "name", 0, 100)
+	if e != nil {
+		t.Fatalf("docs page: %v", e)
+	}
+	if len(page.Rows) != 1 || !page.Rows[0].IsDir || page.Rows[0].Name != "sub" || page.Rows[0].Path != "docs/sub" {
 		t.Fatalf("docs page: %+v", page.Rows)
 	}
-	page, _ = h.c.Page(id, "docs/sub", "name", 0, 100)
+	sub := page.Rows[0].ID
+	page, _ = h.c.Page(id, sub, "name", 0, 100)
 	if len(page.Rows) != 1 || page.Rows[0].Path != "docs/sub/c.txt" || page.Rows[0].Pending != "" {
-		t.Fatalf("docs/sub page: %+v", page.Rows)
+		t.Fatalf("sub page: %+v", page.Rows)
 	}
-	cID := page.Rows[0].FileID
+	// The breadcrumb is the whole chain, root-inclusive, the archive's name
+	// on the root and the folder shown last.
+	if cr := page.Crumbs; len(cr) != 3 || cr[0].ID != rootID || cr[0].Name != "Photos" || cr[1].Name != "docs" || cr[2].ID != sub {
+		t.Fatalf("crumbs: %+v", page.Crumbs)
+	}
+	cID := page.Rows[0].ID
 	text, trunc, e := h.c.PreviewText(id, cID, 3)
 	if e != nil || text != "nes" || !trunc {
 		t.Fatalf("preview text: %q %v %v", text, trunc, e)
@@ -532,33 +553,23 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatalf("multi-range: %d", resp.StatusCode)
 	}
 
-	// Rename a leaf, delete one, save, then extract everything.
-	page, _ = h.c.Page(id, "", "name", 0, 100)
-	for _, r := range page.Rows {
-		names[r.Name] = r
-	}
-	if e := h.c.RenameFile(id, names["a.txt"].FileID, "x/a.txt"); !isCode(e, CodeFileName) {
+	// Rename one record, delete another, save, then extract the whole
+	// archive: the all-zero id is the root and takes everything.
+	page, _ = h.c.Page(id, rootID, "name", 0, 100)
+	names = rowsByName(page)
+	if e := h.c.RenameRecord(id, names["a.txt"].ID, "x/a.txt"); !isCode(e, CodeFileName) {
 		t.Fatalf("rename with a slash: %v", e)
 	}
-	if e := h.c.RenameFile(id, names["a.txt"].FileID, "a2.txt"); e != nil {
+	if e := h.c.RenameRecord(id, names["a.txt"].ID, "a2.txt"); e != nil {
 		t.Fatalf("rename: %v", e)
 	}
-	if e := h.c.DeleteFiles(id, []string{names["b.txt"].FileID}); e != nil {
+	if e := h.c.DeleteRecords(id, []string{names["b.txt"].ID}); e != nil {
 		t.Fatalf("delete: %v", e)
 	}
 	opID, _ = h.c.Save(id)
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
 		t.Fatalf("save 2: %+v", o)
 	}
-	page, _ = h.c.Page(id, "", "name", 0, 100)
-	var all []string
-	for _, r := range page.Rows {
-		if !r.IsFolder {
-			all = append(all, r.FileID)
-		}
-	}
-	page2, _ := h.c.Page(id, "docs/sub", "name", 0, 100)
-	all = append(all, page2.Rows[0].FileID)
 	// Extracted files go under GOTMPDIR when it is set: on the dev machine
 	// that directory is excluded from the antivirus, whose scan of a fresh
 	// file otherwise holds it open while the temp dir is being removed.
@@ -567,11 +578,13 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(out)
-	opID, e = h.c.Extract(id, all, out, ExtractSkip)
+	opID, e = h.c.Extract(id, []string{rootID}, out, ExtractSkip)
 	if e != nil {
 		t.Fatalf("extract: %v", e)
 	}
-	if o := h.rec.waitOp(t, opID); o.Error != "" || len(o.Results) != 2 {
+	// Two folders and two files: a folder is in the plan because its record
+	// is live, never because a file needed a parent.
+	if o := h.rec.waitOp(t, opID); o.Error != "" || len(o.Results) != 4 {
 		t.Fatalf("extract op: %+v", o)
 	}
 	if b, _ := os.ReadFile(filepath.Join(out, "a2.txt")); string(b) != "hello archive\n" {
@@ -605,6 +618,18 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 	if _, e := h.c.Save(id); !isCode(e, CodeNeedsUnlock) {
 		t.Fatalf("save while locked: %v", e)
+	}
+	// CreateFolder and Move stay usable after a lock, into the staged
+	// transaction (APP.md §2.3); Save is what needs the session.
+	after, e := h.c.CreateFolder(id, rootID, "after")
+	if e != nil {
+		t.Fatalf("create folder while locked: %v", e)
+	}
+	if e := h.c.MoveRecords(id, []string{h.row(t, id, rootID, "a2.txt").ID}, after); e != nil {
+		t.Fatalf("move while locked: %v", e)
+	}
+	if e := h.c.Discard(id); e != nil {
+		t.Fatalf("discard while locked: %v", e)
 	}
 	list, _ = h.c.ListArchives(false)
 	if len(list) != 1 || !list[0].Open {
@@ -644,7 +669,7 @@ func TestArchiveIdleClockAndDirtyCap(t *testing.T) {
 	}
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("x"), 0o600)
-	opID, _ := h.c.AddFiles(id, "", []string{f}, PolicySkip)
+	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	h.rec.waitOp(t, opID)
 	st, _ := h.c.Stat(id)
 	if st.Dirty != 1 || st.CapAt == 0 || st.ExpiresAt == 0 {
@@ -694,7 +719,7 @@ func TestShutdownCommitsDirtyArchives(t *testing.T) {
 	h.c.OpenArchive(id)
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("saved at exit"), 0o600)
-	opID, _ := h.c.AddFiles(id, "", []string{f}, PolicySkip)
+	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	h.rec.waitOp(t, opID)
 	h.c.ResolveForShutdown(5 * time.Second)
 	if st := h.status(); st.State != StateLocked || st.OpenArchives != 0 {

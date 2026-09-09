@@ -29,8 +29,17 @@
 //   - The archive superblock has magic ENFOLDS\x01 and carries the index
 //     (offset, ciphertext length, nonce, tag) and the free-space map (offset,
 //     length, SHA-256). Both are relocatable extents.
-//   - The index plaintext is: u32 index_version=1, u32-prefixed zstd dictionary,
-//     u32 file_count, then file records each prefixed by a u32 record_len.
+//   - The index plaintext is: u32 index_version=2, u32-prefixed zstd dictionary,
+//     u32 dir_count and the directory records, then u32 file_count and the file
+//     records, each record prefixed by a u32 record_len. Version 1 — the
+//     object-key model, a full path in every file record — is refused, not
+//     migrated.
+//   - The index is a tree (R39): a directory is a record with an id, every
+//     record hangs off a parent by that id, and the root is implicit at the
+//     all-zero id. Index.Validate walks it in the reader's order — identities,
+//     chains to the root, files against the directories, sibling uniqueness
+//     under simple case folding, then the joined path bound — and Encode runs
+//     the same walk, so this package never writes an index it would refuse.
 //   - The free-space map is plaintext, hashed in the superblock, and must be
 //     sorted, non-overlapping and free of zero-length extents.
 package format

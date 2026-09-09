@@ -135,6 +135,21 @@ const (
 	CodeFileExists    Code = "file.exists"
 	CodeFileNotFound  Code = "file.not_found"
 	CodeFileName      Code = "file.name"
+	// The three per-item codes of the tree (APP.md §3, FORMAT.md R39).
+	// CodeKindMismatch: the incoming item and the item in the way are of
+	// different kinds, and kinds that differ never replace — replacing a
+	// folder with a file would tombstone its subtree in one write, and
+	// replacing a file with a folder is not an edit of that file.
+	CodeKindMismatch Code = "file.kind_mismatch"
+	// CodeMoveIntoSelf: a directory would be moved into itself or into one
+	// of its own descendants.
+	CodeMoveIntoSelf Code = "file.move_into_self"
+	// CodeTreeBounds: the change would stand a directory more than 255
+	// parents from the root, or join a record to a path over 4096 bytes.
+	// Both bounds are the moved or created subtree's and not the named
+	// record's, so they are caught in the pre-flight rather than at the
+	// seal.
+	CodeTreeBounds    Code = "file.tree_bounds"
 	CodeSourceChanged Code = "file.source_changed"
 	CodeContentHash   Code = "file.content_hash"
 	CodeNoSpace       Code = "archive.no_space"
@@ -249,6 +264,9 @@ var classifyTable = []struct {
 	{archive.ErrTxOpen, CodeArchiveDirty},
 	{archive.ErrExists, CodeFileExists},
 	{archive.ErrNotFound, CodeFileNotFound},
+	{archive.ErrMoveIntoSelf, CodeMoveIntoSelf},
+	{archive.ErrTreeBounds, CodeTreeBounds},
+	{archive.ErrKindMismatch, CodeKindMismatch},
 	{archive.ErrSourceChanged, CodeSourceChanged},
 	{archive.ErrContentHash, CodeContentHash},
 	{archive.ErrDictInUse, CodeDictInUse},

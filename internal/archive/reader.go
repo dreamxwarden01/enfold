@@ -34,7 +34,10 @@ type Reader struct {
 	dead    atomic.Bool // set by Archive.Close from another goroutine
 }
 
-// OpenReader opens a live file for reading.
+// OpenReader opens a live file for reading. Only a file has content, so a
+// directory's id — like an unknown one — is ErrNotFound; what a caller does
+// with a live directory is list its children and create it on extraction
+// (APP.md §3), never read it.
 func (a *Archive) OpenReader(id [16]byte) (*Reader, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

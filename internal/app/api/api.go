@@ -205,8 +205,11 @@ type Archive struct {
 	c *app.Core
 }
 
-func (a *Archive) Page(id, folder, sortBy string, offset, limit int) (app.Page, error) {
-	p, e := a.c.Page(id, folder, sortBy, offset, limit)
+// Page lists the live children of one directory in the merged view. dirID
+// is a record id — the all-zero id is the archive's root — never a path, and
+// one that no longer names a live directory is file.not_found.
+func (a *Archive) Page(id, dirID, sortBy string, offset, limit int) (app.Page, error) {
+	p, e := a.c.Page(id, dirID, sortBy, offset, limit)
 	return p, asErr(e)
 }
 
@@ -215,13 +218,20 @@ func (a *Archive) Stat(id string) (app.ArchiveStat, error) {
 	return s, asErr(e)
 }
 
-func (a *Archive) AddFiles(id, folder string, paths []string, policy string) (string, error) {
-	op, e := a.c.AddFiles(id, folder, paths, app.AddPolicy(policy))
+// CreateFolder stages a directory record and returns its id: a folder is a
+// record, so an empty one survives the save (FORMAT.md R39).
+func (a *Archive) CreateFolder(id, parentID, name string) (string, error) {
+	rid, e := a.c.CreateFolder(id, parentID, name)
+	return rid, asErr(e)
+}
+
+func (a *Archive) AddFiles(id, parentID string, paths []string, policy string) (string, error) {
+	op, e := a.c.AddFiles(id, parentID, paths, app.AddPolicy(policy))
 	return op, asErr(e)
 }
 
-func (a *Archive) AddFolder(id, folder, dir, policy string) (string, error) {
-	op, e := a.c.AddFolder(id, folder, dir, app.AddPolicy(policy))
+func (a *Archive) AddFolder(id, parentID, dir, policy string) (string, error) {
+	op, e := a.c.AddFolder(id, parentID, dir, app.AddPolicy(policy))
 	return op, asErr(e)
 }
 
@@ -230,16 +240,24 @@ func (a *Archive) Replace(id, fileID, path string) (string, error) {
 	return op, asErr(e)
 }
 
-func (a *Archive) Delete(id string, fileIDs []string) error {
-	return asErr(a.c.DeleteFiles(id, fileIDs))
+// Delete stages a deletion of each record; a directory takes its subtree,
+// tombstoned in the same write and counted as one change.
+func (a *Archive) Delete(id string, recordIDs []string) error {
+	return asErr(a.c.DeleteRecords(id, recordIDs))
 }
 
-func (a *Archive) Rename(id, fileID, newLeaf string) error {
-	return asErr(a.c.RenameFile(id, fileID, newLeaf))
+func (a *Archive) Rename(id, recordID, newName string) error {
+	return asErr(a.c.RenameRecord(id, recordID, newName))
 }
 
-func (a *Archive) Extract(id string, fileIDs []string, dir, policy string) (string, error) {
-	op, e := a.c.Extract(id, fileIDs, dir, app.ExtractPolicy(policy))
+// Move re-parents each record onto parentID, pre-flighted whole against
+// FORMAT.md R39 and refused whole and in place.
+func (a *Archive) Move(id string, recordIDs []string, parentID string) error {
+	return asErr(a.c.MoveRecords(id, recordIDs, parentID))
+}
+
+func (a *Archive) Extract(id string, recordIDs []string, dir, policy string) (string, error) {
+	op, e := a.c.Extract(id, recordIDs, dir, app.ExtractPolicy(policy))
 	return op, asErr(e)
 }
 
@@ -262,8 +280,12 @@ func (a *Archive) PreviewText(id, fileID string, maxBytes int) (app.TextPreview,
 	return app.TextPreview{Text: t, Truncated: trunc}, asErr(e)
 }
 
-func (a *Archive) CheckNames(id, folder string, names []string) ([]app.Collision, error) {
-	c, e := a.c.CheckNames(id, folder, names)
+// CheckNames lets the UI ask once before an add: which of the offered names
+// a live child of parentID already holds. A name given with a trailing "/"
+// is offered as a directory, and the collision carries the kind on both
+// sides.
+func (a *Archive) CheckNames(id, parentID string, names []string) ([]app.Collision, error) {
+	c, e := a.c.CheckNames(id, parentID, names)
 	return c, asErr(e)
 }
 

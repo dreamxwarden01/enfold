@@ -54,7 +54,7 @@ func TestRegistryWritesWaitForMutation(t *testing.T) {
 	}
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("owed"), 0o600)
-	opID, _ := h.c.AddFiles(id, "", []string{f}, PolicySkip)
+	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	h.rec.waitOp(t, opID)
 
 	h.rec.reset()

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -135,7 +136,8 @@ func (c *Core) Op(id string) (OpView, *Error) {
 	return o.view(), nil
 }
 
-// AddPolicy is what happens when an added name already exists.
+// AddPolicy is what happens when an incoming item and the item in the way
+// are the same kind (APP.md §3). Kinds that differ never replace.
 type AddPolicy string
 
 const (
@@ -144,201 +146,521 @@ const (
 	PolicyKeepBoth AddPolicy = "keep-both"
 )
 
-// AddFiles stages files under folder. Each file is one Tx.Add with its
-// size from os.Stat; a source that changes underneath is reported per file
-// and the rest continue.
-func (c *Core) AddFiles(id, folder string, paths []string, policy AddPolicy) (string, *Error) {
-	oa, e := c.findArchive(id)
+// addNode is one item an add's walk found: a file to store or a folder to
+// make, with what is beneath it. A folder is a node of its own — never a
+// prefix of a name — so an empty subfolder and every folder's modified time
+// survive (FORMAT.md R39, DESIGN.md trap 31).
+type addNode struct {
+	src        string
+	name       string // one path element
+	isDir      bool
+	modifiedAt int64
+	size       int64
+	children   []*addNode
+	refuse     Code // the source itself could not be used
+}
+
+// planItem is what the pre-flight decided for one node, before the first
+// Tx.Add (APP.md §3): the whole batch is resolved — names, kinds, the folded
+// matches and R39's bounds — so the user is asked once and no source is
+// silently skipped.
+type planItem struct {
+	node   *addNode
+	action string // create | enter | add | replace | skip | fail
+	code   Code
+	name   string // the name it takes in the archive
+	joined string // its joined path there
+	// Its destination: an existing directory (or the root), or a folder
+	// this batch creates, whose id is known only once it is staged.
+	parentID   [16]byte
+	parentPlan *planItem
+	// The record in the way, for enter and replace.
+	existing     [16]byte
+	existingPlan *planItem
+	children     []*planItem
+	id           [16]byte // filled in as the item is staged
+	staged       bool
+}
+
+// addDest is where a run of nodes goes: the destination's identity, its
+// depth and path prefix for R39's bounds, its joined path, and what this
+// batch has already planned into it.
+type addDest struct {
+	id      [16]byte
+	plan    *planItem
+	depth   int
+	prefix  int
+	joined  string
+	planned []*planItem
+}
+
+// AddFiles stages files under parentID. Every name is one element,
+// validated with format.ValidateName and matched case folded against the
+// live children of its parent in the merged view (APP.md §3).
+func (c *Core) AddFiles(id, parentID string, paths []string, policy AddPolicy) (string, *Error) {
+	oa, pid, e := c.addTarget(id, parentID)
 	if e != nil {
 		return "", e
 	}
 	if len(paths) == 0 {
 		return "", coded(CodeParams)
 	}
-	items := make([]addItem, 0, len(paths))
-	for _, p := range paths {
-		items = append(items, addItem{src: p, name: path.Base(filepath.ToSlash(p))})
-	}
+	srcs := append([]string(nil), paths...)
 	return c.startOp("add", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
-		return c.addItems(ctx, o, oa, strings.Trim(folder, "/"), items, policy)
+		nodes := make([]*addNode, 0, len(srcs))
+		for _, src := range srcs {
+			n := &addNode{src: src, name: sourceName(src)}
+			st, err := os.Stat(src)
+			switch {
+			case err != nil:
+				n.refuse = CodeIO
+			case st.IsDir():
+				// A folder is AddFolder's call: it is a record with its own
+				// time and a subtree to walk, not a file to store.
+				n.refuse = CodeParams
+				n.isDir = true
+			default:
+				n.size, n.modifiedAt = st.Size(), st.ModTime().Unix()
+			}
+			nodes = append(nodes, n)
+		}
+		return c.addTree(ctx, o, oa, pid, nodes, policy)
 	}), nil
 }
 
-type addItem struct {
-	src  string
-	name string // relative name under the folder, `/`-separated
-}
-
-// AddFolder stages a directory tree under folder/<base>.
-func (c *Core) AddFolder(id, folder, dir string, policy AddPolicy) (string, *Error) {
-	oa, e := c.findArchive(id)
+// AddFolder stages a directory tree under parentID. Every directory the walk
+// creates becomes a record with its own time; an existing directory of that
+// name is entered whatever the policy, so one source folder is never split
+// across two records (APP.md §3).
+func (c *Core) AddFolder(id, parentID, dir string, policy AddPolicy) (string, *Error) {
+	oa, pid, e := c.addTarget(id, parentID)
 	if e != nil {
 		return "", e
 	}
-	base := filepath.Base(dir)
 	return c.startOp("add", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
-		var items []addItem
-		err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if d.IsDir() {
-				return nil
-			}
-			rel, err := filepath.Rel(dir, p)
-			if err != nil {
-				return err
-			}
-			items = append(items, addItem{src: p, name: base + "/" + filepath.ToSlash(rel)})
-			return nil
-		})
+		root, err := walkSource(ctx, dir)
 		if err != nil {
 			return nil, err
 		}
-		return c.addItems(ctx, o, oa, strings.Trim(folder, "/"), items, policy)
+		return c.addTree(ctx, o, oa, pid, []*addNode{root}, policy)
 	}), nil
 }
 
-// addItems is the shared add loop: pre-flight every composed name against
-// R20 and the merged view, then add one by one.
-func (c *Core) addItems(ctx context.Context, o *op, oa *openArchive, folder string, items []addItem, policy AddPolicy) ([]FileOutcome, error) {
+// addTarget resolves the archive and the destination folder: the core
+// validates that the archive is open and that the id is the root or a
+// directory live in the merged view — a folder staged by CreateFolder
+// counts, one staged for deletion does not — and refuses loudly (APP.md §3,
+// the file drop's data-dir-id).
+func (c *Core) addTarget(id, parentID string) (*openArchive, [16]byte, *Error) {
+	oa, e := c.findArchive(id)
+	if e != nil {
+		return nil, [16]byte{}, e
+	}
+	pid, ok := parseID(parentID)
+	if !ok {
+		return nil, [16]byte{}, coded(CodeParams)
+	}
+	c.mu.Lock()
+	usable := oa.merge().dirUsable(pid)
+	c.mu.Unlock()
+	if !usable {
+		return nil, [16]byte{}, coded(CodeFileNotFound)
+	}
+	return oa, pid, nil
+}
+
+// sourceName is the leaf of a source path, as the record's name.
+func sourceName(p string) string {
+	return path.Base(filepath.ToSlash(strings.TrimRight(p, `\/`)))
+}
+
+// walkSource builds the tree of records an AddFolder would make. A source
+// that cannot be read is one node with its refusal, so the results name it
+// rather than the operation failing.
+func walkSource(ctx context.Context, dir string) (*addNode, error) {
+	st, err := os.Stat(dir)
+	if err != nil {
+		return nil, err
+	}
+	root := &addNode{src: dir, name: sourceName(dir), isDir: st.IsDir(), modifiedAt: st.ModTime().Unix()}
+	if !root.isDir {
+		root.size = st.Size()
+		return root, nil
+	}
+	top := filepath.Clean(dir)
+	byPath := map[string]*addNode{top: root}
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, walkErr error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p = filepath.Clean(p)
+		if p == top {
+			return walkErr
+		}
+		parent := byPath[filepath.Dir(p)]
+		if parent == nil {
+			return nil // its folder was refused: nothing beneath it
+		}
+		n := &addNode{src: p, name: filepath.Base(p), isDir: d != nil && d.IsDir()}
+		parent.children = append(parent.children, n)
+		if walkErr != nil {
+			n.refuse = CodeIO
+			if n.isDir {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if info, err := d.Info(); err != nil {
+			n.refuse = CodeIO
+		} else {
+			n.modifiedAt = info.ModTime().Unix()
+			if !n.isDir {
+				n.size = info.Size()
+			}
+		}
+		if n.isDir {
+			byPath[p] = n
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return root, nil
+}
+
+// addTree pre-flights the whole walk against the merged view and then stages
+// it. Nothing is staged until every item has been decided.
+func (c *Core) addTree(ctx context.Context, o *op, oa *openArchive, parentID [16]byte, nodes []*addNode, policy AddPolicy) ([]FileOutcome, error) {
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	if policy == "" {
 		policy = PolicySkip
 	}
-	results := make([]FileOutcome, 0, len(items))
+	c.mu.Lock()
+	m := oa.merge()
+	if !m.dirUsable(parentID) {
+		c.mu.Unlock()
+		return nil, coded(CodeFileNotFound)
+	}
+	depth, prefix, _ := m.dirPos(parentID)
+	d := &addDest{id: parentID, depth: depth, prefix: prefix, joined: m.path(parentID)}
+	plan := planNodes(m, d, nodes, policy)
+	c.mu.Unlock()
 	var total uint64
-	sizes := make([]int64, len(items))
-	for i, it := range items {
-		st, err := os.Stat(it.src)
-		if err != nil {
-			sizes[i] = -1
-			continue
+	var count func(items []*planItem)
+	count = func(items []*planItem) {
+		for _, it := range items {
+			if (it.action == "add" || it.action == "replace") && it.node.size > 0 {
+				total += uint64(it.node.size)
+			}
+			count(it.children)
 		}
-		sizes[i] = st.Size()
-		total += uint64(st.Size())
 	}
+	count(plan)
 	o.progress(0, total, "adding")
+	results := []FileOutcome{}
 	var done uint64
-	for i, it := range items {
-		if ctx.Err() != nil {
-			return results, ctx.Err()
-		}
-		res := FileOutcome{Path: it.src, Name: it.name}
-		if sizes[i] < 0 {
-			res.Outcome, res.Code = "failed", CodeIO
-			results = append(results, res)
-			continue
-		}
-		name := it.name
-		if folder != "" {
-			name = folder + "/" + it.name
-		}
-		if err := format.ValidateFileName(name); err != nil {
-			res.Outcome, res.Code = "failed", CodeFileName
-			results = append(results, res)
-			continue
-		}
-		c.mu.Lock()
-		existing, exists := oa.lookupMerged(name)
-		if err := c.beginLocked(oa); err != nil {
-			c.mu.Unlock()
-			return results, err
-		}
-		c.mu.Unlock()
-		if exists {
-			switch policy {
-			case PolicySkip:
-				res.Outcome = "skipped"
-				results = append(results, res)
-				done += uint64(sizes[i])
-				o.progress(done, total, "adding")
-				continue
-			case PolicyKeepBoth:
-				n2, ok := keepBothName(name, func(cand string) bool {
-					c.mu.Lock()
-					_, taken := oa.lookupMerged(cand)
-					c.mu.Unlock()
-					return taken
-				})
-				if !ok {
-					res.Outcome, res.Code = "failed", CodeFileName
-					results = append(results, res)
-					continue
-				}
-				name = n2
-				exists = false
-			}
-		}
-		f, err := os.Open(it.src)
-		if err != nil {
-			res.Outcome, res.Code = "failed", CodeIO
-			results = append(results, res)
-			continue
-		}
-		var info archive.FileInfo
-		if exists && policy == PolicyReplace {
-			info, err = oa.tx.Replace(ctx, existing.ID, f, sizes[i])
-		} else {
-			info, err = oa.tx.Add(ctx, name, f, sizes[i])
-		}
-		f.Close()
-		if err != nil {
-			if ctx.Err() != nil {
-				return results, ctx.Err()
-			}
-			res.Outcome, res.Code = "failed", classify(err).Code
-			results = append(results, res)
-			continue
-		}
-		c.mu.Lock()
-		if exists && policy == PolicyReplace {
-			oa.stageReplace(info)
-			res.Outcome = "replaced"
-		} else {
-			p := &pendingChange{kind: "added", name: name, info: info}
-			oa.overlay[info.ID] = p
-			oa.adds = append(oa.adds, p)
-			res.Outcome = "added"
-		}
-		oa.seq++
-		c.touchArchiveLocked(oa)
-		c.mu.Unlock()
-		results = append(results, res)
-		done += uint64(sizes[i])
-		o.progress(done, total, "adding")
-	}
+	err := c.runPlan(ctx, o, oa, plan, &results, &done, total)
 	c.mu.Lock()
 	c.settleLocked(oa) // nothing staged after all: not dirty
 	c.mu.Unlock()
 	c.emitArchiveChanged(oa)
 	c.emitState()
-	return results, nil
+	return results, err
 }
 
-// keepBothName inserts " (2)", " (3)", … before the extension until the
-// name is free, up to a bound, validating each candidate.
-func keepBothName(name string, taken func(string) bool) (string, bool) {
-	dir, base := "", name
-	if i := strings.LastIndexByte(name, '/'); i >= 0 {
-		dir, base = name[:i+1], name[i+1:]
+// planNodes decides one run of siblings and, for a folder that is created or
+// entered, everything beneath it.
+func planNodes(m *merged, d *addDest, nodes []*addNode, policy AddPolicy) []*planItem {
+	out := make([]*planItem, 0, len(nodes))
+	for _, n := range nodes {
+		it := &planItem{node: n, name: n.name, parentID: d.id, parentPlan: d.plan}
+		out = append(out, it)
+		if n.refuse != "" {
+			it.action, it.code = "fail", n.refuse
+			continue
+		}
+		if format.ValidateName(n.name) != nil {
+			// Never silently skipped: one outcome, named. When the refused
+			// name is a directory's, nothing beneath it is added and the
+			// walk goes on with the folder's siblings.
+			it.action, it.code = "fail", CodeFileName
+			continue
+		}
+		rec, pl := inTheWay(m, d, n.name)
+		switch {
+		case rec == nil && pl == nil:
+			it.action = "create"
+			if !n.isDir {
+				it.action = "add"
+			}
+		case n.isDir && kindOf(rec, pl):
+			// Two directories: the incoming one is entered whatever the
+			// policy, keeping its dir_id and its own modified_at.
+			it.action = "enter"
+			if rec != nil {
+				it.existing = rec.id
+			} else {
+				it.existingPlan = pl
+			}
+		case n.isDir != kindOf(rec, pl):
+			// Kinds that differ never replace, in either direction.
+			switch policy {
+			case PolicyKeepBoth:
+				it.action, it.name = keepBoth(m, d, n.name, n.isDir)
+			case PolicyReplace:
+				it.action, it.code = "fail", CodeKindMismatch
+			default:
+				it.action = "skip"
+			}
+		default: // two files
+			switch policy {
+			case PolicyKeepBoth:
+				it.action, it.name = keepBoth(m, d, n.name, n.isDir)
+			case PolicyReplace:
+				it.action = "replace"
+				if rec != nil {
+					it.existing = rec.id
+				} else {
+					it.existingPlan = pl
+				}
+			default:
+				it.action = "skip"
+			}
+		}
+		if it.action == "create" || it.action == "add" {
+			if e := boundsAt(m, d.depth, d.prefix, n.isDir, it.name, nil); e != nil {
+				it.action, it.code = "fail", e.Code
+			}
+		}
+		it.joined = join(d.joined, it.name)
+		if it.action == "fail" || it.action == "skip" {
+			continue
+		}
+		d.planned = append(d.planned, it)
+		if !n.isDir || len(n.children) == 0 {
+			continue
+		}
+		sub := &addDest{}
+		switch {
+		case it.action == "enter" && it.existingPlan == nil:
+			ex := m.rec(it.existing)
+			sub.id = ex.id
+			sub.depth, sub.prefix, _ = m.dirPos(ex.id)
+			sub.joined = m.path(ex.id)
+		case it.action == "enter":
+			sub.plan = it.existingPlan
+			sub.depth, sub.prefix = d.depth+1, d.prefix+len(it.existingPlan.name)+1
+			sub.joined = it.existingPlan.joined
+		default: // created
+			sub.plan = it
+			sub.depth, sub.prefix = d.depth+1, d.prefix+len(it.name)+1
+			sub.joined = it.joined
+		}
+		it.children = planNodes(m, sub, n.children, policy)
 	}
-	ext := path.Ext(base)
-	stem := strings.TrimSuffix(base, ext)
+	return out
+}
+
+// inTheWay is the live child of the destination whose name folds onto name,
+// or the item this batch has already planned there. A staged-deleted sibling
+// reserves no name (FORMAT.md R39 folds among live children only), so a
+// deleted folder's name is free and the walk makes a new record.
+func inTheWay(m *merged, d *addDest, name string) (*mergedRec, *planItem) {
+	if d.plan == nil {
+		if r := m.sibling(d.id, name, [16]byte{}); r != nil {
+			return r, nil
+		}
+	}
+	for _, p := range d.planned {
+		if strings.EqualFold(p.name, name) {
+			return nil, p
+		}
+	}
+	return nil, nil
+}
+
+// kindOf reports whether the item in the way is a directory.
+func kindOf(rec *mergedRec, pl *planItem) bool {
+	if rec != nil {
+		return rec.isDir
+	}
+	return pl.node.isDir
+}
+
+// keepBoth takes the next free name — name (2), name (3), … , before the
+// extension for a file and at the end of the whole name for a directory —
+// the first that no live sibling holds under case folding.
+func keepBoth(m *merged, d *addDest, name string, isDir bool) (action, chosen string) {
+	stem, ext := name, ""
+	if !isDir {
+		ext = path.Ext(name)
+		stem = strings.TrimSuffix(name, ext)
+	}
 	for n := 2; n < 1000; n++ {
-		cand := fmt.Sprintf("%s%s (%d)%s", dir, stem, n, ext)
-		if format.ValidateFileName(cand) != nil {
-			return "", false
+		cand := fmt.Sprintf("%s (%d)%s", stem, n, ext)
+		if format.ValidateName(cand) != nil {
+			break
 		}
-		if !taken(cand) {
-			return cand, true
+		if rec, pl := inTheWay(m, d, cand); rec == nil && pl == nil {
+			if isDir {
+				return "create", cand
+			}
+			return "add", cand
 		}
 	}
-	return "", false
+	return "fail", name
+}
+
+func join(dir, name string) string {
+	if dir == "" {
+		return name
+	}
+	return dir + "/" + name
+}
+
+// runPlan stages the pre-flighted walk, parents before children. A folder
+// that could not be staged takes its subtree with it: one outcome for the
+// folder and nothing beneath it.
+func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, items []*planItem, results *[]FileOutcome, done *uint64, total uint64) error {
+	for _, it := range items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		res := FileOutcome{Path: it.node.src, Name: it.joined, IsDir: it.node.isDir}
+		parent := it.parentID
+		if it.parentPlan != nil {
+			parent = it.parentPlan.id
+		}
+		switch it.action {
+		case "fail":
+			res.Outcome, res.Code = "failed", it.code
+			if it.code == "" {
+				res.Code = CodeFileName
+			}
+			*results = append(*results, res)
+			continue
+		case "skip":
+			res.Outcome = "skipped"
+			*results = append(*results, res)
+			continue
+		case "enter":
+			it.id, it.staged = it.existing, true
+			if it.existingPlan != nil {
+				it.id = it.existingPlan.id
+				it.staged = it.existingPlan.staged
+			}
+			res.Outcome = "entered"
+			*results = append(*results, res)
+		case "create":
+			c.mu.Lock()
+			if err := c.beginLocked(oa); err != nil {
+				c.mu.Unlock()
+				return err
+			}
+			info, err := oa.tx.AddDir(parent, it.name, it.node.modifiedAt)
+			if err == nil {
+				oa.stageAdd(&pendingChange{kind: pendingAdded, id: info.ID, isDir: true, name: it.name, parentID: parent, dir: info})
+				it.id, it.staged = info.ID, true
+				oa.seq++
+				c.touchArchiveLocked(oa)
+			}
+			c.mu.Unlock()
+			if err != nil {
+				res.Outcome, res.Code = "failed", classify(err).Code
+				*results = append(*results, res)
+				continue // nothing beneath a folder that was not made
+			}
+			res.Outcome = "created"
+			*results = append(*results, res)
+		case "add", "replace":
+			e := c.stageFile(ctx, oa, it, parent, &res)
+			*results = append(*results, res)
+			if e != nil {
+				return e
+			}
+			*done += uint64(max64(it.node.size, 0))
+			o.progress(*done, total, "adding")
+			continue
+		}
+		if !it.staged && it.action == "enter" {
+			continue // the folder it would have entered was not made
+		}
+		if err := c.runPlan(ctx, o, oa, it.children, results, done, total); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stageFile writes one file into the transaction: an add of a fresh record,
+// or the in-place edit of the record in the way. A source that changed
+// underneath between the walk and the add is one outcome, not a failed
+// operation.
+func (c *Core) stageFile(ctx context.Context, oa *openArchive, it *planItem, parent [16]byte, res *FileOutcome) error {
+	target := it.existing
+	if it.existingPlan != nil {
+		if !it.existingPlan.staged {
+			res.Outcome, res.Code = "failed", CodeFileNotFound
+			return nil
+		}
+		target = it.existingPlan.id
+	}
+	f, err := os.Open(it.node.src)
+	if err != nil {
+		res.Outcome, res.Code = "failed", CodeIO
+		return nil
+	}
+	defer f.Close()
+	c.mu.Lock()
+	if err := c.beginLocked(oa); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	var cur *mergedRec
+	if it.action == "replace" {
+		cur = oa.merge().live(target)
+		if cur == nil {
+			c.mu.Unlock()
+			res.Outcome, res.Code = "failed", CodeFileNotFound
+			return nil
+		}
+	}
+	c.mu.Unlock()
+	var info archive.FileInfo
+	if it.action == "replace" {
+		info, err = oa.tx.Replace(ctx, target, f, it.node.size)
+	} else {
+		info, err = oa.tx.Add(ctx, parent, it.name, f, it.node.size)
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		res.Outcome, res.Code = "failed", classify(err).Code
+		return nil
+	}
+	c.mu.Lock()
+	if it.action == "replace" {
+		oa.stageReplace(cur, info)
+		res.Outcome = "replaced"
+	} else {
+		oa.stageAdd(&pendingChange{kind: pendingAdded, id: info.ID, isDir: false, name: it.name, parentID: parent, file: info})
+		res.Outcome = "added"
+	}
+	it.id, it.staged = info.ID, true
+	oa.seq++
+	c.touchArchiveLocked(oa)
+	c.mu.Unlock()
+	return nil
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // ReplaceFile is the in-place edit: the file's content from src, same id.
@@ -348,7 +670,7 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 		return "", e
 	}
 	fid, ok := parseID(fileID)
-	if !ok {
+	if !ok || fid == format.RootID {
 		return "", coded(CodeParams)
 	}
 	return c.startOp("replace", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
@@ -359,11 +681,13 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 			return nil, err
 		}
 		c.mu.Lock()
-		cur, found := oa.currentInfo(fid)
-		if !found {
+		m := oa.merge()
+		cur := m.live(fid)
+		if cur == nil || cur.isDir {
 			c.mu.Unlock()
 			return nil, archive.ErrNotFound
 		}
+		name := m.path(fid)
 		if err := c.beginLocked(oa); err != nil {
 			c.mu.Unlock()
 			return nil, err
@@ -380,18 +704,18 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 			return nil, err
 		}
 		c.mu.Lock()
-		oa.stageReplace(info)
+		oa.stageReplace(cur, info)
 		oa.seq++
 		c.touchArchiveLocked(oa)
 		c.mu.Unlock()
 		o.progress(uint64(st.Size()), uint64(st.Size()), "replacing")
 		c.emitArchiveChanged(oa)
 		c.emitState()
-		return []FileOutcome{{Name: cur.Name, Path: src, Outcome: "replaced"}}, nil
+		return []FileOutcome{{Name: name, Path: src, Outcome: "replaced"}}, nil
 	}), nil
 }
 
-// ExtractPolicy is what happens when a destination exists.
+// ExtractPolicy is what happens when a destination file exists.
 type ExtractPolicy string
 
 const (
@@ -399,10 +723,27 @@ const (
 	ExtractRename ExtractPolicy = "rename"
 )
 
-// Extract writes committed files under dir: target = dir/FromSlash(name),
-// parents created, existing targets skipped or renamed (never replaced),
-// each file all-or-nothing (trap 17), the batch not.
-func (c *Core) Extract(id string, fileIDs []string, dir string, policy ExtractPolicy) (string, *Error) {
+// extractItem is one record of the plan, resolved before the first byte.
+type extractItem struct {
+	id         [16]byte
+	parentID   [16]byte
+	isDir      bool
+	path       string // the joined archive path
+	dst        string
+	size       uint64
+	modifiedAt int64
+	depth      int
+}
+
+// Extract writes a plan of records under dir (APP.md §3). The plan is a
+// set — each selected record, every live record beneath a selected
+// directory, and the ancestor directories of all of them up to the root —
+// ordered parents before anything under them, and a directory is in it
+// because its record is live, never because a file needed a parent (DESIGN
+// trap 31): an empty folder extracts as an empty folder. The all-zero id
+// among recordIDs is the root and extracts everything; an empty recordIDs is
+// params, never everything.
+func (c *Core) Extract(id string, recordIDs []string, dir string, policy ExtractPolicy) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return "", e
@@ -410,70 +751,97 @@ func (c *Core) Extract(id string, fileIDs []string, dir string, policy ExtractPo
 	if !filepath.IsAbs(dir) {
 		return "", coded(CodeParams)
 	}
-	ids := make([][16]byte, 0, len(fileIDs))
-	for _, s := range fileIDs {
-		fid, ok := parseID(s)
+	if len(recordIDs) == 0 {
+		return "", coded(CodeParams)
+	}
+	all := false
+	ids := make([][16]byte, 0, len(recordIDs))
+	for _, s := range recordIDs {
+		rid, ok := parseID(s)
 		if !ok {
 			return "", coded(CodeParams)
 		}
-		ids = append(ids, fid)
+		if rid == format.RootID {
+			all = true
+			continue
+		}
+		ids = append(ids, rid)
 	}
 	if policy == "" {
 		policy = ExtractSkip
 	}
+	root := filepath.Clean(dir)
 	return c.startOp("extract", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
-		// Plan: resolve every destination first, de-duplicating
-		// case-folded collisions inside the batch, before the first byte.
-		type item struct {
-			fid  [16]byte
-			name string
-			dst  string
-			size uint64
-		}
 		c.mu.Lock()
-		var items []item
-		var total uint64
-		for _, fid := range ids {
-			info, ok := oa.currentInfo(fid)
-			if !ok {
-				continue
-			}
-			if k := oa.pendingKind(fid); k == "added" || k == "replaced" {
-				continue // not previewable/extractable until Save
-			}
-			items = append(items, item{fid: fid, name: info.Name, size: info.Size})
-			total += info.Size
-		}
+		items, e := extractPlan(oa.merge(), ids, all)
 		c.mu.Unlock()
+		if e != nil {
+			return nil, e
+		}
 		if len(items) == 0 {
 			return nil, coded(CodeFileNotFound)
 		}
-		used := map[string]bool{}
-		root := filepath.Clean(dir)
+		// Every target is resolved before the first byte, case-folded
+		// destinations de-duplicated, each asserted to lie under dir. Every
+		// record satisfying R20 and R39 does, so a failure means the index
+		// is not the one the reader validated: the whole operation fails
+		// with file.name, a plan-time invariant and not an item's outcome.
+		used := make(map[string][16]byte, len(items))
+		var total uint64
 		for i := range items {
-			dst := filepath.Join(root, filepath.FromSlash(items[i].name))
-			rel, err := filepath.Rel(root, dst)
+			it := &items[i]
+			it.dst = filepath.Join(root, filepath.FromSlash(it.path))
+			rel, err := filepath.Rel(root, filepath.Clean(it.dst))
 			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				return nil, coded(CodeFileName)
 			}
-			key := strings.ToLower(dst)
-			for n := 2; used[key]; n++ {
-				dst = renamed(filepath.Join(root, filepath.FromSlash(items[i].name)), n)
-				key = strings.ToLower(dst)
+			key := strings.ToLower(it.dst)
+			if other, dup := used[key]; dup && other != it.id {
+				return nil, coded(CodeFileName)
 			}
-			used[key] = true
-			items[i].dst = dst
+			used[key] = it.id
+			if !it.isDir {
+				total += it.size
+			}
+		}
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return nil, err
 		}
 		results := make([]FileOutcome, 0, len(items))
+		at := make(map[[16]byte]int, len(items))
+		gone := map[[16]byte]bool{}
+		var made []extractItem
 		var done uint64
 		o.progress(0, total, "extracting")
 		for _, it := range items {
 			if ctx.Err() != nil {
 				return results, ctx.Err()
 			}
-			res := FileOutcome{Name: it.name, Path: it.dst}
-			if err := os.MkdirAll(filepath.Dir(it.dst), 0o700); err != nil {
+			res := FileOutcome{Name: it.path, Path: it.dst, IsDir: it.isDir}
+			at[it.id] = len(results)
+			if gone[it.parentID] {
+				// A directory that cannot be created takes its subtree with
+				// it, each record beneath it failing in turn.
 				res.Outcome, res.Code = "failed", CodeIO
+				gone[it.id] = true
+				results = append(results, res)
+				continue
+			}
+			if it.isDir {
+				// Created into the parent the order has already made; an
+				// existing folder is used as it stands — never renamed,
+				// never pre-Lstat'ed, never emptied.
+				err := os.Mkdir(it.dst, 0o700)
+				switch {
+				case err == nil:
+					res.Outcome = "created"
+					made = append(made, it)
+				case errors.Is(err, os.ErrExist):
+					res.Outcome = "skipped"
+				default:
+					res.Outcome, res.Code = "failed", CodeIO
+					gone[it.id] = true
+				}
 				results = append(results, res)
 				continue
 			}
@@ -481,11 +849,10 @@ func (c *Core) Extract(id string, fileIDs []string, dir string, policy ExtractPo
 			oa.readers++
 			c.touchArchiveLocked(oa)
 			c.mu.Unlock()
-			err := oa.a.ExtractTo(ctx, it.fid, it.dst)
+			err := oa.a.ExtractTo(ctx, it.id, it.dst)
 			for n := 2; err != nil && errors.Is(err, os.ErrExist) && policy == ExtractRename && n < 1000; n++ {
-				it.dst = renamed(filepath.Join(root, filepath.FromSlash(it.name)), n)
-				res.Path = it.dst
-				err = oa.a.ExtractTo(ctx, it.fid, it.dst)
+				res.Path = renamed(it.dst, n)
+				err = oa.a.ExtractTo(ctx, it.id, res.Path)
 			}
 			c.mu.Lock()
 			oa.readers--
@@ -504,8 +871,72 @@ func (c *Core) Extract(id string, fileIDs []string, dir string, policy ExtractPo
 			done += it.size
 			o.progress(done, total, "extracting")
 		}
+		// Each directory this extraction created then takes its modified_at,
+		// deepest first and only once everything beneath it has landed; a
+		// folder that was already there keeps its own time (DESIGN trap 28),
+		// and a time that will not set leaves the folder created with io.
+		sort.SliceStable(made, func(i, j int) bool { return made[i].depth > made[j].depth })
+		for _, it := range made {
+			t := time.Unix(it.modifiedAt, 0)
+			if err := os.Chtimes(it.dst, t, t); err != nil {
+				if i, ok := at[it.id]; ok {
+					results[i].Code = CodeIO
+				}
+			}
+		}
 		return results, nil
 	}), nil
+}
+
+// extractPlan resolves the set and orders it parents-first. A record reached
+// twice is planned once; a staged rename or move carries its target with it;
+// staged adds and replaces are not extractable until Save, as with
+// PreviewURL, and nothing beneath a staged folder is either. Caller holds
+// the state mutex.
+func extractPlan(m *merged, ids [][16]byte, all bool) ([]extractItem, *Error) {
+	want := map[[16]byte]bool{}
+	for _, rid := range ids {
+		r := m.live(rid)
+		if r == nil {
+			return nil, coded(CodeFileNotFound)
+		}
+		want[r.id] = true
+		if r.isDir {
+			for _, k := range m.subtree(r.id) {
+				want[k.id] = true
+			}
+		}
+		for cur := r.parentID; cur != format.RootID; {
+			a := m.rec(cur)
+			if a == nil {
+				break
+			}
+			want[a.id] = true
+			cur = a.parentID
+		}
+	}
+	var out []extractItem
+	var walk func(parent [16]byte, depth int)
+	walk = func(parent [16]byte, depth int) {
+		for _, r := range m.kids[parent] {
+			if !all && !want[r.id] {
+				continue
+			}
+			switch r.pending {
+			case pendingAdded, pendingReplaced, pendingDeleted:
+				continue
+			}
+			out = append(out, extractItem{
+				id: r.id, parentID: r.parentID, isDir: r.isDir, path: m.path(r.id),
+				size: r.size, modifiedAt: r.modifiedAt, depth: depth,
+			})
+			if r.isDir {
+				walk(r.id, depth+1)
+			}
+		}
+	}
+	walk(format.RootID, 0)
+	return out, nil
 }
 
 // renamed inserts " (n)" before the extension of a path.

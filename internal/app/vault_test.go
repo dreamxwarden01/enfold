@@ -66,12 +66,12 @@ func TestNothingStagedIsClean(t *testing.T) {
 	h.c.OpenArchive(id)
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("once"), 0o600)
-	opID, _ := h.c.AddFiles(id, "", []string{f}, PolicySkip)
+	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	h.rec.waitOp(t, opID)
 	opID, _ = h.c.Save(id)
 	h.rec.waitOp(t, opID)
 	// The same name again, skipped: nothing staged.
-	opID, _ = h.c.AddFiles(id, "", []string{f}, PolicySkip)
+	opID, _ = h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	if o := h.rec.waitOp(t, opID); len(o.Results) != 1 || o.Results[0].Outcome != "skipped" {
 		t.Fatalf("second add: %+v", o)
 	}
@@ -81,19 +81,19 @@ func TestNothingStagedIsClean(t *testing.T) {
 	// Stage one add and un-stage it.
 	g := filepath.Join(h.dir, "g.txt")
 	os.WriteFile(g, []byte("twice"), 0o600)
-	opID, _ = h.c.AddFiles(id, "", []string{g}, PolicySkip)
+	opID, _ = h.c.AddFiles(id, rootID, []string{g}, PolicySkip)
 	h.rec.waitOp(t, opID)
-	page, _ := h.c.Page(id, "", "name", 0, 10)
+	page, _ := h.c.Page(id, rootID, "name", 0, 10)
 	var staged string
 	for _, r := range page.Rows {
 		if r.Pending == "added" {
-			staged = r.FileID
+			staged = r.ID
 		}
 	}
 	if staged == "" {
 		t.Fatalf("no staged row: %+v", page.Rows)
 	}
-	if e := h.c.DeleteFiles(id, []string{staged}); e != nil {
+	if e := h.c.DeleteRecords(id, []string{staged}); e != nil {
 		t.Fatal(e)
 	}
 	if st, _ := h.c.Stat(id); st.Dirty != 0 || st.State != "open" || st.CapAt != 0 {

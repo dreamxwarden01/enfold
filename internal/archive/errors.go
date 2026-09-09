@@ -22,10 +22,26 @@ var (
 	ErrIndeterminate = errors.New("archive: commit outcome unknown")
 	// ErrClosed: the Archive, transaction or Reader is closed.
 	ErrClosed = errors.New("archive: closed")
-	// ErrExists: a live file with this name already exists.
+	// ErrExists: a live child of the same parent already holds this name
+	// under simple case folding (R39 — files and directories share one
+	// namespace, and the platforms this project extracts to would put A.txt
+	// and a.txt on one file).
 	ErrExists = errors.New("archive: name already exists")
-	// ErrNotFound: no live file has this ID or name.
-	ErrNotFound = errors.New("archive: no such file")
+	// ErrNotFound: no live record has this ID, or an id given as a parent or
+	// a destination is neither the root nor a live directory.
+	ErrNotFound = errors.New("archive: no such record")
+	// ErrMoveIntoSelf: a directory would be moved into itself or into one of
+	// its own descendants (R39).
+	ErrMoveIntoSelf = errors.New("archive: a directory cannot be moved into itself")
+	// ErrTreeBounds: the change would stand a live directory more than
+	// format.MaxTreeDepth below the root, or join a live record to a path
+	// over format.MaxPathLen bytes. Both bounds are the whole subtree's, not
+	// the named record's (R39), so a rename or a move is refused for what it
+	// would do to records beneath it.
+	ErrTreeBounds = errors.New("archive: the tree's depth or path bound would be exceeded")
+	// ErrKindMismatch: the id names a record of the other kind — a directory
+	// where a file's content is edited.
+	ErrKindMismatch = errors.New("archive: the id names a record of the other kind")
 	// ErrSourceChanged: the source yielded more or fewer bytes than its
 	// declared size.
 	ErrSourceChanged = errors.New("archive: source size differs from the declared size")

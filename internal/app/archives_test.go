@@ -19,30 +19,30 @@ func TestReplaceOfStagedAddStaysOne(t *testing.T) {
 	big := filepath.Join(h.dir, "big.txt")
 	os.WriteFile(small, []byte("small"), 0o600)
 	os.WriteFile(big, []byte("a much bigger content than before"), 0o600)
-	opID, _ := h.c.AddFiles(id, "", []string{small}, PolicySkip)
+	opID, _ := h.c.AddFiles(id, rootID, []string{small}, PolicySkip)
 	h.rec.waitOp(t, opID)
-	page, _ := h.c.Page(id, "", "name", 0, 10)
+	page, _ := h.c.Page(id, rootID, "name", 0, 10)
 	if len(page.Rows) != 1 || page.Rows[0].Pending != "added" || page.Rows[0].Size != 5 {
 		t.Fatalf("staged: %+v", page.Rows)
 	}
-	opID, e := h.c.ReplaceFile(id, page.Rows[0].FileID, big)
+	opID, e := h.c.ReplaceFile(id, page.Rows[0].ID, big)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
 		t.Fatalf("replace: %+v", o)
 	}
-	page, _ = h.c.Page(id, "", "name", 0, 10)
+	page, _ = h.c.Page(id, rootID, "name", 0, 10)
 	if len(page.Rows) != 1 || page.Rows[0].Pending != "added" || page.Rows[0].Size != 33 {
 		t.Fatalf("after replace: %+v", page.Rows)
 	}
 	if st, _ := h.c.Stat(id); st.Dirty != 1 {
 		t.Fatalf("dirty after replace: %+v", st)
 	}
-	if e := h.c.DeleteFiles(id, []string{page.Rows[0].FileID}); e != nil {
+	if e := h.c.DeleteRecords(id, []string{page.Rows[0].ID}); e != nil {
 		t.Fatal(e)
 	}
-	page, _ = h.c.Page(id, "", "name", 0, 10)
+	page, _ = h.c.Page(id, rootID, "name", 0, 10)
 	if len(page.Rows) != 0 {
 		t.Fatalf("staged add not un-staged: %+v", page.Rows)
 	}
@@ -90,7 +90,7 @@ func TestCopyMismatchIsShown(t *testing.T) {
 	h.c.OpenArchive(id)
 	f := filepath.Join(h.dir, "f.txt")
 	os.WriteFile(f, []byte("newer"), 0o600)
-	opID, _ := h.c.AddFiles(id, "", []string{f}, PolicySkip)
+	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	h.rec.waitOp(t, opID)
 	opID, _ = h.c.Save(id)
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
@@ -116,7 +116,7 @@ func TestCopyMismatchIsShown(t *testing.T) {
 	}
 	// Working on this copy and saving records it; the flag stays until
 	// the archive is reopened against a matching record.
-	opID, _ = h.c.AddFiles(id, "", []string{f}, PolicySkip)
+	opID, _ = h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	h.rec.waitOp(t, opID)
 	opID, _ = h.c.Save(id)
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
@@ -158,7 +158,7 @@ func TestPageNegativeOffset(t *testing.T) {
 	h.unlockWithPassword()
 	id, _ := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
 	h.c.OpenArchive(id)
-	if _, e := h.c.Page(id, "", "name", -5, 10); e != nil {
+	if _, e := h.c.Page(id, rootID, "name", -5, 10); e != nil {
 		t.Fatal(e)
 	}
 }

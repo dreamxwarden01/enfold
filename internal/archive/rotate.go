@@ -18,7 +18,9 @@ import (
 // the new archive key's wrap key, the index is re-sealed under its index
 // key with newKID in the AAD, and the envelope is rewritten. No file data
 // is touched, and dek_epoch does not move — the DEK AAD does not include
-// the kid.
+// the kid. Every record is carried over as it stands, directories included,
+// in the order §11 requires and with no id changed, so the tree a caller was
+// holding is the tree it gets back (R33).
 //
 // Contract: the caller has already committed the new version to the
 // registry, current, with the old one retired. Then a crash anywhere in
@@ -70,7 +72,7 @@ func (a *Archive) RotateKey(ctx context.Context, newKID [16]byte, newKey [32]byt
 		}
 	}
 
-	tx := &Tx{a: a, index: index, pool: a.pool.clone(), allocs: newSpace(nil), pending: newSpace(nil), size0: a.size, changed: true}
+	tx := &Tx{a: a, index: index, tree: newTree(index), pool: a.pool.clone(), allocs: newSpace(nil), pending: newSpace(nil), size0: a.size, changed: true}
 	rec, err := a.commit(ctx, tx, index, newKID, indexNew)
 	if err != nil {
 		if a.broken == nil && a.size > tx.size0 {
@@ -94,9 +96,11 @@ func (a *Archive) RotateKey(ctx context.Context, newKID [16]byte, newKey [32]byt
 }
 
 // Compact rewrites the archive without free space into a fresh file beside
-// it and renames it over the original (R33). Every record — live and
-// tombstone — and the dictionary are carried over; live extents are copied
-// verbatim (ciphertext, unchanged DEKs, §13), only data_off changes. Before
+// it and renames it over the original (R33). Every record — directory and
+// file, live and tombstone — and the dictionary are carried over in the order
+// §11 requires, no dir_id or file_id changes, and live extents are copied
+// verbatim (ciphertext, unchanged DEKs, §13); only a live file's data_off
+// moves, so the tree a caller was holding survives compaction. Before
 // the rename the new file's superblocks, extents and index are read back
 // and checked; file contents are copied verbatim and not re-authenticated.
 // This handle is closed by the operation — on success its file no longer

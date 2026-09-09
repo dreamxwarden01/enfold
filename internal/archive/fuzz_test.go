@@ -29,15 +29,44 @@ func FuzzOpen(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	// A tree, not a flat list: a directory record, a file under it, an empty
+	// folder and a tombstone of each kind, so the corpus carries both record
+	// tables (§11, R39).
+	sub, _, err := a.AddDir(context.Background(), format.RootID, "d", 1700000000)
+	if err != nil {
+		f.Fatal(err)
+	}
+	if _, _, err := a.AddDir(context.Background(), sub.ID, "empty", 1700000001); err != nil {
+		f.Fatal(err)
+	}
+	gone, _, err := a.AddDir(context.Background(), format.RootID, "gone", 1700000002)
+	if err != nil {
+		f.Fatal(err)
+	}
 	contents := map[[16]byte][]byte{}
-	for name, data := range map[string][]byte{"t": text(3000, 1), "n": noise(700, 2), "big": text(5000, 3), "e": {}} {
-		info, _, err := a.Add(context.Background(), name, bytes.NewReader(data), int64(len(data)))
+	for _, c := range []struct {
+		parent [16]byte
+		name   string
+		data   []byte
+	}{
+		{format.RootID, "t", text(3000, 1)},
+		{format.RootID, "n", noise(700, 2)},
+		{sub.ID, "big", text(5000, 3)},
+		{gone.ID, "swept", text(400, 4)},
+		{format.RootID, "e", []byte{}},
+	} {
+		info, _, err := a.Add(context.Background(), c.parent, c.name, bytes.NewReader(c.data), int64(len(c.data)))
 		if err != nil {
 			f.Fatal(err)
 		}
-		contents[info.ID] = data
+		contents[info.ID] = c.data
 	}
+	// One deletion of each kind: a file's tombstone, and a directory's with
+	// the subtree it takes in the same write.
 	if _, err := a.Delete(context.Background(), a.Files()[0].ID); err != nil {
+		f.Fatal(err)
+	}
+	if _, err := a.Delete(context.Background(), gone.ID); err != nil {
 		f.Fatal(err)
 	}
 	a.Close()

@@ -24,6 +24,7 @@ import (
 type Tx struct {
 	a       *Archive
 	index   *format.Index // the working copy; touched only by the Tx's goroutine
+	tree    *tree         // the working copy's id space (R39)
 	pool    *space        // what this transaction may still allocate (a.mu)
 	allocs  *space        // what it has allocated, to leave out of the published map (a.mu)
 	pending *space        // what it has freed, to publish as free and quarantine (a.mu)
@@ -46,7 +47,7 @@ func (a *Archive) Begin() (*Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	tx := &Tx{a: a, index: index, pool: a.pool.clone(), allocs: newSpace(nil), pending: newSpace(nil), size0: a.size}
+	tx := &Tx{a: a, index: index, tree: newTree(index), pool: a.pool.clone(), allocs: newSpace(nil), pending: newSpace(nil), size0: a.size}
 	a.tx = tx
 	return tx, nil
 }
@@ -163,15 +164,25 @@ func (tx *Tx) shrink(e extent, used uint64) error {
 	return nil
 }
 
-// liveName reports whether a live record in the working index has the name.
-func (tx *Tx) liveName(name string, except [16]byte) bool {
-	for i := range tx.index.Files {
-		r := &tx.index.Files[i]
-		if r.State == format.FileLive && r.Name == name && r.FileID != except {
-			return true
-		}
+// place is the check every staged creation, rename and move passes: the name
+// is one valid path element (R20), the parent is the root or a live directory
+// of the working index, no live child of that parent already folds onto the
+// name, and the record — with every live record beneath it — still fits R39's
+// depth and path bounds. Everything is asked of the index this transaction is
+// building, never of the one last committed, so a directory staged a moment
+// ago is as real a parent as any; and a change that would break any of it is
+// refused before the working index is touched.
+func (tx *Tx) place(kids map[[16]byte][]ref, r ref, parent [16]byte, name string) error {
+	if err := format.ValidateName(name); err != nil {
+		return err
 	}
-	return false
+	if !tx.tree.parentUsable(parent) {
+		return fmt.Errorf("%w: %x is not the root or a live directory", ErrNotFound, parent)
+	}
+	if tx.tree.liveName(parent, name, r.id) {
+		return fmt.Errorf("%w: %q", ErrExists, name)
+	}
+	return tx.tree.checkBounds(kids, r, parent, name)
 }
 
 // plan decides how a file of size bytes is stored (DESIGN.md §9, R27),
@@ -200,10 +211,12 @@ func (tx *Tx) plan(src io.ReaderAt, size int64) (format.Storage, error) {
 	return format.StorageZstd, nil
 }
 
-// Add stores a new file. src must hold exactly size bytes; a source that
-// yields more or fewer is ErrSourceChanged. The write is complete when Add
-// returns; the record is published by Commit.
-func (tx *Tx) Add(ctx context.Context, name string, src io.ReaderAt, size int64) (FileInfo, error) {
+// Add stores a new file under parentID — format.RootID for the top level —
+// with name as one path element (R20); nothing is looked up by a path. src
+// must hold exactly size bytes; a source that yields more or fewer is
+// ErrSourceChanged. The write is complete when Add returns; the record is
+// published by Commit.
+func (tx *Tx) Add(ctx context.Context, parentID [16]byte, name string, src io.ReaderAt, size int64) (FileInfo, error) {
 	a := tx.a
 	a.mu.Lock()
 	err := tx.live()
@@ -211,27 +224,54 @@ func (tx *Tx) Add(ctx context.Context, name string, src io.ReaderAt, size int64)
 	if err != nil {
 		return FileInfo{}, err
 	}
-	if err := format.ValidateFileName(name); err != nil {
+	id, err := tx.tree.mintID()
+	if err != nil {
 		return FileInfo{}, err
 	}
-	if tx.liveName(name, [16]byte{}) {
-		return FileInfo{}, fmt.Errorf("%w: %q", ErrExists, name)
-	}
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
+	if err := tx.place(nil, ref{id, false}, parentID, name); err != nil {
 		return FileInfo{}, err
 	}
-	rec := format.FileRecord{FileID: id, State: format.FileLive, Name: name, Revision: 1, DEKEpoch: 1}
+	rec := format.FileRecord{FileID: id, State: format.FileLive, ParentID: parentID, Name: name, Revision: 1, DEKEpoch: 1}
 	if err := tx.store(ctx, &rec, src, size); err != nil {
 		return FileInfo{}, err
 	}
-	tx.index.Files = append(tx.index.Files, rec)
+	tx.tree.appendFile(rec)
 	tx.changed = true
 	return infoOf(&rec), nil
 }
 
+// AddDir stages a directory record under parentID with the folder's own time
+// (R32: nothing writes modified_at again). A folder is a record, so an empty
+// one is a real thing that survives a commit — never a fiction of the page
+// (DESIGN.md trap 31). Its id is minted fresh (R39).
+func (tx *Tx) AddDir(parentID [16]byte, name string, modifiedAt int64) (DirInfo, error) {
+	a := tx.a
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := tx.live(); err != nil {
+		return DirInfo{}, err
+	}
+	id, err := tx.tree.mintID()
+	if err != nil {
+		return DirInfo{}, err
+	}
+	if err := tx.place(nil, ref{id, true}, parentID, name); err != nil {
+		return DirInfo{}, err
+	}
+	rec := format.DirRecord{
+		DirID: id, State: format.FileLive, ParentID: parentID, Name: name,
+		ModifiedAt: modifiedAt, Revision: 1, LastWriter: a.opts.DeviceID,
+	}
+	tx.tree.appendDir(rec)
+	tx.changed = true
+	return dirInfoOf(&rec), nil
+}
+
 // Replace rewrites a live file's content under a fresh DEK (§12), keeping
-// its identity and name. The old extent is freed at Commit.
+// its identity, its name and its parent — it is the in-place edit, never a
+// delete and an add, and it cannot collide (R39). The old extent is freed at
+// Commit. A directory's id is ErrKindMismatch: replacing a folder with a file
+// is not an edit of that folder.
 func (tx *Tx) Replace(ctx context.Context, id [16]byte, src io.ReaderAt, size int64) (FileInfo, error) {
 	a := tx.a
 	a.mu.Lock()
@@ -240,10 +280,14 @@ func (tx *Tx) Replace(ctx context.Context, id [16]byte, src io.ReaderAt, size in
 	if err != nil {
 		return FileInfo{}, err
 	}
-	old := findRecord(tx.index, id)
+	old := tx.tree.liveFile(id)
 	if old == nil {
+		if tx.tree.liveDir(id) != nil {
+			return FileInfo{}, fmt.Errorf("%w: %x is a directory", ErrKindMismatch, id)
+		}
 		return FileInfo{}, ErrNotFound
 	}
+	freed := extent{Off: old.DataOff, Len: old.StoredSize}
 	rec := *old
 	rec.DEKEpoch++
 	rec.Revision++
@@ -251,11 +295,13 @@ func (tx *Tx) Replace(ctx context.Context, id [16]byte, src io.ReaderAt, size in
 		return FileInfo{}, err
 	}
 	a.mu.Lock()
-	tx.pending.insert(extent{Off: old.DataOff, Len: old.StoredSize})
+	tx.pending.insert(freed)
 	a.mu.Unlock()
-	*old = rec
+	// The record is taken again rather than held across the write: it is a
+	// position in a slice the transaction may have grown meanwhile.
+	*tx.tree.fileRec(id) = rec
 	tx.changed = true
-	return infoOf(old), nil
+	return infoOf(&rec), nil
 }
 
 // store writes src into a fresh extent under a fresh DEK and fills rec's
@@ -464,12 +510,18 @@ func (b *boundedWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// Delete turns a live record into a tombstone (R32): identity, name and
-// the merge fields stay, with revision advanced; content fields are zeroed
-// and the dictionary reference dropped; dek_epoch stays monotone. The
-// extent is freed at Commit. Deletion is cryptographic erasure — the
-// ciphertext stays in the freed extent until it is reused or compacted
-// away.
+// Delete turns a live record into a tombstone. A file (R32): identity, name,
+// parent and the merge fields stay, with revision and modified_at advanced;
+// content fields are zeroed and the dictionary reference dropped; dek_epoch
+// stays monotone. A directory: the same write tombstones it and every live
+// record beneath it (R39), the subtree taken from this transaction's own
+// index rather than from the caller, so a live record never stands under a
+// tombstone; the folder's record keeps dir_id, parent_id and name, advances
+// revision and last_writer only, and its modified_at is left exactly as it
+// was, because a folder's time is the folder's own and not a clock (R32).
+// Every extent the write frees is released at Commit. Deletion is
+// cryptographic erasure — the ciphertext stays in the freed extent until it
+// is reused or compacted away.
 func (tx *Tx) Delete(id [16]byte) error {
 	a := tx.a
 	a.mu.Lock()
@@ -477,24 +529,50 @@ func (tx *Tx) Delete(id [16]byte) error {
 	if err := tx.live(); err != nil {
 		return err
 	}
-	r := findRecord(tx.index, id)
-	if r == nil {
+	if id == format.RootID {
+		return fmt.Errorf("%w: the root is not a record", ErrParams)
+	}
+	self, _, _, ok := tx.tree.live(id)
+	if !ok {
 		return ErrNotFound
 	}
-	tx.pending.insert(extent{Off: r.DataOff, Len: r.StoredSize})
-	r.State = format.FileTombstone
-	r.OrigSize, r.StoredSize, r.DataOff = 0, 0, 0
-	r.Storage = format.StorageRaw
-	r.ContentHash = [32]byte{}
-	r.WrappedDEK, r.DEKNonce = [format.WrappedKeySize]byte{}, [format.NonceSize]byte{}
-	r.DEKCreatedAt = 0
-	r.Revision++
-	r.LastWriter, r.ModifiedAt = a.opts.DeviceID, now()
+	doomed := []ref{self}
+	if self.isDir {
+		below, err := tx.tree.subtree(tx.tree.childRefs(), id)
+		if err != nil {
+			return err
+		}
+		doomed = append(doomed, below...)
+	}
+	for _, r := range doomed {
+		if r.isDir {
+			d := tx.tree.dirRec(r.id)
+			d.State = format.FileTombstone
+			d.Revision++
+			d.LastWriter = a.opts.DeviceID
+			continue
+		}
+		f := tx.tree.fileRec(r.id)
+		tx.pending.insert(extent{Off: f.DataOff, Len: f.StoredSize})
+		f.State = format.FileTombstone
+		f.OrigSize, f.StoredSize, f.DataOff = 0, 0, 0
+		f.Storage = format.StorageRaw
+		f.ContentHash = [32]byte{}
+		f.WrappedDEK, f.DEKNonce = [format.WrappedKeySize]byte{}, [format.NonceSize]byte{}
+		f.DEKCreatedAt = 0
+		f.Revision++
+		f.LastWriter, f.ModifiedAt = a.opts.DeviceID, now()
+	}
 	tx.changed = true
 	return nil
 }
 
-// Rename changes a live file's name.
+// Rename changes one live record's name, file or directory alike. A name that
+// folds onto a live sibling of the record's own parent is ErrExists; a change
+// of case alone is not one, since a record is not its own sibling (R39).
+// Renaming a directory lengthens every descendant's path, so the whole
+// subtree is re-checked against the path bound before anything is touched. It
+// writes name, revision and last_writer, and never modified_at (APP.md §3).
 func (tx *Tx) Rename(id [16]byte, name string) error {
 	a := tx.a
 	a.mu.Lock()
@@ -502,22 +580,88 @@ func (tx *Tx) Rename(id [16]byte, name string) error {
 	if err := tx.live(); err != nil {
 		return err
 	}
-	if err := format.ValidateFileName(name); err != nil {
-		return err
+	if id == format.RootID {
+		return fmt.Errorf("%w: the root is not a record", ErrParams)
 	}
-	r := findRecord(tx.index, id)
-	if r == nil {
+	self, was, parent, ok := tx.tree.live(id)
+	if !ok {
 		return ErrNotFound
 	}
-	if r.Name == name {
+	if was == name {
 		return nil
 	}
-	if tx.liveName(name, id) {
-		return fmt.Errorf("%w: %q", ErrExists, name)
+	var kids map[[16]byte][]ref
+	if self.isDir {
+		kids = tx.tree.childRefs()
 	}
-	r.Name = name
-	r.Revision++
-	r.LastWriter, r.ModifiedAt = a.opts.DeviceID, now()
+	if err := tx.place(kids, self, parent, name); err != nil {
+		return err
+	}
+	if self.isDir {
+		d := tx.tree.dirRec(id)
+		d.Name = name
+		d.Revision++
+		d.LastWriter = a.opts.DeviceID
+	} else {
+		f := tx.tree.fileRec(id)
+		f.Name = name
+		f.Revision++
+		f.LastWriter = a.opts.DeviceID
+	}
+	tx.changed = true
+	return nil
+}
+
+// Move re-parents one live record, file or directory: one record written
+// whatever subtree hangs beneath it, which is the point of the tree. The
+// destination must be the root or a directory live in this transaction's
+// index — an unknown, tombstoned or file destination is ErrNotFound; a
+// directory moved into itself or into one of its descendants is
+// ErrMoveIntoSelf; a name a live child of the destination already holds under
+// case folding is ErrExists; and a subtree that would then stand more than
+// format.MaxTreeDepth below the root, or any of whose records would join to a
+// path over format.MaxPathLen bytes, is ErrTreeBounds — those two are the
+// subtree's bounds, not the named record's (R39). A record already under
+// parentID is a no-op. It writes parent_id, revision and last_writer, and
+// never modified_at (APP.md §3).
+func (tx *Tx) Move(id, parentID [16]byte) error {
+	a := tx.a
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := tx.live(); err != nil {
+		return err
+	}
+	if id == format.RootID {
+		return fmt.Errorf("%w: the root is not a record", ErrParams)
+	}
+	self, name, parent, ok := tx.tree.live(id)
+	if !ok {
+		return ErrNotFound
+	}
+	if parent == parentID {
+		return nil
+	}
+	if self.isDir && tx.tree.isBelow(parentID, id) {
+		return fmt.Errorf("%w: %x is %x or one of its descendants", ErrMoveIntoSelf, parentID, id)
+	}
+	var kids map[[16]byte][]ref
+	if self.isDir {
+		kids = tx.tree.childRefs()
+	}
+	if err := tx.place(kids, self, parentID, name); err != nil {
+		return err
+	}
+	if self.isDir {
+		d := tx.tree.dirRec(id)
+		d.ParentID = parentID
+		d.Revision++
+		d.LastWriter = a.opts.DeviceID
+	} else {
+		f := tx.tree.fileRec(id)
+		f.ParentID = parentID
+		f.Revision++
+		f.LastWriter = a.opts.DeviceID
+	}
 	tx.changed = true
 	return nil
 }
@@ -692,7 +836,7 @@ func (a *Archive) commit(ctx context.Context, tx *Tx, index *format.Index, kid [
 		a.wDict.Release()
 		a.wDict, a.wDictFor = nil, nil
 	}
-	a.sb, a.live, a.index, a.free = &next, target, index, free
+	a.sb, a.live, a.index, a.tree, a.free = &next, target, index, newTree(index), free
 	a.retired = newSpace(a.loser)
 	a.rebuildPool()
 	a.freeMapRebuilt = nil
@@ -716,10 +860,20 @@ func (a *Archive) oneTx(ctx context.Context, fn func(*Tx) error) (Receipt, error
 }
 
 // Add stores one file in its own transaction.
-func (a *Archive) Add(ctx context.Context, name string, src io.ReaderAt, size int64) (FileInfo, Receipt, error) {
+func (a *Archive) Add(ctx context.Context, parentID [16]byte, name string, src io.ReaderAt, size int64) (FileInfo, Receipt, error) {
 	var info FileInfo
 	rec, err := a.oneTx(ctx, func(tx *Tx) (err error) {
-		info, err = tx.Add(ctx, name, src, size)
+		info, err = tx.Add(ctx, parentID, name, src, size)
+		return err
+	})
+	return info, rec, err
+}
+
+// AddDir stages one directory in its own transaction.
+func (a *Archive) AddDir(ctx context.Context, parentID [16]byte, name string, modifiedAt int64) (DirInfo, Receipt, error) {
+	var info DirInfo
+	rec, err := a.oneTx(ctx, func(tx *Tx) (err error) {
+		info, err = tx.AddDir(parentID, name, modifiedAt)
 		return err
 	})
 	return info, rec, err
@@ -740,9 +894,14 @@ func (a *Archive) Delete(ctx context.Context, id [16]byte) (Receipt, error) {
 	return a.oneTx(ctx, func(tx *Tx) error { return tx.Delete(id) })
 }
 
-// Rename renames one file in its own transaction.
+// Rename renames one record in its own transaction.
 func (a *Archive) Rename(ctx context.Context, id [16]byte, name string) (Receipt, error) {
 	return a.oneTx(ctx, func(tx *Tx) error { return tx.Rename(id, name) })
+}
+
+// Move re-parents one record in its own transaction.
+func (a *Archive) Move(ctx context.Context, id, parentID [16]byte) (Receipt, error) {
+	return a.oneTx(ctx, func(tx *Tx) error { return tx.Move(id, parentID) })
 }
 
 // SetDictionary installs or clears the dictionary in its own transaction.

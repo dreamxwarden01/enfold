@@ -10,6 +10,7 @@ import (
 	mrand "math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dreamxwarden01/enfold/internal/compress"
@@ -19,6 +20,9 @@ import (
 var (
 	ctx      = context.Background()
 	deviceID = [16]byte{0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1, 0xd1}
+	// root is the implicit root directory, the parent of every top-level
+	// record (FORMAT R39). It has no record of its own.
+	root = format.RootID
 )
 
 func rnd16(t testing.TB) [16]byte {
@@ -92,13 +96,67 @@ func (fx *fixture) open(t testing.TB) *Archive {
 	return a
 }
 
-func add(t testing.TB, a *Archive, name string, data []byte) FileInfo {
+// add stores one file under parentID; name is one path element (R20), never
+// a path — nothing derives a folder from a prefix any more.
+func add(t testing.TB, a *Archive, parentID [16]byte, name string, data []byte) FileInfo {
 	t.Helper()
-	info, _, err := a.Add(ctx, name, bytes.NewReader(data), int64(len(data)))
+	info, _, err := a.Add(ctx, parentID, name, bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatalf("add %s: %v", name, err)
 	}
 	return info
+}
+
+// mkdir stages one directory under parentID and commits it.
+func mkdir(t testing.TB, a *Archive, parentID [16]byte, name string, modifiedAt int64) DirInfo {
+	t.Helper()
+	info, _, err := a.AddDir(ctx, parentID, name, modifiedAt)
+	if err != nil {
+		t.Fatalf("mkdir %s: %v", name, err)
+	}
+	return info
+}
+
+// pathOf is the joined path of a live record, which no record carries.
+func pathOf(t testing.TB, a *Archive, id [16]byte) string {
+	t.Helper()
+	p, err := a.Path(id)
+	if err != nil {
+		t.Fatalf("path %x: %v", id, err)
+	}
+	return p
+}
+
+// findByPath walks the tree for the record at a '/'-joined path, which is how
+// a test names a record now that no lookup by name exists.
+func findByPath(t testing.TB, a *Archive, path string) ([16]byte, bool) {
+	t.Helper()
+	cur := root
+	els := strings.Split(path, "/")
+	for i, el := range els {
+		dirs, files, err := a.Children(cur)
+		if err != nil {
+			t.Fatalf("children of %x: %v", cur, err)
+		}
+		next, ok := [16]byte{}, false
+		for _, d := range dirs {
+			if d.Name == el {
+				next, ok = d.ID, true
+			}
+		}
+		if !ok && i == len(els)-1 {
+			for _, f := range files {
+				if f.Name == el {
+					next, ok = f.ID, true
+				}
+			}
+		}
+		if !ok {
+			return [16]byte{}, false
+		}
+		cur = next
+	}
+	return cur, true
 }
 
 func extract(t testing.TB, a *Archive, id [16]byte) []byte {
@@ -147,7 +205,7 @@ func TestCreateAndOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ro.Add(ctx, "x", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrReadOnly) {
+	if _, _, err := ro.Add(ctx, root, "x", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("add through read-only: %v", err)
 	}
 	if err := ro.RepairEnvelope(); !errors.Is(err, ErrReadOnly) {
@@ -178,6 +236,9 @@ func TestCreateAndOpen(t *testing.T) {
 func TestAddAndExtract(t *testing.T) {
 	// A small InMemoryBelow exercises the end-of-file reservation path.
 	a, fx := newFixture(t, Options{InMemoryBelow: 64 << 10})
+	big := mkdir(t, a, root, "big", 1700000000)
+	// Every name is one element; "big/text.txt" is a record named text.txt
+	// under the directory record big, and its path is derived from the tree.
 	inputs := map[string][]byte{
 		"empty.txt":      {},
 		"tiny.txt":       []byte("x"),
@@ -196,10 +257,20 @@ func TestAddAndExtract(t *testing.T) {
 	}
 	ids := map[string][16]byte{}
 	for name, data := range inputs {
-		info := add(t, a, name, data)
+		parent, el := root, name
+		if base, ok := strings.CutPrefix(name, "big/"); ok {
+			parent, el = big.ID, base
+		}
+		info := add(t, a, parent, el, data)
 		ids[name] = info.ID
 		if info.Storage != want[name] || info.Size != uint64(len(data)) || info.DEKEpoch != 1 || info.Revision != 1 || info.LastWriter != deviceID {
 			t.Errorf("%s: %+v", name, info)
+		}
+		if info.ParentID != parent || info.Name != el {
+			t.Errorf("%s: parent %x name %q", name, info.ParentID, info.Name)
+		}
+		if got := pathOf(t, a, info.ID); got != name {
+			t.Errorf("%s: path %q", name, got)
 		}
 		if info.Storage == format.StorageRaw && info.StoredSize != format.RawStoredSize(uint64(len(data))) {
 			t.Errorf("%s: raw stored size %d", name, info.StoredSize)
@@ -208,17 +279,52 @@ func TestAddAndExtract(t *testing.T) {
 			t.Errorf("%s: extracted %d bytes, want %d", name, len(got), len(data))
 		}
 	}
-	if len(a.Files()) != len(inputs) {
-		t.Fatalf("%d files", len(a.Files()))
+	if len(a.Files()) != len(inputs) || len(a.Dirs()) != 1 {
+		t.Fatalf("%d files, %d dirs", len(a.Files()), len(a.Dirs()))
 	}
-	if _, ok := a.Lookup("big/text.txt"); !ok {
-		t.Error("lookup")
+	// Children lists one directory's own, never a subtree and never a prefix
+	// projection; an id that is not the root or a live directory is refused.
+	dirs, files, err := a.Children(root)
+	if err != nil || len(dirs) != 1 || len(files) != 7 {
+		t.Fatalf("children of the root: %d dirs %d files %v", len(dirs), len(files), err)
 	}
-	if _, _, err := a.Add(ctx, "text.txt", bytes.NewReader([]byte("dup")), 3); !errors.Is(err, ErrExists) {
+	if _, files, err := a.Children(big.ID); err != nil || len(files) != 2 {
+		t.Fatalf("children of big: %d files %v", len(files), err)
+	}
+	if _, _, err := a.Children(ids["text.txt"]); !errors.Is(err, ErrNotFound) {
+		t.Errorf("children of a file: %v", err)
+	}
+	if _, _, err := a.Children(rnd16(t)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("children of an unknown id: %v", err)
+	}
+	if got := pathOf(t, a, big.ID); got != "big" {
+		t.Errorf("directory path %q", got)
+	}
+	if got, _ := a.Path(root); got != "" {
+		t.Errorf("the root's path is %q", got)
+	}
+	// One namespace per parent, folded: the same name in another folder is
+	// free, and the folded one is not.
+	if _, _, err := a.Add(ctx, root, "text.txt", bytes.NewReader([]byte("dup")), 3); !errors.Is(err, ErrExists) {
 		t.Errorf("duplicate name: %v", err)
 	}
-	if _, _, err := a.Add(ctx, "../escape", bytes.NewReader([]byte("x")), 1); !errors.Is(err, format.ErrInvalid) {
+	if _, _, err := a.Add(ctx, root, "TEXT.TXT", bytes.NewReader([]byte("dup")), 3); !errors.Is(err, ErrExists) {
+		t.Errorf("folded duplicate name: %v", err)
+	}
+	if _, _, err := a.AddDir(ctx, root, "Text.txt", 1); !errors.Is(err, ErrExists) {
+		t.Errorf("a directory folding onto a file's name: %v", err)
+	}
+	if _, _, err := a.Add(ctx, root, "../escape", bytes.NewReader([]byte("x")), 1); !errors.Is(err, format.ErrInvalid) {
 		t.Errorf("bad name: %v", err)
+	}
+	if _, _, err := a.Add(ctx, root, "a/b", bytes.NewReader([]byte("x")), 1); !errors.Is(err, format.ErrInvalid) {
+		t.Errorf("a path as a name: %v", err)
+	}
+	if _, _, err := a.Add(ctx, rnd16(t), "orphan", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("add under an unknown parent: %v", err)
+	}
+	if _, _, err := a.Add(ctx, ids["text.txt"], "orphan", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("add under a file: %v", err)
 	}
 	// ExtractTo: temp beside the target, refuses to overwrite.
 	dst := filepath.Join(t.TempDir(), "out.txt")
@@ -234,16 +340,31 @@ func TestAddAndExtract(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Dir(dst)); len(entries) != 1 {
 		t.Errorf("temp files left behind: %d entries", len(entries))
 	}
-	// Everything survives a reopen.
+	// Everything survives a reopen, tree and all.
 	a.Close()
 	b := fx.open(t)
 	for name, data := range inputs {
 		if got := extract(t, b, ids[name]); !bytes.Equal(got, data) {
 			t.Errorf("%s after reopen", name)
 		}
+		if got := pathOf(t, b, ids[name]); got != name {
+			t.Errorf("%s: path %q after reopen", name, got)
+		}
 	}
 	if err := b.Extract(ctx, rnd16(t), io.Discard); !errors.Is(err, ErrNotFound) {
 		t.Errorf("extract unknown: %v", err)
+	}
+	if err := b.Extract(ctx, big.ID, io.Discard); !errors.Is(err, ErrNotFound) {
+		t.Errorf("extract a directory: %v", err)
+	}
+	if d, ok := b.InfoDir(big.ID); !ok || d.Name != "big" || d.ModifiedAt != 1700000000 || d.ParentID != root {
+		t.Errorf("directory record after reopen: %+v %v", d, ok)
+	}
+	if _, ok := b.Info(big.ID); ok {
+		t.Error("Info answered for a directory id")
+	}
+	if _, ok := b.InfoDir(ids["text.txt"]); ok {
+		t.Error("InfoDir answered for a file id")
 	}
 }
 
@@ -259,10 +380,10 @@ func (l lyingReader) ReadAt(p []byte, off int64) (int, error) {
 func TestSourceChanged(t *testing.T) {
 	a, _ := newFixture(t, Options{})
 	data := text(10000, 7)
-	if _, _, err := a.Add(ctx, "short", lyingReader{data[:5000]}, 10000); !errors.Is(err, ErrSourceChanged) {
+	if _, _, err := a.Add(ctx, root, "short", lyingReader{data[:5000]}, 10000); !errors.Is(err, ErrSourceChanged) {
 		t.Errorf("short source: %v", err)
 	}
-	if _, _, err := a.Add(ctx, "long", lyingReader{data}, 5000); !errors.Is(err, ErrSourceChanged) {
+	if _, _, err := a.Add(ctx, root, "long", lyingReader{data}, 5000); !errors.Is(err, ErrSourceChanged) {
 		t.Errorf("long source: %v", err)
 	}
 	// Neither left a record, and the aborted transactions left no growth.
@@ -274,7 +395,7 @@ func TestSourceChanged(t *testing.T) {
 	if uint64(st.Size()) != size {
 		t.Errorf("file %d bytes, state says %d", st.Size(), size)
 	}
-	if _, _, err := a.Add(ctx, "neg", bytes.NewReader(nil), -1); !errors.Is(err, ErrNoSpace) {
+	if _, _, err := a.Add(ctx, root, "neg", bytes.NewReader(nil), -1); !errors.Is(err, ErrNoSpace) {
 		t.Errorf("negative size: %v", err)
 	}
 }
@@ -290,7 +411,7 @@ func TestTransactionAndMutations(t *testing.T) {
 	}
 	var infos []FileInfo
 	for i := 0; i < 5; i++ {
-		info, err := tx.Add(ctx, fmt.Sprintf("f%d.txt", i), bytes.NewReader(text(20000+i, uint64(i))), int64(20000+i))
+		info, err := tx.Add(ctx, root, fmt.Sprintf("f%d.txt", i), bytes.NewReader(text(20000+i, uint64(i))), int64(20000+i))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -306,7 +427,7 @@ func TestTransactionAndMutations(t *testing.T) {
 	if rec.Seq != 2 || len(a.Files()) != 5 {
 		t.Fatalf("after commit: %+v, %d files", rec, len(a.Files()))
 	}
-	if _, err := tx.Add(ctx, "late", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrClosed) {
+	if _, err := tx.Add(ctx, root, "late", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrClosed) {
 		t.Errorf("add after commit: %v", err)
 	}
 
@@ -351,7 +472,7 @@ func TestTransactionAndMutations(t *testing.T) {
 	// Abort truncates appended data and publishes nothing.
 	size0, _, _ := a.Stat()
 	tx, _ = a.Begin()
-	if _, err := tx.Add(ctx, "aborted", bytes.NewReader(noise(200000, 8)), 200000); err != nil {
+	if _, err := tx.Add(ctx, root, "aborted", bytes.NewReader(noise(200000, 8)), 200000); err != nil {
 		t.Fatal(err)
 	}
 	tx.Abort()
@@ -371,7 +492,7 @@ func TestTransactionAndMutations(t *testing.T) {
 	if got := extract(t, b, infos[1].ID); !bytes.Equal(got, newData) {
 		t.Error("replaced content after reopen")
 	}
-	if _, ok := b.Lookup("renamed.txt"); !ok {
+	if _, ok := findByPath(t, b, "renamed.txt"); !ok {
 		t.Error("rename lost")
 	}
 }
@@ -379,21 +500,21 @@ func TestTransactionAndMutations(t *testing.T) {
 func TestQuarantineAndReuse(t *testing.T) {
 	a, _ := newFixture(t, Options{})
 	data := noise(100000, 9)
-	first := add(t, a, "a", data)
+	first := add(t, a, root, "a", data)
 	firstExt := extent{Off: a.record(first.ID).DataOff, Len: first.StoredSize}
 	if _, err := a.Delete(ctx, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	// The next transaction must not reuse the extent the previous commit
 	// freed (the losing superblock still references it); the one after may.
-	second := add(t, a, "b", data)
+	second := add(t, a, root, "b", data)
 	if second.StoredSize != first.StoredSize {
 		t.Fatalf("sizes differ")
 	}
 	if sec := a.record(second.ID); overlaps(extent{Off: sec.DataOff, Len: sec.StoredSize}, firstExt) {
 		t.Errorf("extent reused one commit too early: second at 0x%x, freed [0x%x, 0x%x)", sec.DataOff, firstExt.Off, end(firstExt))
 	}
-	third := add(t, a, "c", data)
+	third := add(t, a, root, "c", data)
 	if th := a.record(third.ID); !overlaps(extent{Off: th.DataOff, Len: th.StoredSize}, firstExt) {
 		t.Errorf("freed extent not reused after quarantine: third at 0x%x, freed [0x%x, 0x%x)", th.DataOff, firstExt.Off, end(firstExt))
 	}
@@ -411,8 +532,8 @@ func TestQuarantineAndReuse(t *testing.T) {
 func TestQuarantineProtectsFallback(t *testing.T) {
 	a, fx := newFixture(t, Options{})
 	data := noise(80000, 33)
-	keep := add(t, a, "keep", text(20000, 34))
-	victim := add(t, a, "victim", data)
+	keep := add(t, a, root, "keep", text(20000, 34))
+	victim := add(t, a, root, "victim", data)
 	if _, err := a.Delete(ctx, victim.ID); err != nil { // state N frees the victim's extent
 		t.Fatal(err)
 	}
@@ -422,7 +543,7 @@ func TestQuarantineProtectsFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Add(ctx, "intruder", bytes.NewReader(data), int64(len(data))); err != nil {
+	if _, err := tx.Add(ctx, root, "intruder", bytes.NewReader(data), int64(len(data))); err != nil {
 		t.Fatal(err)
 	}
 	inflight := snapshot(t, fx.path)
@@ -454,8 +575,8 @@ func TestReaderSeek(t *testing.T) {
 	a, _ := newFixture(t, Options{})
 	rawData := noise(300000, 10)
 	zData := text(300000, 11)
-	raw := add(t, a, "raw", rawData)
-	z := add(t, a, "z", zData)
+	raw := add(t, a, root, "raw", rawData)
+	z := add(t, a, root, "z", zData)
 	if raw.Storage != format.StorageRaw || z.Storage != format.StorageZstd {
 		t.Fatalf("storage %v %v", raw.Storage, z.Storage)
 	}
@@ -510,7 +631,7 @@ func TestReaderSeek(t *testing.T) {
 func TestHeldExtentSurvivesReplace(t *testing.T) {
 	a, _ := newFixture(t, Options{})
 	old := noise(150000, 12)
-	info := add(t, a, "f", old)
+	info := add(t, a, root, "f", old)
 	r, err := a.OpenReader(info.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -523,7 +644,7 @@ func TestHeldExtentSurvivesReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		add(t, a, fmt.Sprintf("fill%d", i), noise(150000, uint64(20+i)))
+		add(t, a, root, fmt.Sprintf("fill%d", i), noise(150000, uint64(20+i)))
 	}
 	got, err := io.ReadAll(r)
 	if err != nil || !bytes.Equal(got, old) {
@@ -538,7 +659,7 @@ func TestHeldExtentSurvivesReplace(t *testing.T) {
 	}
 	// Now it is reusable (after the quarantine of the commit that freed it,
 	// long past).
-	late := add(t, a, "late", noise(150000, 30))
+	late := add(t, a, root, "late", noise(150000, 30))
 	if lr := a.record(late.ID); !overlaps(extent{Off: lr.DataOff, Len: lr.StoredSize}, r.e) {
 		t.Errorf("released extent not reused: late at 0x%x, held was 0x%x", lr.DataOff, r.e.Off)
 	}
@@ -567,8 +688,8 @@ func TestHeldExtentSurvivesReplace(t *testing.T) {
 
 func TestCrashBeforeFlipAndFallback(t *testing.T) {
 	a, fx := newFixture(t, Options{})
-	f1 := add(t, a, "one", text(40000, 40))
-	f2 := add(t, a, "two", noise(40000, 41))
+	f1 := add(t, a, root, "one", text(40000, 40))
+	f2 := add(t, a, root, "two", noise(40000, 41))
 	a.Close()
 	before := snapshot(t, fx.path)
 	a = fx.open(t)
@@ -581,7 +702,7 @@ func TestCrashBeforeFlipAndFallback(t *testing.T) {
 	if err := tx.Delete(f2.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Add(ctx, "three", bytes.NewReader(noise(30000, 43)), 30000); err != nil {
+	if _, err := tx.Add(ctx, root, "three", bytes.NewReader(noise(30000, 43)), 30000); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Commit(ctx); err != nil {
@@ -617,7 +738,7 @@ func TestCrashBeforeFlipAndFallback(t *testing.T) {
 	// TestQuarantineProtectsFallback.)
 	restore(t, fx.path, after)
 	c := fx.open(t)
-	add(t, c, "four", noise(20000, 44)) // one more commit on top
+	add(t, c, root, "four", noise(20000, 44)) // one more commit on top
 	c.Close()
 	torn := snapshot(t, fx.path)
 	var damaged [format.SuperblockSize]byte
@@ -640,10 +761,10 @@ func TestCrashBeforeFlipAndFallback(t *testing.T) {
 	if got := extract(t, d, f1.ID); !bytes.Equal(got, text(50000, 42)) {
 		t.Error("one commit behind: one")
 	}
-	if _, ok := d.Lookup("three"); !ok {
+	if _, ok := findByPath(t, d, "three"); !ok {
 		t.Error("one commit behind: three")
 	}
-	if _, ok := d.Lookup("four"); ok {
+	if _, ok := findByPath(t, d, "four"); ok {
 		t.Error("the torn commit's file is visible")
 	}
 	d.Close()
@@ -651,7 +772,7 @@ func TestCrashBeforeFlipAndFallback(t *testing.T) {
 
 func TestRotateKey(t *testing.T) {
 	a, fx := newFixture(t, Options{})
-	infos := []FileInfo{add(t, a, "a", text(30000, 50)), add(t, a, "b", noise(30000, 51))}
+	infos := []FileInfo{add(t, a, root, "a", text(30000, 50)), add(t, a, root, "b", noise(30000, 51))}
 	if _, err := a.Delete(ctx, infos[1].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -710,10 +831,10 @@ func TestRotateKey(t *testing.T) {
 func TestCompact(t *testing.T) {
 	a, fx := newFixture(t, Options{})
 	keep := map[string][]byte{"k1": text(40000, 60), "k2": noise(40000, 61), "k3": text(70000, 62)}
-	drop := []FileInfo{add(t, a, "d1", noise(60000, 63)), add(t, a, "d2", noise(60000, 64))}
+	drop := []FileInfo{add(t, a, root, "d1", noise(60000, 63)), add(t, a, root, "d2", noise(60000, 64))}
 	ids := map[string][16]byte{}
 	for name, data := range keep {
-		ids[name] = add(t, a, name, data).ID
+		ids[name] = add(t, a, root, name, data).ID
 	}
 	for _, d := range drop {
 		if _, err := a.Delete(ctx, d.ID); err != nil {
@@ -738,7 +859,7 @@ func TestCompact(t *testing.T) {
 	if size >= sizeBefore || last == 0 {
 		t.Errorf("compacted %d → %d, progress %d", sizeBefore, size, last)
 	}
-	if _, _, err := a.Add(ctx, "x", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrClosed) {
+	if _, _, err := a.Add(ctx, root, "x", bytes.NewReader([]byte("x")), 1); !errors.Is(err, ErrClosed) {
 		t.Errorf("handle after compact: %v", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Dir(fx.path)); len(entries) != 1 {
@@ -760,7 +881,7 @@ func TestCompact(t *testing.T) {
 		}
 	}
 	// Still writable and the tombstones' names are reusable.
-	add(t, b, "d1", []byte("again"))
+	add(t, b, root, "d1", []byte("again"))
 }
 
 func TestDictionary(t *testing.T) {
@@ -776,8 +897,8 @@ func TestDictionary(t *testing.T) {
 	if _, err := a.SetDictionary(ctx, dict); err != nil {
 		t.Fatal(err)
 	}
-	small := add(t, a, "small.json", samples[3])
-	large := add(t, a, "large.txt", text(400<<10, 70))
+	small := add(t, a, root, "small.json", samples[3])
+	large := add(t, a, root, "large.txt", text(400<<10, 70))
 	if small.Storage != format.StorageZstdDict || large.Storage != format.StorageZstd {
 		t.Fatalf("storage %v %v", small.Storage, large.Storage)
 	}
@@ -813,8 +934,8 @@ func TestDictionary(t *testing.T) {
 
 func TestFreeMapDamage(t *testing.T) {
 	a, fx := newFixture(t, Options{})
-	info := add(t, a, "f", text(30000, 80))
-	if _, err := a.Delete(ctx, add(t, a, "g", noise(30000, 81)).ID); err != nil {
+	info := add(t, a, root, "f", text(30000, 80))
+	if _, err := a.Delete(ctx, add(t, a, root, "g", noise(30000, 81)).ID); err != nil {
 		t.Fatal(err)
 	}
 	a.Close()
@@ -837,7 +958,7 @@ func TestFreeMapDamage(t *testing.T) {
 	if _, _, free := c.Stat(); free == 0 {
 		t.Error("rebuilt map found no free space")
 	}
-	add(t, c, "h", noise(1000, 82)) // writes the rebuilt map
+	add(t, c, root, "h", noise(1000, 82)) // writes the rebuilt map
 	c.Close()
 	d := fx.open(t)
 	if d.FreeMapRebuilt() != nil {
@@ -850,8 +971,8 @@ func TestFreeMapDamage(t *testing.T) {
 // quadratic time, and must never hand out a live extent.
 func TestHostileMetadata(t *testing.T) {
 	a, fx := newFixture(t, Options{})
-	info := add(t, a, "f", text(30000, 91))
-	if _, err := a.Delete(ctx, add(t, a, "g", noise(30000, 92)).ID); err != nil {
+	info := add(t, a, root, "f", text(30000, 91))
+	if _, err := a.Delete(ctx, add(t, a, root, "g", noise(30000, 92)).ID); err != nil {
 		t.Fatal(err)
 	}
 	a.Close()
@@ -916,7 +1037,7 @@ func TestHostileMetadata(t *testing.T) {
 		if name != "interleaved" && b.FreeMapRebuilt() == nil {
 			t.Errorf("%s: lying map not reported", name)
 		}
-		n := add(t, b, "n", noise(20000, 93))
+		n := add(t, b, root, "n", noise(20000, 93))
 		if nr := b.record(n.ID); overlaps(extent{Off: nr.DataOff, Len: nr.StoredSize}, extent{Off: liveRec.DataOff, Len: liveRec.StoredSize}) {
 			t.Errorf("%s: allocation over a live file", name)
 		}
@@ -951,7 +1072,7 @@ func TestHostileMetadata(t *testing.T) {
 // other goroutines; the race detector, when on, is the assertion.
 func TestConcurrentReadersAndWrites(t *testing.T) {
 	a, _ := newFixture(t, Options{InMemoryBelow: 1 << 10})
-	base := add(t, a, "base", text(200000, 95))
+	base := add(t, a, root, "base", text(200000, 95))
 	done := make(chan struct{})
 	errs := make(chan error, 64)
 	go func() {
@@ -971,7 +1092,7 @@ func TestConcurrentReadersAndWrites(t *testing.T) {
 		}
 	}()
 	for i := 0; i < 6; i++ {
-		add(t, a, fmt.Sprintf("w%d", i), text(300000, uint64(96+i)))
+		add(t, a, root, fmt.Sprintf("w%d", i), text(300000, uint64(96+i)))
 		if _, _, err := a.Replace(ctx, base.ID, bytes.NewReader(text(200000, 95)), 200000); err != nil {
 			t.Fatal(err)
 		}
@@ -988,7 +1109,7 @@ func TestConcurrentReadersAndWrites(t *testing.T) {
 
 func TestOpenRefusesDamage(t *testing.T) {
 	a, fx := newFixture(t, Options{})
-	info := add(t, a, "f", text(30000, 90))
+	info := add(t, a, root, "f", text(30000, 90))
 	a.Close()
 	good := snapshot(t, fx.path)
 	rec := func() (*format.ArchiveSuperblock, uint64) {
@@ -1035,13 +1156,13 @@ func TestOpenRefusesDamage(t *testing.T) {
 
 func TestPaddingAndNoCompression(t *testing.T) {
 	a, _ := newFixture(t, Options{NoCompression: true})
-	info := add(t, a, "t", text(50000, 100))
+	info := add(t, a, root, "t", text(50000, 100))
 	if info.Storage != format.StorageRaw {
 		t.Errorf("NoCompression stored %v", info.Storage)
 	}
 	a.Close()
 	b, _ := newFixture(t, Options{Compress: compress.Params{Level: compress.Fastest, Padding: 4096}})
-	info = add(t, b, "t", text(50000, 101))
+	info = add(t, b, root, "t", text(50000, 101))
 	if info.Storage != format.StorageZstd {
 		t.Errorf("padded stored %v", info.Storage)
 	}
@@ -1054,13 +1175,13 @@ func TestContextCancel(t *testing.T) {
 	a, _ := newFixture(t, Options{})
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, _, err := a.Add(cctx, "x", bytes.NewReader(text(100000, 110)), 100000); !errors.Is(err, context.Canceled) {
+	if _, _, err := a.Add(cctx, root, "x", bytes.NewReader(text(100000, 110)), 100000); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled add: %v", err)
 	}
 	if len(a.Files()) != 0 {
 		t.Error("cancelled add left a record")
 	}
-	info := add(t, a, "y", text(100000, 111))
+	info := add(t, a, root, "y", text(100000, 111))
 	if err := a.Extract(cctx, info.ID, io.Discard); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled extract: %v", err)
 	}

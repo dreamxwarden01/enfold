@@ -42,6 +42,7 @@ type Archive struct {
 	sb    *format.ArchiveSuperblock
 	live  format.Copy
 	index *format.Index
+	tree  *tree // index's two record tables by id (R39)
 
 	free    *space         // the published free map, as on disk
 	pool    *space         // free − retired − held: what may be allocated now
@@ -275,7 +276,7 @@ func (a *Archive) load(keys []Key) error {
 	if index == nil {
 		return ErrKey
 	}
-	a.index = index
+	a.index, a.tree = index, newTree(index)
 	a.envelopeStale = a.kid != env.KID
 
 	// The losing copy: what it still references is quarantined from
@@ -530,6 +531,9 @@ func (a *Archive) Seq() uint64 {
 	return a.sb.Seq
 }
 
+// Stat's count is live files only: a directory is a record of its own (R39)
+// but occupies no data region, so counting folders among the files would make
+// the number mean neither one thing nor the other. Dirs is the directories.
 func (a *Archive) Stat() (size uint64, files int, free uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -544,9 +548,9 @@ func (a *Archive) Stat() (size uint64, files int, free uint64) {
 	return a.size, files, a.free.total()
 }
 
-// Files lists every live file. The list is the decrypted index; it must not
-// cross the WebView boundary whole (DESIGN.md §10) — page it. Nil on a
-// closed or broken Archive.
+// Files lists every live file, in the index's record order. The list is the
+// decrypted index; it must not cross the WebView boundary whole (DESIGN.md
+// §10) — page it. Nil on a closed or broken Archive.
 func (a *Archive) Files() []FileInfo {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -562,47 +566,95 @@ func (a *Archive) Files() []FileInfo {
 	return out
 }
 
-// Lookup finds a live file by name. The format does not forbid two live
-// files with one name in an archive written elsewhere; the first wins.
-func (a *Archive) Lookup(name string) (FileInfo, bool) {
+// Dirs lists every live directory, in the index's record order. It is the
+// other half of the snapshot Files gives: the tree the caller lists, walks
+// and draws a breadcrumb from is these two together (APP.md §2.3), never a
+// projection of prefixes.
+func (a *Archive) Dirs() []DirInfo {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.usable() != nil {
-		return FileInfo{}, false
+		return nil
 	}
-	for i := range a.index.Files {
-		if r := &a.index.Files[i]; r.State == format.FileLive && r.Name == name {
-			return infoOf(r), true
+	var out []DirInfo
+	for i := range a.index.Dirs {
+		if a.index.Dirs[i].State == format.FileLive {
+			out = append(out, dirInfoOf(&a.index.Dirs[i]))
 		}
 	}
-	return FileInfo{}, false
+	return out
 }
 
-// Info describes one live file by ID.
+// Info describes one live file by ID. A directory's id is InfoDir's.
 func (a *Archive) Info(id [16]byte) (FileInfo, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.usable() != nil {
 		return FileInfo{}, false
 	}
-	if r := a.record(id); r != nil {
+	if r := a.tree.liveFile(id); r != nil {
 		return infoOf(r), true
 	}
 	return FileInfo{}, false
 }
 
-// record finds a live record by ID; nil when there is none.
-func (a *Archive) record(id [16]byte) *format.FileRecord {
-	return findRecord(a.index, id)
+// InfoDir describes one live directory by ID.
+func (a *Archive) InfoDir(id [16]byte) (DirInfo, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.usable() != nil {
+		return DirInfo{}, false
+	}
+	if d := a.tree.liveDir(id); d != nil {
+		return dirInfoOf(d), true
+	}
+	return DirInfo{}, false
 }
 
-func findRecord(x *format.Index, id [16]byte) *format.FileRecord {
-	for i := range x.Files {
-		if r := &x.Files[i]; r.FileID == id && r.State == format.FileLive {
-			return r
+// Children lists the live children of one directory — format.RootID is the
+// root — in the index's record order, directories and files apart. There is
+// no lookup by name and none by path: a listing is the tree's children of an
+// id, and an id that is neither the root nor a live directory is ErrNotFound
+// rather than an empty listing under a folder that is gone (APP.md §3).
+func (a *Archive) Children(parentID [16]byte) ([]DirInfo, []FileInfo, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.usable(); err != nil {
+		return nil, nil, err
+	}
+	if !a.tree.parentUsable(parentID) {
+		return nil, nil, ErrNotFound
+	}
+	var dirs []DirInfo
+	var files []FileInfo
+	for i := range a.index.Dirs {
+		if d := &a.index.Dirs[i]; d.State == format.FileLive && d.ParentID == parentID {
+			dirs = append(dirs, dirInfoOf(d))
 		}
 	}
-	return nil
+	for i := range a.index.Files {
+		if f := &a.index.Files[i]; f.State == format.FileLive && f.ParentID == parentID {
+			files = append(files, infoOf(f))
+		}
+	}
+	return dirs, files, nil
+}
+
+// Path is the joined path of one live record of either kind: its ancestors'
+// names and its own, separated by '/' (R20, R39). The root's is empty. It is
+// derived from the tree on demand — no record carries a path.
+func (a *Archive) Path(id [16]byte) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.usable(); err != nil {
+		return "", err
+	}
+	return a.tree.path(id)
+}
+
+// record finds a live file record by ID; nil when there is none.
+func (a *Archive) record(id [16]byte) *format.FileRecord {
+	return a.tree.liveFile(id)
 }
 
 // Hash is the SHA-256 of the whole file as it is now, for the registry's

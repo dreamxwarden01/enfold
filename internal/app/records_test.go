@@ -952,7 +952,24 @@ func TestCheckFilesAbandonsAPathOverBudget(t *testing.T) {
 		t.Fatalf("a second pass probed past the blocked path: %d", n)
 	}
 	// When it finally answers the slot is free and the next pass measures.
+	// The abandoned goroutine is still inside its syscall when unblock
+	// returns, and it hands its answer over on its own schedule: the slot is
+	// free only once it has, so that is what is waited for rather than the
+	// next pass being raced against it.
 	unblock()
+	answered := time.Now().Add(5 * time.Second)
+	for {
+		h.c.mu.Lock()
+		free := h.c.probeOut == nil || len(h.c.probeOut) > 0
+		h.c.mu.Unlock()
+		if free {
+			break
+		}
+		if time.Now().After(answered) {
+			t.Fatal("the abandoned probe never answered")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 	if e := h.c.CheckFiles(); e != nil {
 		t.Fatal(e)
 	}

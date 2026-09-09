@@ -3200,3 +3200,18 @@ entry and one greyed row, nothing may be staged beneath it, and un-staging a sta
 returns what was moved into it; extraction plans a set ordered parents-first, creates folders
 because their records are live, sets times deepest-last on folders it made, and fails whole at
 plan time on a containment miss; the file drop carries a directory id, never a path.
+
+**Landed in Go, 2026-09-09** (format → archive → app, one Opus implementer each, a reviewer with
+six minors, all fixed): `index_version` 2 with `DirRecord`, `ValidateName` in UTF-16 units, R39
+in six passes (identities, fields, chains memoised, files, folded siblings by a fold-key map that
+a test pins against `strings.EqualFold`, joined paths) run from both `Encode` and `DecodeIndex`;
+the archive layer's `Tx.AddDir` / `Delete` of a subtree / `Rename` / `Move`, `Children` and
+`Path` in place of the whole-name lookup, `Compact` and `RotateKey` carrying the tree; the app's
+merged view rebuilt per call, `Page` with root-inclusive `Crumbs`, `CreateFolder` as a staged
+`Tx.AddDir` returning at once, the policy rules, `Move` refused whole, extraction's ordered set
+with times only on folders it made, the drop by `dirId`. Two deviations worth the record: a
+file's `modified_at` is now the content's clock — an add, a replace and a deletion advance it, a
+rename or a move does not (§11 amended; Explorer does not move a file's date on rename either);
+and the archive layer checks sibling uniqueness by scanning both tables with `EqualFold` per
+staged change, O(records) — fine at this size, a per-parent map if a folder ever holds tens of
+thousands. `CheckNames` offers a directory by a trailing `/` on the name. The frontend follows.

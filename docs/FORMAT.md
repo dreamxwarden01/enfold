@@ -1199,7 +1199,7 @@ R20; a tombstone may have any.
 | `pack_id` | `u8[16]` | Reserved for small-file packing; all-zero when unused |
 | `revision` | `u64` | Merge |
 | `last_writer` | `u8[16]` | Merge |
-| `modified_at` | `i64` | Display and last-resort tie-break, and a change clock: every mutation of the record advances it (R32), so it is neither the source file's time nor set on an extracted file — a directory's is the opposite (above) |
+| `modified_at` | `i64` | Display and last-resort tie-break, and a change clock for the content: an add, a replace and a deletion advance it (R32); a rename or a move changes `name` or `parent_id` and the merge fields only, so what the page shows as *Modified* stays the content's time. It is neither the source file's time nor set on an extracted file — a directory's is the folder's own (above) |
 
 `content_hash` is over the **plaintext** because that is the question the AEAD does not already
 answer: whether the content changed as distinct from whether the key changed (`dek_epoch`), and

@@ -204,7 +204,20 @@ func FuzzDecodeArchiveSuperblock(f *testing.F) {
 func FuzzDecodeIndex(f *testing.F) {
 	b, _ := sampleIndex().Encode()
 	f.Add(b)
-	f.Add([]byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	// The smallest valid index: version 2, no dictionary, no directories, no
+	// files.
+	f.Add([]byte{2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	// A tree deep enough to exercise the chain walk, and one whose records
+	// hang off the root only.
+	flat, _ := (&Index{
+		Dirs:  []DirRecord{dirRec(idN(1), RootID, "a")},
+		Files: []FileRecord{fileRec(idN(2), RootID, "b"), fileRec(idN(3), idN(1), "c")},
+	}).Encode()
+	f.Add(flat)
+	deep, _ := indexWithPath(MaxPathLen).Encode()
+	f.Add(deep)
+	// index_version 1 — refused, never migrated.
+	f.Add([]byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		d, err := DecodeIndex(data)
 		if err != nil {

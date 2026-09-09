@@ -113,6 +113,22 @@ export function fileNameProblem(name: string): string {
   return name.includes("/") ? LEAF_RULE : "";
 }
 
+// newNameProblem judges a name typed for something new inside the archive
+// — *Create folder* — against the rule above and then against the names
+// the folder already holds, compared the way the core compares them (case
+// folded among live children, FORMAT.md R39): two rows of one name are one
+// folder with two rows. A row staged for deletion is not a live sibling
+// and reserves no name, so the caller leaves it out of `taken`. These are
+// the rows the listing loaded: a name that exists only beyond them is the
+// listing's own limit, and the core refuses it again.
+export const NAME_TAKEN = "There is already something with that name here.";
+export function newNameProblem(name: string, taken: string[]): string {
+  const said = fileNameProblem(name);
+  if (said) return said;
+  const leaf = name.trim().toLowerCase();
+  return taken.some((t) => t.toLowerCase() === leaf) ? NAME_TAKEN : "";
+}
+
 // confirmSecretProblem judges the second field of a chosen secret: one
 // core prompt, two fields on the page, one submission (APP.md §13).
 export const CONFIRM_SECRET = "The two do not match.";

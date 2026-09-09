@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem, NAME_TAKEN, newNameProblem } from "./validate";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -129,5 +129,21 @@ describe("fileNameProblem", () => {
     expect(fileNameProblem("   ")).toBe(REQUIRED);
     expect(fileNameProblem("2024/notes.md")).toBe(LEAF_RULE);
     expect(fileNameProblem("/notes.md")).toBe(LEAF_RULE);
+  });
+});
+
+describe("the name a new folder may take", () => {
+  it("obeys the rename's rule: a name is required, and carries no separator", () => {
+    expect(newNameProblem("Receipts", [])).toBe("");
+    expect(newNameProblem("", [])).toBe(REQUIRED);
+    expect(newNameProblem("   ", [])).toBe(REQUIRED);
+    expect(newNameProblem("a/b", [])).toBe(LEAF_RULE);
+  });
+
+  it("refuses a name the folder already holds, whatever its case", () => {
+    expect(newNameProblem("Receipts", ["Receipts"])).toBe(NAME_TAKEN);
+    expect(newNameProblem("receipts", ["Receipts"])).toBe(NAME_TAKEN);
+    expect(newNameProblem(" Receipts ", ["notes.md", "Receipts"])).toBe(NAME_TAKEN);
+    expect(newNameProblem("Bills", ["Receipts"])).toBe("");
   });
 });

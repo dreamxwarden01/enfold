@@ -14,44 +14,75 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as app$0 from "../models.js";
 
-export function AddFiles(id: string, folder: string, paths: string[] | null, policy: string): $CancellablePromise<string> {
-    return $Call.ByID(2769288047, id, folder, paths, policy);
+export function AddFiles(id: string, parentID: string, paths: string[] | null, policy: string): $CancellablePromise<string> {
+    return $Call.ByID(2769288047, id, parentID, paths, policy);
 }
 
-export function AddFolder(id: string, folder: string, dir: string, policy: string): $CancellablePromise<string> {
-    return $Call.ByID(3008447636, id, folder, dir, policy);
+export function AddFolder(id: string, parentID: string, dir: string, policy: string): $CancellablePromise<string> {
+    return $Call.ByID(3008447636, id, parentID, dir, policy);
 }
 
 export function CancelOp(opID: string): $CancellablePromise<void> {
     return $Call.ByID(2446376312, opID);
 }
 
-export function CheckNames(id: string, folder: string, names: string[] | null): $CancellablePromise<app$0.Collision[] | null> {
-    return $Call.ByID(1850767145, id, folder, names);
+/**
+ * CheckNames lets the UI ask once before an add: which of the offered names
+ * a live child of parentID already holds. A name given with a trailing "/"
+ * is offered as a directory, and the collision carries the kind on both
+ * sides.
+ */
+export function CheckNames(id: string, parentID: string, names: string[] | null): $CancellablePromise<app$0.Collision[] | null> {
+    return $Call.ByID(1850767145, id, parentID, names);
 }
 
-export function Delete(id: string, fileIDs: string[] | null): $CancellablePromise<void> {
-    return $Call.ByID(3839303214, id, fileIDs);
+/**
+ * CreateFolder stages a directory record and returns its id: a folder is a
+ * record, so an empty one survives the save (FORMAT.md R39).
+ */
+export function CreateFolder(id: string, parentID: string, name: string): $CancellablePromise<string> {
+    return $Call.ByID(3241529081, id, parentID, name);
+}
+
+/**
+ * Delete stages a deletion of each record; a directory takes its subtree,
+ * tombstoned in the same write and counted as one change.
+ */
+export function Delete(id: string, recordIDs: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(3839303214, id, recordIDs);
 }
 
 export function Discard(id: string): $CancellablePromise<void> {
     return $Call.ByID(2715197693, id);
 }
 
-export function Extract(id: string, fileIDs: string[] | null, dir: string, policy: string): $CancellablePromise<string> {
-    return $Call.ByID(585645538, id, fileIDs, dir, policy);
+export function Extract(id: string, recordIDs: string[] | null, dir: string, policy: string): $CancellablePromise<string> {
+    return $Call.ByID(585645538, id, recordIDs, dir, policy);
 }
 
 export function KeepOpen(id: string): $CancellablePromise<void> {
     return $Call.ByID(2470395052, id);
 }
 
+/**
+ * Move re-parents each record onto parentID, pre-flighted whole against
+ * FORMAT.md R39 and refused whole and in place.
+ */
+export function Move(id: string, recordIDs: string[] | null, parentID: string): $CancellablePromise<void> {
+    return $Call.ByID(191579688, id, recordIDs, parentID);
+}
+
 export function Op(opID: string): $CancellablePromise<app$0.OpView> {
     return $Call.ByID(448053830, opID);
 }
 
-export function Page(id: string, folder: string, sortBy: string, offset: number, limit: number): $CancellablePromise<app$0.Page> {
-    return $Call.ByID(2601627082, id, folder, sortBy, offset, limit);
+/**
+ * Page lists the live children of one directory in the merged view. dirID
+ * is a record id — the all-zero id is the archive's root — never a path, and
+ * one that no longer names a live directory is file.not_found.
+ */
+export function Page(id: string, dirID: string, sortBy: string, offset: number, limit: number): $CancellablePromise<app$0.Page> {
+    return $Call.ByID(2601627082, id, dirID, sortBy, offset, limit);
 }
 
 /**
@@ -65,8 +96,8 @@ export function PreviewURL(id: string, fileID: string): $CancellablePromise<stri
     return $Call.ByID(913354260, id, fileID);
 }
 
-export function Rename(id: string, fileID: string, newLeaf: string): $CancellablePromise<void> {
-    return $Call.ByID(3028646727, id, fileID, newLeaf);
+export function Rename(id: string, recordID: string, newName: string): $CancellablePromise<void> {
+    return $Call.ByID(3028646727, id, recordID, newName);
 }
 
 export function Replace(id: string, fileID: string, path: string): $CancellablePromise<string> {

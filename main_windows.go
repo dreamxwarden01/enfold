@@ -301,21 +301,43 @@ func (s *shell) ensureWindow() {
 		if len(files) == 0 {
 			return
 		}
-		drop := dropPayload{Paths: files}
+		drop := dropPayload{Paths: files, IsDir: make([]bool, len(files))}
 		if d := ctx.DropTargetDetails(); d != nil {
 			drop.ArchiveID = d.Attributes["data-archive-id"]
-			drop.Folder = d.Attributes["data-folder"]
+			drop.DirID = d.Attributes["data-dir-id"]
 		}
-		s.app.Event.Emit("shell.drop", drop)
+		// The event is read on this thread and left before anything slow:
+		// a stat of a few thousand paths, or of one on a sleeping drive or
+		// a network share, would hold the main thread for the whole batch
+		// with no repaint (APP.md §3, Shell).
+		go func() {
+			for i, p := range drop.Paths {
+				if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+					drop.IsDir[i] = true
+				}
+			}
+			s.app.Event.Emit("shell.drop", drop)
+		}()
 	})
 }
 
-// dropPayload is what a file drop becomes for the page: the paths and the
-// target the page named. The core validates both.
+// dropPayload is what a file drop becomes for the page: the paths, what
+// kind each one is, and the target the page named — the archive and the
+// directory *id* it is showing, from Page's dirID and Crumbs, never a path
+// (APP.md §3, FORMAT.md R39, DESIGN.md trap 31). The core validates both:
+// a stale id is refused, where a stale path would resolve to whatever
+// folder now happens to carry that name.
+//
+// IsDir runs beside Paths, one entry each: the page sends files to
+// AddFiles and each directory to AddFolder, and it cannot stat a path
+// itself — the core answers a directory handed to AddFiles with one failed
+// outcome of params. A path that cannot be stat'ed at all (it went between
+// the drop and this) is offered as a file, and the add reports it.
 type dropPayload struct {
 	Paths     []string `json:"paths"`
+	IsDir     []bool   `json:"isDir"`
 	ArchiveID string   `json:"archiveId"`
-	Folder    string   `json:"folder"`
+	DirID     string   `json:"dirId"`
 }
 
 func (s *shell) closeWindow() {

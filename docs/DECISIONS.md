@@ -3215,3 +3215,16 @@ rename or a move does not (§11 amended; Explorer does not move a file's date on
 and the archive layer checks sibling uniqueness by scanning both tables with `EqualFold` per
 staged change, O(records) — fine at this size, a per-parent map if a folder ever holds tens of
 thousands. `CheckNames` offers a directory by a trailing `/` on the name. The frontend follows.
+
+**And in the page, the same morning** (one implementer, a reviewer with nine findings — one
+major: a failed listing left the page standing in a folder it never showed — all fixed): the
+folder is a directory id, the breadcrumb is `Crumbs`, a created folder is the core's record, rows
+carry folders with the sum beneath, a deleted folder is one greyed row, Rename and Delete take
+folders, a drag onto a folder row or a crumb is `Move` with its refusal under the target,
+*Extract all* sends the root id, the drop carries `dirId` and a per-path kind the shell now stats
+(`main_windows.go`), the collision dialog names kinds and greys *Replace* across kinds, and the
+per-item outcomes have a surface the docs had not named: a *What happened* dialog, opened for
+failed and skipped items alike (a skipped subtree is one line for its top and would otherwise
+vanish; narrowing it to failures is one line). Left open, small: *Extract all* is no longer gated
+(the file count cannot say whether the tree holds anything — a record count on `ArchiveStat`
+would), Move has no keyboard path, and the mock's Discard does not revert a staged move.

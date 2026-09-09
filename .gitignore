@@ -19,6 +19,10 @@
 *.eks
 *.efd
 
+# Python (the UI mock)
+__pycache__/
+*.pyc
+
 # Editor / OS
 .vscode/
 .idea/

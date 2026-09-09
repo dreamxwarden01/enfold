@@ -8,6 +8,8 @@ import { CeremonyStep, VaultState } from "./api";
 import { codeText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
 import { delay, SETTLE } from "./motion";
+import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
+import { hasTrouble, summaryLine, tally } from "./results";
 import type { Outcome } from "./outcome";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
@@ -18,10 +20,16 @@ export interface Toast {
   kind: "info" | "error";
 }
 
+// The shell's file drop (APP.md §3, Shell): the paths, whether each one is
+// a directory — the page cannot stat a path, and a directory handed to
+// AddFiles is one failed outcome — and the target the page named, the
+// archive and the directory *id* it is showing (`data-archive-id` /
+// `data-dir-id`), never a path.
 export interface Drop {
   paths: string[];
+  isDir?: boolean[] | null;
   archiveId: string;
-  folder: string;
+  dirId: string;
 }
 
 export interface Expiring {
@@ -63,8 +71,15 @@ class Store {
   current = $state<string | null>(null);
   stat = $state<ArchiveStat | null>(null);
   page = $state<Page | null>(null);
-  folder = $state("");
+  // The directory the page is showing, as an id: the all-zero id is the
+  // archive's root (APP.md §3). The breadcrumb is the page's own Crumbs,
+  // never built from this.
+  dirId = $state(ROOT_ID);
   sortBy = $state("name");
+  // The last batch operation of the open archive that did not go through
+  // whole (a failed or skipped item): the page shows what happened once,
+  // and clears it (APP.md §3, FileOutcome).
+  results = $state<OpView | null>(null);
   slots = $state<SlotView[]>([]);
   // The vault's entangled password (APP.md §13): one switch for the whole
   // vault, its On known while Locked, its CanEnable only while Unlocked.
@@ -264,9 +279,13 @@ class Store {
     if (!done) return;
     if (o.error) {
       this.toast(`${opLabel(o.kind)}: ${codeText(o.error)}`, "error");
-    } else {
-      const failed = (o.results ?? []).filter((r) => r.outcome === "failed").length;
-      if (failed > 0) this.toast(`${opLabel(o.kind)}: ${failed} file(s) failed`, "error");
+    } else if (hasTrouble(o.results)) {
+      // Something was left out — a kind that differs, a name the tree
+      // cannot hold, a skipped subtree. The page it happened on says what
+      // happened, item by item; another archive's op gets the summary as a
+      // toast, since its own surface is not on screen.
+      if (o.archiveId && o.archiveId === this.current) this.results = o;
+      else this.toast(`${opLabel(o.kind)}: ${summaryLine(tally(o.results))}`, "error");
     }
     if (o.archiveId && o.archiveId === this.current) void this.refreshArchive();
     void this.refreshArchives();
@@ -354,7 +373,9 @@ class Store {
     try {
       this.stat = await Archives.Open(id);
       this.current = id;
-      this.folder = "";
+      this.dirId = ROOT_ID;
+      this.page = null;
+      this.results = null;
       this.setRoute("archive");
       await this.loadPage();
       return true;
@@ -384,22 +405,68 @@ class Store {
   }
 
   private pageToken = 0;
+  // The name of the folder the page is stepping into, until its listing
+  // arrives: the crumbs do not name it yet, so this is what a folder that
+  // went is called if it went before it was ever listed.
+  private entering = "";
 
+  // loadPage lists the directory the page holds. The page can hold one
+  // that is gone — Discard drops the folders that transaction staged, a
+  // Delete takes a subtree the page was standing in — and the core answers
+  // file.not_found rather than an empty listing under a breadcrumb that
+  // still names the place (APP.md §3). The crumbs last held are then
+  // walked upwards, retrying until one answers; the root always does.
   async loadPage(): Promise<void> {
     const id = this.current;
     if (!id) return;
     const t = ++this.pageToken; // a superseded reply is dropped
-    try {
-      const page = await Archive.Page(id, this.folder, this.sortBy, 0, 2000);
-      if (this.current !== id || t !== this.pageToken) return;
-      this.page = page;
-    } catch (e) {
-      this.toast(codeText(errorOf(e).code), "error");
+    const held = this.page?.crumbs ?? [];
+    const chain = retryChain(held, this.dirId);
+    let target = this.dirId;
+    let went = "";
+    for (;;) {
+      try {
+        const page = await Archive.Page(id, target, this.sortBy, 0, 2000);
+        if (this.current !== id || t !== this.pageToken) return;
+        this.page = page;
+        this.dirId = target;
+        this.entering = "";
+        if (went) {
+          const now = page.crumbs?.[page.crumbs.length - 1]?.name ?? "";
+          this.toast(`${went} is no longer in the archive.${now ? ` Showing ${now}.` : ""}`);
+        }
+        return;
+      } catch (e) {
+        if (this.current !== id || t !== this.pageToken) return;
+        const code = errorOf(e).code;
+        const up = chain.shift();
+        if (code !== Code.CodeFileNotFound || up === undefined) {
+          // The listing did not arrive and the page still shows the folder
+          // it showed before. dirId is what every write names — the drop
+          // target's data-dir-id, Create folder, Add files, Add folder —
+          // so it is put back where the page actually stands (the last
+          // crumb of the listing on screen, root-inclusive and never
+          // empty), rather than left naming a folder the user never
+          // entered (APP.md §3, DESIGN.md trap 31).
+          this.dirId = shownDir(this.page?.crumbs);
+          this.entering = "";
+          this.toast(codeText(code), "error");
+          return;
+        }
+        if (!went) {
+          const name = wentName(held, target) || this.entering;
+          went = name ? `"${name}"` : "That folder";
+        }
+        target = up;
+      }
     }
   }
 
-  async enterFolder(folder: string): Promise<void> {
-    this.folder = folder;
+  // enterDir shows one directory of the open archive, by id; the name is
+  // what the row said, for the message a folder that went leaves behind.
+  async enterDir(dirId: string, name = ""): Promise<void> {
+    this.dirId = dirId;
+    this.entering = name;
     await this.loadPage();
   }
 
@@ -407,7 +474,9 @@ class Store {
     this.current = null;
     this.stat = null;
     this.page = null;
-    this.folder = "";
+    this.dirId = ROOT_ID;
+    this.entering = "";
+    this.results = null;
     if (this.route === "archive") this.setRoute("archives");
   }
 

@@ -907,7 +907,12 @@ loopback URL, text through `PreviewText`, everything else "Extract…" — pendi
 one *Add* button whose menu holds *Add files*, *Add folder* and *Create folder* (a staged
 directory record, written at save whether or not a file was added into it — FORMAT R39), *Extract all* (the whole archive, whatever is selected — the pane's *Extract…* is the
 selection's), *Rename*, *Delete*; a drag of the selection onto a folder row or a crumb is `Move`,
-refused in place with the reason (§3) and never a half-moved selection; a click on the list's blank area clears the
+refused in place with the reason (§3) and never a half-moved selection — the reason sits under
+the target row until the next click; an op of the open archive that reports a failed or skipped
+item opens a *What happened* dialog listing each with its code's copy, beside the summary line
+("2 files added · 1 folder created · 1 skipped"), and an op of another archive gets the summary
+as a toast; a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
+is said by a toast naming it, the page having walked its crumbs upwards; a click on the list's blank area clears the
 selection; the name column takes the width the others do not need, so a name is never squeezed
 while *Stored as* stands empty — Size, Stored as and Modified are fixed and Modified goes first
 when the pane is narrow; drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,

@@ -416,6 +416,30 @@ export enum Code {
     CodeFileExists = "file.exists",
     CodeFileNotFound = "file.not_found",
     CodeFileName = "file.name",
+
+    /**
+     * The three per-item codes of the tree (APP.md §3, FORMAT.md R39).
+     * CodeKindMismatch: the incoming item and the item in the way are of
+     * different kinds, and kinds that differ never replace — replacing a
+     * folder with a file would tombstone its subtree in one write, and
+     * replacing a file with a folder is not an edit of that file.
+     */
+    CodeKindMismatch = "file.kind_mismatch",
+
+    /**
+     * CodeMoveIntoSelf: a directory would be moved into itself or into one
+     * of its own descendants.
+     */
+    CodeMoveIntoSelf = "file.move_into_self",
+
+    /**
+     * CodeTreeBounds: the change would stand a directory more than 255
+     * parents from the root, or join a record to a path over 4096 bytes.
+     * Both bounds are the moved or created subtree's and not the named
+     * record's, so they are caught in the pre-flight rather than at the
+     * seal.
+     */
+    CodeTreeBounds = "file.tree_bounds",
     CodeSourceChanged = "file.source_changed",
     CodeContentHash = "file.content_hash",
     CodeNoSpace = "archive.no_space",
@@ -429,16 +453,32 @@ export enum Code {
 };
 
 /**
- * Collision is what CheckNames reports.
+ * Collision is what CheckNames reports: the kind on both sides — what is
+ * being offered and what is in the way — so the dialog can say "Photos is a
+ * file here" and grey Replace whenever the two differ (APP.md §3).
  */
 export interface Collision {
+    /**
+     * the name as it was offered
+     */
     "name": string;
 
     /**
-     * the file id of the row it collides with
+     * the kind offered: a name given with a trailing "/"
      */
+    "isDir": boolean;
     "existing": string;
+    "existingIsDir": boolean;
     "pending": boolean;
+}
+
+/**
+ * Crumb is one step of the breadcrumb: a directory's id and its name, the
+ * root's being the archive's own name (APP.md §3).
+ */
+export interface Crumb {
+    "id": string;
+    "name": string;
 }
 
 /**
@@ -511,34 +551,37 @@ export interface FileInfo {
 }
 
 /**
- * FileOutcome is one file's result inside a batch operation.
+ * FileOutcome is one record's result inside a batch operation. IsDir tells a
+ * directory's outcome from a file's: created (a directory record made) and
+ * entered (an existing one descended into) are a directory's, added and
+ * replaced a file's (APP.md §3).
  */
 export interface FileOutcome {
     "path": string;
     "name": string;
+    "isDir": boolean;
 
     /**
-     * added | replaced | renamed | skipped | extracted | failed
+     * added | replaced | created | entered | skipped | extracted | failed
      */
     "outcome": string;
     "code"?: Code;
 }
 
 /**
- * FileRow is one row of a page.
+ * FileRow is one row of a page: one record of the merged view, file or
+ * directory alike (APP.md §3). ID and ParentID are the record's own ids —
+ * 32 lowercase hex digits, the all-zero id being the root — Name is the
+ * record's own name and Path the joined one (FORMAT.md R20, R39). A
+ * directory's Size is the sum beneath it and its ModifiedAt the record's
+ * own.
  */
 export interface FileRow {
-    "fileId": string;
-
-    /**
-     * the full stored name
-     */
-    "path": string;
-
-    /**
-     * the leaf within the folder asked for
-     */
+    "id": string;
+    "parentId": string;
+    "isDir": boolean;
     "name": string;
+    "path": string;
     "size": number;
 
     /**
@@ -549,15 +592,9 @@ export interface FileRow {
     "modifiedAt": number;
 
     /**
-     * added | replaced | renamed | deleted
+     * added | replaced | renamed | moved | deleted
      */
     "pending"?: string;
-    "isFolder": boolean;
-
-    /**
-     * folders: files under it
-     */
-    "files": number;
 }
 
 /**
@@ -601,13 +638,16 @@ export interface OpView {
 }
 
 /**
- * Page is one screenful of an archive folder.
+ * Page is one screenful of one directory. Total counts that directory's
+ * children, not its subtree, and Crumbs is the chain from the root down to
+ * the folder shown, inclusive and never empty — the page draws the whole
+ * breadcrumb from it and takes no name from Stat.
  */
 export interface Page {
     "seq": number;
-    "folder": string;
     "rows": FileRow[] | null;
     "total": number;
+    "crumbs": Crumb[] | null;
 }
 
 /**

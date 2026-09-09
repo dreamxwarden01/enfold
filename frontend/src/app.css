@@ -527,6 +527,23 @@ thead th .caret.on.asc { transform: rotate(180deg); }
 .crumbs .i { width: 12px; height: 12px; color: var(--ink-3); }
 .file-split { display: grid; grid-template-columns: 1fr 264px; gap: 16px; flex: 1; min-height: 0; padding-bottom: 14px; }
 .file-split.dropping .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
+/* A drag of the selection onto a folder row or a crumb is a Move (APP.md
+   §6): the target the drag is over wears the accent wash, and a refusal —
+   the whole move refused, in place — is said against that target, where
+   the drag was aimed. The name cell lets the line wrap under the name; no
+   other cell does. */
+tbody tr.drop-into td { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.crumbs .c.drop-into { background: var(--accent-wash); color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent-line); }
+/* The name keeps its own nowrap, whatever the cell does, so it ellipsizes
+   in the refused row as in every other. */
+.fname { white-space: nowrap; }
+tbody tr.refused td { height: auto; padding-top: 5px; padding-bottom: 5px; vertical-align: top; }
+tbody tr.refused td.sel-mark { white-space: normal; overflow: visible; }
+.move-note { display: block; color: var(--danger); font-size: 11.5px; line-height: 1.35; padding: 4px 0 0 23px; white-space: normal; }
+.layer-body > .move-note { padding: 0 2px 2px; }
+ul.plain { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
+ul.plain li { overflow-wrap: anywhere; }
+p.dim { color: var(--ink-2); }
 /* The file table's columns (APP.md §6, the Archive page): Size, Stored as
    and Modified are fixed at what their content asks for — "zstd, 79%
    smaller", "12,406 files", "2026-09-08 21:14" — and the name column,

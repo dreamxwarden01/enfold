@@ -13,6 +13,7 @@ export type {
     ArchiveSummary,
     CeremonyState,
     Collision,
+    Crumb,
     Difference,
     EntangledState,
     FileInfo,

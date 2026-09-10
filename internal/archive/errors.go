@@ -57,6 +57,13 @@ var (
 	ErrDictInUse = errors.New("archive: dictionary is referenced by stored files")
 	// ErrTxOpen: a transaction is already open on this Archive.
 	ErrTxOpen = errors.New("archive: a transaction is open")
+	// ErrStalePlan: a move (R40) does not fit the archive's state — its
+	// source is not where the plan found it, or its destination is not free
+	// space the transaction may allocate: live, under R31's quarantine
+	// (ReclaimPlan.NeedsPublish, Publish lifts it), held by a reader, or
+	// taken by another move. A plan is made against one committed state and
+	// answers for one commit; nothing was written — plan again.
+	ErrStalePlan = errors.New("archive: the plan does not fit the archive's state")
 	// ErrNoSpace: the file would exceed the format's bounds.
 	ErrNoSpace = errors.New("archive: size limit")
 	// ErrParams: an argument the package refuses.

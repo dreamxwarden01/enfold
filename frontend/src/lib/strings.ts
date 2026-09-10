@@ -4,7 +4,7 @@
 
 import { CeremonyStep, Code } from "./api";
 import type { CeremonyState, CodeKey, StepKey } from "./api";
-import { plural } from "./format";
+import { bytes, plural } from "./format";
 
 export interface StepCopy {
   title: string;
@@ -150,6 +150,10 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeOpCommitting]: "The operation is already being saved; it will finish.",
   [Code.CodeOpRunning]: "An operation is still writing the vault. Wait for it to finish.",
   [Code.CodeTooSlow]: "This would not finish before the session locks. Extend the session first.",
+  // A move commit of the reclaim the core runs after an edit failed: the
+  // edit itself is saved, and the next qualifying commit takes the run up
+  // again (APP.md §2.3). Never "the edit failed".
+  [Code.CodeReclaimIncomplete]: "Saved. Reclaiming space did not finish.",
   [Code.CodeParams]: "Enfold refused the request.",
   [Code.CodeIO]: "A file could not be read or written.",
 };
@@ -178,6 +182,15 @@ export const archivePageCopy = {
   deleteNeedsUnlock: "Unlock the vault first: the record is the vault's.",
   deleteTampered: "The vault's slot region does not verify; every change is disabled.",
 };
+
+// reclaimedText is what a finished *Reclaiming space* says: the bytes the
+// file system got back — the archive's own shrinking (OpView.Returned) —
+// said apart from the bytes the run moved, since the two are never the same
+// figure (APP.md §2.3). Its caller decides when there is anything to say
+// (ops.ts reclaimedLine).
+export function reclaimedText(returned: number): string {
+  return `Reclaimed ${bytes(returned)}`;
+}
 
 // ---- The extract dialog and what an `ask` comes back with (APP.md §3,
 // §6, ruled 2026-09-10) ----------------------------------------------

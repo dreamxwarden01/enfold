@@ -11,7 +11,7 @@ import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
 import { hasTrouble, summaryLine, tally } from "./results";
 import { hasConflicts } from "./conflicts";
-import { opLabel } from "./ops";
+import { opErrorLine, opLabel, reclaimedLine } from "./ops";
 import type { Outcome } from "./outcome";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
@@ -309,7 +309,11 @@ class Store {
     this.ops[o.id] = o;
     if (!done) return;
     if (o.error) {
-      this.toast(`${opLabel(o.kind, o.items)}: ${codeText(o.error)}`, "error");
+      this.toast(opErrorLine(o.kind, o.items, o.error, codeText(o.error)), "error");
+    } else if (reclaimedLine(o)) {
+      // A reclaim reports what came back, on whichever page is up: the
+      // strip that showed it running has gone with it.
+      this.toast(reclaimedLine(o));
     } else if (hasTrouble(o.results)) {
       // Something was left out — a kind that differs, a name the tree
       // cannot hold, a skipped subtree. The page it happened on says what

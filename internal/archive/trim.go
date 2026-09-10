@@ -148,8 +148,9 @@ func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error
 	// index and free map can stand in the way there — they are the live
 	// copy's until the flip and are not written over — and the place then
 	// moves above them, giving back what lies past that instead. What is
-	// left free is the holes below, which is what the map says and what
-	// Compact is for: truncation gives the tail back, compaction the middle.
+	// left free is the holes below, which is what the map says and what a
+	// move (R40, reclaim.go) or Compact is for: truncation gives the tail
+	// back, compaction the middle.
 	cur := []extent{
 		{Off: a.sb.IndexOff, Len: a.sb.IndexLen + format.TagSize},
 		{Off: a.sb.FreeMapOff, Len: a.sb.FreeMapLen},

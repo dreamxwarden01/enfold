@@ -5,12 +5,19 @@
 import type { ArchiveStat } from "./api";
 import { bytes, dateTime, plural } from "./format";
 
-// The free space is shown from 64 MiB up, which is the floor of the rule
-// the core reclaims on (APP.md §2.3: free space at or above 64 MiB *and* a
-// quarter of the file). Below the quarter the core leaves the holes where
-// they are, and the figure is then the only thing that says why the file
-// is bigger than the files inside it; below 64 MiB there is nothing worth
-// a reader's attention and the line stays short.
+// The free space is shown from 64 MiB up. The figure is the archive's
+// published free map — what a whole-file *Compact* would give back — and
+// the floor is that of the rule the core reclaims on (APP.md §2.3, FORMAT.md
+// R40): a run of moves happens when it would give the file system back
+// 64 MiB or more of the *tail*, and that is at least a quarter of what it
+// would have to move — bytes returned, never the size of any hole, since a
+// hole filled behind a file that cannot move returns nothing. So a figure
+// at or over the floor on the strip is space the core could not or would
+// not move for — a file larger than every hole before it, a gain under a
+// quarter of the move, an extent a reader holds — and it is the only thing
+// that says why the file is bigger than the files inside it, and what
+// *Compact* on the Archives page is for. Below 64 MiB there is nothing
+// worth a reader's attention and the line stays short.
 export const freeSpaceFloor = 64 * 1024 * 1024;
 
 export function freeWorthShowing(freeSpace: number | undefined): boolean {

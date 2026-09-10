@@ -14,10 +14,11 @@ empties it; paste this into the page once to have it dispatch them:
 That is what makes an operation visible: an add, a replace or an extract
 here runs for a few seconds, ticking op.progress by bytes the way the core
 does, and publishes nothing until it commits at its end (APP.md 2.3).
-POST /mock/preview {"name": "reclaim"} plays the compaction the core runs
-itself after a commit that leaves the free space over APP.md 2.3's
-thresholds - the strip's *Reclaiming space*, cancellable, the space back on
-the status line when it commits.
+POST /mock/preview {"name": "reclaim"} plays the in-place compaction the
+core runs itself after a commit whose plan would give enough of the tail
+back (APP.md 2.3, FORMAT.md R40) - the strip's *Reclaiming space*,
+cancellable, the space back on the status line and "Reclaimed 1.2 GB" said
+when it ends.
 
 An archive's lifetime (APP.md 2.3, ruled 2026-09-10) is played too: the
 page's Archives.Open mounts one archive and mints a preview token; every
@@ -171,10 +172,11 @@ state = {
 # the vault's password waiting in the field beside it; "deadline" is the
 # note the status carries when the five minutes from the touch ran out
 # (APP.md 2.2); "locked" puts it back.
-# "reclaim" is not a vault state but an operation: it plays the compaction
-# the core runs itself after a commit that leaves the free space over
-# APP.md 2.3's thresholds. It is in the same set because it is the same
-# question - "show me that" - and the route tells the two apart by name.
+# "reclaim" is not a vault state but an operation: it plays the in-place
+# compaction the core runs itself after a commit whose plan would give
+# enough of the tail back (APP.md 2.3, FORMAT.md R40). It is in the same
+# set because it is the same question - "show me that" - and the route
+# tells the two apart by name.
 PREVIEW_OPS = {"reclaim": lambda: start_reclaim()}
 
 PREVIEWS = {
@@ -421,7 +423,8 @@ def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase="", arch
     op_id = "op%d" % state["nextOp"]
     aid = archive_id or state["stat"]["id"]
     op = {"id": op_id, "kind": kind, "archiveId": aid, "done": 0, "total": total,
-          "items": items, "phase": phase, "startedAt": int(time.time()), "finished": False, "results": []}
+          "items": items, "phase": phase, "startedAt": int(time.time()), "finished": False, "results": [],
+          "returned": 0}
     if policy:
         op["policy"] = policy
         op["destination"] = destination
@@ -550,29 +553,64 @@ def delete_records(args):
     return None
 
 
-# The free space the core reclaims on (APP.md 2.3): at or above 64 MiB
-# *and* a quarter of the file. Below the quarter the holes stay where they
-# are and the status line says how much of the file they are.
+# The rule the core reclaims on (APP.md 2.3, FORMAT.md R40): a run of
+# moves happens when it would give the file system back 64 MiB or more of
+# the tail, and that is at least a quarter of what it would have to move.
+# The mock has no layout to plan on, so it takes the free space for the
+# tail and the live bytes for the move; what the core measures is bytes
+# returned, never the size of a hole.
 RECLAIM_FLOOR = 64 * 1024 * 1024
 
 
 def reclaim_due():
     st = state["stat"]
-    return st["freeSpace"] >= RECLAIM_FLOOR and st["freeSpace"] * 4 >= st["size"]
+    live = max(0, st["size"] - st["freeSpace"])
+    return st["freeSpace"] >= RECLAIM_FLOOR and st["freeSpace"] * 4 >= live
+
+
+def running_reclaim():
+    """The run on the books, or None. The core plans no second run over a
+    first (ops.go reclaimDueLocked): a run is an operation of the archive,
+    and an operation of the archive is what holds the next one off."""
+    for o in running_ops(state["stat"]["id"]):
+        if o["kind"] == "reclaim":
+            return o
+    return None
 
 
 def start_reclaim():
-    """*Reclaiming space* (APP.md 2.3, 6): a compaction the user did not
-    ask for, cancellable, which gives the file's free space back when it
-    commits. Its Items is zero - it moves bytes, not files - and its phase
-    is the compaction it is made of, which the strip does not repeat."""
+    """*Reclaiming space* (APP.md 2.3, 6): the in-place compaction the user
+    did not ask for, cancellable, which lowers the live data into the holes
+    a budget per commit and gives the tail back as it comes free. Its Items
+    is zero - it moves bytes, not files - its Total is the bytes to move,
+    its phase the copies it is made of, which the strip does not repeat,
+    and what came back is said apart from what moved: Returned is the
+    file's own shrinking, which the page reports as "Reclaimed 1.2 GB".
+
+    A run already on the books is answered instead of a second being begun,
+    and what this one reports is measured on its own run alone: the file's
+    size when it began against the size it leaves, never the free map read
+    at its commit, which a delete made while it ran has already grown."""
+    running = running_reclaim()
+    if running is not None:
+        return running["id"]
     st = state["stat"]
+    before = st["size"]
+    holes = st["freeSpace"]           # what this run set out to give back
+    live = max(0, before - holes)     # and the bytes it has to move for it
 
     def commit():
-        st["size"] = max(0, st["size"] - st["freeSpace"])
-        st["freeSpace"] = 0
+        # This run's own holes, and no more: space freed under it belongs to
+        # the run after, which the next commit plans.
+        give = min(holes, st["freeSpace"])
+        st["size"] = max(0, st["size"] - give)
+        st["freeSpace"] -= give
+        # The commit runs on the operation's thread, once start_op has
+        # answered the id below.
+        state["ops"][op_id]["returned"] = max(0, before - st["size"])
 
-    return start_op("reclaim", st["size"], commit, seconds=6.0, phase="compacting")
+    op_id = start_op("reclaim", live, commit, seconds=6.0, phase="moving")
+    return op_id
 
 
 def rename_record(args):

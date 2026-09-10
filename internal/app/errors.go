@@ -168,6 +168,12 @@ const (
 	CodeOpCommitting Code = "op.committing"
 	CodeOpRunning    Code = "op.in_progress"
 	CodeTooSlow      Code = "op.too_slow_for_session"
+	// CodeReclaimIncomplete: a move commit of the reclaim the core runs
+	// after an edit failed. The edit itself committed and stays committed;
+	// the reclaim's own operation ends with this, and the next qualifying
+	// commit takes the run up again (APP.md §2.3). "Saved. Reclaiming space
+	// did not finish."
+	CodeReclaimIncomplete Code = "archive.reclaim_incomplete"
 
 	CodeParams Code = "params"
 	CodeIO     Code = "io"
@@ -249,8 +255,10 @@ var classifyTable = []struct {
 	{ErrTokenManagementKey, CodeTokenMgmtKey},
 	{ErrTokenCancelled, CodeCancelled},
 
-	// Operations.
+	// Operations. The reclaim's wrap stands before the archive's sentinels
+	// it carries inside: the outcome is the run's, the cause is the log's.
 	{ErrOpCommitting, CodeOpCommitting},
+	{errReclaimIncomplete, CodeReclaimIncomplete},
 
 	// Keystore.
 	{keystore.ErrIndeterminate, CodeIndeterminate},

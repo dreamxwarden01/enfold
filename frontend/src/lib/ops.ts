@@ -3,6 +3,7 @@
 // so the strip has one job — name what is running, move a bar by the bytes
 // the core reports, and offer *Cancel* where a cancel means something.
 import { plural } from "./format";
+import { reclaimedText } from "./strings";
 
 // opLabel is the running operation's name, as the strip says it: the verb
 // and what it is working on — *Adding 3 files*, *Adding 1 file*,
@@ -23,9 +24,11 @@ export function opLabel(kind: string, items = 0): string {
       return "Verifying";
     case "compact":
       return "Compacting";
-    // The compaction the core runs itself after a commit that leaves the
-    // free space over APP.md §2.3's thresholds. It is named for what the
-    // user gets, not for the machinery: *Reclaiming space*.
+    // The in-place compaction the core runs itself after a commit, or after
+    // the last reader closes, when moving live data down into the holes
+    // would give the file system enough of the tail back (APP.md §2.3,
+    // FORMAT.md R40). It is named for what the user gets, not for the
+    // machinery: *Reclaiming space*.
     case "reclaim":
       return "Reclaiming space";
     case "rotate":
@@ -42,11 +45,11 @@ function counted(verb: string, items: number): string {
 // something the name does not (APP.md §6 — no phase word beside the verb).
 // A verify's "hashing" and a rotation's "registry" are where the work has
 // got to; "adding" beside *Adding 3 files* is the same word twice, and a
-// reclaim's own phase is the compaction it is made of, which the name has
-// already put in the user's words. "starting" is the phase every operation
-// carries before it has done anything, so it is a restatement too: it says
-// nothing about where the work has got to, and the strip's own presence
-// already says the operation began.
+// reclaim's own phase — "moving", the copies it is made of — is what the
+// name has already put in the user's words. "starting" is the phase every
+// operation carries before it has done anything, so it is a restatement
+// too: it says nothing about where the work has got to, and the strip's
+// own presence already says the operation began.
 const restatements = new Set([
   "starting",
   "adding",
@@ -54,6 +57,7 @@ const restatements = new Set([
   "extracting",
   "compacting",
   "compacted",
+  "moving",
   "verified",
   "rotated",
 ]);
@@ -72,4 +76,27 @@ export function opPhase(phase: string | undefined): string {
 // to abort halfway, and an extract has already written files on disk.
 export function cancellable(kind: string): boolean {
   return kind === "add" || kind === "replace" || kind === "reclaim";
+}
+
+// reclaimedLine is when a finished reclaim says what the file system got
+// back — the file's own shrinking, OpView.Returned — apart from what was
+// moved, since the two are never the same figure (APP.md §2.3): a move
+// commit's own metadata can leave the file larger for a moment, and the
+// bytes copied are not the bytes returned. Nothing for any other kind, and
+// nothing for a run that ended before it gave anything back — a cancel or a
+// failure already has its line. The words are the copy table's
+// (strings.ts reclaimedText, APP.md §7); this decides whether they are said.
+export function reclaimedLine(o: { kind: string; error?: string; returned?: number }): string {
+  if (o.kind !== "reclaim" || o.error || !(o.returned ?? 0)) return "";
+  return reclaimedText(o.returned ?? 0);
+}
+
+// opErrorLine is the toast a finished operation's error makes: the
+// operation's name, then the code's copy — except where the copy already
+// names the operation and its outcome in full, as the reclaim's does
+// ("Saved. Reclaiming space did not finish."), where a name in front would
+// say "Reclaiming space" twice.
+export function opErrorLine(kind: string, items: number, code: string, text: string): string {
+  if (code === "archive.reclaim_incomplete") return text;
+  return `${opLabel(kind, items)}: ${text}`;
 }

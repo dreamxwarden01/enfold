@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CeremonyStep, Code } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
-import { codeCopy, codeText, retriesText, stepCopy } from "./strings";
+import { codeCopy, codeText, reclaimedText, retriesText, stepCopy } from "./strings";
 
 describe("copy table", () => {
   it("covers every ceremony step", () => {
@@ -33,5 +33,11 @@ describe("retries", () => {
   });
   it("says unknown when the card is verified", () => {
     expect(retriesText({ retries: 3, retriesKnown: true, verified: true })).toMatch(/unknown/);
+  });
+});
+
+describe("what a finished reclaim says", () => {
+  it("names the bytes the file system got back", () => {
+    expect(reclaimedText(1.2 * 1024 * 1024 * 1024)).toBe("Reclaimed 1.2 GB");
   });
 });

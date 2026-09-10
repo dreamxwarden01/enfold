@@ -169,6 +169,25 @@ func (s *space) firstFit(n uint64) (extent, bool) {
 	return extent{}, false
 }
 
+// firstFitBefore takes the lowest n bytes that end at or before limit —
+// the earliest hole wholly before a source that holds it, which is where R40
+// places a move — removing what it takes, and reports whether it found any.
+// It is firstFit with a ceiling: the set is sorted, so the first extent that
+// cannot end in time ends the search.
+func (s *space) firstFitBefore(n, limit uint64) (extent, bool) {
+	for _, e := range s.x {
+		if e.Off+n > limit {
+			break
+		}
+		if e.Len >= n {
+			got := extent{Off: e.Off, Len: n}
+			s.remove(got)
+			return got, true
+		}
+	}
+	return extent{}, false
+}
+
 // exactOrFirstFit prefers an extent of exactly n bytes, then the first that
 // fits; exact fits keep the map from fragmenting into unusable tails.
 func (s *space) exactOrFirstFit(n uint64) (extent, bool) {

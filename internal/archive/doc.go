@@ -68,9 +68,32 @@
 // naming a state that does not reference the freed run, so the truncation
 // can never leave a superblock pointing past the end of the file. trim.go
 // documents the order and what a crash at each step leaves behind. What
-// truncation cannot give back — free space with live data above it — is
-// Compact's, and the caller decides when that is worth its rewrite
-// (APP.md §2.3: 64 MiB and a quarter of the file).
+// truncation cannot give back — free space with live data above it — a move
+// can.
+//
+// # Moving extents
+//
+// A live extent may be moved down into a hole before it, verbatim (R40,
+// reclaim.go): PlanReclaim is the dry run over the committed state — each
+// live extent, in offset order, into the earliest hole wholly before it that
+// holds it, a file no hole holds skipped, a held extent left where it lies —
+// and MoveExtents is one commit of it: every destination taken exactly from
+// the pool before a byte is copied, never appended, the ciphertext copied in
+// chunks with a cancel honoured at each, the record's data_off pointed at the
+// copy and the source freed and quarantined like a deleted file's data. A
+// Reader holding the source keeps reading it where it lies. The tail such a
+// commit frees comes back with the follow-up commit above, so an archive
+// gives its space back in place, without a second file. The caller decides
+// when a run is worth its moves (APP.md §2.3) and, when the plan wants a hole
+// the commit just made freed, begins with Publish — the empty commit that
+// spends the quarantine. A plan answers for one commit, but a run of them is
+// what the caller weighs, so the plan carries the dry run of the whole loop
+// as well (RunTailReturned, RunBytesToMove): three equal files with the first
+// deleted give nothing back on the first commit and a whole file's worth on
+// the second. That dry run takes the caller's own budget per commit, since
+// the commits it must answer for are the budgeted ones and a budget changes
+// where the moves land, not only when. Whole-file Compact remains for what a
+// move cannot do: a file larger than every hole before it.
 //
 // A failure at or after the superblock write leaves the outcome unknown; the
 // Archive then refuses every operation (ErrIndeterminate, Broken) and the

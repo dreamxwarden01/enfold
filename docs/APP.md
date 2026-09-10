@@ -449,16 +449,25 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   *Reclaiming space* run, FORMAT R40's in-place compaction. The plan is made on the free map in
   memory first: live extents in offset order, each into the earliest published hole wholly
   before it that holds it, a file no hole before it holds skipped, an extent a reader holds left
-  where it lies for this run. The run happens only when the plan would give the file system
-  back **64 MiB or more** of the tail and that is at least a quarter of what it would have to
-  move — the floor measures bytes returned, not the size of any hole, since a hole filled
+  where it lies for this run. The run happens only when the whole run — the plan dry-run commit by commit in memory, a
+  source one commit frees becoming a hole for the commits after the next (R31's quarantine), so
+  that deleting the first of three equal files counts the two moves it takes and not the one
+  the first commit can make — would give the file system back **64 MiB or more** of the tail and that is at least a quarter
+  of what it would have to move; the dry run takes the same budgeted steps the run will, since a
+  budget changes which holes coalesce and so which files move, and the run itself stops, as a
+  run cut short and not as a failure, if what it has moved ever exceeds four times what has come
+  back and what the fresh plan still promises (the outside review of the implementation) — the floor measures bytes returned, not the size of any hole, since a hole filled
   behind a file that cannot move returns nothing, and a 64 MiB hole at the head of a 100 GB
-  archive is not worth moving 100 GB for (that is what *Compact* is for, on request). Each
-  commit moves as many extents as fit in a budget of **64 MiB** of ciphertext, so an archive of
-  many small files does not pay one index rewrite per file; when the hole the plan wants is
+  archive is not worth moving 100 GB for (that is what *Compact* is for, on request). Each commit moves as many extents as fit in a budget of **64 MiB** of ciphertext — an extent
+  larger than the budget moves alone, in a commit of its own, since it cannot be split and would
+  otherwise never move — so an archive of many small files does not pay one index rewrite per
+  file, and each is planned afresh — the commit's own index takes a hole and the sources just moved are in quarantine,
+  so one plan is never worked through across commits; when the hole the plan wants is
   still under R31's quarantine — freed by the commit just made, with no tail follow-up to
-  publish it — the run's first commit is the empty one that does; the tail is cut by the
-  follow-up commit as it comes free. Progress is by bytes moved, and what came back is said
+  publish it — the run's first commit is the empty one that does; the tail is cut by the follow-up commit as it comes free — and a move commit, like the
+  publishing one, places its own index outside the run that follow-up will cut, appending it
+  if no other hole holds it, so what comes back is never less than the plan promised (the
+  adversarial proof of 2026-09-10). Progress is by bytes moved, and what came back is said
   separately ("Reclaimed 1.2 GB"); a cancel is honoured at any chunk of the copy — an aborted
   commit leaves the originals live and its copies in free space — and *Close archive* cancels
   it too, the archive consistent and simply less compacted, the run resumed by the next

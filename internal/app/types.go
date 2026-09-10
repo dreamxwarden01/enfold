@@ -353,9 +353,10 @@ type ExistingFile struct {
 }
 
 // OpView is a running or finished long operation. Kind is add | replace |
-// extract | compact | reclaim | verify | rotate; reclaim is the compaction
-// the core runs itself after a commit that leaves the free space over
-// APP.md §2.3's thresholds, and the strip shows it as Reclaiming space.
+// extract | compact | reclaim | verify | rotate; reclaim is the in-place
+// compaction the core runs itself after a commit, or after the last reader
+// closes, when the plan would give the file system enough of the tail back
+// (APP.md §2.3, FORMAT.md R40), and the strip shows it as Reclaiming space.
 type OpView struct {
 	ID        string `json:"id"`
 	Kind      string `json:"kind"`
@@ -381,6 +382,12 @@ type OpView struct {
 	// (APP.md §3).
 	Policy      string `json:"policy,omitempty"`
 	Destination string `json:"destination,omitempty"`
+	// Returned is what a reclaim gave the file system back once it ended:
+	// the file's size before the run less its size after, which is what the
+	// page says — "Reclaimed 1.2 GB" — and is never the bytes it moved
+	// (APP.md §2.3). Zero for every other kind, and for a run that ended
+	// before its first commit.
+	Returned uint64 `json:"returned"`
 }
 
 // SlotBrief names one recovery slot of an incoming file, so that a dialog

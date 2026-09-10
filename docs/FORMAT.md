@@ -676,8 +676,9 @@ that lands before the commit publishes leaves the originals live and the copies 
 while one between two commits leaves a consistent archive with its live data lower in the file
 than before, the next such commit going on from there. What a move gives back is the tail, when
 the last live byte moves down and the follow-up commit of R31 truncates it; the metadata a commit
-writes takes space of its own — the free map is always appended, the index when no hole holds
-it — so a single move commit may leave the file larger for the moment, and what came back is
+writes takes space of its own — the free map is always appended, the index when no hole holds it, and a move commit keeps its
+index out of the run the follow-up will truncate — so a single move commit may leave the file
+larger for the moment, and what came back is
 never confused with what was moved. This is compaction **in place**: an archive gives its space
 back without a second file and without ever needing twice its size on disk. Whole-file
 compaction (R33) remains, on request, for what a move cannot do: a file whose extent is larger

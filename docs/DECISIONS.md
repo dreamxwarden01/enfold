@@ -3454,3 +3454,66 @@ graver, than the Opus-reviews-Opus batches did — a panic and a kill switch tha
 have reached the user — and it costs Anthropic usage nothing; keep it. Astra's own subagents
 fail to launch every time ("no thread with id"); it reviews alone and still delivers.
 
+## 2026-09-10 — In-place compaction implemented (R40)
+
+The archive layer gained the move step behind three calls: `PlanReclaim`, a dry run on the
+in-memory free map that answers one commit's moves — each live extent, in offset order, into
+the earliest published hole wholly before it that holds it, held sources and oversized files
+skipped — and a run-level estimate beside them; `Publish`, the explicit empty commit that spends
+R31's quarantine; and `MoveExtents`, one commit of moves whose destinations are taken exactly
+from the transaction's pool by a new `tx.take` (never the allocator's first fit, never an
+append), the record pointed at the copy before a byte is written, the copy made in 1 MiB chunks
+with the cancel checked at each, the source freed and quarantined by the commit like a deleted
+file's data, and the whole thing aborted — originals live, copies in free space, the file no
+larger — on any error. A plan a commit can no longer honour (a source moved, a hole retired or
+held) is refused whole with `ErrStalePlan` and writes nothing; the app plans again.
+
+**The adversary's pass** (an Opus reviewer told to break it and to leave its proofs as tests,
+`adversary_*_test.go`): a crash at every write of a move commit — the copy chunks, the index,
+the map, the flip, each step of the follow-up — every cancel and torn write per chunk, a Close
+under the copy, a reader opened mid-copy or holding the old tail, a damaged free map, and every
+hand-crafted destination a plan would never choose (held, quarantined, live, the losing index,
+another move's source or destination): no data loss, no state Open cannot read, R31's fallback
+kept, the map's invariants held on the handle and on a reopen. Two low findings: the
+tail-returned estimate over-promised by one index and one map when the move commit's own index
+first-fitted just above the new last live byte, in the run the follow-up would cut — fixed at
+the root, a move commit and a publishing commit keep their index out of that run, appending it
+if no other hole holds it (the file ends tighter, not looser, for it); and the contract's app
+sketch worked one plan through several commits, which the layer refuses safely — the app plans
+afresh for every commit instead, since the commit's own index takes a hole and the sources just
+moved are in quarantine.
+
+**One commit deep was not enough.** The app implementer, building the worth rule on the plan,
+found that `[hole S][S][S]` — the user deletes the first of three equal files, the case that
+started all this — plans one move with nothing returned (the third file still anchors the tail),
+so the run would never start although two commits give S back. The plan's estimate is now the
+whole run, simulated commit by commit on the free-space model: a source one commit frees is a
+hole for the commits after the next, an empty publishing commit inserted where the quarantine
+demands it, bounded and answering for what it walked, never above what the real run returns
+(proved by running three layouts to convergence against the figure). The worth rule weighs
+`RunTailReturned` and `RunBytesToMove`; the one-commit figures stay for the tests that pin them.
+
+**The app** plans before each commit, publishes when the plan wants a quarantined hole, moves
+up to 64 MiB of ciphertext per commit, pays the registry receipt after each, does not quiesce
+readers (a move needs no drain; whole-file *Compact* keeps its), is triggered by every
+operation's commit and by the last reader's close, is not gated on the session (a commit is
+not; the receipt waits), ends as cancelled under *Cancel* or *Close archive*, and otherwise
+reports `Returned` — the strip's toast says *Reclaimed 1.2 GB* — or `archive.reclaim_incomplete`
+("Saved. Reclaiming space did not finish."), never touching the edit's own outcome. The
+constants — 64 MiB returned, a quarter of what moves, 64 MiB per commit — sit in one rule,
+lowered by the tests. `RotateKey` rewrites the file and needs no reclaim.
+
+**The outside review of the implementation** (Codex Astra over the diff, 38 files, 214k tokens):
+no high finding; three medium, two low, all real. The run-level estimate simulated each step's
+whole move list while the app commits a budgeted prefix and plans again — a budget changes which
+holes coalesce and so which files move, and on a contrived layout the real run moved five times
+what the estimate weighed — so the dry run now takes the same budgeted steps, and the run stops
+by itself, cut short rather than failed, if what it has moved exceeds four times what has come
+back plus what the fresh plan promises. The last-reader trigger was lost when an extract's own
+readers were released by a bare decrement or when a reader closed during another operation —
+every operation's end now re-plans, a reclaim's own end never (a cancelled reclaim is resumed by
+the next qualifying commit, not by itself). The first extent of a commit ignoring the budget is
+kept as the necessary exception — an extent larger than the budget cannot be split and would
+otherwise never move — and written into §2.3. The mock's overlapping reclaims and the
+"Reclaimed …" line outside `strings.ts` were the two low.
+

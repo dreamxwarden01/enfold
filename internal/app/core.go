@@ -90,10 +90,12 @@ type Core struct {
 	// (APP.md §2.2): the attempt goes on until the card answers.
 	pending *attempt
 
-	// reclaim is APP.md §2.3's rule for the compaction the core runs itself
-	// after a commit — 64 MiB free and a quarter of the file. It is held
-	// here rather than read from the constants so that a test can lower it:
-	// a test that had to make a 64 MiB archive would prove nothing more.
+	// reclaim is APP.md §2.3's rule for the in-place compaction the core
+	// runs itself after a commit — 64 MiB of the tail given back, at least
+	// a quarter of what it would have to move, and 64 MiB moved per commit.
+	// It is held here rather than read from the constants so that a test
+	// can lower it: a test that had to make a 64 MiB archive would prove
+	// nothing more.
 	reclaim reclaimRule
 
 	archives map[[16]byte]*openArchive
@@ -145,7 +147,7 @@ func New(d Deps) (*Core, error) {
 		return nil, fmt.Errorf("app: DataDir is required")
 	}
 	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, opening: map[[16]byte]chan struct{}{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
-	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare}
+	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare, budget: reclaimBudget}
 	c.vault.state = StateNone
 	c.vault.warnings = map[Code]bool{}
 	return c, nil

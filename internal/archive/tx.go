@@ -93,6 +93,25 @@ func (tx *Tx) alloc(n uint64, atEnd bool) (extent, error) {
 	return e, tx.assertWritable(e)
 }
 
+// take claims exactly e from the pool: R40's placement, which alloc cannot
+// make — its first fit may lie above the source and its fallback appends,
+// and a move that does not lower the data is not a move. e must lie within
+// one free extent of what this transaction may allocate from; what does not
+// — live data, an extent under quarantine, one a reader holds, or one another
+// move has taken — is ErrStalePlan, since a plan is made against a state and
+// this is not it. The file never grows here. Caller holds a.mu.
+func (tx *Tx) take(e extent) error {
+	if e.Len == 0 {
+		return fmt.Errorf("%w: empty allocation", ErrInternal)
+	}
+	if !tx.pool.contains(e) {
+		return fmt.Errorf("%w: [0x%x, 0x%x) is not free space this transaction may allocate", ErrStalePlan, e.Off, end(e))
+	}
+	tx.pool.remove(e)
+	tx.allocs.insert(e)
+	return tx.assertWritable(e)
+}
+
 // release gives an allocation back: truncated away when it is the tail of
 // the file, into the pool otherwise. Caller holds a.mu.
 func (tx *Tx) release(e extent) {
@@ -724,8 +743,10 @@ func (tx *Tx) abortLocked() {
 
 // Commit publishes the transaction in one superblock flip and returns what
 // the registry needs to know. A transaction that changed nothing commits
-// nothing. After a failure at or after the commit point the Archive is
-// Broken; before it, the transaction is aborted and the Archive usable.
+// nothing — Archive.Publish is the explicit way to commit the index
+// unchanged (R40, reclaim.go). After a failure at or after the commit point
+// the Archive is Broken; before it, the transaction is aborted and the
+// Archive usable.
 //
 // A commit that leaves a free run at the end of the file gives it back: the
 // archive layer issues at once, inside this call, the empty commit R31's

@@ -458,6 +458,15 @@ export enum Code {
     CodeOpCommitting = "op.committing",
     CodeOpRunning = "op.in_progress",
     CodeTooSlow = "op.too_slow_for_session",
+
+    /**
+     * CodeReclaimIncomplete: a move commit of the reclaim the core runs
+     * after an edit failed. The edit itself committed and stays committed;
+     * the reclaim's own operation ends with this, and the next qualifying
+     * commit takes the run up again (APP.md §2.3). "Saved. Reclaiming space
+     * did not finish."
+     */
+    CodeReclaimIncomplete = "archive.reclaim_incomplete",
     CodeParams = "params",
     CodeIO = "io",
 };
@@ -670,9 +679,10 @@ export interface IncomingRecord {
 
 /**
  * OpView is a running or finished long operation. Kind is add | replace |
- * extract | compact | reclaim | verify | rotate; reclaim is the compaction
- * the core runs itself after a commit that leaves the free space over
- * APP.md §2.3's thresholds, and the strip shows it as Reclaiming space.
+ * extract | compact | reclaim | verify | rotate; reclaim is the in-place
+ * compaction the core runs itself after a commit, or after the last reader
+ * closes, when the plan would give the file system enough of the tail back
+ * (APP.md §2.3, FORMAT.md R40), and the strip shows it as Reclaiming space.
  */
 export interface OpView {
     "id": string;
@@ -705,6 +715,15 @@ export interface OpView {
      */
     "policy"?: string;
     "destination"?: string;
+
+    /**
+     * Returned is what a reclaim gave the file system back once it ended:
+     * the file's size before the run less its size after, which is what the
+     * page says — "Reclaimed 1.2 GB" — and is never the bytes it moved
+     * (APP.md §2.3). Zero for every other kind, and for a run that ended
+     * before its first commit.
+     */
+    "returned": number;
 }
 
 /**

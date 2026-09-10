@@ -43,9 +43,10 @@ describe("the status strip", () => {
 });
 
 // The free space is worth knowing from the floor of the core's own rule
-// up: below a quarter of the file the core leaves the holes where they
-// are, and the figure is then the only thing that says why the file is
-// bigger than the files inside it (APP.md §2.3).
+// up: the core moves live data down only for a tail worth 64 MiB and a
+// quarter of the move, so a figure over the floor is what it left where
+// it lay, and the only thing that says why the file is bigger than the
+// files inside it (APP.md §2.3, FORMAT.md R40).
 describe("the free space on the strip", () => {
   it("starts at 64 MiB", () => {
     expect(freeSpaceFloor).toBe(64 * 1024 * 1024);

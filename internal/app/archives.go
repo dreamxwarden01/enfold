@@ -73,9 +73,15 @@ type openArchive struct {
 	method      string
 	receiptOwed bool
 	lastSavedAt int64
-	// Preview quiescing for a compaction, whether the user asked for it or
-	// the core did (APP.md §2.3, Reclaiming space).
+	// Preview quiescing for the whole-file compaction the user asked for
+	// (APP.md §2.3). The core's own reclaim never sets it: a move copies an
+	// extent a reader may be reading and retargets nothing (FORMAT.md R40).
 	quiesced bool
+	// reclaiming: a reclaim has been found due and is being planned or
+	// registered (ops.go reclaimIfWorth), so that two commits ending at
+	// once — or a commit and a reader's end — start one run, not two. The
+	// ops map answers for the run from its registration on.
+	reclaiming bool
 }
 
 // owedReceipt is a commit's receipt a lock stranded (APP.md §2.3).
@@ -650,16 +656,27 @@ func (c *Core) settleArchive(oa *openArchive) {
 
 // releaseReader ends one preview reader and closes the archive when that
 // reader was the last thing holding a page the user has left (APP.md §2.3).
+// The last reader of an archive that stays open is where a reclaim is
+// planned again: an extent a reader held was left where it lay for the
+// run, and may move now (§2.3, FORMAT.md R40). A release that lands while
+// an operation of the archive is registered plans nothing here — a run
+// under another operation would only wait on the handle — and is not lost
+// either: that operation's own end plans one (ops.go finishOp).
 func (c *Core) releaseReader(oa *openArchive) {
 	c.mu.Lock()
 	if oa.readers > 0 {
 		oa.readers--
 	}
+	last := oa.readers == 0
 	closed := c.dropIfUnheldLocked(oa)
 	c.mu.Unlock()
 	if closed {
 		c.emitArchivesChanged()
 		c.emitState()
+		return
+	}
+	if last {
+		c.reclaimIfWorth(oa, nil)
 	}
 }
 
@@ -1037,9 +1054,9 @@ func (t *opTx) commit(ctx context.Context) *Error {
 	c.emitArchivesChanged()
 	c.emitState()
 	// The tail of the file came back with the commit itself (FORMAT.md R31
-	// as amended); free space with live data above it is compaction's, and
-	// this is where the core decides that it is worth one (APP.md §2.3).
-	c.reclaimAfterCommit(oa, t.op)
+	// as amended); a hole with live data above it is a move's (R40), and
+	// this is where the core decides that a run is worth it (APP.md §2.3).
+	c.reclaimIfWorth(oa, t.op)
 	return nil
 }
 

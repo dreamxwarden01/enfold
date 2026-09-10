@@ -588,11 +588,12 @@ func (a *Archive) Seq() uint64 {
 // but occupies no data region, so counting folders among the files would make
 // the number mean neither one thing nor the other. Dirs is the directories.
 //
-// The free figure is the published map: what a compaction would give back,
-// which is what the caller's own rule for one is measured against (APP.md
-// §2.3). The tail is not in it — the commit that freed it truncated it away
-// (R31 as amended, trim.go) — and after such a commit nothing is quarantined
-// either, so the number is the allocation pool as well.
+// The free figure is the published map: what a whole-file compaction would
+// give back; what a run of moves would, and whether one is worth it, is
+// PlanReclaim's to say (APP.md §2.3, R40). The tail is not in it — the
+// commit that freed it truncated it away (R31 as amended, trim.go) — and
+// after such a commit nothing is quarantined either, so the number is the
+// allocation pool as well.
 func (a *Archive) Stat() (size uint64, files int, free uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

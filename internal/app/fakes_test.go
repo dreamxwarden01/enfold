@@ -656,7 +656,7 @@ type harness struct {
 	rec       *recorder
 	cards     *fakeCards
 	// The core's own log, kept so that a test can look for a line the core
-	// owes — a reclaim skipped under a lock says so and nothing else does.
+	// owes and nothing else says.
 	logMu sync.Mutex
 	logs  []string
 }

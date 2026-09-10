@@ -268,7 +268,7 @@
     <p>This way in stops working at once. The vault refuses if fewer than two independent ways in would remain.</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (removing = false)}>Cancel</button>
-      <button type="button" class="btn accent" onclick={() => { removing = false; void begin(Keys.RemoveSlot(sel.recipientId)); }}>Remove</button>
+      <button type="button" class="btn danger-fill" onclick={() => { removing = false; void begin(Keys.RemoveSlot(sel.recipientId)); }}>Remove</button>
     {/snippet}
   </Dialog>
 {/if}

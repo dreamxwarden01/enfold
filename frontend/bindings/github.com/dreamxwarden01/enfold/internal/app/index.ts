@@ -16,6 +16,7 @@ export type {
     Crumb,
     Difference,
     EntangledState,
+    ExistingFile,
     FileInfo,
     FileOutcome,
     FileRow,

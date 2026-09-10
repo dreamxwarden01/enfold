@@ -101,6 +101,21 @@ export function previewKind(name: string): PreviewKind {
   return "none";
 }
 
+// fileIcon is the sprite symbol a row wears: the five kinds the preview
+// knows by extension, a folder, and a plain file for everything else. The
+// file list and the conflict dialog's compare list draw from the one rule
+// (APP.md §6).
+export function fileIcon(name: string, isDir = false): string {
+  if (isDir) return "i-folder";
+  switch (previewKind(name)) {
+    case "image": return "i-image";
+    case "video": return "i-video";
+    case "audio": return "i-audio";
+    case "text": return "i-doc";
+  }
+  return "i-file";
+}
+
 export function storageLabel(storage: string, savedPercent: number): string {
   switch (storage) {
     case "raw":

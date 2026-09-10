@@ -245,8 +245,10 @@ type ArchivesChanged struct {
 }
 
 // ArchiveStat is the open archive's status strip. There is no Dirty, no
-// CapAt and no SessionAlive since 2026-09-09: every operation is its own
-// transaction, so the archive is clean between them (APP.md §2.3).
+// CapAt and no SessionAlive since 2026-09-09 — every operation is its own
+// transaction, so the archive is clean between them — and no ExpiresAt since
+// 2026-09-10: an open archive has no timeout of its own, so there is no
+// deadline to show (APP.md §2.3, DESIGN.md §10).
 type ArchiveStat struct {
 	Seq   uint64 `json:"seq"`
 	ID    string `json:"id"`
@@ -261,7 +263,6 @@ type ArchiveStat struct {
 	KeyVersion   int    `json:"keyVersion"`
 	LastSavedAt  int64  `json:"lastSavedAt"`
 	State        string `json:"state"`
-	ExpiresAt    int64  `json:"expiresAt"` // the archive's own idle deadline
 	ReceiptOwed  bool   `json:"receiptOwed"`
 	CopyMismatch bool   `json:"copyMismatch"` // the file is not the copy the vault last saw
 }
@@ -316,12 +317,39 @@ type Collision struct {
 // directory's outcome from a file's: created (a directory record made) and
 // entered (an existing one descended into) are a directory's, added and
 // replaced a file's (APP.md §3).
+//
+// ID, Size and ModifiedAt are the archive copy's — the record's id as every
+// other view spells it (32 lowercase hex digits), its plaintext size and its
+// modified_at — set on every extract outcome, where the record is known
+// before the first byte, and on an add's or a replace's where they are known
+// as the item is written; zero where they are not. They are what lets the
+// page re-issue an extract for the conflicts it was told about, and draw the
+// compare list's archive side, without walking the tree (APP.md §3).
 type FileOutcome struct {
 	Path    string `json:"path"`
 	Name    string `json:"name"`
 	IsDir   bool   `json:"isDir"`
-	Outcome string `json:"outcome"` // added | replaced | created | entered | skipped | extracted | failed
+	Outcome string `json:"outcome"` // added | replaced | created | entered | skipped | extracted | conflict | failed
 	Code    Code   `json:"code,omitempty"`
+	// ID is the record's id, empty where the outcome has none yet (a source
+	// an add refused or skipped, a folder it could not make).
+	ID         string `json:"id,omitempty"`
+	Size       uint64 `json:"size"`       // the archive copy's plaintext size; 0 for a directory
+	ModifiedAt int64  `json:"modifiedAt"` // the archive copy's modified_at
+	// Existing is the file that was in the way, on the conflict outcome of an
+	// extract with the ask policy and on nothing else (APP.md §3, ruled
+	// 2026-09-10): what the page shows in its Replace / Skip / Compare
+	// dialogs before it re-issues the extract for the ids the user chose.
+	Existing *ExistingFile `json:"existing,omitempty"`
+}
+
+// ExistingFile is the file already in the destination, as a stat taken after
+// the collision was seen — by the cheap pre-check or by the exclusive
+// create's refusal — says it. The stat decides nothing: nothing is ever
+// placed over a file on a stat's word (APP.md §3).
+type ExistingFile struct {
+	Size       uint64 `json:"size"`
+	ModifiedAt int64  `json:"modifiedAt"`
 }
 
 // OpView is a running or finished long operation. Kind is add | replace |
@@ -345,6 +373,14 @@ type OpView struct {
 	Finished  bool          `json:"finished"`
 	Error     Code          `json:"error,omitempty"`
 	Results   []FileOutcome `json:"results,omitempty"`
+	// Policy and Destination are an extract's — replace | skip | rename | ask,
+	// and the folder it writes under — and empty for every other kind, so
+	// that the conflict question is derived from the operation itself in the
+	// store: it survives the page's remount across the lock scene and cannot
+	// be lost to a race between the call's return and the operation's end
+	// (APP.md §3).
+	Policy      string `json:"policy,omitempty"`
+	Destination string `json:"destination,omitempty"`
 }
 
 // SlotBrief names one recovery slot of an incoming file, so that a dialog
@@ -388,20 +424,20 @@ type Settings struct {
 	RecoveryRecordPct int    `json:"recoveryRecordPct"`
 	DictionaryBelow   int64  `json:"dictionaryBelow"`
 	// LastArchiveFolder is where the last archive was created, for the New
-	// archive dialog (APP.md §6), and LastExtractFolder is where the last
-	// extraction went, for the extract dialog's destination (§3). Both are
-	// read-only: Set ignores them, since only a create and an extract write
-	// them.
+	// archive dialog (APP.md §6): read-only, since only a create writes it.
+	// An extract's destination is not remembered — the page prefills it from
+	// the archive's own folder (§3, ruled 2026-09-10).
 	LastArchiveFolder  string `json:"lastArchiveFolder"`
-	LastExtractFolder  string `json:"lastExtractFolder"`
 	IdleMinutes        int    `json:"idleMinutes"`     // from the registry; 0 = default
 	AbsoluteMinutes    int    `json:"absoluteMinutes"` // from the registry; 0 = default
 	TimeoutsFromVault  bool   `json:"timeoutsFromVault"`
 	TimeoutsAdjustable bool   `json:"timeoutsAdjustable"` // only while unlocked
 }
 
-// Events the core emits. There is no archive.expiring since 2026-09-09: an
-// archive is clean between operations, so its idle clock simply closes it
+// Events the core emits. There is no archive.expiring since 2026-09-09 — an
+// archive is clean between operations, so nothing was ever asked before a
+// close — and nothing to expire at all since 2026-09-10: an open archive has
+// no timeout of its own, and archives.changed is what says one has closed
 // (APP.md §2.3, DESIGN.md §10).
 const (
 	EventVaultState      = "vault.state"

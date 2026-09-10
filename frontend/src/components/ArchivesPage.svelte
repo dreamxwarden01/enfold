@@ -305,12 +305,17 @@
     try {
       await Archives.Close(id);
     } catch (e) {
-      fail(e);
-      return false;
+      // An archive that has closed itself since the row was read — a page
+      // left it, and nothing was holding it — is already where this wanted
+      // it (APP.md §2.3).
+      if (errorOf(e).code !== Code.CodeArchiveNotOpen) {
+        fail(e);
+        return false;
+      }
     }
     // The Archive page may still be holding this one as its current
-    // archive: it has no handle any more.
-    if (store.current === id) store.leaveArchive();
+    // archive: it has no handle any more, so there is nothing to leave.
+    if (store.current === id) store.leaveArchive(true);
     await store.refreshArchives();
     return true;
   }
@@ -328,6 +333,10 @@
       await store.loadDetails(want);
       const a = store.archives.find((x) => x.id === want);
       if (!a) return;
+      // The Archive page left it, which closes it; a preview body still in
+      // flight leaves it draining, and the record's own close is what ends
+      // that before the consent screen (APP.md §2.3, §13).
+      if (a.open && !(await closeFirst(want))) return;
       const d = store.details;
       del = { id: a.id, name: a.name, path: a.path, createdAt: d && d.archiveId === want ? d.createdAt : 0, mode: "delete" };
     })();
@@ -357,6 +366,20 @@
     }
   }
 
+  // What stops a record-level operation, said on the button itself. The
+  // archive being open is never one of them since 2026-09-10: *Verify*,
+  // *Compact* and *Rotate key* unwrap the key with the session's KWK, open
+  // the file for the operation and close it again, so the page never asks
+  // for the archive to be opened first (APP.md §2.3). Only the vault does:
+  // while it is locked they are disabled with its own reason.
+  const opReason = $derived(
+    !unlocked
+      ? codeText(Code.CodeVaultLocked)
+      : tampered
+        ? warningCopy(Code.CodeVaultTampered, st?.tamperedReason)
+        : undefined,
+  );
+
   const foreign = $derived(!!sel && foreignPath(sel.path));
   const purge = $derived(sel ? purgeAfter(sel.forgottenAt) : 0);
 
@@ -378,9 +401,12 @@
     <button type="button" class="btn accent" disabled={!sel || (!unlocked && !sel.open)} onclick={() => sel && store.openArchive(sel.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
     <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive</button>
     <div class="sep"></div>
-    <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} onclick={() => sel && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(sel.id) })}>Compact</button>
-    <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} onclick={() => sel && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(sel.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key</button>
-    <button type="button" class="btn subtle" disabled={!sel || !unlocked} onclick={() => sel && run(Archives.Verify(sel.id))}><svg class="i i-14"><use href="#i-check" /></svg>Verify</button>
+    <!-- Never gated on the archive being open (APP.md §2.3, ruled
+         2026-09-10): the core opens it for the operation and closes it
+         again, so there is no "open the archive first". -->
+    <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} title={opReason} onclick={() => sel && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(sel.id) })}>Compact</button>
+    <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} title={opReason} onclick={() => sel && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(sel.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key</button>
+    <button type="button" class="btn subtle" disabled={!sel || !unlocked} title={!unlocked ? codeText(Code.CodeVaultLocked) : undefined} onclick={() => sel && run(Archives.Verify(sel.id))}><svg class="i i-14"><use href="#i-check" /></svg>Verify</button>
     <button type="button" class="btn subtle" disabled={!sel || !unlocked} onclick={() => sel && run(sel.hidden ? Archives.Unhide(sel.id) : Archives.Hide(sel.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{sel?.hidden ? "Unhide" : "Hide"}</button>
     <div class="sep"></div>
     <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => run(Archives.CheckFiles())}>Check files</button>

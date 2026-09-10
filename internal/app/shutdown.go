@@ -39,6 +39,10 @@ func (c *Core) ResolveForShutdown(budget time.Duration) {
 	var list []*openArchive
 	var running []*op
 	for _, oa := range c.archives {
+		// The process is ending, so every page is left with it (APP.md
+		// §2.3): a handle whose operation does not end within the budget is
+		// then closed by that operation's own end rather than kept.
+		oa.mounted = false
 		list = append(list, oa)
 		running = append(running, c.cancelOpsLocked(oa.id)...)
 	}

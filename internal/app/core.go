@@ -97,6 +97,11 @@ type Core struct {
 	reclaim reclaimRule
 
 	archives map[[16]byte]*openArchive
+	// opening are the archives an openArchiveFor is opening right now, each
+	// with the channel it closes once the handle is installed or the open
+	// has failed: a second opener waits on it and joins the handle, so that
+	// the archive layer sees one Open per path (APP.md §2.3).
+	opening map[[16]byte]chan struct{}
 	// deleting are the records a Delete has claimed: it releases the state
 	// mutex for the folder read and the removal, and nothing may open or
 	// forget the record while it does (APP.md §13).
@@ -139,7 +144,7 @@ func New(d Deps) (*Core, error) {
 	if d.DataDir == "" {
 		return nil, fmt.Errorf("app: DataDir is required")
 	}
-	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
+	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, opening: map[[16]byte]chan struct{}{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
 	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare}
 	c.vault.state = StateNone
 	c.vault.warnings = map[Code]bool{}

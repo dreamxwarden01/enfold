@@ -5,7 +5,7 @@ import { codeText } from "./strings";
 import { hasTrouble, summaryLine, tally, troubles } from "./results";
 
 function out(o: Partial<FileOutcome>): FileOutcome {
-  return { path: "", name: "", isDir: false, outcome: "added", ...o };
+  return { path: "", name: "", isDir: false, outcome: "added", size: 0, modifiedAt: 0, ...o };
 }
 
 const results: FileOutcome[] = [

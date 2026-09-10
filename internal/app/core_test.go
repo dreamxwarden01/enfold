@@ -625,7 +625,13 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 }
 
-func TestArchiveIdleClockClosesIt(t *testing.T) {
+// An open archive has no timeout of its own (APP.md §2.3, DESIGN.md §10,
+// ruled 2026-09-10): it stays open while its page is shown, vault locked or
+// not, and a lock locks the keystore and not an archive already open. What
+// stays usable after the lock is §2.3's list — Page, PreviewText, and the
+// operations, each committing and owing its receipt — and no amount of time
+// takes it away.
+func TestAnOpenArchiveHasNoTimeoutOfItsOwn(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id, e := h.c.CreateArchive(filepath.Join(h.dir, "a.enf"), "A", compressionNormal)
@@ -635,41 +641,52 @@ func TestArchiveIdleClockClosesIt(t *testing.T) {
 	if _, e := h.c.OpenArchive(id); e != nil {
 		t.Fatal(e)
 	}
-	// Idle: the archive closes itself, silently, after the session's idle
-	// span (the timers fire inside Advance). There is nothing to ask about —
-	// an archive is clean between operations (APP.md §2.3, DESIGN.md §10).
-	h.clk.Advance(defaultIdle + time.Second)
-	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
-		t.Fatalf("idle archive still open: %v", e)
-	}
-	h.rec.waitState(t, StateLocked) // the session's own idle clock fired too
-
-	// An archive worked on is not idle: the clock is re-armed by every
-	// operation, and what was committed is there after the close.
-	h.unlockWithPassword()
-	if _, e := h.c.OpenArchive(id); e != nil {
-		t.Fatal(e)
-	}
 	f := filepath.Join(h.dir, "f.txt")
-	os.WriteFile(f, []byte("x"), 0o600)
+	os.WriteFile(f, []byte("kept"), 0o600)
 	opID, _ := h.c.AddFiles(id, rootID, []string{f}, PolicySkip)
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
 		t.Fatalf("add: %+v", o)
 	}
-	st, _ := h.c.Stat(id)
-	if st.ExpiresAt != h.clk.Now().Add(defaultIdle).Unix() {
-		t.Fatalf("the operation did not re-arm the clock: %+v", st)
-	}
+
+	// Well past the session's own idle span, which the archive used to
+	// borrow: the session locks and the archive does not close.
 	h.clk.Advance(defaultIdle + time.Second)
+	h.rec.waitState(t, StateLocked)
+	for i := 0; i < 6; i++ {
+		h.clk.Advance(defaultIdle + time.Second)
+	}
+	st, e := h.c.Stat(id)
+	if e != nil {
+		t.Fatalf("the archive was closed by a clock of its own: %v", e)
+	}
+	if st.Files != 1 {
+		t.Fatalf("stat after the lock: %+v", st)
+	}
+	// And usable: the page, a preview, and an operation that commits and
+	// owes its receipt until the next unlock.
+	row := h.row(t, id, rootID, "f.txt")
+	if text, _, e := h.c.PreviewText(id, row.ID, 64); e != nil || text != "kept" {
+		t.Fatalf("preview under the lock: %q %v", text, e)
+	}
+	if _, e := h.c.CreateFolder(id, rootID, "after"); e != nil {
+		t.Fatalf("create folder under the lock: %v", e)
+	}
+	if st := h.stat(t, id); !st.ReceiptOwed || st.Records != 2 {
+		t.Fatalf("the commit under the lock: %+v", st)
+	}
+	// Leaving the page is what closes it, and what was committed is there.
+	if e := h.c.LeaveArchive(id); e != nil {
+		t.Fatal(e)
+	}
 	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
-		t.Fatalf("the idle clock did not close the archive: %v", e)
+		t.Fatalf("the page was left and the archive stayed open: %v", e)
 	}
 	h.unlockWithPassword()
 	if _, e := h.c.OpenArchive(id); e != nil {
 		t.Fatal(e)
 	}
-	if st, _ := h.c.Stat(id); st.Files != 1 {
-		t.Fatalf("the committed add did not survive the close: %+v", st)
+	if st, _ := h.c.Stat(id); st.Files != 1 || st.Records != 2 {
+		t.Fatalf("the committed work did not survive the close: %+v", st)
 	}
 }
 

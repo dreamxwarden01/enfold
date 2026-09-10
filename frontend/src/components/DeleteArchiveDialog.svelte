@@ -187,7 +187,9 @@
   {#snippet actions()}
     {#if phase === "consent" || phase === "busy"}
       <button type="button" class="btn" disabled={phase === "busy"} onclick={onclose}>Cancel</button>
-      <button type="button" class="btn accent" disabled={phase === "busy"} onclick={go}>{phase === "busy" ? "Working…" : mode === "forget" ? "Forget the key" : "Delete archive"}</button>
+      <!-- The button that carries the destructive act out is filled red
+           (APP.md §6, ruled 2026-09-10), here and in every confirmation. -->
+      <button type="button" class="btn danger-fill" disabled={phase === "busy"} onclick={go}>{phase === "busy" ? "Working…" : mode === "forget" ? "Forget the key" : "Delete archive"}</button>
     {:else if phase === "done"}
       <button type="button" class="btn accent" onclick={onclose}>Close</button>
     {:else if phase === "mismatch"}
@@ -196,7 +198,7 @@
       <button type="button" class="btn accent" onclick={() => (phase = "mismatch-confirm")}>Forget the key only…</button>
     {:else if phase === "mismatch-confirm"}
       <button type="button" class="btn" onclick={() => (phase = "mismatch")}>Go back</button>
-      <button type="button" class="btn accent" onclick={() => void forget()}>Forget the key</button>
+      <button type="button" class="btn danger-fill" onclick={() => void forget()}>Forget the key</button>
     {:else if phase === "unreachable"}
       <button type="button" class="btn" onclick={onclose}>Close</button>
       <button type="button" class="btn" onclick={locate}>Locate…</button>

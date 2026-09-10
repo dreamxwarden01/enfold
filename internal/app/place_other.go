@@ -27,3 +27,11 @@ func placeExclusive(tmp, path string) error {
 	_ = os.Remove(tmp)
 	return nil
 }
+
+// placeReplace moves tmp onto path over whatever is there, in one operation
+// — os.Rename, which replaces atomically here — so that the old file is
+// never unlinked first (APP.md §3's replace). Enfold ships on Windows
+// (SCOPE.md); this keeps the package buildable and testable elsewhere.
+func placeReplace(tmp, path string) error {
+	return os.Rename(tmp, path)
+}

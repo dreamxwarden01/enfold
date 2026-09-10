@@ -40,6 +40,9 @@ type op struct {
 	phase  atomic.Value // string
 	cancel context.CancelFunc
 	over   chan struct{}
+	// policy and destination are an extract's, fixed before the operation
+	// is registered and empty for every other kind (OpView.Policy).
+	policy, destination string
 	// committing is set once the writing is done and the commit has been
 	// entered: from there the operation is being saved under a context no
 	// cancel reaches, and CancelOp answers op.committing rather than
@@ -58,6 +61,7 @@ func (o *op) view() OpView {
 		ID: o.id, Kind: o.kind, ArchiveID: o.archiveID,
 		Done: o.done.Load(), Total: o.total.Load(), Items: int(o.items.Load()),
 		StartedAt: o.startedAt.Unix(), Finished: o.finished, Results: o.results,
+		Policy: o.policy, Destination: o.destination,
 	}
 	if p, ok := o.phase.Load().(string); ok {
 		v.Phase = p
@@ -136,9 +140,19 @@ func (r *countingReaderAt) advance(off, n int64) {
 
 // startOp registers an operation and runs fn on its own goroutine.
 func (c *Core) startOp(kind, archiveID string, fn func(ctx context.Context, o *op) ([]FileOutcome, error)) string {
+	return c.startOpWith(kind, archiveID, nil, fn)
+}
+
+// startOpWith is startOp with the operation described before it is
+// registered: describe fills in what the view carries from the first event
+// on — an extract's policy and destination — and is nil for the rest.
+func (c *Core) startOpWith(kind, archiveID string, describe func(o *op), fn func(ctx context.Context, o *op) ([]FileOutcome, error)) string {
 	ctx, cancel := context.WithCancel(context.Background())
 	o := &op{id: randomID(), kind: kind, archiveID: archiveID, startedAt: c.now(), cancel: cancel, over: make(chan struct{}), c: c}
 	o.phase.Store("starting")
+	if describe != nil {
+		describe(o)
+	}
 	c.mu.Lock()
 	c.ops[o.id] = o
 	c.mu.Unlock()
@@ -171,9 +185,22 @@ func (c *Core) finishOp(o *op, results []FileOutcome, e *Error) {
 	}
 	o.finished, o.results, o.err = true, results, e
 	v := o.view()
+	// The operation was one of the things holding the archive open. With it
+	// over, an archive whose page has been left — or one this operation
+	// opened for itself, the page never having been there — is closed and its
+	// keys go (APP.md §2.3).
+	closed := false
+	if aid, ok := parseID(o.archiveID); ok {
+		if oa := c.archives[aid]; oa != nil {
+			closed = c.dropIfUnheldLocked(oa)
+		}
+	}
 	c.mu.Unlock()
 	close(o.over)
 	c.emit(EventOpDone, v)
+	if closed {
+		c.emitArchivesChanged()
+	}
 	c.emitState()
 	// Keep finished ops for a while so a rebuilt window sees the outcome.
 	c.deps.Clock.AfterFunc(5*time.Minute, func() {
@@ -665,7 +692,10 @@ func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, tx *archive.
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		res := FileOutcome{Path: it.node.src, Name: it.joined, IsDir: it.node.isDir}
+		res := FileOutcome{Path: it.node.src, Name: it.joined, IsDir: it.node.isDir, ModifiedAt: it.node.modifiedAt}
+		if !it.node.isDir {
+			res.Size = uint64(max64(it.node.size, 0))
+		}
 		parent := it.parentID
 		if it.parentPlan != nil {
 			parent = it.parentPlan.id
@@ -689,6 +719,9 @@ func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, tx *archive.
 				it.written = it.existingPlan.written
 			}
 			res.Outcome = "entered"
+			if it.written {
+				res.ID = hexID(it.id)
+			}
 			*results = append(*results, res)
 		case "create":
 			info, err := tx.AddDir(parent, it.name, it.node.modifiedAt)
@@ -698,7 +731,7 @@ func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, tx *archive.
 				continue // nothing beneath a folder that was not made
 			}
 			it.id, it.written, *wrote = info.ID, true, true
-			res.Outcome = "created"
+			res.Outcome, res.ID = "created", hexID(info.ID)
 			*results = append(*results, res)
 		case "add", "replace":
 			err := c.addFile(ctx, o, tx, it, parent, &res, *done, total)
@@ -760,6 +793,7 @@ func (c *Core) addFile(ctx context.Context, o *op, tx *archive.Tx, it *planItem,
 		return nil
 	}
 	it.id, it.written = info.ID, true
+	res.ID = hexID(info.ID)
 	if it.action == "replace" {
 		res.Outcome = "replaced"
 	} else {
@@ -837,16 +871,23 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 			return nil, e
 		}
 		o.progress(total, total, "replacing")
-		return []FileOutcome{{Name: name, Path: src, Outcome: "replaced"}}, nil
+		return []FileOutcome{{Name: name, Path: src, Outcome: "replaced", ID: fileID, Size: total, ModifiedAt: st.ModTime().Unix()}}, nil
 	}), nil
 }
 
-// ExtractPolicy is what happens when a destination file exists.
+// ExtractPolicy is what happens when a destination file exists (APP.md §3,
+// ruled 2026-09-10). replace is the default — what every archiver's wizard
+// does — and ask is the drag-and-drop shape: what collides with nothing is
+// extracted and every collision comes back as an outcome for the page to ask
+// about, which then re-issues Extract for the chosen ids with replace or
+// rename. Anything else is params.
 type ExtractPolicy string
 
 const (
-	ExtractSkip   ExtractPolicy = "skip"
-	ExtractRename ExtractPolicy = "rename"
+	ExtractReplace ExtractPolicy = "replace"
+	ExtractSkip    ExtractPolicy = "skip"
+	ExtractRename  ExtractPolicy = "rename"
+	ExtractAsk     ExtractPolicy = "ask"
 )
 
 // extractItem is one record of the plan, resolved before the first byte.
@@ -868,9 +909,11 @@ type extractItem struct {
 // because its record is live, never because a file needed a parent (DESIGN
 // trap 31): an empty folder extracts as an empty folder. The all-zero id
 // among recordIDs is the root and extracts everything; an empty recordIDs is
-// params, never everything. The destination is created if it does not exist
-// and remembered as settings.json's lastExtractFolder, which the extract
-// dialog prefills next time.
+// params, never everything.
+//
+// The destination is the page's to decide — it prefills the dialog by the
+// rule of §3, and the core keeps no folder from the last time (ruled
+// 2026-09-10) — and is created here if it does not exist.
 func (c *Core) Extract(id string, recordIDs []string, dir string, policy ExtractPolicy) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
@@ -895,11 +938,19 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		}
 		ids = append(ids, rid)
 	}
-	if policy == "" {
-		policy = ExtractSkip
+	switch policy {
+	case "":
+		policy = ExtractReplace // the wizard default of every archiver (APP.md §3)
+	case ExtractReplace, ExtractSkip, ExtractRename, ExtractAsk:
+	default:
+		return "", coded(CodeParams)
 	}
 	root := filepath.Clean(dir)
-	return c.startOp("extract", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
+	// The policy and the destination ride on the operation from its first
+	// event (OpView.Policy, Destination): the conflict question is derived
+	// from the operation itself, never from the call's return (APP.md §3).
+	describe := func(o *op) { o.policy, o.destination = string(policy), root }
+	return c.startOpWith("extract", id, describe, func(ctx context.Context, o *op) ([]FileOutcome, error) {
 		c.mu.Lock()
 		items, e := extractPlan(oa.merge(), ids, all)
 		c.mu.Unlock()
@@ -940,7 +991,6 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		if err := os.MkdirAll(root, 0o700); err != nil {
 			return nil, err
 		}
-		c.rememberFolder(extractFolder, root)
 		results := make([]FileOutcome, 0, len(items))
 		at := make(map[[16]byte]int, len(items))
 		gone := map[[16]byte]bool{}
@@ -952,7 +1002,13 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 			if ctx.Err() != nil {
 				return results, ctx.Err()
 			}
-			res := FileOutcome{Name: it.path, Path: it.dst, IsDir: it.isDir}
+			// Every outcome names the record and carries the archive copy's
+			// size and date — known before the first byte — so a conflict
+			// can be re-issued by id and compared without walking the tree.
+			res := FileOutcome{Name: it.path, Path: it.dst, IsDir: it.isDir, ID: hexID(it.id), ModifiedAt: it.modifiedAt}
+			if !it.isDir {
+				res.Size = it.size
+			}
 			at[it.id] = len(results)
 			if gone[it.parentID] {
 				// A directory that cannot be created takes its subtree with
@@ -980,16 +1036,18 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 				results = append(results, res)
 				continue
 			}
+			// The operation itself holds the archive open (finishOp is what
+			// closes one nothing holds), so this reader is counted for the
+			// compaction's drain alone.
 			c.mu.Lock()
 			oa.readers++
-			c.touchArchiveLocked(oa)
 			c.mu.Unlock()
 			base := done
 			count := func(written uint64) { o.progress(base+written, total, "extracting") }
-			err := extractFile(ctx, oa.a, it.id, it.dst, count)
+			err := extractFile(ctx, oa.a, it.id, it.dst, policy == ExtractReplace, count)
 			for n := 2; err != nil && errors.Is(err, os.ErrExist) && policy == ExtractRename && n < 1000; n++ {
 				res.Path = renamed(it.dst, n)
-				err = extractFile(ctx, oa.a, it.id, res.Path, count)
+				err = extractFile(ctx, oa.a, it.id, res.Path, false, count)
 			}
 			c.mu.Lock()
 			oa.readers--
@@ -997,6 +1055,15 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 			switch {
 			case err == nil:
 				res.Outcome = "extracted"
+			case errors.Is(err, os.ErrExist) && policy == ExtractAsk:
+				// The collision is the page's to resolve: it asks and
+				// re-issues Extract for the chosen ids with replace or
+				// rename. Existing is a stat taken after the collision was
+				// seen — by the cheap pre-check or by the exclusive create's
+				// refusal — and decides nothing: nothing is ever placed over
+				// a file on a stat's word (APP.md §3). A file that went in
+				// between leaves the outcome with none.
+				res.Outcome, res.Existing = "conflict", existingFile(res.Path)
 			case errors.Is(err, os.ErrExist):
 				res.Outcome = "skipped"
 			case ctx.Err() != nil:
@@ -1103,16 +1170,20 @@ func (c *Core) recordReceiptLocked(oa *openArchive, rec archive.Receipt, hash *[
 	delete(c.owed, oa.id)
 }
 
-// Verify re-hashes the file and refreshes the registry's hash (R36).
+// Verify re-hashes the file and refreshes the registry's hash (R36). Like
+// every operation of the Archives page it never asks for the archive to be
+// opened first (APP.md §2.3): a closed one is opened for the operation and
+// closed again when it ends.
 func (c *Core) Verify(id string) (string, *Error) {
 	if e := c.refuseIfForgotten(id); e != nil {
 		return "", e
 	}
-	oa, e := c.findArchive(id)
+	oa, e := c.acquireForOperation(id)
 	if e != nil {
 		return "", e
 	}
 	return c.startOp("verify", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
+		c.releaseClaim(oa) // the operation is registered: it holds the handle now
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
 		o.progress(0, 1, "hashing")
@@ -1159,25 +1230,28 @@ func (c *Core) Verify(id string) (string, *Error) {
 	}), nil
 }
 
-// Compact rewrites the archive without free space (APP.md §2.3): refused
-// unless Open, gated on the session, and it waits its turn on the handle
+// Compact rewrites the archive without free space (APP.md §2.3): the
+// archive is opened for the operation when its page is not open (§2.3, ruled
+// 2026-09-10), gated on the session, and it waits its turn on the handle
 // like every other operation; previews are quiesced; the handle is finished
 // by the call and the path reopened.
 func (c *Core) Compact(id string) (string, *Error) {
 	if e := c.refuseIfForgotten(id); e != nil {
 		return "", e
 	}
-	oa, e := c.findArchive(id)
+	oa, e := c.acquireForOperation(id)
 	if e != nil {
 		return "", e
 	}
 	c.mu.Lock()
 	if _, e := c.sessionLocked(); e != nil {
 		c.mu.Unlock()
+		c.releaseClaim(oa) // no operation to run: a handle opened for one goes
 		return "", coded(CodeNeedsUnlock)
 	}
 	if !c.compactionFitsLocked(oa) {
 		c.mu.Unlock()
+		c.releaseClaim(oa)
 		return "", coded(CodeTooSlow)
 	}
 	oa.quiesced = true
@@ -1201,9 +1275,10 @@ func (c *Core) compactionFitsLocked(oa *openArchive) bool {
 // and in what a failure leaves: a reclaim reopens then too, since the user
 // never asked for it and §2.3 leaves the archive untouched until it finishes,
 // while a Compact they did ask for ends closed. Caller has set oa.quiesced
-// under the state mutex.
+// and taken a claim on the handle under the state mutex.
 func (c *Core) startCompaction(oa *openArchive, kind string) string {
 	return c.startOp(kind, hexID(oa.id), func(ctx context.Context, o *op) ([]FileOutcome, error) {
+		c.releaseClaim(oa) // the operation is registered: it holds the handle now
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
 		// Drain previews: wait for outstanding readers, bounded.
@@ -1239,6 +1314,11 @@ func (c *Core) startCompaction(oa *openArchive, kind string) string {
 		// after a successful compaction) so that a failure never leaves the
 		// file locked, and forgotten.
 		c.mu.Lock()
+		// Whether the page holds this archive is read here and not before:
+		// a page that opened it while the compaction ran joined this handle,
+		// and the reopen below carries that on. A Compact of the Archives
+		// page reopens unmounted and finishOp closes it (APP.md §2.3).
+		mounted := oa.mounted
 		c.closeArchiveLocked(oa)
 		if err == nil {
 			// The receipt is recorded (or owed) now, before the reopen: a
@@ -1257,14 +1337,16 @@ func (c *Core) startCompaction(oa *openArchive, kind string) string {
 			// it already handles. A Compact the user asked for is left as it
 			// was: they chose to leave.
 			if kind == "reclaim" {
-				c.OpenArchive(hexID(oa.id))
+				c.openArchiveFor(hexID(oa.id), mounted)
 			}
 			c.emitArchivesChanged()
 			c.emitState()
 			return nil, err
 		}
-		// Reopen for the page.
-		if _, e := c.OpenArchive(hexID(oa.id)); e != nil {
+		// Reopen — for the page when the page is there, and as the core's own
+		// handle when this Compact was the Archives page's, which finishOp
+		// then closes (APP.md §2.3).
+		if _, e := c.openArchiveFor(hexID(oa.id), mounted); e != nil {
 			return nil, e
 		}
 		o.progress(1, 1, "compacted")
@@ -1319,6 +1401,7 @@ func (c *Core) reclaimAfterCommit(oa *openArchive, self *op) {
 		return
 	}
 	oa.quiesced = true
+	oa.claims++ // as any other start of a compaction: released once it is registered
 	c.mu.Unlock()
 	c.log("archive %s: reclaiming %d bytes of free space in %d", oa.name, free, size)
 	c.startCompaction(oa, "reclaim")
@@ -1346,22 +1429,25 @@ func (c *Core) reclaimDueLocked(oa *openArchive, self *op) bool {
 }
 
 // RotateKey is registry-first (R33, trap 21): the new version published,
-// the old retired, then the archive adopts it, then the receipt.
+// the old retired, then the archive adopts it, then the receipt. The
+// Archives page never asks for the archive to be opened first (APP.md §2.3).
 func (c *Core) RotateKey(id string) (string, *Error) {
 	if e := c.refuseIfForgotten(id); e != nil {
 		return "", e
 	}
-	oa, e := c.findArchive(id)
+	oa, e := c.acquireForOperation(id)
 	if e != nil {
 		return "", e
 	}
 	c.mu.Lock()
 	if _, e := c.sessionLocked(); e != nil {
 		c.mu.Unlock()
+		c.releaseClaim(oa) // no operation to run: a handle opened for one goes
 		return "", coded(CodeNeedsUnlock)
 	}
 	c.mu.Unlock()
 	return c.startOp("rotate", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
+		c.releaseClaim(oa) // the operation is registered: it holds the handle now
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
 		var key [32]byte
@@ -1516,41 +1602,29 @@ func (c *Core) CreateArchive(p, name, method string) (string, *Error) {
 		os.Remove(p)
 		return "", e
 	}
-	c.rememberFolder(archiveFolder, filepath.Dir(p))
+	c.rememberArchiveFolder(filepath.Dir(p))
 	c.emitArchivesChanged()
 	return hexID(id), nil
 }
 
-// rememberFolder records one of the settings file's two remembered folders —
-// where the last archive was made, where the last extraction went — so that
-// the next dialog opens there (APP.md §3's lastExtractFolder, §6's
-// lastArchiveFolder). A convenience: a folder that could not be written down
-// is logged and nothing else, and the operation stands either way.
-func (c *Core) rememberFolder(which folderKind, dir string) {
+// rememberArchiveFolder records where the last archive was made, so that the
+// next New archive dialog opens there (APP.md §6's lastArchiveFolder — the
+// one remembered folder left, an extract's destination having become the
+// page's own rule on 2026-09-10). A convenience: a folder that could not be
+// written down is logged and nothing else, and the create stands either way.
+func (c *Core) rememberArchiveFolder(dir string) {
 	c.mu.Lock()
-	field := &c.settings.LastArchiveFolder
-	if which == extractFolder {
-		field = &c.settings.LastExtractFolder
-	}
-	if *field == dir {
+	if c.settings.LastArchiveFolder == dir {
 		c.mu.Unlock()
 		return
 	}
-	*field = dir
+	c.settings.LastArchiveFolder = dir
 	file := c.settings
 	c.mu.Unlock()
 	if err := saveSettings(c.deps.DataDir, file); err != nil {
-		c.log("settings: recording %s: %v", which, err)
+		c.log("settings: recording the archive folder: %v", err)
 	}
 }
-
-// folderKind names which remembered folder rememberFolder writes.
-type folderKind string
-
-const (
-	archiveFolder folderKind = "the archive folder"
-	extractFolder folderKind = "the extract folder"
-)
 
 // HideArchive and UnhideArchive flip the hidden policy bit.
 func (c *Core) HideArchive(id string, hidden bool) *Error {

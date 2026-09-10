@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hashText, keyId, plural } from "./format";
+import { fileIcon, hashText, keyId, plural } from "./format";
 
 describe("keyId", () => {
   it("groups the first eight hex digits, upper-cased (FORMAT.md §18.4)", () => {
@@ -67,5 +67,26 @@ describe("plural", () => {
   it("takes an irregular plural rather than guessing at one", () => {
     expect(plural(1, "entry", "entries")).toBe("1 entry");
     expect(plural(3, "entry", "entries")).toBe("3 entries");
+  });
+});
+
+// The sprite symbol a row wears, shared by the file list and the conflict
+// dialog's compare list (APP.md §6).
+describe("fileIcon", () => {
+  it("is the folder's, whatever the name says", () => {
+    expect(fileIcon("notes.txt", true)).toBe("i-folder");
+    expect(fileIcon("2024", true)).toBe("i-folder");
+  });
+
+  it("follows the five kinds the preview knows", () => {
+    expect(fileIcon("IMG_7201.jpg")).toBe("i-image");
+    expect(fileIcon("DJI_0042.MP4")).toBe("i-video");
+    expect(fileIcon("song.flac")).toBe("i-audio");
+    expect(fileIcon("trip-notes.md")).toBe("i-doc");
+  });
+
+  it("is a plain file for everything else, a PDF included", () => {
+    expect(fileIcon("itinerary.pdf")).toBe("i-file");
+    expect(fileIcon("noext")).toBe("i-file");
   });
 });

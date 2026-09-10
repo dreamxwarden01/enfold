@@ -23,6 +23,10 @@ export function CheckFiles(): $CancellablePromise<void> {
     return $Call.ByID(118112595);
 }
 
+/**
+ * Close is the kill switch: it closes now, readers or not, dropping the
+ * preview token and failing every in-flight body (APP.md §2.3, §4).
+ */
 export function Close(id: string): $CancellablePromise<void> {
     return $Call.ByID(1388822288, id);
 }
@@ -70,6 +74,16 @@ export function Forget(id: string): $CancellablePromise<void> {
 
 export function Hide(id: string): $CancellablePromise<void> {
     return $Call.ByID(2169725132, id);
+}
+
+/**
+ * Leave is the page leaving an open archive (APP.md §2.3): it closes at once
+ * and its keys go, unless a preview reader still holds it — then it stays
+ * open for the readers alone and closes with the last of them. An archive
+ * that is not open answers nil: it had already been left.
+ */
+export function Leave(id: string): $CancellablePromise<void> {
+    return $Call.ByID(660127987, id);
 }
 
 export function List(showHidden: boolean): $CancellablePromise<app$0.ArchiveSummary[] | null> {

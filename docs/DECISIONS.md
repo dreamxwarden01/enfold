@@ -3351,3 +3351,106 @@ either; and the whole rule assumes an honest `Sync`, now written into R31. Two t
 the crash seam tears and fails writes rather than skipping them, and an interrupted follow-up is
 retried on the same handle. One prompt lesson: telling Codex "do not run any tool" stops it
 reading files; say what it may not do.
+
+## 2026-09-10 — In-place compaction; an open archive has no timeout; extract's destination and its conflicts; the red Delete
+
+The user's third pass. **In place** (asked as "why can't we modify the archive file directly?"):
+a file system cannot cut a hole out of the middle of a file, but a live extent can be moved
+verbatim — same DEK, same nonces, same tags, the chunk AAD naming no offset — into an earlier
+hole by an ordinary commit that updates `data_off` and quarantines the old extent (FORMAT R40).
+Reclaiming space is that, one extent per commit from the front, the tail cut as it comes free,
+cancellable between commits, resumed by the next; the cost is the live bytes after the first
+hole (WinRAR's whole-archive rewrite in the worst case, far less usually), no second file, no
+double space. It runs after any commit that leaves a hole of 64 MiB or more before live data;
+the whole-file rewrite stays as the explicit *Compact*. The auto-reclaim of 2026-09-09 (a
+rewrite above a quarter) is superseded.
+
+**No timeout of the archive's own.** The user: the per-archive idle expiry "cut work off for no
+reason"; an archive should stay open while it is in Enfold's management view, vault locked or
+not; leaving the view closes it at once and destroys the DEKs, unless something is reading it
+over HTTP (a state for the later external-player playback, with its own timeout then, and the
+server bound to 127.0.0.1 and nothing else, written into §4 now); *Close archive* stays as a
+kill switch that drops readers too; and the Archives page's own operations — Verify, Compact,
+Rotate key — never ask the user to open the archive first: while the vault is unlocked they
+unwrap the key with the session's KWK, open for the operation, and close. DESIGN §10's earlier
+rule ("otherwise keep-it-open bypasses the session timeout") is reversed and the reasoning
+recorded there. The locked banner is one plain line.
+
+**Extract.** The destination is prefilled by one rule: *Extract all* → the archive's own folder
+plus a folder named after the archive, created when the extract starts; a selection → the
+archive's own folder, no extra level. The "+ a folder named after the archive" action and
+`lastExtractFolder` are gone. `replace` is the default policy — the wizard default of every
+archiver, and the case the first design forgot — written through the temporary and placed over
+the old file in one move; `ask` is the drag-and-drop shape: extract what collides with nothing,
+then one dialog for one conflict (Replace / Skip / Compare both files) or for many (Replace all /
+Skip all / Let me decide for each file), the compare list after Windows Explorer's — the type's
+icon, *Files from the archive* against *Files already in the destination*, dates and sizes,
+ticks on either side, "Skip N files with the same date and size" at the foot. Drag out of the
+archive does not exist yet; when it does, it is `ask` with no dialog first.
+
+**The Delete button** was the accent's green with red text; it is a filled red button.
+
+**The outside critique** (Codex Astra, read-only, over R40 and the lifetime rules, the same
+day) held up on every anchor it cited and amended both. On R40: the destination is pinned
+*wholly before the source* and never appended (the archive layer's allocator prefers an exact
+fit anywhere and appends otherwise, so it cannot be used unchanged); a file no hole before it
+holds is skipped, not a stop; a commit moves as many extents as fit in a 64 MiB budget rather
+than one — a qualifying hole in front of ten thousand small files would otherwise cost ten
+thousand index rewrites; the trigger measures **bytes the file system gets back**, at least
+64 MiB and a quarter of what must move, instead of the size of a hole, since a hole filled
+behind a file that cannot move returns nothing and a small hole at the head of a huge archive
+is not worth the rewrite; a hole freed by the commit just made is still under R31's quarantine
+and an unchanged transaction publishes nothing, so a run that wants it begins with the empty
+commit that publishes it; an extent a reader holds is left for the run and the plan is
+re-made when the last reader closes; a cancel is honoured per chunk of the copy, as the
+whole-file Compact already does, so *Close archive* is never behind a 100 GB copy; the free
+map is always appended and the index sometimes, so a move commit can leave the file larger
+until the follow-up cuts the tail, and a reclaim that fails after the user's edit committed
+says "saved; reclaim incomplete"; and "fewer holes" was the wrong word — a move can turn one
+hole into two; what a move does is lower the live data. On the lifetime rules: "closed the
+instant it stops being looked at" was not true — an unattended desktop, or a window minimised
+to the taskbar, keeps the page mounted — so DESIGN §2 and §10 now say what is conceded (the
+review also caught that the window's close, which destroys it, sent no Leave at all, and the
+user then supplied the rule that was missing: **closing the window exits every archive;
+minimising to the taskbar does not** — `Core.LeaveAll` on the window's close; and when the
+external player exists, a close while something is still being served to it asks once first,
+marked in APP §2.3 and §4 for that day); and "for the readers
+alone" had no boundary — the whole handle and its token stayed — so leaving with a body in
+flight is a **draining** state (no new request, no operation, closed after the last body), and
+the external player of a later version gets a file-scoped lease with a deadline bound to the
+playback the user started, never to requests. The critique's own subagents failed to launch
+("no thread with id"); it read the fourteen files itself, in 101k tokens.
+
+**The review experiment** (the user's idea: let Codex Astra review what Opus implemented,
+then an Opus fixer, instead of Opus reviewing Opus). The batch implementing the rulings above —
+two Opus implementers, Go then frontend, no Claude reviewer — passed every gate; Astra then
+read the diff (56 files, 175k tokens) and returned thirteen findings, every anchor of which
+held: four high — *Leave* only cleared the page's flag, so the token, `findArchive` and every
+page method went on working after the page was gone; closing the window sent no *Leave* at
+all, so an archive's keys outlived the window (the user's rule, above, followed); *Close* took
+the operation mutex first, so the kill switch waited behind a running add; and `Archive.Close`
+tore a compressed reader down under a `Read` that was inside it, a nil dereference in
+`compress.Reader.classify` — seven medium (two openers of a closed archive both reached
+`archive.Open` and the second got `archive.busy`; a locked page could mount a handle the core
+had opened for a verify; the page's own walk of `Page` to find a conflict's record id stopped
+at the first 200 rows; the *ask* bookkeeping raced the operation's end and lived in the
+component, which the lock scene destroys; *Extract all* kept an old "not twice" exception; the
+pre-check under *ask* against "a stat after the refusal") and two low (new copy outside
+`strings.ts`; dark brown ink on the dark theme's red button) — and judged eight of the
+implementers' recorded deviations sound in a line each. All but the pre-check finding were
+fixed (that one is an accepted deviation, the doc reworded: the collision may be seen by the
+pre-check, the stat comes after it, nothing is written over on a stat's word): draining is the
+page's flag alone — unmounted, every page method answers `archive.not_open` and the preview
+URL 404s, *Open* re-mounts, the last body closes; `Core.LeaveAllArchives` on the window's
+closing event; *Close* drops the token, cancels the operation, kills the readers
+(`Archive.DropReaders`) and only then waits for the handle; a `Reader` mutex held across
+`Read`/`Seek` and taken by the kill, a.mu before r.mu everywhere; an opening reservation the
+second opener waits on; no mount of an unmounted handle while locked; `FileOutcome` carries
+the record's `ID`, `Size` and `ModifiedAt` and `OpView` an extract's `Policy` and
+`Destination`, so the conflict question is derived from the store's operations, survives the
+lock scene and needs no walk; *Extract all* always adds its level; the batch's copy in
+`strings.ts`; white ink on a saturated red in both themes. Verdict: this shape found more, and
+graver, than the Opus-reviews-Opus batches did — a panic and a kill switch that waited would
+have reached the user — and it costs Anthropic usage nothing; keep it. Astra's own subagents
+fail to launch every time ("no thread with id"); it reviews alone and still delivers.
+

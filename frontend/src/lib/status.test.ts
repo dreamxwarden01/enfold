@@ -14,7 +14,6 @@ function stat(over: Partial<ArchiveStat> = {}): ArchiveStat {
     keyVersion: 1,
     lastSavedAt: 0,
     state: "open",
-    expiresAt: 0,
     receiptOwed: false,
     copyMismatch: false,
     ...over,

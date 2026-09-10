@@ -319,6 +319,16 @@ func (s *shell) ensureWindow() {
 			s.app.Event.Emit("shell.drop", drop)
 		}()
 	})
+	// Destroying the window leaves every page (APP.md §2.3, §2.4): the
+	// process keeps running in the tray and a window recreated from it
+	// starts at the list, so every archive a page held closes — or drains
+	// while a body is in flight — exactly as if its page had been left.
+	// Common.WindowClosing is what WM_CLOSE becomes under the default event
+	// mapping, and what Close() emits; Wails runs each listener on a
+	// goroutine of its own, off the main thread.
+	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
+		s.core.LeaveAllArchives()
+	})
 }
 
 // dropPayload is what a file drop becomes for the page: the paths, what

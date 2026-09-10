@@ -29,6 +29,12 @@
   --danger: #a12b2b;
   --danger-wash: #fbe7e7;
   --danger-line: #ecb9b9;
+  /* The filled destructive button (ruled 2026-09-10): the danger colour as
+     ground, its own ink over it, and a darker press — the accent's shape in
+     the other colour. */
+  --danger-fill: #a12b2b;
+  --danger-fill-hover: #8b2222;
+  --danger-on: #ffffff;
   --ctl: #ffffff;
   --ctl-hover: #f3f3f6;
   --ctl-press: #ebebef;
@@ -91,6 +97,12 @@
     --danger: #f19a9a;
     --danger-wash: #3a2323;
     --danger-line: #5c3434;
+    /* White ink in the dark theme too: a saturated red that carries it
+       (about 5:1 against white), not the pale pink of the outline danger,
+       which is ink on a dark ground and would need dark lettering. */
+    --danger-fill: #c53a3a;
+    --danger-fill-hover: #cf4040;
+    --danger-on: #ffffff;
     --ctl: #323238;
     --ctl-hover: #3a3a41;
     --ctl-press: #2e2e34;
@@ -136,6 +148,9 @@
   --danger: #f19a9a;
   --danger-wash: #3a2323;
   --danger-line: #5c3434;
+  --danger-fill: #c53a3a;
+  --danger-fill-hover: #cf4040;
+  --danger-on: #ffffff;
   --ctl: #323238;
   --ctl-hover: #3a3a41;
   --ctl-press: #2e2e34;
@@ -206,7 +221,17 @@ a { color: var(--accent-ink); }
 .btn.accent:active { background: var(--accent-hover); color: var(--accent-on); filter: brightness(0.94); }
 .btn.subtle { background: transparent; border-color: transparent; }
 .btn.subtle:hover { background: var(--surface-alt); border-color: transparent; }
+/* Two danger buttons (APP.md §6, ruled 2026-09-10). The toolbar's is the
+   outline one, red ink on the control's own ground. The one that carries
+   the destructive act out — the *Delete* of a confirmation — is filled:
+   the danger colour as ground and white ink, never the accent's green
+   under red text, which is what it was. It follows the accent's shape
+   (transparent border, the darker under-line, the same weight) so the two
+   read as the same kind of button in two colours. */
 .btn.danger { color: var(--danger); }
+.btn.danger-fill { background: var(--danger-fill); color: var(--danger-on); border-color: transparent; border-bottom-color: var(--accent-under); font-weight: 600; }
+.btn.danger-fill:hover { background: var(--danger-fill-hover); }
+.btn.danger-fill:active { background: var(--danger-fill-hover); color: var(--danger-on); filter: brightness(0.94); }
 .btn.link {
   background: none; border: none; padding: 0; height: auto;
   color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px;

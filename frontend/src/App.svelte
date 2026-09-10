@@ -52,9 +52,10 @@
     return c.slotLabel;
   });
 
-  // Nothing asks about an archive whose time is running out any more: it
-  // is clean between operations, so the idle expiry simply closes it
-  // (APP.md §2.3, DESIGN.md §10).
+  // The heartbeat is the vault's session and nothing else: an open archive
+  // has no timeout of its own, so input on the archive page keeps the
+  // session alive and asks nothing about the archive (APP.md §2.3,
+  // DESIGN.md §10, ruled 2026-09-10).
   const activity = () => store.activity();
 </script>
 

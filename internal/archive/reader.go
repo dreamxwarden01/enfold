@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"github.com/dreamxwarden01/enfold/internal/compress"
@@ -20,8 +21,19 @@ import (
 // decompression and discarding up to the target, which is what
 // http.ServeContent needs (it seeks to the end for the size, then back).
 // Every Reader is independent — one per request — and holds its file's
-// extent against reuse until Close. Not safe for concurrent use. A Reader
-// is a snapshot of the file as it was when opened; Archive.Close ends it.
+// extent against reuse until Close. Not safe for concurrent use by its
+// caller. A Reader is a snapshot of the file as it was when opened;
+// Archive.Close ends it.
+//
+// The one concurrency a Reader does admit is the kill: Archive.Close and
+// Archive.DropReaders end every Reader from another goroutine while the
+// Reader's own goroutine may be inside Read or Seek. mu is what keeps the
+// two apart — Read and Seek hold it for their whole duration, and the kill
+// takes it before it closes the decoders — so a decoder is never torn down
+// under a call that is using it (a compress.Reader closed mid-Read would
+// dereference the nil it left behind). Lock order is a.mu, then mu: the kill
+// is called with a.mu held and Close takes a.mu first; Read and Seek take mu
+// alone and never a.mu, so a kill waiting on mu is never waited on in turn.
 type Reader struct {
 	a       *Archive
 	info    FileInfo
@@ -31,7 +43,8 @@ type Reader struct {
 	section *io.SectionReader
 	pos     int64 // plaintext position, compressed files only
 	closed  bool
-	dead    atomic.Bool // set by Archive.Close from another goroutine
+	dead    atomic.Bool // set by the kill from another goroutine
+	mu      sync.Mutex  // held by Read, Seek and the kill; a.mu is taken before it, never after
 }
 
 // OpenReader opens a live file for reading. Only a file has content, so a
@@ -100,6 +113,8 @@ func (r *Reader) usable() error {
 }
 
 func (r *Reader) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := r.usable(); err != nil {
 		return 0, err
 	}
@@ -115,6 +130,8 @@ func (r *Reader) Read(p []byte) (int, error) {
 // restarts the stream and a forward seek decompresses and discards, so the
 // cost is proportional to the target offset.
 func (r *Reader) Seek(offset int64, whence int) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := r.usable(); err != nil {
 		return 0, err
 	}
@@ -160,11 +177,20 @@ func (r *Reader) Seek(offset int64, whence int) (int64, error) {
 	return r.pos, nil
 }
 
-// kill is Archive.Close's side: the decoders are closed (which zeroes what
-// they held) and the Reader refuses from then on. Caller holds a.mu; the
-// Reader's own goroutine may be mid-Read, which then fails on the closed
-// decoder or the closed file.
+// kill is the side of Archive.Close and Archive.DropReaders: the decoders
+// are closed (which zeroes what they held) and the Reader refuses from then
+// on. Caller holds a.mu. The Reader's own goroutine may be inside Read or
+// Seek, so the teardown waits for that call to end under r.mu and the next
+// one fails with ErrClosed; nothing is ever closed under a call that is using
+// it.
 func (r *Reader) kill() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.killLocked()
+}
+
+// killLocked is the kill itself. Caller holds r.mu.
+func (r *Reader) killLocked() {
 	if r.dead.Swap(true) {
 		return
 	}
@@ -174,21 +200,20 @@ func (r *Reader) kill() {
 	r.sr.Close()
 }
 
-// Close releases the hold on the file's extent.
+// Close releases the hold on the file's extent. It takes a.mu and then r.mu,
+// the same order as the kill, and never the reverse.
 func (r *Reader) Close() error {
-	if r.closed {
-		return nil
-	}
-	r.closed = true
 	a := r.a
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !r.dead.Swap(true) {
-		if r.cr != nil {
-			r.cr.Close()
-		}
-		r.sr.Close()
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil
 	}
+	r.closed = true
+	r.killLocked()
+	r.mu.Unlock()
 	if _, tracked := a.readers[r]; !tracked {
 		return nil // Archive.Close already released everything
 	}

@@ -10,6 +10,7 @@ import { methodAfter, outcomeAfter } from "./outcome";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
 import { hasTrouble, summaryLine, tally } from "./results";
+import { hasConflicts } from "./conflicts";
 import { opLabel } from "./ops";
 import type { Outcome } from "./outcome";
 
@@ -65,6 +66,11 @@ class Store {
   route = $state<Route>("archives");
   current = $state<string | null>(null);
   stat = $state<ArchiveStat | null>(null);
+  // The open archive's file path, from its registry row: ArchiveStat does
+  // not carry one, and the extract dialog is prefilled from the archive's
+  // own folder (APP.md §3, ruled 2026-09-10). Kept here so the field is
+  // right even while the vault is locked and the list is not being read.
+  currentPath = $state("");
   page = $state<Page | null>(null);
   // The directory the page is showing, as an id: the all-zero id is the
   // archive's root (APP.md §3). The breadcrumb is the page's own Crumbs,
@@ -75,6 +81,12 @@ class Store {
   // whole (a failed or skipped item): the page shows what happened once,
   // and clears it (APP.md §3, FileOutcome).
   results = $state<OpView | null>(null);
+  // The extracts whose conflicts the page has answered or dismissed, by op
+  // id. The question itself is never stored: it is derived from the ops
+  // (conflictQuestion), so it survives the page's remount across the lock
+  // scene and cannot be lost to a race between Extract's return and the
+  // op's end (APP.md §3, ruled 2026-09-10).
+  handledConflicts = $state<Record<string, true>>({});
   slots = $state<SlotView[]>([]);
   // The vault's entangled password (APP.md §13): one switch for the whole
   // vault, its On known while Locked, its CanEnable only while Unlocked.
@@ -121,6 +133,34 @@ class Store {
 
   get runningOps(): OpView[] {
     return Object.values(this.ops).filter((o) => !o.finished);
+  }
+
+  // asksAbout: a finished extract with the `ask` policy that reported
+  // conflicts and has not been answered. The policy and the destination
+  // are the op's own (OpView.Policy, OpView.Destination), so nothing about
+  // the call that started it has to be remembered here.
+  private asksAbout(o: OpView): boolean {
+    return o.finished && o.policy === "ask" && !this.handledConflicts[o.id] && hasConflicts(o.results);
+  }
+
+  // conflictQuestion is the question the open archive's page shows: the
+  // oldest unanswered `ask` of that archive (APP.md §3). Null when there is
+  // none — and while another archive is on screen, since only the page of
+  // the archive it came from can re-issue for it.
+  get conflictQuestion(): OpView | null {
+    let found: OpView | null = null;
+    for (const o of Object.values(this.ops)) {
+      if (o.archiveId !== this.current || !this.asksAbout(o)) continue;
+      if (!found || o.startedAt < found.startedAt) found = o;
+    }
+    return found;
+  }
+
+  // settleConflicts is the page's answer — re-issued, skipped or dismissed
+  // — after which the op has nothing more to say and goes.
+  settleConflicts(opId: string): void {
+    this.handledConflicts[opId] = true;
+    delete this.ops[opId];
   }
 
   // boot subscribes first, then asks for everything.
@@ -280,14 +320,16 @@ class Store {
     }
     if (o.archiveId && o.archiveId === this.current) void this.refreshArchive();
     void this.refreshArchives();
-    // Every extract records the folder it went to (settings.json,
-    // lastExtractFolder), which is what the extract dialog is prefilled
-    // with next time (APP.md §3). The core writes it at the destination's
-    // creation, before the first byte, so a cancelled or partly failed
-    // extract has recorded it too — the re-read is not gated on the
-    // outcome.
-    if (o.kind === "extract") void this.refreshSettings();
+    // An extract records nothing: the destination is prefilled by the rule
+    // of APP.md §3 from the archive's own folder, and no folder is kept
+    // from the last time (ruled 2026-09-10). What an extract with the
+    // `ask` policy does come back with is its conflicts, which the page of
+    // the archive it came from reads off this op (conflictQuestion) — so
+    // an op still asking is kept until the page answers, and one whose
+    // page has gone is settled with the page (dropArchive).
     setTimeout(() => {
+      const kept = this.ops[o.id];
+      if (kept && this.asksAbout(kept) && kept.archiveId === this.current) return;
       delete this.ops[o.id];
     }, 8000);
   }
@@ -295,6 +337,8 @@ class Store {
   async refreshArchives(): Promise<void> {
     try {
       this.archives = (await Archives.List(this.showHidden)) ?? [];
+      const here = this.current ? this.archives.find((a) => a.id === this.current) : undefined;
+      if (here) this.currentPath = here.path;
     } catch (e) {
       const code = errorOf(e).code;
       if (code !== "vault.needs_unlock" && code !== "vault.none") this.toast(codeText(code), "error");
@@ -371,6 +415,7 @@ class Store {
     try {
       this.stat = await Archives.Open(id);
       this.current = id;
+      this.currentPath = this.archives.find((a) => a.id === id)?.path ?? "";
       this.dirId = ROOT_ID;
       this.page = null;
       this.results = null;
@@ -395,7 +440,7 @@ class Store {
     } catch (e) {
       const code = errorOf(e).code;
       if (code === "archive.not_open") {
-        this.leaveArchive();
+        this.leaveArchive(true); // it is closed already; there is nothing to leave
       } else {
         this.toast(codeText(code), "error");
       }
@@ -467,13 +512,38 @@ class Store {
     await this.loadPage();
   }
 
-  leaveArchive(): void {
+  // dropArchive tells the core the page is gone and forgets what the page
+  // held. Leaving is `Archives.Leave`, never `Close` (APP.md §2.3, ruled
+  // 2026-09-10): the archive closes at once and its keys go, unless a
+  // preview body is still in flight, in which case it drains and closes
+  // itself after the last one — where Close is the page's kill switch and
+  // drops the readers too. `closed` says the caller has already closed it
+  // (the kill switch, a Delete archive…), so there is nothing to leave.
+  private dropArchive(closed: boolean): void {
+    const id = this.current;
     this.current = null;
     this.stat = null;
+    this.currentPath = "";
     this.page = null;
     this.dirId = ROOT_ID;
     this.entering = "";
     this.results = null;
+    // A question the page did not answer goes with the page: the archive
+    // closes behind it, and nothing could re-issue for it.
+    for (const o of Object.values(this.ops)) {
+      if (o.archiveId === id && this.asksAbout(o)) this.settleConflicts(o.id);
+    }
+    if (id && !closed) {
+      void Archives.Leave(id)
+        .then(() => this.refreshArchives())
+        .catch(() => {
+          /* a page cannot fail to be left */
+        });
+    }
+  }
+
+  leaveArchive(closed = false): void {
+    this.dropArchive(closed);
     if (this.route === "archive") this.setRoute("archives");
   }
 
@@ -499,8 +569,14 @@ class Store {
   // transition (APP.md §6): 1 into an archive, -1 back out, 0 sideways.
   nav = $state(0);
 
+  // Any route change away from the archive's page is leaving it, and the
+  // archive is left (APP.md §2.3): the rail, the breadcrumb's *Archives*,
+  // a *Delete archive…*. The lock screen is the one exception — it is a
+  // scene over the same page, `current` is kept and the unlock comes
+  // straight back to it (applyStatus), so the page was never left.
   private setRoute(route: Route): void {
     const from = this.route;
+    if (from === "archive" && route !== "archive" && route !== "lock" && this.current) this.dropArchive(false);
     this.nav = from === "archives" && route === "archive" ? 1 : from === "archive" && route === "archives" ? -1 : 0;
     this.route = route;
   }

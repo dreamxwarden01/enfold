@@ -12,23 +12,41 @@ import (
 )
 
 // extractFile writes one record's plaintext to path with the discipline
-// APP.md §3 asks for — all-or-nothing, `os.ErrExist` rather than an
-// overwrite — while counting the bytes as they land, so that the bar moves
-// inside one large file (§3: progress is by bytes, not by file).
+// APP.md §3 asks for — all-or-nothing, and `os.ErrExist` rather than an
+// overwrite unless replace was chosen — while counting the bytes as they
+// land, so that the bar moves inside one large file (§3: progress is by
+// bytes, not by file).
+//
+// replace is the policy of §3 as amended on 2026-09-10: the content goes
+// through the same temporary and is placed over the file already there in
+// one move, never by unlinking it first, so a failure anywhere before the
+// move leaves the old file exactly as it was.
+//
+// A collision may be seen twice over: by the cheap pre-check below, which
+// spares the decryption of a file that will not be placed, or by the
+// exclusive move's refusal when the file appeared in between. Either is a
+// collision; what neither is, is a licence to write — nothing is ever placed
+// over a file on a stat's word, only by the exclusive create or by the
+// replace the user chose (the outside review of 2026-09-10, finding 11,
+// accepted as documented).
 //
 // The archive layer's own ExtractTo does the same placement and is what this
 // would otherwise call; it takes no progress hook, and the counting has to
-// sit on the writer, so the temporary and the exclusive move are done here
-// instead. Everything about the content — the decryption, the chunk seals
-// and the whole-file content hash — is still archive.Extract's, and a
-// mismatch there leaves nothing at path.
-func extractFile(ctx context.Context, a *archive.Archive, id [16]byte, path string, on func(written uint64)) error {
-	// A cheap first answer for the common case; the exclusive move below is
-	// what actually decides, so nothing here is a check the placement then
-	// trusts (DECISIONS: ExtractTo's existence check was a TOCTOU until the
-	// final move became exclusive).
-	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("%w: %s", os.ErrExist, path)
+// sit on the writer, so the temporary and the move are done here instead.
+// Everything about the content — the decryption, the chunk seals and the
+// whole-file content hash — is still archive.Extract's, and a mismatch there
+// leaves nothing at path.
+func extractFile(ctx context.Context, a *archive.Archive, id [16]byte, path string, replace bool, on func(written uint64)) error {
+	// The cheap pre-check: it may see the collision first, and it spares
+	// the decryption; the exclusive move below is what places a file, so
+	// nothing here is a check the placement then trusts (DECISIONS:
+	// ExtractTo's existence check was a TOCTOU until the final move became
+	// exclusive). Under replace nothing is in the way by definition, so the
+	// file is not looked at before it is replaced.
+	if !replace {
+		if _, err := os.Lstat(path); err == nil {
+			return fmt.Errorf("%w: %s", os.ErrExist, path)
+		}
 	}
 	tmp, err := extractTempName(path)
 	if err != nil {
@@ -54,11 +72,34 @@ func extractFile(ctx context.Context, a *archive.Archive, id [16]byte, path stri
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := placeExclusive(tmp, path); err != nil {
+	place := placeExclusive
+	if replace {
+		place = placeReplace
+	}
+	if err := place(tmp, path); err != nil {
 		return err
 	}
 	ok = true
 	return nil
+}
+
+// existingFile is what the file in the way says about itself: the size and
+// the modified time an `ask` extract hands back with its conflict outcome
+// (APP.md §3). It is a stat taken after the collision was seen — by the
+// pre-check or by the exclusive create's refusal — and never one that
+// decides a write: nothing is placed over a file on its word. It answers
+// nil when the file has gone in between, which leaves the conflict standing
+// with nothing to show for it.
+func existingFile(path string) *ExistingFile {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil
+	}
+	size := fi.Size()
+	if size < 0 {
+		size = 0
+	}
+	return &ExistingFile{Size: uint64(size), ModifiedAt: fi.ModTime().Unix()}
 }
 
 // countingWriter reports the plaintext written so far. The callback is the

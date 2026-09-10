@@ -568,19 +568,16 @@ func TestExtractOfAName255UnitsLong(t *testing.T) {
 	}
 }
 
-// Every extraction records where it went, so the extract dialog's
-// destination is prefilled with it next time (APP.md §3, settings.json's
-// lastExtractFolder). Read-only on the Settings view, like the archive
-// folder: only an extraction writes it.
-func TestExtractRemembersItsFolder(t *testing.T) {
+// The core does not decide an extract's destination and does not remember
+// one: the page prefills the dialog from the archive's own folder (APP.md
+// §3, ruled 2026-09-10 — lastExtractFolder is gone from settings.json). What
+// the core still does is make the folder it was given, however deep.
+func TestExtractMakesItsDestinationAndKeepsNoFolder(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Where")
 	h.add(t, id, rootID, PolicySkip, h.src(t, "a.txt", "a"))
 
-	if got := h.c.GetSettings().LastExtractFolder; got != "" {
-		t.Fatalf("a fresh core already has a folder: %q", got)
-	}
 	// A destination that does not exist yet is created (APP.md §3).
 	out := filepath.Join(outDir(t), "made", "here")
 	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip)
@@ -593,21 +590,12 @@ func TestExtractRemembersItsFolder(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "a.txt")); err != nil {
 		t.Fatalf("the destination was not made: %v", err)
 	}
-	if got := h.c.GetSettings().LastExtractFolder; got != out {
-		t.Fatalf("lastExtractFolder %q, want %q", got, out)
-	}
-	// It survives a restart of the core: the file carries it.
-	if got := loadSettings(h.c.deps.DataDir).LastExtractFolder; got != out {
-		t.Fatalf("the settings file says %q", got)
-	}
-	// And Set ignores it.
-	s := h.c.GetSettings()
-	s.LastExtractFolder = filepath.Join(h.dir, "elsewhere")
-	if e := h.c.SetSettings(s); e != nil {
-		t.Fatal(e)
-	}
-	if got := h.c.GetSettings().LastExtractFolder; got != out {
-		t.Fatalf("Set wrote the folder: %q", got)
+	// And nothing about it is written down: the only folder the settings
+	// file keeps is the last archive created in (§6).
+	if b, err := os.ReadFile(filepath.Join(h.c.deps.DataDir, "settings.json")); err == nil {
+		if strings.Contains(string(b), out) || strings.Contains(string(b), "lastExtractFolder") {
+			t.Fatalf("the extraction was recorded in the settings file: %s", b)
+		}
 	}
 }
 

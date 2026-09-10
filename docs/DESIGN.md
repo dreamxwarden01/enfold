@@ -31,6 +31,10 @@ host disk.
 **Out of scope — this design does NOT defend against:**
 
 - Malware running as the user *while the vault is unlocked*. It can read plaintext directly.
+- Whoever reaches the desktop after the user walks away from an open archive's page. The vault
+  locks on its timer; the open archive does not (§10, ruled 2026-09-10) — it stays open, its page usable, until someone leaves the page, closes it or closes the window
+  (a closed window leaves every page; a minimised one does not). Accepted as the price of never
+  cutting work off.
 - Kernel-level compromise / rootkits
 - Coerced disclosure of the PIN or password
 - Evil-maid modification of the application binary itself
@@ -615,12 +619,22 @@ On vault close, also destroy the decrypted index and the Metadata key.
 
 Auto-lock destroys the KWK and the VMK and blocks opening anything new. Archives already open
 stay usable until closed, so a running stream or an in-progress edit is not killed mid-flight.
-Open archives carry their **own idle timeout**; otherwise "keep it open" becomes a way to bypass
-the session timeout entirely. Since 2026-09-09 an archive is clean between operations — every
-add, delete, rename, move and folder creation is its own transaction, committed at its end, and
-a running one can be cancelled (`APP.md` §2.3) — so the idle expiry simply closes it; the staged
-model with its Save / Discard prompts and its per-archive cap is gone, as it is from every
-archiver the user compared.
+An open archive has **no timeout of its own** (ruled 2026-09-10, reversing the earlier rule that it
+must, lest "keep it open" bypass the session timeout): it stays open while its page is shown, and
+is closed — its DEKs destroyed — the moment the user leaves the page, unless a preview body is
+still in flight, in which case it drains, below (`APP.md` §2.3, §4). What the earlier rule feared is answered differently: the session timeout guards the keystore
+and the way to every other archive, and an archive open on screen is the user's deliberate,
+visible state, closed when its page is left; a timer that closed it under the user's eyes was
+cutting work off for nothing. The concession is stated plainly, not hidden behind "visible": a
+page left mounted — the window minimised to the taskbar, a desktop walked away from — keeps the
+archive open past the vault's lock, and whoever sits down at that desktop can use its page (§2
+lists it). Closing the window is not that: it goes to the tray, is destroyed, and leaves every
+page (`APP.md` §2.3, §2.4), so a closed window never keeps a key in memory. Leaving the page with a preview body in flight drains rather than closes: no new
+request, no operation, closed after the last body (`APP.md` §2.3, §4). *Close archive* on the page is the kill switch, readers or not.
+Since 2026-09-09 an archive is clean between operations — every add, delete, rename, move and
+folder creation is its own transaction, committed at its end, and a running one can be cancelled
+(`APP.md` §2.3) — so a close never loses anything; the staged model with its Save / Discard
+prompts and its per-archive cap is gone, as it is from every archiver the user compared.
 
 ### Making the unlocked state visible
 

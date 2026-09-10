@@ -2,15 +2,19 @@
   import { Archive, Archives, Shell, errorOf } from "../lib/api";
   import type { Collision, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText } from "../lib/strings";
-  import { bytes, countdown, dateTime, previewKind, storageLabel } from "../lib/format";
+  import { archivePageCopy, codeText, conflictCopy, conflictTitle } from "../lib/strings";
+  import { bytes, dateTime, fileIcon, previewKind, storageLabel } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
   import { statusNote } from "../lib/status";
   import { fileNameProblem, newNameProblem } from "../lib/validate";
   import { ROOT_ID, canDrop, countPhrase, deleteBody, deleteCounts, deleteTitle } from "../lib/tree";
   import type { DragState, DropTarget } from "../lib/tree";
   import { summaryLine, tally, troubles } from "../lib/results";
+  import { destinationFor } from "../lib/extract";
+  import { allOf, conflictsOf, planIsEmpty, reissuePlan } from "../lib/conflicts";
+  import type { Decision } from "../lib/conflicts";
   import Dialog from "./Dialog.svelte";
+  import ConflictDialog from "./ConflictDialog.svelte";
   import ExtractDialog from "./ExtractDialog.svelte";
   import MenuButton from "./MenuButton.svelte";
   import type { MenuItem } from "./MenuButton.svelte";
@@ -55,7 +59,18 @@
   const taken = $derived(rows.map((r) => r.name));
   const judgeFolder = $derived((v: string) => newNameProblem(v, taken));
   let deleting = $state<FileRow[]>([]);
-  let extracting = $state<{ ids: string[]; label: string } | null>(null);
+  let extracting = $state<{ ids: string[]; label: string; all: boolean } | null>(null);
+  // The conflicts an extract with the `ask` policy came back with (APP.md
+  // §3): the question is the store's, derived from the finished op itself
+  // — its policy, its destination, its outcomes — so nothing here has to
+  // remember what was asked, and the question is still there after the
+  // lock scene remounts this page or when the op finished before Extract
+  // even returned. The rows come straight off the outcomes: each carries
+  // the record's id and the archive copy's size and date, so nothing is
+  // walked. Only which of the two dialogs is up is this page's.
+  const question = $derived(store.conflictQuestion);
+  const conflicts = $derived(question ? conflictsOf(question.results) : []);
+  let comparing = $state(false);
   let collisions = $state<{ at: string; plan: AddPlan; list: Collision[] } | null>(null);
   const kindsDiffer = $derived((collisions?.list ?? []).some((c) => c.isDir !== c.existingIsDir));
   let dropping = $state(false);
@@ -64,16 +79,7 @@
     store.toast(codeText(errorOf(e).code), "error");
   }
 
-  function fileIcon(r: FileRow): string {
-    if (r.isDir) return "i-folder";
-    switch (previewKind(r.name)) {
-      case "image": return "i-image";
-      case "video": return "i-video";
-      case "audio": return "i-audio";
-      case "text": return "i-doc";
-    }
-    return "i-file";
-  }
+  const rowIcon = (r: FileRow) => fileIcon(r.name, r.isDir);
 
   function click(e: MouseEvent, r: FileRow) {
     moveError = null;
@@ -362,18 +368,20 @@
   }
 
   // Both ways in open the same dialog (APP.md §3): the destination lives
-  // in it, prefilled from the folder last extracted to, rather than in a
-  // native picker the page opens first.
-  function startExtract(ids: string[], label: string) {
+  // in it, prefilled by the rule of §3 from the archive's own folder —
+  // *Extract all* one level deeper, in a folder named after the archive —
+  // rather than in a native picker the page opens first. Nothing is kept
+  // from the last time (ruled 2026-09-10).
+  function startExtract(ids: string[], label: string, all = false) {
     if (ids.length === 0) return;
-    extracting = { ids, label };
+    extracting = { ids, label, all };
   }
 
   // *Extract all* is the archive's, not the selection's (APP.md §6): the
   // root id alone means everything, so the page sends that one id and
   // walks nothing.
   function extractAll() {
-    void startExtract([ROOT_ID], "everything in this archive");
+    startExtract([ROOT_ID], "everything in this archive", true);
   }
 
   async function doExtract(dir: string, policy: string) {
@@ -381,16 +389,54 @@
     extracting = null;
     if (!x) return;
     try {
+      // An `ask` comes back with its question on the op itself (APP.md
+      // §3): nothing is kept here against the op id.
       await Archive.Extract(id, x.ids, dir, policy);
     } catch (e) {
       fail(e);
     }
   }
 
+  // The one-conflict and many-conflict answers (APP.md §3): *Replace* and
+  // *Replace all* re-issue for every record with `replace`, *Skip* and
+  // *Skip all* re-issue nothing, and *Compare* / *Let me decide* open the
+  // compare list. Closing either dialog answers nothing and the question
+  // is settled: the files in the way stay where they are.
+  function decide(d: Decision) {
+    void reissue(allOf(conflicts, d));
+  }
+
+  function dismissQuestion() {
+    if (question) store.settleConflicts(question.id);
+    comparing = false;
+  }
+
+  async function reissue(decisions: Record<string, Decision>) {
+    const q = question;
+    const rows = conflicts;
+    comparing = false;
+    if (!q) return;
+    // The destination is the op's own (OpView.Destination): the re-issue
+    // goes where the first extract went.
+    const dir = q.destination ?? "";
+    store.settleConflicts(q.id);
+    const plan = reissuePlan(rows, decisions);
+    if (planIsEmpty(plan)) return;
+    try {
+      if (plan.replace.length > 0) await Archive.Extract(id, plan.replace, dir, "replace");
+      if (plan.rename.length > 0) await Archive.Extract(id, plan.rename, dir, "rename");
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  // *Close archive* is the kill switch (APP.md §2.3): it closes now,
+  // readers or not, dropping every preview body in flight — where simply
+  // leaving the page closes it only once nothing is reading it.
   async function close() {
     try {
       await Archives.Close(id);
-      store.leaveArchive();
+      store.leaveArchive(true);
       await store.refreshArchives();
     } catch (e) {
       fail(e);
@@ -398,23 +444,28 @@
   }
 
   // Delete archive… is the same act as the Archives page's, on the archive
-  // this page shows (APP.md §13): the archive is closed first and, since
-  // closing leaves this page, the id is handed to the Archives page, which
-  // opens the one dialog. It is disabled while the vault is locked with
-  // the archive open (§2.3): the registry write needs the session's key.
-  // Nothing is asked about unfinished changes — there are none between
-  // operations — and a running one is cancelled by the close.
+  // this page shows (APP.md §13). It leaves this page, so it is a Leave
+  // and not the kill switch (§2.3, ruled 2026-09-10): the archive closes
+  // at once, and the id is handed to the Archives page, which opens the
+  // one dialog — where the record is closed first in its own turn if a
+  // preview body kept this one draining. It is disabled while the vault is
+  // locked (§2.3): the registry write needs the session's key. Nothing is
+  // asked about unfinished changes — there are none between operations —
+  // and a running one is cancelled when the handle goes.
   async function closeThenDelete() {
     const archiveId = id;
     try {
-      await Archives.Close(archiveId);
+      await Archives.Leave(archiveId);
     } catch (e) {
       fail(e);
       return;
     }
-    store.deleteAfterClose = archiveId;
-    store.leaveArchive();
+    // The list is re-read before the hand-over, so the Archives page reads
+    // whether the archive is still open off a fresh row and not off the
+    // one this page was showing.
     await store.refreshArchives();
+    store.deleteAfterClose = archiveId;
+    store.leaveArchive(true);
   }
 
   // What a batch reported when something was left out (lib/results.ts):
@@ -425,12 +476,11 @@
   const resultItems = $derived(troubles(results?.results));
 
   // The foot's note (LayerFoot, lib/status.ts): the archive's figures —
-  // singular at one, and the free space when it is worth knowing — and,
-  // while the vault is locked and the archive still open, when it closes.
+  // singular at one, and the free space when it is worth knowing. Nothing
+  // counts down here: an open archive has no timeout of its own, locked
+  // vault or not (APP.md §2.3, ruled 2026-09-10).
   $effect(() => {
-    let note = statusNote(stat);
-    if (!store.unlocked && stat?.expiresAt) note += ` · archive closes in ${countdown(stat.expiresAt, store.now)}`;
-    store.footNote = note;
+    store.footNote = statusNote(stat);
   });
 </script>
 
@@ -456,7 +506,9 @@
     {/each}
   </nav>
   <div class="grow"></div>
-  <button type="button" class="btn sm" onclick={close}>Close archive</button>
+  <!-- The kill switch (APP.md §2.3): leaving the page closes the archive
+       on its own, and this closes it even while something is playing. -->
+  <button type="button" class="btn sm" title={archivePageCopy.closeNow} onclick={close}>Close archive</button>
 </div>
 
 <div class="layer-body">
@@ -477,13 +529,16 @@
          §13, R25): the flow closes the archive before the write is even
          attempted, so a refusal at the end would have shut the user's
          archive for nothing. -->
-    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? "Unlock the vault first: the record is the vault's." : tampered ? "The vault's slot region does not verify; every change is disabled." : undefined} onclick={() => void closeThenDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
+    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined} onclick={() => void closeThenDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
   </div>
 
   {#if !store.unlocked}
     <div class="bar">
       <svg class="i i-14"><use href="#i-lock" /></svg>
-      <span class="grow">The vault is locked. This archive stays open until it goes idle — you can browse it, change it and extract from it; what you change is recorded in the vault at the next unlock.</span>
+      <!-- One plain line (APP.md §2.3, §6, ruled 2026-09-10): the archive
+           has no timeout of its own, and what it owes the vault is
+           already said by the status strip. -->
+      <span class="grow">{archivePageCopy.lockedBanner}</span>
       <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button>
     </div>
   {/if}
@@ -534,7 +589,7 @@
               >
                 <td class="sel-mark">
                   <div class="fname">
-                    <svg class="i i-14"><use href="#{fileIcon(r)}" /></svg>
+                    <svg class="i i-14"><use href="#{rowIcon(r)}" /></svg>
                     <span>{r.name}</span>
                   </div>
                   {#if moveError && moveError.id === r.id}<span class="move-note">Not moved: {moveError.text}</span>{/if}
@@ -576,7 +631,7 @@
         {/if}
       </div>
       {#if one}
-        <div class="pname"><svg class="i i-14"><use href="#{fileIcon(one)}" /></svg><span>{one.name}</span></div>
+        <div class="pname"><svg class="i i-14"><use href="#{rowIcon(one)}" /></svg><span>{one.name}</span></div>
         <dl class="facts">
           <div class="fact"><dt>{one.isDir ? "Size beneath" : "Size"}</dt><dd>{bytes(one.size)}</dd></div>
           {#if !one.isDir}
@@ -626,7 +681,7 @@
     <p>{deleteBody(deleting)}</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (deleting = [])}>Cancel</button>
-      <button type="button" class="btn accent danger" onclick={doDelete}>Delete</button>
+      <button type="button" class="btn danger-fill" onclick={doDelete}>Delete</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -634,11 +689,42 @@
 {#if extracting}
   <ExtractDialog
     label={extracting.label}
-    archiveName={stat?.name ?? ""}
-    initial={store.settings?.lastExtractFolder ?? ""}
+    initial={destinationFor(store.currentPath, stat?.name ?? "", extracting.all)}
     onextract={(dir, policy) => void doExtract(dir, policy)}
     oncancel={() => (extracting = null)}
   />
+{/if}
+
+<!-- What an `ask` came back with (APP.md §3): one conflict names the file,
+     several count them, and *Compare* / *Let me decide* open the compare
+     list. Skipping re-issues nothing. The words are the strings table's
+     (§7). -->
+{#if question && conflicts.length > 0 && !comparing}
+  <Dialog title={conflictTitle(conflicts.length, conflicts[0].name)} onclose={dismissQuestion}>
+    {#if conflicts.length === 1}
+      <p>{conflictCopy.oneBody}</p>
+    {:else}
+      <ul class="plain">
+        {#each conflicts.slice(0, 6) as c (c.path)}<li>{c.path}</li>{/each}
+        {#if conflicts.length > 6}<li>{conflictCopy.andMore(conflicts.length - 6)}</li>{/if}
+      </ul>
+    {/if}
+    {#snippet actions()}
+      <button type="button" class="btn" onclick={() => (comparing = true)}>{conflictCopy.compare(conflicts.length)}</button>
+      <button type="button" class="btn" onclick={() => decide("skip")}>{conflictCopy.skip(conflicts.length)}</button>
+      <button type="button" class="btn accent" onclick={() => decide("replace")}>{conflictCopy.replace(conflicts.length)}</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if question && conflicts.length > 0 && comparing}
+  {#key question.id}
+    <ConflictDialog
+      rows={conflicts}
+      oncontinue={(d) => void reissue(d)}
+      oncancel={dismissQuestion}
+    />
+  {/key}
 {/if}
 
 <!-- The collision dialog says the kind on both sides — "Photos is a file
@@ -665,7 +751,7 @@
 <!-- What a batch left out: the counts first — folders created and entered
      beside the files added — then each item with its own code's copy
      (APP.md §3, FileOutcome). -->
-{#if results}
+{#if results && !question}
   <Dialog title="What happened" onclose={() => (store.results = null)}>
     <p>{resultLine}</p>
     <ul class="plain">

@@ -18,10 +18,11 @@ export function freeWorthShowing(freeSpace: number | undefined): boolean {
   return Number.isFinite(n) && n >= freeSpaceFloor;
 }
 
-// statusNote is the strip without the archive's own countdown, which the
-// page appends while the vault is locked: "12,406 files · 48.1 GB · key v1
-// · last saved 2026-09-05 21:14 · 2.9 GB free". A count of one is
-// singular — "1 file" (ruled 2026-09-09).
+// statusNote is the whole strip: "12,406 files · 48.1 GB · key v1 · last
+// saved 2026-09-05 21:14 · 2.9 GB free". Nothing is appended to it any
+// more — an open archive has no timeout of its own, locked vault or not,
+// so there is no deadline to count down (APP.md §2.3, ruled 2026-09-10).
+// A count of one is singular — "1 file" (ruled 2026-09-09).
 export function statusNote(stat: ArchiveStat | null | undefined): string {
   if (!stat) return "";
   const parts = [plural(stat.files, "file"), bytes(stat.size), `key v${stat.keyVersion}`];

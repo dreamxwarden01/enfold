@@ -317,22 +317,21 @@ func TestVerifyRepairsATornEnvelope(t *testing.T) {
 	}
 }
 
-// The archive's one clock holds for any running operation, whether or not
-// that operation holds the archive's own lock (APP.md §2.3, DESIGN.md §10).
-// An add registers its operation before it walks the source folder and takes
-// opMu only afterwards, and an extract takes it never: the clock looked at
-// readers and compaction alone and could close the archive under either (the
-// outside audit of 2026-09-09).
-func TestTheIdleClockHoldsForARunningOperation(t *testing.T) {
+// A running operation holds the archive open whether or not it holds the
+// archive's own lock (APP.md §2.3): an add registers its operation before it
+// walks the source folder and takes opMu only afterwards, and an extract
+// takes it never. A page left while one runs therefore leaves the archive
+// standing until the operation ends, and the operation's own end closes it —
+// there is no clock to wait for since 2026-09-10.
+func TestALeftPageWaitsForTheRunningOperation(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	id := h.openArchive(t, "Idle")
+	id := h.openArchive(t, "Leaving")
 	// One folder and no file: the extract's plan creates it without opening
-	// a reader, so nothing but the operation itself holds the clock.
+	// a reader, so nothing but the operation itself holds the archive.
 	if _, e := h.c.CreateFolder(id, rootID, "F"); e != nil {
 		t.Fatal(e)
 	}
-	armedAt := h.stat(t, id).ExpiresAt
 
 	// The operation is stopped inside its first progress event — on its own
 	// goroutine, holding neither opMu nor a reader.
@@ -354,25 +353,33 @@ func TestTheIdleClockHoldsForARunningOperation(t *testing.T) {
 	}
 	<-held
 
-	// Past the archive's idle deadline, twice over. The session's own clock
-	// is a different one and is kept alive here, since a lock would close the
-	// archive for a reason that is not this test's.
+	if e := h.c.LeaveArchive(id); e != nil {
+		t.Fatalf("leave: %v", e)
+	}
+	// Past what used to be the archive's idle deadline, twice over: nothing
+	// closes it, and neither does the leave while the operation runs. The
+	// handle is held by the operation alone, though: the page it no longer
+	// has is answered archive.not_open (APP.md §2.3, draining).
 	for i := 0; i < 3; i++ {
 		h.clk.Advance(5 * time.Minute)
 		h.c.Activity()
 	}
-	st, e := h.c.Stat(id)
-	if e != nil {
-		t.Fatalf("the archive was closed under a running operation: %v", e)
+	if !h.isHeld(id) {
+		t.Fatal("the archive was closed under a running operation")
 	}
-	if st.ExpiresAt <= armedAt {
-		t.Fatalf("the clock was not re-armed while the operation ran: %+v", st)
+	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
+		t.Fatalf("the left archive still answered its page: %v", e)
 	}
 	close(release)
 	if o := h.rec.waitOp(t, opID); o.Error != "" {
 		t.Fatalf("extract: %+v", o)
 	}
 	h.rec.onEvent(nil)
+	// The operation was the last thing holding a page that had been left:
+	// its end closes the archive and the keys go with it.
+	if _, e := h.c.Stat(id); !isCode(e, CodeArchiveNotOpen) {
+		t.Fatalf("the left archive stayed open after its operation: %v", e)
+	}
 }
 
 // Closing an archive whose commit ended indeterminate releases the handle so

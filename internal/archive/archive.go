@@ -795,6 +795,20 @@ func (a *Archive) Close() error {
 	return a.teardown()
 }
 
+// DropReaders kills every open Reader — the same kill Close performs, so
+// their next Read or Seek fails with ErrClosed and what they had decrypted
+// is zeroed — without closing the handle. It is the first half of a close
+// that must not wait: the caller ends the bodies now and closes the handle
+// once whatever else holds it has let go (APP.md §2.3, Close archive). A
+// killed Reader still owns its extent until its own Close, as any other.
+func (a *Archive) DropReaders() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for r := range a.readers {
+		r.kill()
+	}
+}
+
 // teardown releases everything an open handle holds. Caller holds a.mu and
 // has set a.closed.
 func (a *Archive) teardown() error {

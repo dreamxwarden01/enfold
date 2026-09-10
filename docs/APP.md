@@ -441,16 +441,33 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   still holds free, so nothing is lost and nothing leaks. A Delete asks first, on the page —
   "Permanently delete 3 files and 1 folder from ECON 280? A folder takes everything beneath it.
   This cannot be undone." — and then commits; deletion is cryptographic erasure (FORMAT R32).
-  Rename, Move and CreateFolder commit at once, with no question. **Space comes back** (ruled
-  2026-09-09, after an emptied archive stood at 8 GB): a cancelled add's appended bytes are
-  truncated at `Abort` (the archive layer's rule); a commit that frees the tail of the file is
-  followed at once by a second, empty commit that truncates it — R31's quarantine lasts one
-  commit, and that commit is this one, so the losing superblock never points past the end of the
-  file; and after any commit that leaves the free space at or above **64 MiB and a quarter of
-  the file**, the core runs `Compact` as a follow-on operation shown as *Reclaiming space* —
-  cancellable, the archive untouched until it finishes, previews quiesced as for any compaction
-  — so an archive emptied by a delete does not stay the size of what it held. The thresholds are
-  constants for now. **Compact and RotateKey are
+  Rename, Move and CreateFolder commit at once, with no question. **Space comes back** (ruled 2026-09-09, after an emptied archive stood at 8 GB; the in-place form
+  ruled 2026-09-10): a cancelled add's appended bytes are truncated at `Abort` (the archive
+  layer's rule); a commit that frees the tail of the file is followed at once by a second, empty
+  commit that truncates it — R31's quarantine lasts one commit, and that commit is this one, so
+  the losing superblock never points past the end of the file; and after any commit — and when the last reader holding an extent closes — the core plans a
+  *Reclaiming space* run, FORMAT R40's in-place compaction. The plan is made on the free map in
+  memory first: live extents in offset order, each into the earliest published hole wholly
+  before it that holds it, a file no hole before it holds skipped, an extent a reader holds left
+  where it lies for this run. The run happens only when the plan would give the file system
+  back **64 MiB or more** of the tail and that is at least a quarter of what it would have to
+  move — the floor measures bytes returned, not the size of any hole, since a hole filled
+  behind a file that cannot move returns nothing, and a 64 MiB hole at the head of a 100 GB
+  archive is not worth moving 100 GB for (that is what *Compact* is for, on request). Each
+  commit moves as many extents as fit in a budget of **64 MiB** of ciphertext, so an archive of
+  many small files does not pay one index rewrite per file; when the hole the plan wants is
+  still under R31's quarantine — freed by the commit just made, with no tail follow-up to
+  publish it — the run's first commit is the empty one that does; the tail is cut by the
+  follow-up commit as it comes free. Progress is by bytes moved, and what came back is said
+  separately ("Reclaimed 1.2 GB"); a cancel is honoured at any chunk of the copy — an aborted
+  commit leaves the originals live and its copies in free space — and *Close archive* cancels
+  it too, the archive consistent and simply less compacted, the run resumed by the next
+  qualifying commit. A reclaim that fails after the user's own edit committed reports the edit
+  saved and the reclaim incomplete, never the edit failed; a move commit's own metadata may
+  leave the file larger for a moment (the free map is always appended), which the follow-up
+  commit takes back. The whole-file *Compact* stays on the Archives page for what a move cannot
+  serve (a file larger than every hole before it) and for a full defragmentation on request.
+  The floor, the quarter and the budget are constants for now. **Compact and RotateKey are
   gated on `Session.Live()`** before they start (`NeedsUnlock`); an operation's own commit is
   not — the archive key is in memory — and the receipt it owes waits for the session. The
   commit — index seal, free map, two syncs — runs under the archive's own mutex only, so the
@@ -464,15 +481,50 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   the next unlock) and is adopted, the next registry write recording it; the file's size is not
   compared — an aborted transaction's tail leaves the file larger at the same `seq`, and the
   archive layer reclaims it.
-- **One clock per archive** (DESIGN §10's own idle timeout): idleness — no running operation, no
-  open reader, no request — closes the archive, which is always clean between operations; a
-  running operation holds the clock. A preview range request resets the archive's clock, never
-  the session's.
+- **An open archive has no timeout of its own** (ruled 2026-09-10; DESIGN §10 amended). It stays
+  open — its keys in memory — for as long as its page is shown in Enfold, whether or not the
+  vault is locked: a lock locks the keystore, not an archive already open, and a timer that
+  closed the archive under the user's eyes was found to cut work off for no reason. Leaving the
+  page (`Archives.Leave`) closes it at once and destroys its DEKs — or, when one of its own
+  operations is still running, when that operation ends, since closing the handle under an add
+  because the user went back to the list is the cut-off this ruling reverses — unless a body is
+  still being served over the preview transport, in which case the archive is **draining**: the token admits
+  no new request, every bound method but `Close` answers `archive.not_open`, the bodies in flight
+  finish, and the archive closes itself after the last (§4). That is all a page's own preview
+  needs; the external player that will need more — new range requests after the page is left —
+  gets a file-scoped lease with a deadline of its own, bound to the playback the user started and
+  never renewed by a request, decided when it exists. *Close archive* on the page is the kill
+  switch: it closes now, readers or not, dropping every in-flight body (§4) and cancelling an
+  operation of its own that is running — Close never waits behind an add or a verify: the token
+  dies and the bodies fail first, and the handle closes as soon as the cancelled operation has
+  let go. **Closing the window is leaving every page** (ruled 2026-09-10, the user's own rule: "closing
+  the window should exit the archive; minimising to the taskbar is not that"): the window's
+  close — which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the shell, so an
+  archive whose window was closed closes, or drains, exactly like one whose page was left, and a
+  window recreated from the tray starts at the list. Minimising to the taskbar is not a close:
+  the page stays mounted and the archive open. When the external player exists (§4), closing the
+  window while something is still being served to it **asks once** before the archive goes —
+  the words and the shape decided then; marked here so the close path is built with the
+  question in mind. A page nobody is looking at is still a page: an archive left open on an
+  unattended, unlocked desktop — the window open or minimised — stays open, past the vault's
+  own lock, until someone leaves its page, closes it or closes the window — an accepted
+  concession, written into DESIGN §2 and §10, chosen over a timer that cut work off.
 - **What stays usable after a lock** (DESIGN §10): `Page`, `Stat`, `PreviewText`, `Extract`,
   `PreviewURL`, in-flight readers, and the operations — `CreateFolder`/`AddFiles`/`AddFolder`/
   `Delete`/`Rename`/`Move` — each committing the archive and owing its receipt; Compact,
-  RotateKey, Open and Create need the session. The frontend keeps an open
-  archive's view mounted across a lock (a locked banner; nothing new can be opened).
+  RotateKey, Open and Create need the session — `Open` included when the handle already exists:
+  a handle the core opened for an Archives-page operation is never mounted by a page while the
+  vault is locked (`vault.needs_unlock`), so a lock never hands a page an archive it did not
+  have. The frontend keeps an open archive's view mounted across a lock (a locked banner, one line: "The vault is locked. This
+  archive stays open while you are here."; nothing new can be opened).
+- **The Archives page's operations never ask for the archive to be opened first.** While the
+  vault is unlocked, *Verify*, *Compact*, *Rotate key* and every other record-level operation on
+  an archive whose page is not open unwrap the archive key with the session's `KWK`, open the
+  file for the operation, and close it — the key destroyed — when the operation ends; an archive
+  whose page *is* open uses that handle. The one-handle-per-path rule of the archive layer is
+  kept by the core: an operation on a closed archive opens it as the core's own handle, and a
+  page opening it meanwhile joins that handle rather than opening a second. The temporary
+  unlock of a later version has its own rules and is not this.
 - **Compacting**: refused unless Open and clean; previews for the archive are quiesced by
   draining (stop minting URLs, refuse new requests, wait for in-flight handlers, with a timeout
   that aborts the compaction); every core entry point answers `archive.compacting` from core
@@ -498,7 +550,8 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
 ### 2.4 Window and tray
 
 `None ⇄ Open`. The window is destroyed on close (the provisional default,
-`DisableQuitOnLastWindowClosed`) and recreated from the tray or a second launch through one
+`DisableQuitOnLastWindowClosed`) — its destruction leaving every archive page, `Core.LeaveAll`
+(§2.3) — and recreated from the tray or a second launch through one
 `ensureWindow()` in the shell (`app.Window.GetByName` then `NewWithOptions`); the tray's
 `AttachWindow`/`ShowWindow`/`ToggleWindow` helpers are not used — they assume a window that
 exists at tray creation and that close only hides. Tray: three states — Locked, Locked with
@@ -567,7 +620,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
 **Archives**
 - `List(showHidden) []ArchiveSummary{ID, Name, Description, Path, StoredSize, LastWrittenAt,
   KeyVersion, Open, Dirty, ReceiptOwed, NoCompression, ForgottenAt, Note Code}` — hidden and
-  forgotten records are filtered unless `showHidden`. `Open(id)`, `Close(id)`, `Create(path,
+  forgotten records are filtered unless `showHidden`. `Open(id)`, `Leave(id)` (the page left: close, or drain while a body is in flight, §2.3), `Close(id)` (the kill switch), `Create(path,
   name, noCompression)`, `Hide(id)`, `Unhide(id)`, `Locate(id, newPath)`, `Compact(id) opID`,
   `RotateKey(id) opID`, `Verify(id) opID`, `CloseAll()` — `Create(path, name, method)` takes the
   compression method, `store` · `fastest` · `normal` · `better` · `best`, written into the
@@ -679,15 +732,32 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Enfold does not alter what it did not make), and a time that will not set leaves the folder
   `created` with `io` in its `Code`. Directories appear in `Results` as `created | skipped |
   failed` and add no bytes to the progress `Total`, which counts file plaintext only, so a plan
-  of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not). **The extract dialog** (the page's, for the pane's
-  *Extract…* and the toolbar's *Extract all* alike) holds an editable destination prefilled with
-  the folder last extracted to (`settings.json`, `lastExtractFolder`, written by every extract),
-  *Browse…* opening the native folder picker into it, one action *+ a folder named after the
-  archive* that appends `\<archive name>` to the field (the native picker cannot prefill the name
-  of a folder the user creates, so the field does what WinRAR's destination field does), the
-  `skip | rename` policy, and *Extract*; the destination is created if it does not exist. *Extract
-  all* extracts everything from the root straight into that destination — never into a folder it
-  makes on its own — and is greyed while `ArchiveStat.Records` is zero (live files and folders
+  of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not). **The extract dialog** (the page's, for the pane's *Extract…* and the toolbar's *Extract all*
+  alike) holds an editable destination prefilled by one rule (ruled 2026-09-10): for *Extract
+  all*, the archive's own folder plus a folder named after the archive — `D:\Archives\ECON 280\`
+  for `D:\Archives\ECON 280.efd` — created when the extract starts; for a selection, the archive's
+  own folder, with no extra level. *Browse…* opens the native folder picker into it; the
+  destination is created if it does not exist. **The policy for a file already there is
+  `replace` by default** — what every archiver's wizard does — with `skip`, `rename` (keep both,
+  the incoming one numbered) and `ask` beside it: `replace` writes through the temporary and
+  places it over the existing file in one move (never by unlinking first, so a failure leaves the
+  old file); `ask` extracts everything that collides with nothing first and reports each
+  collision as a `conflict` outcome carrying the record's `ID`, the archive copy's `Size` and
+  `ModifiedAt`, and `Existing{Size, ModifiedAt}` for the file in the way — a stat taken after the
+  collision was seen, by the cheap pre-check or by the exclusive create's refusal, and never one
+  that decides a write: nothing is ever placed over a file on a stat's word — so the page has
+  everything the compare list shows and every id the re-issue needs without walking the tree;
+  and the page then asks — for one:
+  "The destination already has a file named <name>" with *Replace*, *Skip* and *Compare both
+  files*; for several: "The destination has N files with the same names" with *Replace all*,
+  *Skip all* and *Let me decide for each file* — and re-issues `Extract` for the chosen ids with
+  `replace` or `rename`. *Compare* and *Let me decide* are one dialog after Windows Explorer's:
+  a row per file with the type's icon, *Files from the archive* on the left and *Files already
+  in the destination* on the right, each side's date and size, a tick on either or both (both =
+  keep both), and "Skip N files with the same date and size" at the foot. A drag out of the
+  archive into Explorer, when it exists, is an extract with the `ask` policy and no dialog
+  before it. `Extract` with the all-zero id extracts everything from the root straight into the
+  destination and is greyed while `ArchiveStat.Records` is zero (live files and folders
   together; the file count alone cannot say whether the tree holds anything). `PreviewURL(id,
   fileID)`, `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
   `OpenReader` + `LimitReader`; no cross-origin fetch exists). `Stat` carries `CopyMismatch` and the
@@ -699,7 +769,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   more.
 - Events: `archive.changed {ID, Seq}` and progress as above. `OpView` carries `Items`, the files an
   add, a replace or an extract plans, known once the plan is made, so the strip can say *Adding 3
-  files* rather than the phase word; a count of one is singular everywhere the page counts.
+  files* rather than the phase word, and, for an extract, its `Policy` and `Destination`, so the
+  conflict question is derived from the operation itself in the store — it survives the page's
+  remount across the lock scene and cannot be lost to a race between the call's return and the
+  operation's end; a count of one is singular everywhere the page counts.
   Progress is by **bytes**, not by file: an add, a replace and an extract count the bytes read of the file in hand, so a single
   large file moves the bar (at most ten events a second, as before); `Done`/`Total` are plaintext
   bytes. `ArchiveStat` loses `Dirty`, `CapAt` and `SessionAlive` and gains `Records` (live files
@@ -796,8 +869,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
 **Settings** — `Get()`, `Set()`. Machine-local, in `%LOCALAPPDATA%\Enfold\settings.json`
 (temp-then-rename): the vault's path when kept elsewhere (empty: `vault.eks` in the data folder)
 and its display name, close-to-tray behaviour, theme, look, recovery
-record percentage, dictionary threshold, the last export (`lastExportAt`, §13), the folder of the
-last archive created (`lastArchiveFolder`) and the folder last extracted to (`lastExtractFolder`).
+record percentage, dictionary threshold, the last export (`lastExportAt`, §13) and the folder of
+the last archive created (`lastArchiveFolder`).
 **Security-relevant values live in the authenticated
 registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
@@ -829,10 +902,18 @@ A loopback `net/http` server on `127.0.0.1:<port>`, **bound once for the process
 that runs), `Content-Type` from the name, multi-range refused (single range or
 none, so the handler may `Close` its Reader on return). **The preview transport outlives the
 session; it dies with the last open archive, and a live reader is archive activity.** The token
-is per archive (an unknown token is a 404 with no archive id in the URL); closing the archive
-drops the token and `Archive.Close` fails every in-flight body. A lock changes nothing here.
-Justification: it serves only archives whose keys are in this process's memory, which a
-same-user process reads regardless (DESIGN §2); the unguessable path is the access control.
+is per archive (an unknown token is a 404 with no archive id in the URL); closing the archive drops the token and `Archive.Close` fails every in-flight body; leaving
+the page with a body in flight puts the archive in §2.3's draining state — the token admits no
+new request, the bodies finish, the archive closes itself after the last. A lock changes nothing
+here.
+Justification: it serves only archives whose keys are in this process's memory, which a same-user
+process reads regardless (DESIGN §2); the unguessable path is the access control. **A later
+version may hand this URL to an external player** so a video plays in place without extraction;
+when it does, the server stays bound to `127.0.0.1` and nothing else — never `0.0.0.0`, never a
+LAN address — and an archive kept open for such a player after its page was left gets a file-scoped lease
+with a deadline of its own, bound to the playback the user started and never renewed by a
+request (§2.3), decided then — as is the one question the window's close asks while such a
+player is still being served (§2.3).
 
 **The page's CSP is a response header from the asset middleware** (production only; in
 `wails3 dev` Vite's HMR needs its own origin):
@@ -927,7 +1008,9 @@ bar, no Save, no Discard: every operation commits at its end, §2.3), the toolba
 one *Add* button whose menu holds *Add files*, *Add folder* and *Create folder* (a staged
 directory record, written at save whether or not a file was added into it — FORMAT R39), *Extract all* (the whole archive, whatever is selected — the pane's *Extract…* is the
 selection's), *Rename*, *Delete* (a dialog first — "Permanently delete 3 files and 1 folder from ECON 280? A
-folder takes everything beneath it. This cannot be undone." — then the operation), the pane's
+folder takes everything beneath it. This cannot be undone." — whose *Delete* is a filled red
+button, the danger colour as ground and white ink, never the accent's green under red text —
+then the operation), the pane's
 *Extract…* and the toolbar's *Extract all* through the extract dialog (§3); a drag of the
 selection onto a folder row or a crumb is `Move`,
 refused in place with the reason (§3) and never a half-moved selection — the reason sits under
@@ -938,7 +1021,9 @@ as a toast; a folder the page stood in that went (a Discard dropped it, a Delete
 is said by a toast naming it, the page having walked its crumbs upwards; a click on the list's blank area clears the
 selection; the name column takes the width the others do not need, so a name is never squeezed
 while *Stored as* stands empty — Size, Stored as and Modified are fixed and Modified goes first
-when the pane is narrow; drag-and-drop, the expiring prompt, the locked banner). Keys & backups (slots, Add a key,
+when the pane is narrow; drag-and-drop; the extract dialog and the conflict dialogs of §3; the
+locked banner, one line — "The vault is locked. This archive stays open while you are here." — and
+no timeout of the archive's own (§2.3)). Keys & backups (slots, Add a key,
 Remove — greyed while the invariant would refuse — Rotate now (its dialog says every way in is
 rewrapped here and now, and asks for a backup first, §13), the entangled password's row (§13),
 *Show recovery key…* — shown only while a recovery

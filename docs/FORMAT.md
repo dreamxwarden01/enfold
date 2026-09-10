@@ -660,6 +660,29 @@ record never stands under a tombstone; moving a directory into itself or into a 
 refused. Nothing is ever derived from a path: extraction creates a directory because its record is
 live, never because a file's name has a prefix, and a `name` with a `/` is invalid.
 
+**R40 — A live extent may be moved within the file, verbatim.** A commit may give a live file
+record a new `data_off` whose extent holds a byte-for-byte copy of the old one — nothing about
+the content changes: the same DEK, the same nonces, the same tags, and the chunk AAD
+(`archive_id ‖ file_id ‖ alg_id ‖ chunk_size`, §12) names no offset. The destination is taken
+from the published, unquarantined free space (R31's writer rule) and lies **wholly before the
+source**, never appended: a move that would not lower the extent is not a move, and a file
+larger than every hole before it is skipped, the run going on to the next. The index is
+committed naming the new extent; the old one is freed by that commit and quarantined like a
+deleted file's. A reader that holds the old extent keeps reading it where it lies — R31 keeps a
+held extent from reuse and from truncation until the hold ends — and nothing is ever
+retargeted. One commit may move several extents, each to its own place, within a budget of bytes
+the app sets (`APP.md` §2.3); a cancel is honoured per chunk of the copy, not per extent, and one
+that lands before the commit publishes leaves the originals live and the copies in free space,
+while one between two commits leaves a consistent archive with its live data lower in the file
+than before, the next such commit going on from there. What a move gives back is the tail, when
+the last live byte moves down and the follow-up commit of R31 truncates it; the metadata a commit
+writes takes space of its own — the free map is always appended, the index when no hole holds
+it — so a single move commit may leave the file larger for the moment, and what came back is
+never confused with what was moved. This is compaction **in place**: an archive gives its space
+back without a second file and without ever needing twice its size on disk. Whole-file
+compaction (R33) remains, on request, for what a move cannot do: a file whose extent is larger
+than every hole before it.
+
 
 ---
 
@@ -1281,11 +1304,12 @@ file is checked by the archive layer, which knows the file size. Nothing in the 
 extent the index references, so a tampered map can waste space but cannot direct a write over
 existing data.
 
-Compaction is an offline operation, run on request and by the app itself when the free space is
-worth it (`APP.md` §2.3). It is the only operation that moves file data without
-changing a DEK, which is permissible because ciphertext bytes are copied verbatim rather than
-re-encrypted. What it must keep is pinned in R33; what a writer must leave alone between commits,
-in R31.
+Compaction is done in place (R40) by the app itself, a budget of bytes per commit, after any
+commit whose free space would give enough of the tail back to be worth the moves (`APP.md`
+§2.3); the whole-file rewrite of R33 is an explicit operation, run on request. These two are the only
+operations that move file data without changing a DEK, which is permissible because ciphertext
+bytes are copied verbatim rather than re-encrypted. What the rewrite must keep is pinned in R33
+and what a move must keep in R40; what a writer must leave alone between commits, in R31.
 
 ---
 

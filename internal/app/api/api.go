@@ -140,6 +140,14 @@ func (a *Archives) Open(id string) (app.ArchiveStat, error) {
 	return s, asErr(e)
 }
 
+// Leave is the page leaving an open archive (APP.md §2.3): it closes at once
+// and its keys go, unless a preview reader still holds it — then it stays
+// open for the readers alone and closes with the last of them. An archive
+// that is not open answers nil: it had already been left.
+func (a *Archives) Leave(id string) error { return asErr(a.c.LeaveArchive(id)) }
+
+// Close is the kill switch: it closes now, readers or not, dropping the
+// preview token and failing every in-flight body (APP.md §2.3, §4).
 func (a *Archives) Close(id string) error     { return asErr(a.c.CloseArchive(id)) }
 func (a *Archives) CloseAll() []string        { return a.c.CloseAllArchives() }
 func (a *Archives) Hide(id string) error      { return asErr(a.c.HideArchive(id, true)) }
@@ -257,6 +265,12 @@ func (a *Archive) Move(id string, recordIDs []string, parentID string) error {
 	return asErr(a.c.MoveRecords(id, recordIDs, parentID))
 }
 
+// Extract writes the chosen records under dir, which it creates if it is not
+// there. policy is what happens to a file already in the destination:
+// "replace" (the default when empty), "skip", "rename", or "ask" — which
+// extracts everything that collides with nothing and reports each collision
+// as a conflict outcome carrying the existing file's size and date, for the
+// page to ask about and re-issue (APP.md §3).
 func (a *Archive) Extract(id string, recordIDs []string, dir, policy string) (string, error) {
 	op, e := a.c.Extract(id, recordIDs, dir, app.ExtractPolicy(policy))
 	return op, asErr(e)

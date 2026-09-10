@@ -19,11 +19,12 @@ import (
 
 // openArchive is one archive the core holds open (APP.md §2.3): the
 // committed snapshot — the files and the directories, re-taken after every
-// commit — the preview token, the reader count and one idle clock. There is
-// no overlay and no dirty state since 2026-09-09: every operation is its own
-// transaction, committed at its end. Fields are guarded by Core.mu; opMu
-// serialises operations that touch the handle, and a running operation holds
-// it for the whole of its transaction.
+// commit — the preview token, the reader count and what holds the handle
+// open. There is no overlay and no dirty state since 2026-09-09: every
+// operation is its own transaction, committed at its end, and no clock of
+// its own since 2026-09-10 — an open archive has no timeout (DESIGN.md §10).
+// Fields are guarded by Core.mu; opMu serialises operations that touch the
+// handle, and a running operation holds it for the whole of its transaction.
 type openArchive struct {
 	id   [16]byte
 	path string
@@ -40,7 +41,20 @@ type openArchive struct {
 	state   string // open | compacting | needs_reopen
 	token   string
 	readers int
-	lastUse time.Time
+	// What holds the handle open (APP.md §2.3, ruled 2026-09-10). mounted is
+	// the page: set by an Open, cleared by Leave, and an archive stays open
+	// for as long as it stands, vault locked or not. claims are the
+	// Archives-page operations that opened this archive for themselves and
+	// have not registered their operation yet — the moment one is registered
+	// the ops map holds the handle instead. With none of these, no reader and
+	// no running operation, nothing is looking at the archive and it is
+	// closed at once: there is no clock to wait for.
+	mounted bool
+	claims  int
+	// gone is closed when the handle is closed (closeArchiveLocked). A
+	// caller that finds the handle closing — the kill switch has it — waits
+	// on it and then opens afresh: nobody takes over a handle that is going.
+	gone chan struct{}
 	// The handle's figures, cached at every snapshot so that nothing under
 	// the state mutex takes the archive's own mutex (a running hash holds
 	// it for the whole read). records counts live files and directories
@@ -51,12 +65,6 @@ type openArchive struct {
 	free    uint64
 	// copyMismatch: the file's seq is not the one the registry last saw.
 	copyMismatch bool
-	// The idle clock. Each arm bumps its generation and the callback carries
-	// the one it was armed with, so a callback that was already running when
-	// the clock was re-armed or cleared does nothing.
-	idleTimer Timer
-	idleGen   uint64
-	expiresAt time.Time
 	// Registry facts.
 	kid        [16]byte
 	keyVersion int
@@ -79,7 +87,15 @@ type owedReceipt struct {
 	hash      *[32]byte
 }
 
-// findArchive returns the open archive or the code.
+// findArchive returns the archive a page-facing call may use, or the code.
+// It serves the page's own methods — Page, Stat, the previews, the
+// operations — and answers for a handle the page does not hold exactly as
+// for none: archive.not_open. That is the draining state of APP.md §2.3 and
+// §4 in one predicate — a handle whose page was left while a body was in
+// flight, or which the kill switch is closing, or which an Archives-page
+// operation opened for itself, is held by what is in flight and nothing
+// else, and admits no new request until an Open mounts it again. Cancel of
+// a running operation does not come through here and stays allowed.
 func (c *Core) findArchive(id string) (*openArchive, *Error) {
 	aid, ok := parseID(id)
 	if !ok {
@@ -88,7 +104,7 @@ func (c *Core) findArchive(id string) (*openArchive, *Error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	oa := c.archives[aid]
-	if oa == nil {
+	if oa == nil || !oa.mounted {
 		return nil, coded(CodeArchiveNotOpen)
 	}
 	switch oa.state {
@@ -314,17 +330,69 @@ func (c *Core) deviceIDLocked() [16]byte {
 	return [16]byte{}
 }
 
-// OpenArchive opens a registry archive under the session.
+// OpenArchive opens a registry archive under the session for its page: the
+// archive stays open while the page is shown and has no timeout of its own
+// (APP.md §2.3). An archive the core already holds — for an operation of the
+// Archives page, or for a reader of a page that was left — is joined rather
+// than opened a second time, which is what keeps the archive layer's
+// one-handle-per-path rule.
 func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
+	return c.openArchiveFor(id, true)
+}
+
+// openArchiveFor is the open itself; mounted says whether the page is what
+// asks for it. An operation of the Archives page opens with mounted false —
+// nothing but the operation holds the handle, so it closes again when the
+// operation ends (APP.md §2.3) — and a page that opens the same archive
+// meanwhile joins the handle and mounts it, which keeps it open afterwards.
+//
+// Two callers opening a closed archive at once — an Archives-page operation
+// and the page — must end with one handle, not with the archive layer's
+// ErrBusy for the second: the first installs an opening reservation under
+// the state mutex before it calls archive.Open, and the second finds it,
+// waits for it outside the mutex and comes back in to join the handle (the
+// outside review of 2026-09-10, finding 5). A handle the kill switch is
+// closing is waited for the same way and then opened afresh.
+func (c *Core) openArchiveFor(id string, mounted bool) (ArchiveStat, *Error) {
 	aid, ok := parseID(id)
 	if !ok {
 		return ArchiveStat{}, coded(CodeParams)
 	}
 	c.mu.Lock()
 	if oa := c.archives[aid]; oa != nil {
+		if oa.state == "closing" {
+			// The kill switch has this handle: it is gone in a moment, and
+			// what follows is a fresh open — a page never takes over a
+			// handle that is being closed under it.
+			gone := oa.gone
+			c.mu.Unlock()
+			<-gone
+			return c.openArchiveFor(id, mounted)
+		}
+		if mounted && !oa.mounted {
+			// Mounting a handle the page does not hold — one the core opened
+			// for an Archives-page operation, or one draining after its page
+			// was left — is an Open, and an Open needs the session (APP.md
+			// §2.3, "What stays usable after a lock"): a lock preserves the
+			// page an archive already had and never hands a page one it did
+			// not have. The handle stays as it was, unmounted.
+			if _, e := c.sessionLocked(); e != nil {
+				c.mu.Unlock()
+				return ArchiveStat{}, e
+			}
+			oa.mounted = true
+		}
 		st := c.statLocked(oa)
 		c.mu.Unlock()
 		return st, nil
+	}
+	if ch := c.opening[aid]; ch != nil {
+		// Someone else is opening this archive right now: wait for their
+		// handle and join it, so that the archive layer sees one Open per
+		// path (APP.md §2.3).
+		c.mu.Unlock()
+		<-ch
+		return c.openArchiveFor(id, mounted)
 	}
 	if c.deleting[aid] {
 		// A delete has claimed this record and its file is going: it is not
@@ -355,7 +423,26 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 	}
 	opts := c.archiveOptionsLocked(rec)
 	path, name, kid, nv, method, lastAt, lastSeq := rec.LastPath, rec.Name, rec.CurrentKID, len(rec.Versions), methodOf(rec.Policy), rec.LastWrittenAt, rec.LastSeq
+	// The reservation: from here until the handle is installed or the open
+	// has failed, a second opener of this archive waits rather than opening
+	// a second handle. It is released on every way out.
+	opening := make(chan struct{})
+	c.opening[aid] = opening
 	c.mu.Unlock()
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		c.mu.Lock()
+		if c.opening[aid] == opening {
+			delete(c.opening, aid)
+		}
+		c.mu.Unlock()
+		close(opening)
+	}
+	defer release()
 
 	a, err := archive.Open(path, keys, opts)
 	zeroKeys(keys)
@@ -365,14 +452,15 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 		}
 		return ArchiveStat{}, c.fail("open archive", err)
 	}
-	oa := &openArchive{id: aid, path: path, name: name, a: a, kid: kid, keyVersion: nv, method: method, lastSavedAt: lastAt}
+	oa := &openArchive{id: aid, path: path, name: name, a: a, kid: kid, keyVersion: nv, method: method, lastSavedAt: lastAt, gone: make(chan struct{})}
 	oa.token = newToken()
 	oa.refreshSnapshot()
 	c.mu.Lock()
 	if c.archives[aid] != nil { // raced with another Open
 		c.mu.Unlock()
 		a.Close()
-		return c.OpenArchive(id)
+		release() // before re-entering, or the re-entry would wait on itself
+		return c.openArchiveFor(id, mounted)
 	}
 	if c.deleting[aid] {
 		// A delete claimed the record while the file was being opened: the
@@ -383,8 +471,7 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 	}
 	c.archives[aid] = oa
 	oa.state = "open"
-	oa.lastUse = c.now()
-	c.armArchiveIdleLocked(oa)
+	oa.mounted = mounted
 	if a.Stale() != nil || a.FreeMapRebuilt() != nil || a.EnvelopeStale() {
 		c.log("archive %s opened with warnings: stale=%v freemap=%v envelope=%v", name, a.Stale(), a.FreeMapRebuilt(), a.EnvelopeStale())
 	}
@@ -465,9 +552,203 @@ func (oa *openArchive) refreshSnapshot() {
 	oa.records = len(oa.snap) + len(oa.dirSnap)
 }
 
-// CloseArchive closes an open archive. An operation running on it holds the
-// handle until it ends, one way or the other: the archive is clean between
-// operations, so there is nothing to ask about (APP.md §2.3).
+// LeaveArchive is the page leaving the archive (APP.md §2.3, ruled
+// 2026-09-10): the archive closes at once and its DEKs go with it, unless
+// something is still reading it over the preview transport — then it is
+// **draining**: the token admits no new request, every page-facing method
+// answers archive.not_open (findArchive), the bodies in flight finish, and
+// the archive closes itself after the last (releaseReader). A draining
+// archive gets **no timeout** in this version: the state exists for the
+// external playback of §4 and its timeout is decided with it, so the core
+// says so in the log rather than inventing a clock. A running operation
+// holds the handle the same way and the close follows it (ops.go finishOp).
+// An archive that is not open, or that the page does not hold, was already
+// left: nothing to do.
+func (c *Core) LeaveArchive(id string) *Error {
+	aid, ok := parseID(id)
+	if !ok {
+		return coded(CodeParams)
+	}
+	c.mu.Lock()
+	oa := c.archives[aid]
+	if oa == nil || !oa.mounted {
+		c.mu.Unlock()
+		return nil
+	}
+	oa.mounted = false
+	closed := c.dropIfUnheldLocked(oa)
+	readers, name := oa.readers, oa.name
+	c.mu.Unlock()
+	switch {
+	case closed:
+		c.emitArchivesChanged()
+		c.emitState()
+	case readers > 0:
+		c.log("archive %s: the page was left while %d readers still hold it: it drains — no new request, closed after the last body — with no timeout of its own in this version (APP.md §2.3)", name, readers)
+	default:
+		c.log("archive %s: the page was left with work still running on it: it closes when that work ends (APP.md §2.3)", name)
+	}
+	return nil
+}
+
+// LeaveAllArchives leaves every archive a page holds: what the shell calls
+// as the window is destroyed (APP.md §2.3, §2.4), since the process keeps
+// running in the tray and a window recreated from it starts at the list.
+// Each archive closes, or drains, exactly as LeaveArchive leaves it.
+func (c *Core) LeaveAllArchives() {
+	c.mu.Lock()
+	var ids []string
+	for id, oa := range c.archives {
+		if oa.mounted {
+			ids = append(ids, hexID(id))
+		}
+	}
+	c.mu.Unlock()
+	for _, id := range ids {
+		c.LeaveArchive(id)
+	}
+}
+
+// dropIfUnheldLocked closes an archive nothing holds any more: its page has
+// been left (or it was opened for one operation of the Archives page and
+// never mounted), no preview reader is reading it, no operation is running
+// on it and no claim stands. It is the whole of the archive's lifetime rule
+// since the idle clock went (APP.md §2.3, DESIGN.md §10). It reports whether
+// the handle was closed, so the caller can announce it outside the mutex.
+// Caller holds the state mutex and not opMu.
+func (c *Core) dropIfUnheldLocked(oa *openArchive) bool {
+	if c.archives[oa.id] != oa || oa.mounted || oa.claims > 0 {
+		return false
+	}
+	if oa.readers > 0 || oa.quiesced || oa.state == "compacting" || c.hasRunningOpLocked(oa.id) {
+		return false
+	}
+	// A short call that takes the handle without registering an operation —
+	// a rename, a delete, a folder — holds opMu; it closes the archive itself
+	// on its way out (settleArchive), so nothing is left open here.
+	if !oa.opMu.TryLock() {
+		return false
+	}
+	defer oa.opMu.Unlock()
+	c.closeArchiveLocked(oa)
+	return true
+}
+
+// settleArchive closes an archive nothing holds any more and announces it.
+// Every call that could have been the last thing holding one ends with it:
+// the calls that take opMu without registering an operation, and the reader
+// releases.
+func (c *Core) settleArchive(oa *openArchive) {
+	c.mu.Lock()
+	closed := c.dropIfUnheldLocked(oa)
+	c.mu.Unlock()
+	if closed {
+		c.emitArchivesChanged()
+		c.emitState()
+	}
+}
+
+// releaseReader ends one preview reader and closes the archive when that
+// reader was the last thing holding a page the user has left (APP.md §2.3).
+func (c *Core) releaseReader(oa *openArchive) {
+	c.mu.Lock()
+	if oa.readers > 0 {
+		oa.readers--
+	}
+	closed := c.dropIfUnheldLocked(oa)
+	c.mu.Unlock()
+	if closed {
+		c.emitArchivesChanged()
+		c.emitState()
+	}
+}
+
+// acquireForOperation resolves the archive one of the Archives page's own
+// operations runs on — Verify, Compact, RotateKey (APP.md §2.3, ruled
+// 2026-09-10: the Archives page's operations never ask for the archive to be
+// opened first). The handle the page holds is joined; an archive whose page
+// is not open is opened as the core's own, its key unwrapped through the
+// session, and closed again — the key destroyed — when the operation ends
+// (ops.go finishOp). A page that opens it meanwhile joins this handle rather
+// than opening a second, so the archive layer's one-handle-per-path rule is
+// never tripped. A session that is not live answers as it always did: the
+// unwrap needs it.
+//
+// It returns holding a claim on the handle, which keeps it open until the
+// operation is registered; the operation drops the claim as its first act
+// (releaseClaim), and a path that then fails to start one must drop it too.
+func (c *Core) acquireForOperation(id string) (*openArchive, *Error) {
+	aid, ok := parseID(id)
+	if !ok {
+		return nil, coded(CodeParams)
+	}
+	for {
+		c.mu.Lock()
+		oa := c.archives[aid]
+		if oa == nil {
+			// Opened as the core's own handle, unmounted; the open joins a
+			// concurrent one through its reservation. The handle is looked
+			// up again rather than trusted: with no claim on it yet, a Leave
+			// that landed in between could have closed it, and the loop then
+			// simply opens it once more.
+			c.mu.Unlock()
+			if _, e := c.openArchiveFor(id, false); e != nil {
+				return nil, e
+			}
+			continue
+		}
+		if oa.state == "closing" {
+			// The kill switch has this handle: wait for it to go and open
+			// afresh, as a page would.
+			gone := oa.gone
+			c.mu.Unlock()
+			<-gone
+			continue
+		}
+		switch oa.state {
+		case "compacting":
+			c.mu.Unlock()
+			return nil, coded(CodeArchiveCompacting)
+		case "needs_reopen":
+			c.mu.Unlock()
+			return nil, coded(CodeArchiveNeedsReopen)
+		}
+		oa.claims++
+		c.mu.Unlock()
+		return oa, nil
+	}
+}
+
+// releaseClaim gives back what acquireForOperation took. Called from inside
+// the operation — where the ops map holds the archive instead, so nothing
+// closes — and from every path that acquired one and then did not start an
+// operation at all, where it is the close.
+func (c *Core) releaseClaim(oa *openArchive) {
+	c.mu.Lock()
+	if oa.claims > 0 {
+		oa.claims--
+	}
+	closed := c.dropIfUnheldLocked(oa)
+	c.mu.Unlock()
+	if closed {
+		c.emitArchivesChanged()
+		c.emitState()
+	}
+}
+
+// CloseArchive is the kill switch of APP.md §2.3: it closes now, readers or
+// not, and never waits behind an add or a verify. Under the state mutex the
+// token dies and the handle is marked closing — unmounted, so every
+// page-facing method answers archive.not_open from here on, and an Open
+// waits for it to be gone — and every running operation on it is cancelled;
+// then the in-flight readers are killed at once (archive.DropReaders), so
+// every body over the preview transport fails at its next chunk (§4); and
+// only then is the handle's own turn taken, which is short — a cancelled
+// operation lets go at its next chunk, its transaction aborted and nothing
+// published — and the handle closed. The archive is clean between
+// operations, so there is nothing to ask about. A compaction is the one
+// refusal: it holds the archive's mutex for its whole run and is cancelled
+// through its own operation instead.
 func (c *Core) CloseArchive(id string) *Error {
 	aid, ok := parseID(id)
 	if !ok {
@@ -475,48 +756,59 @@ func (c *Core) CloseArchive(id string) *Error {
 	}
 	c.mu.Lock()
 	oa := c.archives[aid]
-	if oa != nil && (oa.state == "compacting" || oa.quiesced) {
+	if oa == nil {
+		c.mu.Unlock()
+		return coded(CodeArchiveNotOpen)
+	}
+	if oa.state == "compacting" || oa.quiesced {
 		// A compaction holds the archive's mutex for its whole run: say so
 		// now rather than after it.
 		c.mu.Unlock()
 		return coded(CodeArchiveCompacting)
 	}
-	c.mu.Unlock()
-	if oa == nil {
-		return coded(CodeArchiveNotOpen)
+	if oa.state == "closing" {
+		// Another Close has it: it is gone in a moment, which is what this
+		// call asked for.
+		gone := oa.gone
+		c.mu.Unlock()
+		<-gone
+		return nil
 	}
+	oa.token = ""
+	oa.mounted = false
+	oa.state = "closing"
+	c.cancelOpsLocked(aid)
+	c.mu.Unlock()
+	// The bodies fail first: nothing waits for the operation's turn.
+	oa.a.DropReaders()
+	// The handle's turn: the operation cancelled above lets go at its next
+	// chunk. It may have closed the archive itself on its way out — an
+	// unmounted handle nothing holds — in which case the job is done.
 	oa.opMu.Lock()
-	defer oa.opMu.Unlock()
 	c.mu.Lock()
-	if c.archives[aid] != oa {
-		c.mu.Unlock()
-		return coded(CodeArchiveNotOpen)
+	if c.archives[aid] == oa {
+		// A handle in needs_reopen is broken but still holds the file:
+		// closing it is what lets a reopen succeed.
+		c.closeArchiveLocked(oa)
 	}
-	if oa.state == "compacting" {
-		c.mu.Unlock()
-		return coded(CodeArchiveCompacting)
-	}
-	// A handle in needs_reopen is broken but still holds the file: closing
-	// it is what lets a reopen succeed.
-	c.closeArchiveLocked(oa)
 	c.mu.Unlock()
+	oa.opMu.Unlock()
 	c.emitArchivesChanged()
 	c.emitState()
 	return nil
 }
 
-// closeArchiveLocked drops the archive: token forgotten, timer stopped,
-// handle closed (which fails every in-flight preview body). Caller holds the
-// state mutex and opMu.
+// closeArchiveLocked drops the archive: token forgotten, handle closed —
+// which fails every in-flight preview body and zeroes the keys — and gone
+// closed, which wakes whoever was waiting for this handle to go. Caller holds
+// the state mutex and opMu.
 func (c *Core) closeArchiveLocked(oa *openArchive) {
-	if oa.idleTimer != nil {
-		oa.idleTimer.Stop()
-	}
-	oa.idleGen++ // a callback already on its way is void
 	oa.token = ""
+	oa.mounted = false
 	delete(c.archives, oa.id)
 	oa.a.Close()
 	oa.state = "closed"
+	close(oa.gone)
 }
 
 // CloseAllArchives closes what it can and reports what stayed open — an
@@ -636,9 +928,6 @@ func (c *Core) statLocked(oa *openArchive) ArchiveStat {
 	if oa.state != "needs_reopen" && oa.state != "compacting" {
 		st.Size, st.Files, st.Records, st.FreeSpace = oa.size, oa.files, oa.records, oa.free
 	}
-	if !oa.expiresAt.IsZero() {
-		st.ExpiresAt = oa.expiresAt.Unix()
-	}
 	return st
 }
 
@@ -653,63 +942,14 @@ func (c *Core) Stat(id string) (ArchiveStat, *Error) {
 	return c.statLocked(oa), nil
 }
 
-// The archive's one clock (APP.md §2.3, DESIGN.md §10): idleness — no
-// running operation, no open reader, no request — closes it, and the archive
-// is always clean between operations, so nothing is ever discarded by it.
-
-// touchArchiveLocked records activity on the archive and re-arms its idle
-// clock. Caller holds the state mutex.
-func (c *Core) touchArchiveLocked(oa *openArchive) {
-	oa.lastUse = c.now()
-	c.armArchiveIdleLocked(oa)
-}
-
-func (c *Core) armArchiveIdleLocked(oa *openArchive) {
-	if oa.idleTimer != nil {
-		oa.idleTimer.Stop()
-	}
-	idle := c.vault.idle
-	if idle == 0 {
-		idle = defaultIdle
-	}
-	oa.expiresAt = c.now().Add(idle)
-	oa.idleGen++
-	gen := oa.idleGen
-	oa.idleTimer = c.deps.Clock.AfterFunc(idle, func() { c.archiveIdle(oa, gen) })
-}
-
-// archiveIdle is the idle clock's expiry, for the arm it was set by.
-func (c *Core) archiveIdle(oa *openArchive, gen uint64) {
-	if !oa.opMu.TryLock() {
-		// An operation is running: it holds the clock. Look again later.
-		c.mu.Lock()
-		if c.archives[oa.id] == oa && oa.idleGen == gen {
-			c.armArchiveIdleLocked(oa)
-		}
-		c.mu.Unlock()
-		return
-	}
-	defer oa.opMu.Unlock()
-	c.mu.Lock()
-	if c.archives[oa.id] != oa || oa.idleGen != gen {
-		c.mu.Unlock()
-		return // closed, or re-armed while this callback was on its way
-	}
-	// A running operation holds the clock whether or not it holds opMu: an
-	// add registers its operation before it walks the source folder and takes
-	// opMu only afterwards, and an extract takes it never — it was the walk
-	// of a large folder that could have the archive closed under it (the
-	// outside audit of 2026-09-09).
-	if oa.readers > 0 || oa.state == "compacting" || c.hasRunningOpLocked(oa.id) {
-		c.armArchiveIdleLocked(oa)
-		c.mu.Unlock()
-		return
-	}
-	c.closeArchiveLocked(oa)
-	c.mu.Unlock()
-	c.emitArchivesChanged()
-	c.emitState()
-}
+// An open archive has no clock (APP.md §2.3, DESIGN.md §10, ruled
+// 2026-09-10): it stays open while its page is shown — vault locked or not,
+// window on screen or hidden to the tray — and is closed the moment the page
+// is left (LeaveArchive), the last reader of a left page ends
+// (releaseReader), or the operation that opened it for itself finishes
+// (ops.go finishOp). A timer that closed it under the user's eyes was
+// cutting work off for nothing, and the session's own timeout still guards
+// the keystore.
 
 // An operation is a transaction (APP.md §2.3, DECISIONS 2026-09-09): Begin
 // at its start, Commit at its end, then the receipt, one Session.UpdateRegistry
@@ -792,7 +1032,6 @@ func (t *opTx) commit(ctx context.Context) *Error {
 	oa.seq++
 	seq := oa.seq
 	c.recordReceiptLocked(oa, rec, nil)
-	c.touchArchiveLocked(oa)
 	c.mu.Unlock()
 	c.emit(EventArchiveChanged, ArchiveChanged{ID: hexID(oa.id), Seq: seq})
 	c.emitArchivesChanged()
@@ -847,7 +1086,6 @@ func (c *Core) Page(id, dirID, sortBy string, offset, limit int) (Page, *Error) 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.touchArchiveLocked(oa)
 	m := oa.merge()
 	if !m.dirUsable(did) {
 		return Page{}, coded(CodeFileNotFound)
@@ -981,6 +1219,10 @@ func (c *Core) CreateFolder(id, parentID, name string) (string, *Error) {
 	if !ok {
 		return "", coded(CodeParams)
 	}
+	// The page may have been left while this call held the handle: the
+	// archive is closed on the way out then, since nothing waits for a clock
+	// any more (APP.md §2.3).
+	defer c.settleArchive(oa)
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
@@ -1037,6 +1279,10 @@ func (c *Core) DeleteRecords(id string, recordIDs []string) *Error {
 		}
 		ids = append(ids, rid)
 	}
+	// The page may have been left while this call held the handle: the
+	// archive is closed on the way out then, since nothing waits for a clock
+	// any more (APP.md §2.3).
+	defer c.settleArchive(oa)
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
@@ -1076,6 +1322,10 @@ func (c *Core) RenameRecord(id, recordID, newName string) *Error {
 	if !ok || rid == format.RootID {
 		return coded(CodeParams)
 	}
+	// The page may have been left while this call held the handle: the
+	// archive is closed on the way out then, since nothing waits for a clock
+	// any more (APP.md §2.3).
+	defer c.settleArchive(oa)
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
@@ -1144,6 +1394,10 @@ func (c *Core) MoveRecords(id string, recordIDs []string, parentID string) *Erro
 		}
 		ids = append(ids, rid)
 	}
+	// The page may have been left while this call held the handle: the
+	// archive is closed on the way out then, since nothing waits for a clock
+	// any more (APP.md §2.3).
+	defer c.settleArchive(oa)
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
 	c.mu.Lock()
@@ -1225,7 +1479,6 @@ func (c *Core) PreviewURL(id, fileID string) (string, *Error) {
 	if _, ok := oa.currentFile(fid); !ok {
 		return "", coded(CodeFileNotFound)
 	}
-	c.touchArchiveLocked(oa)
 	return c.preview.url(oa.token, fid), nil
 }
 
@@ -1252,14 +1505,9 @@ func (c *Core) PreviewText(id, fileID string, maxBytes int) (string, bool, *Erro
 		c.mu.Unlock()
 		return "", false, coded(CodeFileNotFound)
 	}
-	c.touchArchiveLocked(oa)
 	oa.readers++
 	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		oa.readers--
-		c.mu.Unlock()
-	}()
+	defer c.releaseReader(oa)
 	r, err := oa.a.OpenReader(fid)
 	if err != nil {
 		return "", false, c.fail("preview text", err)

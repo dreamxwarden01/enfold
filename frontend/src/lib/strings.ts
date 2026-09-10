@@ -4,6 +4,7 @@
 
 import { CeremonyStep, Code } from "./api";
 import type { CeremonyState, CodeKey, StepKey } from "./api";
+import { plural } from "./format";
 
 export interface StepCopy {
   title: string;
@@ -163,6 +164,71 @@ const extraCodes: Record<string, string> = {
 export function codeText(code: string | undefined): string {
   if (!code) return "";
   return (codeCopy as Record<string, string>)[code] ?? extraCodes[code] ?? `Error: ${code}`;
+}
+
+// ---- The archive page's own lines (APP.md §2.3, §6, ruled 2026-09-10) --
+//
+// The locked banner is one plain line: the archive has no timeout of its
+// own, and what it owes the vault is already said by the status strip. The
+// two titles are what stops *Delete archive…*, said on the button itself,
+// and the third is what the kill switch does that leaving the page does not.
+export const archivePageCopy = {
+  lockedBanner: "The vault is locked. This archive stays open while you are here.",
+  closeNow: "Closes the archive now, even while something is playing.",
+  deleteNeedsUnlock: "Unlock the vault first: the record is the vault's.",
+  deleteTampered: "The vault's slot region does not verify; every change is disabled.",
+};
+
+// ---- The extract dialog and what an `ask` comes back with (APP.md §3,
+// §6, ruled 2026-09-10) ----------------------------------------------
+//
+// The four policies in the words the dialog offers them: *Keep both* is
+// the `rename` policy, the incoming file numbered, and *Ask me about each
+// conflict* is the one that comes back with a question.
+export const policyLabels: Record<string, string> = {
+  replace: "Replace",
+  skip: "Skip",
+  rename: "Keep both",
+  ask: "Ask me about each conflict",
+};
+
+export const extractCopy = {
+  policyLegend: "If a file is already there",
+};
+
+// conflictTitle is the question asked first: one conflict names the file,
+// several count them.
+export function conflictTitle(n: number, name: string): string {
+  if (n === 1) return `The destination already has a file named ${name}`;
+  return `The destination has ${plural(n, "file")} with the same names`;
+}
+
+// The rest of the question, one way for one conflict and another for
+// several: *Replace* / *Skip* / *Compare both files* against *Replace all*
+// / *Skip all* / *Let me decide for each file*.
+export const conflictCopy = {
+  oneBody: "It was left where it is. The copy in the archive can replace it, or both can be kept.",
+  andMore: (n: number): string => `and ${n} more.`,
+  compare: (n: number): string => (n === 1 ? "Compare both files" : "Let me decide for each file"),
+  skip: (n: number): string => (n === 1 ? "Skip" : "Skip all"),
+  replace: (n: number): string => (n === 1 ? "Replace" : "Replace all"),
+};
+
+// The compare list after Windows Explorer's: the two columns, the note
+// under the ticks, and its two buttons.
+export const compareCopy = {
+  title: "Which files do you want to keep?",
+  fromArchive: "Files from the archive",
+  inDestination: "Files already in the destination",
+  note: "A tick on both sides keeps both: the file from the archive comes out under a new name.",
+  cancel: "Cancel",
+  go: "Continue",
+};
+
+// skipSameText is the foot's tick, singular at one and empty at none —
+// there is nothing to tick when no two copies match.
+export function skipSameText(n: number): string {
+  return n === 0 ? "" : `Skip ${plural(n, "file")} with the same date and size`;
 }
 
 // retriesText is the count shown with the PIN prompt. The card is asked

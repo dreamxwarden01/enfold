@@ -17,12 +17,22 @@ does, and publishes nothing until it commits at its end (APP.md 2.3).
 POST /mock/preview {"name": "reclaim"} plays the compaction the core runs
 itself after a commit that leaves the free space over APP.md 2.3's
 thresholds - the strip's *Reclaiming space*, cancellable, the space back on
-the status line when it commits."""
-import json, os, sys, threading, time
+the status line when it commits.
+
+An archive's lifetime (APP.md 2.3, ruled 2026-09-10) is played too: the
+page's Archives.Open mounts one archive and mints a preview token; every
+Archive-service method answers archive.not_open for an archive that is not
+mounted, and the preview URL - served by this mock at /p/<token>/<id> -
+answers 404 the moment the token is gone. Archives.Leave unmounts at once
+and leaves the archive DRAINING while one of its own operations still runs
+(the row keeps open: true until it ends, then archives.changed with open:
+false); Archives.Close is the kill switch and cancels that operation."""
+import json, os, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "frontend", "dist")
 NOW = int(time.time())
+PORT = 8125
 
 # Ids are 32 lowercase hex digits and the all-zero id is the archive's
 # root directory - the same value the core, the page and the generated
@@ -82,9 +92,11 @@ state = {
     ],
     # ArchiveStat lost Dirty, CapAt and SessionAlive on 2026-09-09 and
     # gained Records: an archive is clean between operations, and Extract
-    # all is greyed on a record count of zero (APP.md 2.3, 3).
+    # all is greyed on a record count of zero (APP.md 2.3, 3). It lost
+    # ExpiresAt on 2026-09-10: an open archive has no timeout of its own,
+    # so there is no deadline to carry.
     "stat": {"seq": 1, "id": "a1" * 16, "name": "Photos 2024", "size": 51_700_000_000, "files": 12406, "freeSpace": 3_100_000_000,
-             "records": 0, "keyVersion": 3, "lastSavedAt": NOW - 7200, "state": "open", "expiresAt": NOW + 540,
+             "records": 0, "keyVersion": 3, "lastSavedAt": NOW - 7200, "state": "open",
              "receiptOwed": False, "copyMismatch": False},
     # The index is a tree (APP.md 3, FORMAT.md R39): one record per
     # directory and per file, hanging off its parent by id, the root the
@@ -128,12 +140,28 @@ state = {
     "lastExportAt": NOW - 1_900_000,
     "settings": {"vaultPath": "D:/Vaults/personal.eks", "displayName": "Personal vault", "closeToTray": "destroy", "theme": "system",
                  "look": "native", "recoveryRecordPct": 3, "dictionaryBelow": 262144, "idleMinutes": 0, "absoluteMinutes": 0,
-                 "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives",
-                 "lastExtractFolder": "D:/Extracted"},
+                 "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives"},
     "text": {"text": "# Iceland, July 2024\n\nDay 1: Reykjavik...\n", "truncated": False},
+    # What the destination already holds, keyed by the record's path inside
+    # the archive: the mock's stand-in for the exclusive create the core
+    # cannot do here. Under the `ask` policy each one comes back as a
+    # `conflict` outcome carrying this stat, which is taken after the
+    # refusal and never to decide it (APP.md 3, ruled 2026-09-10). The
+    # first matches the archive's own copy exactly, so the compare list's
+    # "Skip N files with the same date and size" has something to tick.
+    "inDestination": {
+        "IMG_7201.HEIC": {"size": 4_300_000, "modifiedAt": NOW - 90000},
+        "itinerary.pdf": {"size": 990_000, "modifiedAt": NOW - 200000},
+        "2024/IMG_0001.HEIC": {"size": 1_200_000, "modifiedAt": NOW - 400000},
+    },
     # The operations running now, and the events the page has not drained.
     "ops": {},
     "events": [],
+    # The archive the page has mounted (Archives.Open), and the preview
+    # token minted for it - forgotten at Leave and at Close, after which
+    # the URL is 404 whatever it says (APP.md 2.3, 4).
+    "mounted": None,
+    "token": "",
 }
 
 # Scenes the lock screen cannot reach on its own here (the mock dispatches
@@ -314,9 +342,14 @@ def stat():
     return s
 
 
-def bump():
+def bump(archive_id=None):
     """One commit: the archive's seq advances and the page is told
-    (APP.md 2.3, an operation is a transaction)."""
+    (APP.md 2.3, an operation is a transaction). An operation the Archives
+    page started on an archive whose page is not open advances no tree the
+    page is showing, so only the list is told."""
+    if archive_id is not None and archive_id != state["stat"]["id"]:
+        emit("archives.changed", {"purged": []})
+        return
     state["stat"]["seq"] += 1
     state["stat"]["lastSavedAt"] = int(time.time())
     emit("archive.changed", {"id": state["stat"]["id"], "seq": state["stat"]["seq"]})
@@ -373,18 +406,25 @@ def op_view(op):
     return {k: v for k, v in op.items() if k != "cancelled"}
 
 
-def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase=""):
+def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase="", archive_id=None,
+             policy="", destination=""):
     """An operation is a transaction (APP.md 2.3): it begins, ticks
     op.progress by *bytes* - Done against Total, both plaintext - and
     commits at its end. A Cancel aborts it and publishes nothing: the
     records the commit would have made are never made. Items is what the
     operation planned - the files an add, a replace or an extract will
     write - which is what the strip counts: "Adding 3 files", singular at
-    one (APP.md 3, ruled 2026-09-09)."""
+    one (APP.md 3, ruled 2026-09-09). An extract's OpView carries its
+    Policy and Destination from its first event, so the conflict question
+    is the operation's own (APP.md 3, ruled 2026-09-10)."""
     state["nextOp"] = state.get("nextOp", 0) + 1
     op_id = "op%d" % state["nextOp"]
-    op = {"id": op_id, "kind": kind, "archiveId": state["stat"]["id"], "done": 0, "total": total,
+    aid = archive_id or state["stat"]["id"]
+    op = {"id": op_id, "kind": kind, "archiveId": aid, "done": 0, "total": total,
           "items": items, "phase": phase, "startedAt": int(time.time()), "finished": False, "results": []}
+    if policy:
+        op["policy"] = policy
+        op["destination"] = destination
     state["ops"][op_id] = op
 
     def run():
@@ -394,16 +434,38 @@ def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase=""):
                 op["finished"] = True
                 op["error"] = "op.cancelled"
                 emit("op.done", op_view(op))
+                finish_drain(aid)
                 return
             op["done"] = total * i // steps
             emit("op.progress", op_view(op))
-        commit()
+        # A commit with something to report answers its FileOutcomes; the
+        # rest answer None and the operation reports nothing.
+        out = commit()
+        if out is not None:
+            op["results"] = out
         op["finished"] = True
         emit("op.done", op_view(op))
-        bump()
+        bump(aid)
+        finish_drain(aid)
 
     threading.Thread(target=run, daemon=True).start()
     return op_id
+
+
+def running_ops(archive_id):
+    return [o for o in state["ops"].values() if o["archiveId"] == archive_id and not o["finished"]]
+
+
+def finish_drain(archive_id):
+    """The last of a left archive's own operations has ended: it closes
+    itself now (APP.md 2.3) and the list is told."""
+    a = archive(archive_id)
+    if a is None or not a.get("draining") or running_ops(archive_id):
+        return
+    a["draining"] = False
+    a["open"] = False
+    state["vault"]["openArchives"] = open_count()
+    emit("archives.changed", {"purged": []})
 
 
 def cancel_op(args):
@@ -591,23 +653,203 @@ def replace_file(args):
     return start_op("replace", ADDED_SIZE, lambda: None, items=1)
 
 
+# The four policies of APP.md 3 (ruled 2026-09-10). Replace is the default
+# when none is given - the wizard default of every archiver - and anything
+# else is params: the old code treated an unknown word as skip, which would
+# now silently mean "not replace".
+EXTRACT_POLICIES = ("replace", "skip", "rename", "ask")
+
+
+def extract_plan(ids):
+    """The files an Extract would write: each selected record and everything
+    live beneath a selected directory, the all-zero id meaning the whole
+    archive. Directories are left out of this list - the mock reports files
+    only - and an empty plan is file.not_found."""
+    if ROOT_ID in (ids or []):
+        want = {r["id"] for r in state["records"]}
+    else:
+        want = set()
+        for rid in ids or []:
+            if record(rid) is None:
+                continue
+            want |= {rid} | set(subtree(rid))
+    return [r for r in state["records"] if r["id"] in want and not r["isDir"]]
+
+
+def under(dest, p):
+    """Where a record lands: the destination plus its path in the archive,
+    which is what the core joins (APP.md 3)."""
+    return dest.rstrip("/\\") + "\\" + p.replace("/", "\\")
+
+
 def extract(args):
     """Extract(id, recordIDs, dir, policy): the all-zero id among the
     records is the whole archive; an empty list is params, never
-    everything. Every extract records the folder it went to
-    (lastExtractFolder), which is what the extract dialog is prefilled
-    with next time (APP.md 3)."""
-    ids, dest = (list(args) + ["", [], ""])[1:3]
+    everything. Nothing is recorded about the destination - the dialog is
+    prefilled from the archive's own folder, and no folder is kept from the
+    last time (ruled 2026-09-10). `ask` extracts everything that collides
+    with nothing and reports each collision as a `conflict` outcome
+    carrying the existing file's size and date, for the page to ask about
+    and re-issue."""
+    ids, dest, policy = (list(args) + ["", [], "", ""])[1:4]
     if not ids:
         return Err("params")
-    files = [r for r in state["records"] if not r["isDir"]]
+    policy = policy or "replace"
+    if policy not in EXTRACT_POLICIES:
+        return Err("params")
+    files = extract_plan(ids)
+    if not files:
+        return Err("file.not_found")
     total = sum(r["size"] for r in files) or ADDED_SIZE
+    here = state["inDestination"]
 
     def commit():
-        if dest:
-            state["settings"]["lastExtractFolder"] = dest
+        out = []
+        for r in files:
+            p = path_of(r)
+            # Every extract outcome carries the record's id and the archive
+            # copy's size and date (APP.md 3, ruled 2026-09-10): the page
+            # walks nothing for its compare list or its re-issue.
+            res = {"path": under(dest, p), "name": p, "isDir": False, "outcome": "extracted",
+                   "id": r["id"], "size": r["size"], "modifiedAt": r["modifiedAt"]}
+            existing = here.get(p)
+            if existing is not None:
+                if policy == "skip":
+                    res["outcome"] = "skipped"
+                elif policy == "ask":
+                    res["outcome"] = "conflict"
+                    res["existing"] = dict(existing)
+                elif policy == "rename":
+                    res["path"] = under(dest, p) + " (2)"
+                else:
+                    here.pop(p, None)  # replaced: the destination holds ours now
+            out.append(res)
+        return out
 
-    return start_op("extract", total, commit, items=len(files) or 1)
+    return start_op("extract", total, commit, items=len(files), policy=policy, destination=dest)
+
+
+# ---- an archive's lifetime (APP.md 2.3, ruled 2026-09-10) --------------
+#
+# An open archive has no timeout of its own. Leaving its page closes it at
+# once - Archives.Leave - or, while one of its own operations still runs,
+# when that operation ends (draining: nothing new is admitted meanwhile);
+# *Close archive* is the kill switch, which closes it whatever is reading it
+# and cancels the operation. The Archives page's own operations never ask
+# for it to be opened first: they open it themselves, run, and close it
+# again.
+
+def open_count():
+    return len([a for a in state["archives"] if a.get("open")])
+
+
+def mounted_only(method):
+    """Every Archive-service method is the mounted page's (APP.md 2.3):
+    an archive that is not mounted - never opened, left, closed, draining -
+    answers archive.not_open, the token notwithstanding. CancelOp and Op
+    are not wrapped: they stay allowed."""
+    def guarded(args):
+        if not args or state.get("mounted") != args[0]:
+            return Err("archive.not_open")
+        return method(args)
+    guarded.__name__ = getattr(method, "__name__", "method")
+    return guarded
+
+
+def preview_url(args):
+    """PreviewURL(id, fileID): the loopback URL the mock itself serves, under
+    the token minted at Open (APP.md 4)."""
+    return "http://127.0.0.1:%d/p/%s/%s" % (PORT, state["token"], (list(args) + ["", ""])[1])
+
+
+def open_archive(args):
+    """Archives.Open(id): the page has it now. It needs the session
+    (APP.md 2.3, "What stays usable after a lock") - unless this page
+    already has it, in which case the lock preserved it and Open answers
+    Stat as before. A token is minted for the previews; any earlier one is
+    forgotten with the archive it belonged to."""
+    a = archive(args[0]) if args else None
+    if a is None:
+        return Err("archive.not_found")
+    if state["vault"]["state"] != "unlocked" and state.get("mounted") != a["id"]:
+        return Err("vault.needs_unlock")
+    if state.get("mounted") != a["id"]:
+        state["mounted"] = a["id"]
+        state["token"] = secrets.token_hex(16)
+    a["open"] = True
+    a["draining"] = False
+    state["vault"]["openArchives"] = open_count()
+    return stat()
+
+
+def leave_archive(args):
+    """Archives.Leave(id): the page left it. Nothing new is admitted from
+    this moment - the methods answer archive.not_open and the preview URL
+    404 - and it closes at once, its keys gone, unless one of its own
+    operations still runs, in which case it is DRAINING: the row keeps
+    open: true until that operation ends, then archives.changed says
+    open: false (APP.md 2.3). An archive that is not open answers nil: it
+    had already been left."""
+    a = archive(args[0]) if args else None
+    if a is None:
+        return None
+    if state.get("mounted") == a["id"]:
+        state["mounted"] = None
+        state["token"] = ""
+    if a.get("open") and running_ops(a["id"]):
+        a["draining"] = True
+    else:
+        a["draining"] = False
+        a["open"] = False
+    state["vault"]["openArchives"] = open_count()
+    return None
+
+
+def close_archive(args):
+    """Archives.Close(id): the kill switch. It closes now, readers or not,
+    dropping every in-flight body and cancelling an operation of its own
+    that is running - the op ends with op.cancelled - and never waits
+    behind one (APP.md 2.3)."""
+    a = archive(args[0]) if args else None
+    if a is None:
+        return None
+    for o in running_ops(a["id"]):
+        o["cancelled"] = True
+    if state.get("mounted") == a["id"]:
+        state["mounted"] = None
+        state["token"] = ""
+    a["draining"] = False
+    a["open"] = False
+    state["vault"]["openArchives"] = open_count()
+    return None
+
+
+def record_op(kind, args, total, seconds=4.0, phase=""):
+    """A record-level operation from the Archives page - Verify, Compact,
+    Rotate key. It runs whether or not the archive's page is open: while
+    the vault is unlocked the core unwraps the key with the session's KWK,
+    opens the file for the operation and closes it again (APP.md 2.3, ruled
+    2026-09-10). An archive left closed stays closed."""
+    a = archive(args[0]) if args else None
+    if a is None:
+        return Err("archive.not_found")
+    if state["vault"]["state"] != "unlocked":
+        return Err("vault.needs_unlock")
+
+    def commit():
+        if kind == "rotate":
+            a["keyVersion"] += 1
+        if kind == "compact":
+            if a["id"] == state["stat"]["id"]:
+                st = state["stat"]
+                st["size"] = max(0, st["size"] - st["freeSpace"])
+                st["freeSpace"] = 0
+            a["freeSpace"] = 0
+        if kind == "verify":
+            a["hashBehind"] = 0
+        return None
+
+    return start_op(kind, total, commit, seconds=seconds, phase=phase, archive_id=a["id"])
 
 
 def vault_status():
@@ -665,21 +907,31 @@ METHODS = {
     3770426637: lambda a: None, 951839700: lambda a: None, 4094929714: lambda a: None, 2320277474: lambda a: None,
     2953146167: lambda a: None, 882388909: lambda a: None,
     4176692468: lambda a: listed(bool(a and a[0])),             # archives.List
-    923201420: lambda a: stat(),                                # archives.Open
-    1388822288: lambda a: None, 2300343171: lambda a: [], 2169725132: lambda a: None, 474530495: lambda a: None,
-    422512670: lambda a: None, 1162996984: create_archive, 2111968017: lambda a: "op1", 3689812034: lambda a: "op2",
-    3359801409: lambda a: "op3",
+    923201420: open_archive,                                    # archives.Open
+    660127987: leave_archive,                                   # archives.Leave (the page left)
+    1388822288: close_archive,                                  # archives.Close (the kill switch)
+    2300343171: lambda a: [], 2169725132: lambda a: None, 474530495: lambda a: None,
+    422512670: lambda a: None, 1162996984: create_archive,
+    # Verify, Compact and Rotate key run on a closed archive: the core
+    # opens it for the operation and closes it again (APP.md 2.3).
+    2111968017: lambda a: record_op("compact", a, 8_000_000_000, seconds=6.0, phase="compacting"),
+    3689812034: lambda a: record_op("rotate", a, 1_000_000),
+    3359801409: lambda a: record_op("verify", a, 4_000_000_000, seconds=5.0),
     # The archive's tree, and its operations. Save, Discard and KeepOpen
     # went on 2026-09-09: each operation is its own transaction, committed
     # at its end, and CancelOp aborts a running add or replace.
-    2601627082: page,                                           # archive.Page
-    2565212395: lambda a: stat(),                               # archive.Stat
-    3241529081: create_folder,                                  # archive.CreateFolder
-    191579688: move,                                            # archive.Move
-    2769288047: add_files, 3008447636: add_folder, 3231340199: replace_file, 3839303214: delete_records,
-    3028646727: rename_record, 585645538: extract,
-    913354260: lambda a: "http://127.0.0.1:1/p/x/y", 723007364: lambda a: state["text"],
-    1850767145: check_names, 2446376312: cancel_op,             # archive.CancelOp
+    # Each of these is the mounted page's: an archive that is not mounted
+    # - left, closed, draining - answers archive.not_open (APP.md 2.3).
+    2601627082: mounted_only(page),                             # archive.Page
+    2565212395: mounted_only(lambda a: stat()),                 # archive.Stat
+    3241529081: mounted_only(create_folder),                    # archive.CreateFolder
+    191579688: mounted_only(move),                              # archive.Move
+    2769288047: mounted_only(add_files), 3008447636: mounted_only(add_folder),
+    3231340199: mounted_only(replace_file), 3839303214: mounted_only(delete_records),
+    3028646727: mounted_only(rename_record), 585645538: mounted_only(extract),
+    913354260: mounted_only(preview_url), 723007364: mounted_only(lambda a: state["text"]),
+    1850767145: mounted_only(check_names),
+    2446376312: cancel_op,                                      # archive.CancelOp (allowed while draining)
     448053830: lambda a: op_view(state["ops"].get(a[0] if a else "", {"id": "", "kind": "add", "archiveId": "", "done": 0, "total": 0, "items": 0, "phase": "", "startedAt": NOW, "finished": True})),
     632849442: lambda a: state["slots"], 309727738: lambda a: None, 3159373965: lambda a: None, 1280438677: lambda a: None,
     207819850: lambda a: None, 3463005426: lambda a: None, 3166408438: lambda a: None,  # RevealRecoveryKey, SaveRecoveryKey, DropRecoveryKey
@@ -725,6 +977,28 @@ class H(SimpleHTTPRequestHandler):
         if self.path.startswith("/mock/events"):
             queued, state["events"] = state["events"], []
             return self.reply(queued)
+        # The preview transport (APP.md 4): a body under the token minted
+        # at Open, and 404 for anything else - a token that was forgotten
+        # at Leave or Close, or one the mount does not know - so the page's
+        # <img> shows what the core would: nothing, once the page is left.
+        if self.path.startswith("/p/"):
+            parts = self.path.split("/")
+            token = parts[2] if len(parts) > 2 else ""
+            if not state.get("mounted") or not token or token != state["token"]:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            data = (b'<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">'
+                    b'<rect width="640" height="400" fill="#c9d9d5"/>'
+                    b'<circle cx="480" cy="120" r="48" fill="#f2efe4"/>'
+                    b'<path d="M0 400 L200 190 L330 320 L420 240 L640 400 Z" fill="#4c7c72"/></svg>')
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         # The one-time recovery URL the core would mint: 48 digits, once.
         if self.path.startswith("/s/"):
             data = b"1234 5678 9012 3456 7890 1234 5678 9012 3456 7890 1234 5678"
@@ -784,5 +1058,5 @@ class H(SimpleHTTPRequestHandler):
         super().end_headers()
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8125
-    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+    PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8125
+    ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

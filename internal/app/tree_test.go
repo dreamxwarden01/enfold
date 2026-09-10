@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -825,6 +826,163 @@ func TestExtractAllWithFoldersAndTimes(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(out, "g.txt")); string(b) != "g" {
 		t.Fatalf("the file already there was touched: %q", b)
+	}
+}
+
+// replace is the default policy (APP.md §3, ruled 2026-09-10): the content
+// is written through the temporary and placed over the file already there in
+// one move — never by unlinking it first — so what was there is gone only
+// once the whole new file has landed, and a failure before the move leaves
+// it exactly as it was. An empty policy is replace; a word that is neither
+// of the four is params.
+func TestExtractReplacePlacesOverTheOldFile(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Over")
+	h.add(t, id, rootID, PolicySkip,
+		h.src(t, "a.txt", "the new content"),
+		h.src(t, "big.bin", strings.Repeat("payload ", 1<<17))) // 1 MiB: several chunks
+
+	if _, e := h.c.Extract(id, []string{rootID}, outDir(t), "clobber"); !isCode(e, CodeParams) {
+		t.Fatalf("an unknown policy: %v", e)
+	}
+
+	out := outDir(t)
+	if err := os.WriteFile(filepath.Join(out, "a.txt"), []byte("the old content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aid := h.row(t, id, rootID, "a.txt").ID
+	opID, e := h.c.Extract(id, []string{aid}, out, "") // empty: replace
+	if e != nil {
+		t.Fatal(e)
+	}
+	o := h.rec.waitOp(t, opID)
+	if o.Error != "" || len(o.Results) != 1 || o.Results[0].Outcome != "extracted" {
+		t.Fatalf("replace over an existing file: %+v", o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "a.txt")); string(b) != "the new content" {
+		t.Fatalf("what stands there now: %q", b)
+	}
+	if left := temporaries(t, out); len(left) != 0 {
+		t.Fatalf("the temporary was left behind: %v", left)
+	}
+
+	// A failure mid-write: the extraction is cancelled after its first chunk
+	// has landed in the temporary. The old file is untouched and no
+	// temporary is left.
+	archiveID, _ := parseID(id)
+	h.c.mu.Lock()
+	oa := h.c.archives[archiveID]
+	h.c.mu.Unlock()
+	fid, _ := parseID(h.row(t, id, rootID, "big.bin").ID)
+	dst := filepath.Join(out, "big.bin")
+	if err := os.WriteFile(dst, []byte("the old big file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	chunks := 0
+	err := extractFile(ctx, oa.a, fid, dst, true, func(uint64) { chunks++; cancel() })
+	if err == nil {
+		t.Fatal("the cancelled extraction reported success")
+	}
+	if chunks == 0 {
+		t.Fatal("the extraction failed before it had written anything: not a failure mid-write")
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "the old big file" {
+		t.Fatalf("a failure mid-write touched the old file: %q", b)
+	}
+	if left := temporaries(t, out); len(left) != 0 {
+		t.Fatalf("the failed extraction left a temporary: %v", left)
+	}
+}
+
+// temporaries lists the extraction temporaries lying in a folder.
+func temporaries(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".enfold-") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// ask is the drag-and-drop shape (APP.md §3, ruled 2026-09-10): everything
+// that collides with nothing is extracted, and each collision comes back as
+// a conflict outcome carrying the existing file's size and date — a stat
+// taken after the placement refused — for the page to ask about and re-issue
+// with replace or rename. skip and rename are unchanged beside it.
+func TestExtractAskReportsTheConflicts(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Asking")
+	h.add(t, id, rootID, PolicySkip, h.src(t, "a.txt", "archived a"), h.src(t, "b.txt", "archived b"))
+
+	out := outDir(t)
+	there := filepath.Join(out, "a.txt")
+	if err := os.WriteFile(there, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2021, 3, 4, 5, 6, 7, 0, time.UTC)
+	if err := os.Chtimes(there, when, when); err != nil {
+		t.Fatal(err)
+	}
+
+	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractAsk)
+	if e != nil {
+		t.Fatal(e)
+	}
+	o := h.rec.waitOp(t, opID)
+	if o.Error != "" || len(o.Results) != 2 {
+		t.Fatalf("ask: %+v", o)
+	}
+	byName := map[string]FileOutcome{}
+	for _, r := range o.Results {
+		byName[r.Name] = r
+	}
+	conflict, extracted := byName["a.txt"], byName["b.txt"]
+	if conflict.Outcome != "conflict" {
+		t.Fatalf("the collision: %+v", conflict)
+	}
+	if conflict.Existing == nil || conflict.Existing.Size != 4 || conflict.Existing.ModifiedAt != when.Unix() {
+		t.Fatalf("what the conflict says of the file in the way: %+v", conflict.Existing)
+	}
+	if extracted.Outcome != "extracted" || extracted.Existing != nil {
+		t.Fatalf("what collided with nothing: %+v", extracted)
+	}
+	if b, _ := os.ReadFile(there); string(b) != "mine" {
+		t.Fatalf("ask wrote over the file in the way: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "b.txt")); string(b) != "archived b" {
+		t.Fatalf("the rest was not extracted: %q", b)
+	}
+
+	// The page asks, and re-issues for the chosen id. Skip leaves it, rename
+	// takes the next free name beside it, replace takes its place.
+	only := []string{h.row(t, id, rootID, "a.txt").ID}
+	opID, _ = h.c.Extract(id, only, out, ExtractSkip)
+	if o := h.rec.waitOp(t, opID); o.Results[0].Outcome != "skipped" {
+		t.Fatalf("skip: %+v", o.Results)
+	}
+	opID, _ = h.c.Extract(id, only, out, ExtractRename)
+	if o := h.rec.waitOp(t, opID); o.Results[0].Outcome != "extracted" {
+		t.Fatalf("rename: %+v", o.Results)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "a (2).txt")); string(b) != "archived a" {
+		t.Fatalf("rename did not take the next name: %q", b)
+	}
+	opID, _ = h.c.Extract(id, only, out, ExtractReplace)
+	if o := h.rec.waitOp(t, opID); o.Results[0].Outcome != "extracted" {
+		t.Fatalf("replace: %+v", o.Results)
+	}
+	if b, _ := os.ReadFile(there); string(b) != "archived a" {
+		t.Fatalf("replace did not place the new file: %q", b)
 	}
 }
 

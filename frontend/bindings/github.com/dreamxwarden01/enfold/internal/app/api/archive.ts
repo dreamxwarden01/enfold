@@ -53,6 +53,14 @@ export function Delete(id: string, recordIDs: string[] | null): $CancellableProm
     return $Call.ByID(3839303214, id, recordIDs);
 }
 
+/**
+ * Extract writes the chosen records under dir, which it creates if it is not
+ * there. policy is what happens to a file already in the destination:
+ * "replace" (the default when empty), "skip", "rename", or "ask" — which
+ * extracts everything that collides with nothing and reports each collision
+ * as a conflict outcome carrying the existing file's size and date, for the
+ * page to ask about and re-issue (APP.md §3).
+ */
 export function Extract(id: string, recordIDs: string[] | null, dir: string, policy: string): $CancellablePromise<string> {
     return $Call.ByID(585645538, id, recordIDs, dir, policy);
 }

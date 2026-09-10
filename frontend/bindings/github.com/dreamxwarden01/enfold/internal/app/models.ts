@@ -35,8 +35,10 @@ export interface ArchiveDetails {
 
 /**
  * ArchiveStat is the open archive's status strip. There is no Dirty, no
- * CapAt and no SessionAlive since 2026-09-09: every operation is its own
- * transaction, so the archive is clean between them (APP.md §2.3).
+ * CapAt and no SessionAlive since 2026-09-09 — every operation is its own
+ * transaction, so the archive is clean between them — and no ExpiresAt since
+ * 2026-09-10: an open archive has no timeout of its own, so there is no
+ * deadline to show (APP.md §2.3, DESIGN.md §10).
  */
 export interface ArchiveStat {
     "seq": number;
@@ -55,11 +57,6 @@ export interface ArchiveStat {
     "keyVersion": number;
     "lastSavedAt": number;
     "state": string;
-
-    /**
-     * the archive's own idle deadline
-     */
-    "expiresAt": number;
     "receiptOwed": boolean;
 
     /**
@@ -524,6 +521,17 @@ export interface EntangledState {
 }
 
 /**
+ * ExistingFile is the file already in the destination, as a stat taken after
+ * the collision was seen — by the cheap pre-check or by the exclusive
+ * create's refusal — says it. The stat decides nothing: nothing is ever
+ * placed over a file on a stat's word (APP.md §3).
+ */
+export interface ExistingFile {
+    "size": number;
+    "modifiedAt": number;
+}
+
+/**
  * FileInfo is what a backup file says about itself before any unlock.
  */
 export interface FileInfo {
@@ -567,6 +575,14 @@ export interface FileInfo {
  * directory's outcome from a file's: created (a directory record made) and
  * entered (an existing one descended into) are a directory's, added and
  * replaced a file's (APP.md §3).
+ * 
+ * ID, Size and ModifiedAt are the archive copy's — the record's id as every
+ * other view spells it (32 lowercase hex digits), its plaintext size and its
+ * modified_at — set on every extract outcome, where the record is known
+ * before the first byte, and on an add's or a replace's where they are known
+ * as the item is written; zero where they are not. They are what lets the
+ * page re-issue an extract for the conflicts it was told about, and draw the
+ * compare list's archive side, without walking the tree (APP.md §3).
  */
 export interface FileOutcome {
     "path": string;
@@ -574,10 +590,34 @@ export interface FileOutcome {
     "isDir": boolean;
 
     /**
-     * added | replaced | created | entered | skipped | extracted | failed
+     * added | replaced | created | entered | skipped | extracted | conflict | failed
      */
     "outcome": string;
     "code"?: Code;
+
+    /**
+     * ID is the record's id, empty where the outcome has none yet (a source
+     * an add refused or skipped, a folder it could not make).
+     */
+    "id"?: string;
+
+    /**
+     * the archive copy's plaintext size; 0 for a directory
+     */
+    "size": number;
+
+    /**
+     * the archive copy's modified_at
+     */
+    "modifiedAt": number;
+
+    /**
+     * Existing is the file that was in the way, on the conflict outcome of an
+     * extract with the ask policy and on nothing else (APP.md §3, ruled
+     * 2026-09-10): what the page shows in its Replace / Skip / Compare
+     * dialogs before it re-issues the extract for the ids the user chose.
+     */
+    "existing"?: ExistingFile | null;
 }
 
 /**
@@ -654,6 +694,17 @@ export interface OpView {
     "finished": boolean;
     "error"?: Code;
     "results"?: FileOutcome[] | null;
+
+    /**
+     * Policy and Destination are an extract's — replace | skip | rename | ask,
+     * and the folder it writes under — and empty for every other kind, so
+     * that the conflict question is derived from the operation itself in the
+     * store: it survives the page's remount across the lock scene and cannot
+     * be lost to a race between the call's return and the operation's end
+     * (APP.md §3).
+     */
+    "policy"?: string;
+    "destination"?: string;
 }
 
 /**
@@ -702,13 +753,11 @@ export interface Settings {
 
     /**
      * LastArchiveFolder is where the last archive was created, for the New
-     * archive dialog (APP.md §6), and LastExtractFolder is where the last
-     * extraction went, for the extract dialog's destination (§3). Both are
-     * read-only: Set ignores them, since only a create and an extract write
-     * them.
+     * archive dialog (APP.md §6): read-only, since only a create writes it.
+     * An extract's destination is not remembered — the page prefills it from
+     * the archive's own folder (§3, ruled 2026-09-10).
      */
     "lastArchiveFolder": string;
-    "lastExtractFolder": string;
 
     /**
      * from the registry; 0 = default

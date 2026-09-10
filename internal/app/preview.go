@@ -116,7 +116,11 @@ func (p *previewServer) serveFile(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if oa == nil || oa.quiesced || oa.state == "compacting" || oa.state == "needs_reopen" {
+	// The token is not enough: an archive whose page was left is draining
+	// (APP.md §2.3, §4) — the bodies in flight finish, and it admits no new
+	// request — and one the kill switch is closing has lost its token
+	// already. mounted is the one predicate for both.
+	if oa == nil || !oa.mounted || oa.quiesced || oa.state == "compacting" || oa.state == "needs_reopen" {
 		c.mu.Unlock()
 		http.NotFound(w, r)
 		return
@@ -128,13 +132,10 @@ func (p *previewServer) serveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	oa.readers++
-	c.touchArchiveLocked(oa)
 	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		oa.readers--
-		c.mu.Unlock()
-	}()
+	// A reader holds the archive open even after its page was left, and the
+	// last one to end closes it (APP.md §2.3, §4).
+	defer c.releaseReader(oa)
 	rd, err := oa.a.OpenReader(fid)
 	if err != nil {
 		http.NotFound(w, r)

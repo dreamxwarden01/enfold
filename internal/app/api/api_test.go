@@ -43,6 +43,7 @@ func TestBoundSurface(t *testing.T) {
 			"Details(string) (app.ArchiveDetails, error)",
 			"Forget(string) error",
 			"Hide(string) error",
+			"Leave(string) error",
 			"List(bool) ([]app.ArchiveSummary, error)",
 			"Locate(string, string) error",
 			"Open(string) (app.ArchiveStat, error)",

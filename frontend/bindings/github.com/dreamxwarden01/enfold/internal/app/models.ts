@@ -449,6 +449,16 @@ export enum Code {
     CodeDictInUse = "archive.dictionary_in_use",
     CodeOpNotFound = "op.not_found",
     CodeOpCancelled = "op.cancelled",
+
+    /**
+     * CodeOpCommitting: the cancel arrived after the writing was done and
+     * the commit had been entered, which runs under a context no cancel
+     * reaches. The change is being published and the operation's result will
+     * say so, so the cancel is refused rather than answered as if it had
+     * worked (the outside audit of 2026-09-09). "The operation is already
+     * being saved; it will finish."
+     */
+    CodeOpCommitting = "op.committing",
     CodeOpRunning = "op.in_progress",
     CodeTooSlow = "op.too_slow_for_session",
     CodeParams = "params",

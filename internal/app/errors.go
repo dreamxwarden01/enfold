@@ -159,8 +159,15 @@ const (
 	CodeDictInUse     Code = "archive.dictionary_in_use"
 	CodeOpNotFound    Code = "op.not_found"
 	CodeOpCancelled   Code = "op.cancelled"
-	CodeOpRunning     Code = "op.in_progress"
-	CodeTooSlow       Code = "op.too_slow_for_session"
+	// CodeOpCommitting: the cancel arrived after the writing was done and
+	// the commit had been entered, which runs under a context no cancel
+	// reaches. The change is being published and the operation's result will
+	// say so, so the cancel is refused rather than answered as if it had
+	// worked (the outside audit of 2026-09-09). "The operation is already
+	// being saved; it will finish."
+	CodeOpCommitting Code = "op.committing"
+	CodeOpRunning    Code = "op.in_progress"
+	CodeTooSlow      Code = "op.too_slow_for_session"
 
 	CodeParams Code = "params"
 	CodeIO     Code = "io"
@@ -184,6 +191,10 @@ func (e *Error) Is(target error) bool {
 }
 
 func coded(c Code) *Error { return &Error{Code: c} }
+
+// ErrOpCommitting is what a cancel meets once the operation has entered its
+// commit (ops.go CancelOp); classify maps it to CodeOpCommitting.
+var ErrOpCommitting = errors.New("app: the operation is already being saved")
 
 // classify turns any error of the lower layers into an *Error. It is the
 // only path an error takes to a service's return value or an event.
@@ -237,6 +248,9 @@ var classifyTable = []struct {
 	{ErrTokenNoProtectedKey, CodeTokenNoMgmtKey},
 	{ErrTokenManagementKey, CodeTokenMgmtKey},
 	{ErrTokenCancelled, CodeCancelled},
+
+	// Operations.
+	{ErrOpCommitting, CodeOpCommitting},
 
 	// Keystore.
 	{keystore.ErrIndeterminate, CodeIndeterminate},

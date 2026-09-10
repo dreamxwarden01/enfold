@@ -294,8 +294,11 @@ func compressLevelOf(policy uint32) compress.Level {
 // archiveOptions builds the writer options from the record and settings.
 // The archive's own policy decides how it is written, whoever opens it:
 // the raw bit and the level of FORMAT.md §7.1 travel with the archive.
+// ArchiveID is the record's own, which is the reader's way into a file whose
+// envelope a crash inside a rotation left unreadable (FORMAT.md R33).
 func (c *Core) archiveOptionsLocked(rec *format.ArchiveRecord) archive.Options {
 	return archive.Options{
+		ArchiveID:     rec.ArchiveID,
 		DeviceID:      c.deviceIDLocked(),
 		NoCompression: rec.Policy&format.PolicyNoCompression != 0,
 		Compress:      compress.Params{Level: compressLevelOf(rec.Policy)},
@@ -384,11 +387,37 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 	if a.Stale() != nil || a.FreeMapRebuilt() != nil || a.EnvelopeStale() {
 		c.log("archive %s opened with warnings: stale=%v freemap=%v envelope=%v", name, a.Stale(), a.FreeMapRebuilt(), a.EnvelopeStale())
 	}
-	if lastSeq != 0 && lastSeq != a.Seq() {
-		// The file is not the copy the record last saw: shown on the
-		// archive until a commit records this copy, never adopted silently.
-		c.log("archive %s: registry saw seq %d, file is at %d", name, lastSeq, a.Seq())
+	// The reopen check is on last_seq alone (APP.md §2.3, amended
+	// 2026-09-09). The size is not compared: an aborted transaction's tail
+	// leaves the file larger at the same seq, and the archive layer reclaims
+	// it.
+	switch fileSeq := a.Seq(); {
+	case lastSeq == 0 || fileSeq == lastSeq:
+	case fileSeq < lastSeq:
+		// Behind the record: an older copy of the file is back — a restored
+		// backup. Shown on the archive until a commit records this copy,
+		// never adopted silently.
+		c.log("archive %s: registry saw seq %d, file is at %d", name, lastSeq, fileSeq)
 		oa.copyMismatch = true
+	default:
+		// Ahead of it: a commit landed and its receipt did not — a crash
+		// before the next unlock. The file is the work, so it is adopted, and
+		// the registry is brought up to it at this write or owes it like any
+		// other receipt.
+		c.log("archive %s: the file is at seq %d, ahead of the registry's %d: a receipt was lost", name, fileSeq, lastSeq)
+		size, _, _ := a.Stat()
+		// The commit nobody recorded happened when the file was last
+		// written, not when the registry last heard of it: adopting under
+		// lastAt would name a newer commit with an older time, and the
+		// Archives list would show a "last saved" earlier than the work it
+		// describes. The file's own modification time is the honest source;
+		// a stat that fails leaves now, as every other receipt has.
+		at := c.now().Unix()
+		if fi, err := os.Stat(path); err == nil {
+			at = fi.ModTime().Unix()
+		}
+		oa.lastSavedAt = at
+		c.recordReceiptLocked(oa, archive.Receipt{Seq: fileSeq, Size: size, WrittenAt: at}, nil)
 	}
 	st := c.statLocked(oa)
 	c.mu.Unlock()
@@ -665,7 +694,12 @@ func (c *Core) archiveIdle(oa *openArchive, gen uint64) {
 		c.mu.Unlock()
 		return // closed, or re-armed while this callback was on its way
 	}
-	if oa.readers > 0 || oa.state == "compacting" {
+	// A running operation holds the clock whether or not it holds opMu: an
+	// add registers its operation before it walks the source folder and takes
+	// opMu only afterwards, and an extract takes it never — it was the walk
+	// of a large folder that could have the archive closed under it (the
+	// outside audit of 2026-09-09).
+	if oa.readers > 0 || oa.state == "compacting" || c.hasRunningOpLocked(oa.id) {
 		c.armArchiveIdleLocked(oa)
 		c.mu.Unlock()
 		return
@@ -680,22 +714,55 @@ func (c *Core) archiveIdle(oa *openArchive, gen uint64) {
 // at its start, Commit at its end, then the receipt, one Session.UpdateRegistry
 // and archive.changed; Abort on failure and on Cancel.
 
-// beginOp opens the transaction one operation runs in. Caller holds opMu.
-func (c *Core) beginOp(oa *openArchive) (*archive.Tx, *Error) {
+// opTx is one operation's transaction together with the guard APP.md §2.3
+// needs behind it. Every caller defers end() the moment beginOp returns, and
+// end() aborts unless the operation committed or aborted of its own accord —
+// so an exit nobody wrote code for leaves nothing open. A panic the operation
+// runner recovers (ops.go startOp) is the one that was found: the transaction
+// stayed open and every later operation on that archive answered
+// archive.dirty (ErrTxOpen) until the handle was closed (the outside audit of
+// 2026-09-09).
+type opTx struct {
+	c    *Core
+	oa   *openArchive
+	tx   *archive.Tx
+	over bool // committed or aborted: end() has nothing left to do
+}
+
+// beginOp opens the transaction one operation runs in. Caller holds opMu and
+// defers end() before anything else can fail.
+func (c *Core) beginOp(oa *openArchive) (*opTx, *Error) {
 	tx, err := oa.a.Begin()
 	if err != nil {
 		return nil, c.fail("begin", err)
 	}
-	return tx, nil
+	return &opTx{c: c, oa: oa, tx: tx}, nil
 }
 
-// commitOp publishes it. The commit — index seal, free map, two syncs — runs
+// end is the deferred guard: any exit that is not a commit is an abort.
+func (t *opTx) end() {
+	if !t.over {
+		t.abort()
+	}
+}
+
+// commit publishes it. The commit — index seal, free map, two syncs — runs
 // under the archive's own mutex only, so the state mutex stays short and a
 // lock trigger is never held up by I/O; the receipt is written under the
 // state mutex right after, and a lock that lands between the two leaves it
-// owed. Caller holds opMu.
-func (c *Core) commitOp(ctx context.Context, oa *openArchive, tx *archive.Tx) *Error {
-	rec, err := tx.Commit(ctx)
+// owed. Caller holds opMu. A commit that fails has aborted the transaction
+// itself (the archive's contract) or left the handle for a reopen, so the
+// guard leaves it alone from here.
+//
+// The flag is set after the call, never before it: a panic raised inside
+// Commit must still find over == false, so that end() aborts and no
+// transaction is left open behind it (the outside audit of 2026-09-09,
+// finding 4). Abort after a Commit is a no-op either way — the archive's
+// contract (archive/tx.go Abort) — so the ordinary paths are unchanged.
+func (t *opTx) commit(ctx context.Context) *Error {
+	c, oa := t.c, t.oa
+	rec, err := t.tx.Commit(ctx)
+	t.over = true
 	c.mu.Lock()
 	if err != nil {
 		if errors.Is(err, archive.ErrIndeterminate) {
@@ -726,16 +793,17 @@ func (c *Core) commitOp(ctx context.Context, oa *openArchive, tx *archive.Tx) *E
 	return nil
 }
 
-// abortOp discards the transaction: nothing is published, and the bytes it
+// abort discards the transaction: nothing is published, and the bytes it
 // wrote lie in extents the committed free map still holds free — the
 // superblock the readers use never named them, so nothing is lost and
 // nothing leaks (APP.md §2.3). The tail it appended is truncated away, which
 // is why the snapshot's figures are taken again. Caller holds opMu.
-func (c *Core) abortOp(oa *openArchive, tx *archive.Tx) {
-	tx.Abort()
-	c.mu.Lock()
-	oa.refreshSnapshot()
-	c.mu.Unlock()
+func (t *opTx) abort() {
+	t.over = true
+	t.tx.Abort()
+	t.c.mu.Lock()
+	t.oa.refreshSnapshot()
+	t.c.mu.Unlock()
 }
 
 // currentFile is the live file of the committed snapshot. Only a file has
@@ -924,16 +992,16 @@ func (c *Core) CreateFolder(id, parentID, name string) (string, *Error) {
 	}
 	at := c.now().Unix()
 	c.mu.Unlock()
-	tx, e := c.beginOp(oa)
+	t, e := c.beginOp(oa)
 	if e != nil {
 		return "", e
 	}
-	info, err := tx.AddDir(pid, name, at)
+	defer t.end()
+	info, err := t.tx.AddDir(pid, name, at)
 	if err != nil {
-		c.abortOp(oa, tx)
 		return "", c.fail("create folder", err)
 	}
-	if e := c.commitOp(context.Background(), oa, tx); e != nil {
+	if e := t.commit(context.Background()); e != nil {
 		return "", e
 	}
 	return hexID(info.ID), nil
@@ -969,17 +1037,17 @@ func (c *Core) DeleteRecords(id string, recordIDs []string) *Error {
 	if len(targets) == 0 {
 		return nil
 	}
-	tx, e := c.beginOp(oa)
+	t, e := c.beginOp(oa)
 	if e != nil {
 		return e
 	}
+	defer t.end()
 	for _, r := range targets {
-		if err := tx.Delete(r.id); err != nil {
-			c.abortOp(oa, tx)
+		if err := t.tx.Delete(r.id); err != nil {
 			return c.fail("delete", err)
 		}
 	}
-	return c.commitOp(context.Background(), oa, tx)
+	return t.commit(context.Background())
 }
 
 // RenameRecord renames one record, file or directory (APP.md §3): a "/" is
@@ -1021,15 +1089,15 @@ func (c *Core) RenameRecord(id, recordID, newName string) *Error {
 		return e
 	}
 	c.mu.Unlock()
-	tx, e := c.beginOp(oa)
+	t, e := c.beginOp(oa)
 	if e != nil {
 		return e
 	}
-	if err := tx.Rename(rid, newName); err != nil {
-		c.abortOp(oa, tx)
+	defer t.end()
+	if err := t.tx.Rename(rid, newName); err != nil {
 		return c.fail("rename", err)
 	}
-	return c.commitOp(context.Background(), oa, tx)
+	return t.commit(context.Background())
 }
 
 // MoveRecords re-parents each record, one record written whatever subtree
@@ -1109,20 +1177,20 @@ func (c *Core) MoveRecords(id string, recordIDs []string, parentID string) *Erro
 	if len(moving) == 0 {
 		return nil // every record was already there
 	}
-	tx, e := c.beginOp(oa)
+	t, e := c.beginOp(oa)
 	if e != nil {
 		return e
 	}
+	defer t.end()
 	for _, rid := range moving {
-		if err := tx.Move(rid, pid); err != nil {
+		if err := t.tx.Move(rid, pid); err != nil {
 			// The pre-flight proved the batch legal, so a refusal here is
 			// the archive disagreeing with the view the user was shown: the
 			// transaction is dropped whole and nothing is published.
-			c.abortOp(oa, tx)
 			return c.fail("move", err)
 		}
 	}
-	return c.commitOp(context.Background(), oa, tx)
+	return t.commit(context.Background())
 }
 
 // PreviewURL is the loopback URL of a file. It acts on a record, so the root

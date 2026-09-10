@@ -828,6 +828,69 @@ func TestRotateKey(t *testing.T) {
 	fx.open(t)
 }
 
+// R33, amended after the outside audit of 2026-09-09: rotation rewrites the
+// 4 KiB envelope in place, so a crash inside that write leaves a checksum
+// that fails and used to leave an archive that would not open — the reader
+// decoded the envelope before it tried a key. An envelope that does not
+// decode is now absent, not a verdict: with the archive_id the caller's own
+// record holds, every key is tried against the index (whose AAD binds
+// archive_id ‖ kid, which is what decides), the envelope is reported stale
+// and RepairEnvelope writes it again. Only a file no key opens is corrupt.
+func TestTornEnvelopeOpensUnderTheCallersArchiveID(t *testing.T) {
+	a, fx := newFixture(t, Options{})
+	info := add(t, a, root, "a", text(30000, 70))
+	newKey := Key{KID: rnd16(t), Key: rnd32(t)}
+	if _, err := a.RotateKey(ctx, newKey.KID, newKey.Key); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+
+	// The envelope's checksum, as a torn in-place write leaves it.
+	tear := func() {
+		b := snapshot(t, fx.path)
+		for i := format.EnvelopeOff + format.SuperblockSize - 32; i < format.EnvelopeOff+format.SuperblockSize; i++ {
+			b[i] ^= 0xff
+		}
+		restore(t, fx.path, b)
+		if _, err := format.DecodeEnvelope(b[format.EnvelopeOff : format.EnvelopeOff+format.SuperblockSize]); err == nil {
+			t.Fatal("the envelope still decodes")
+		}
+	}
+	tear()
+
+	// With no archive id to open at, the envelope is still the file's answer.
+	if _, err := Open(fx.path, []Key{fx.key, newKey}, fx.opts); !errors.Is(err, format.ErrInvalid) {
+		t.Fatalf("without an archive id: %v", err)
+	}
+	opts := fx.opts
+	opts.ArchiveID = fx.archiveID
+	c, err := Open(fx.path, []Key{fx.key, newKey}, opts)
+	if err != nil {
+		t.Fatalf("open with a torn envelope: %v", err)
+	}
+	if !c.EnvelopeStale() || c.KID() != newKey.KID || c.ID() != fx.archiveID {
+		t.Fatalf("torn envelope: stale=%v kid=%x id=%x", c.EnvelopeStale(), c.KID(), c.ID())
+	}
+	if got := extract(t, c, info.ID); !bytes.Equal(got, text(30000, 70)) {
+		t.Error("content through a torn envelope")
+	}
+	if err := c.RepairEnvelope(); err != nil || c.EnvelopeStale() {
+		t.Fatalf("repair: %v, stale=%v", err, c.EnvelopeStale())
+	}
+	c.Close()
+	env, err := ReadEnvelope(fx.path)
+	if err != nil || env.KID != newKey.KID || env.ArchiveID != fx.archiveID {
+		t.Fatalf("the envelope was not written again: %+v %v", env, err)
+	}
+
+	// A torn envelope and no key that opens the index: that is a corrupt
+	// file, and it says so rather than blaming the key.
+	tear()
+	if _, err := Open(fx.path, []Key{{KID: rnd16(t), Key: rnd32(t)}}, opts); !errors.Is(err, format.ErrInvalid) {
+		t.Fatalf("a torn envelope under a key that opens nothing: %v", err)
+	}
+}
+
 func TestCompact(t *testing.T) {
 	a, fx := newFixture(t, Options{})
 	keep := map[string][]byte{"k1": text(40000, 60), "k2": noise(40000, 61), "k3": text(70000, 62)}
@@ -882,6 +945,42 @@ func TestCompact(t *testing.T) {
 	}
 	// Still writable and the tombstones' names are reusable.
 	add(t, b, root, "d1", []byte("again"))
+}
+
+// Compaction copies a record chunk by chunk and looks for a cancel at every
+// one, not only between files: one record can be many gigabytes, and a cancel
+// that waits for the next file is not a cancel (the outside audit of
+// 2026-09-09). Nothing is left behind: the original file is untouched and the
+// half-written temporary is gone.
+func TestCompactCancelsInsideOneFile(t *testing.T) {
+	a, fx := newFixture(t, Options{NoCompression: true})
+	data := noise(6<<20, 80) // several copies of the 1 MiB chunk buffer
+	kept := add(t, a, root, "big", data)
+	drop := add(t, a, root, "drop", noise(1<<20, 81))
+	if _, err := a.Delete(ctx, drop.ID); err != nil {
+		t.Fatal(err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var calls, last uint64
+	if _, _, err := a.Compact(cctx, func(done, total uint64) {
+		calls++
+		last = done
+		cancel() // the first chunk of the first file is enough
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancel inside one file: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the copy went on for %d chunks (%d bytes) after the cancel", calls, last)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(fx.path)); len(entries) != 1 {
+		t.Errorf("the cancelled compaction left its temporary: %d entries", len(entries))
+	}
+	a.Close()
+	b := fx.open(t)
+	if got := extract(t, b, kept.ID); !bytes.Equal(got, data) {
+		t.Error("the file after a cancelled compaction")
+	}
 }
 
 func TestDictionary(t *testing.T) {

@@ -424,10 +424,11 @@ func (s *shell) reveal(path string) error {
 }
 
 // The print spooler watch around the recovery key's print (APP.md §6): the
-// jobs standing before window.print(), then the poll after afterprint for
-// one the snapshot did not hold. Nothing here ever submits a job; an error
-// is the spooler being unreadable, and the page then asks the user as it
-// always did.
+// jobs standing before window.print(), then a poll that runs from there until
+// End answers after afterprint, so a job that spools and completes while the
+// dialog stands is caught as well. Nothing here ever submits a job; an error
+// is the spooler being unreadable — including one that does not answer in
+// time — and the page then asks the user as it always did.
 func (s *shell) printBegin() error {
 	s.printMu.Lock()
 	defer s.printMu.Unlock()

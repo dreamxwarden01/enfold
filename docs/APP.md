@@ -450,8 +450,11 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   inside the ~2 s suspend budget, or a slot-change ceremony holding the handle leaves a
   **receipt owed**, held in memory, applied when the ceremony ends or at the next unlock before
   any archive is opened (dropped if the record's kid moved), shown as "saved; vault record
-  pending". On reopen a file whose size or `last_seq` disagrees with the record is reported,
-  never adopted silently.
+  pending". On reopen a file whose `last_seq` is **behind** the record's is reported as an older copy
+  restored, never adopted silently; one **ahead** of it is a receipt that was lost (a crash before
+  the next unlock) and is adopted, the next registry write recording it; the file's size is not
+  compared — an aborted transaction's tail leaves the file larger at the same `seq`, and the
+  archive layer reclaims it.
 - **One clock per archive** (DESIGN §10's own idle timeout): idleness — no running operation, no
   open reader, no request — closes the archive, which is always clean between operations; a
   running operation holds the clock. A preview range request resets the archive's clock, never
@@ -477,7 +480,11 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   first and the archive adopts them after.
 - **NeedsReopen**: `ErrIndeterminate` from any commit closes the archive and says what happened;
   Reopen shows which state won. **Verify** is an explicit op that re-hashes the file and refreshes
-  `LastCiphertextHash` with `HashAtSeq`; Save never hashes.
+  `LastCiphertextHash` with `HashAtSeq`; Save never hashes. Verify is also where a torn or
+  unrewritten envelope is made good (FORMAT R33): an archive that opened with `EnvelopeStale` is
+  rewritten with `RepairEnvelope` **before** the hash is taken, so the file goes back to
+  describing itself and the hash recorded is of the file as it now stands. A compaction heals it
+  the same way, since it writes a fresh envelope and records the new hash; an open never writes.
 
 ### 2.4 Window and tray
 
@@ -686,7 +693,11 @@ sentinel of every package with a catch-all `internal` — and services are regis
   large file moves the bar (at most ten events a second, as before); `Done`/`Total` are plaintext
   bytes. `ArchiveStat` loses `Dirty`, `CapAt` and `SessionAlive` and gains `Records` (live files
   and directories); `Save`, `Discard` and `KeepOpen` are gone; `CancelOp` on a running Add or
-  Replace aborts its transaction.
+  Replace aborts its transaction — and a cancel that arrives once the operation has entered its
+  commit is refused with `op.committing` ("The operation is already being saved; it will
+  finish."), the operation's own result then being the committed one. The two are one decision
+  under the core's state mutex: either the cancel lands first and nothing is published, or the
+  commit is entered first and the cancel is refused. There is no answer in between.
 
 **Keys**
 - `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Removable}` — `Removable` says the
@@ -742,13 +753,22 @@ sentinel of every package with a catch-all `internal` — and services are regis
   previews are
   decrypted content and stay without one; a recovery key is meant to leave the machine) — the
   page can tell a print from a cancelled one: the shell watches the print spooler — `Shell.PrintBegin()`
-  snapshots the jobs of every local printer, `window.print()` runs, and `Shell.PrintEnd()` polls
-  for up to three seconds after `afterprint` and answers whether a new job appeared (Microsoft
+  snapshots the jobs of every local printer **and starts a poller that reads the spooler every
+  250 ms from there until `PrintEnd` answers**, so a job that spools and completes while the
+  dialog stands — in no queue either call would have read on its own — is caught as well;
+  `window.print()` runs, and `Shell.PrintEnd()` waits up to three seconds after `afterprint`,
+  returning the moment a new job has been seen (Microsoft
   Print to PDF is a printer, so a PDF counts; a job that later fails still counts — it was
   submitted, as BitLocker counts it) — so a print the spooler saw is done with no second question,
-  and one it did not see is said to have been cancelled with *Print…* still offered; only when
+  and one the spooler answered for without holding anything new is said to have been cancelled
+  with *Print…* still offered; only when
   the spooler cannot be read at all does the second confirmation follow ("it printed,
-  and all 48 digits are legible"); **written down** — a second confirmation ("all 48 digits,
+  and all 48 digits are legible") — and a window that passes with no reading coming back at all
+  is exactly that, an unreadable spooler, never a cancellation: a stalled spooler and a cancelled
+  print are indistinguishable, and the sheet may be standing in the tray. A watch nobody ends —
+  the page throws inside `window.print()`, the dialog goes down mid-print — is spent after five
+  minutes: the poller stops, and a `PrintEnd` after that errors like one without a `PrintBegin`;
+  **written down** — a second confirmation ("all 48 digits,
   checked against the screen") before the dialog closes. After a save the core acknowledged the
   dialog closes on *Done*. The handle is the URL's token: the one-time GET consumes the URL,
   not the value, which the core keeps for the reveal's life — until `DropRecoveryKey(handle)`
@@ -785,8 +805,11 @@ registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
 
 **Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `PrintBegin()` / `PrintEnd()
-bool` (the spooler watch around `window.print()`, §6; `PrintEnd` answers false when nothing was
-submitted and errors when the spooler cannot be read), `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
+bool` (the spooler watch around `window.print()`, §6; `PrintBegin` snapshots and starts the
+poller, erroring when the spooler cannot be read within its own three seconds, so the page falls
+back before it prints rather than after; `PrintEnd` answers false when the spooler answered and
+held nothing new, and errors both when the spooler cannot be read and when its whole window
+passes with no reading coming back), `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
 `Reveal`, `Quit`
 (names the running operations, if any, in a native Yes/No question — the only buttons a Windows
 message box has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
@@ -861,7 +884,8 @@ calls `LockNow` synchronously.
 
 **Shutdown.** `Options.ShouldQuit` never shows UI. `Options.OnShutdown` runs
 `resolveForShutdown()`: a running operation is cancelled — its transaction aborted, nothing
-published, which the format tolerates — each owed receipt is written under a fresh ~2 s context,
+published, which the format tolerates — each owed receipt is written (a keystore write, milliseconds on a healthy disk — it takes no
+context, so a stalled disk is the one thing that can hold the lock past the budget),
 the archives are closed, then the lock — bounded to ~3 s in all. The tray's Quit asks the user first, then takes the
 window and the tray away, runs the same function, and waits — unseen — for a pending touch
 (§2.2) to end (`AwaitPendingTouch`: the card's own answer, about 15 s, then its release), so

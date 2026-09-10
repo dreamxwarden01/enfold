@@ -82,11 +82,16 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 }
 
 // extractTempName is a hidden name beside the target, on the same volume so
-// that the move into place is a rename.
+// that the move into place is a rename. Its length is its own — 29 units,
+// whatever the target's — because a name of the 255 units R20 allows is a
+// name a volume can hold, and one carrying the target's would then be too
+// long to create (the outside audit of 2026-09-09). It is random rather than
+// derived, so two extracts of one name into one folder do not collide; the
+// O_EXCL below is what proves it.
 func extractTempName(target string) (string, error) {
 	var r [8]byte
 	if _, err := rand.Read(r[:]); err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(target), fmt.Sprintf(".%s.part-%x", filepath.Base(target), r)), nil
+	return filepath.Join(filepath.Dir(target), fmt.Sprintf(".enfold-%x.part", r)), nil
 }

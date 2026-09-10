@@ -146,6 +146,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeDictInUse]: "The dictionary is still in use.",
   [Code.CodeOpNotFound]: "That operation is gone.",
   [Code.CodeOpCancelled]: "Cancelled.",
+  [Code.CodeOpCommitting]: "The operation is already being saved; it will finish.",
   [Code.CodeOpRunning]: "An operation is still writing the vault. Wait for it to finish.",
   [Code.CodeTooSlow]: "This would not finish before the session locks. Extend the session first.",
   [Code.CodeParams]: "Enfold refused the request.",

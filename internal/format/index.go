@@ -137,7 +137,10 @@ func ValidateName(name string) error {
 		return invalidf("name %q is a relative element", name)
 	}
 	for _, c := range name {
-		if c < 0x20 || c == 0x7F || c == '/' || strings.ContainsRune(`\:*?"<>|`, c) {
+		// R20 says no control character, which is unicode.IsControl — C0 and
+		// DEL and the C1 block U+0080–U+009F, not C0 and DEL alone (the
+		// outside audit of 2026-09-09).
+		if unicode.IsControl(c) || c == '/' || strings.ContainsRune(`\:*?"<>|`, c) {
 			return invalidf("name %q contains forbidden character %q", name, c)
 		}
 	}

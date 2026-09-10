@@ -511,8 +511,15 @@ same `dek_epoch` (the DEK AAD does not include the kid), re-seals the index with
 its AAD, and rewrites the envelope last. **The registry is written first**: the new version is
 recorded as current and the old retired before the archive is touched, so a crash anywhere
 leaves an archive under one of two keys the registry holds — the reverse order would leave, on
-a crash, an archive under a key that exists nowhere. A reader opening an archive therefore tries
-the envelope's kid first and the archive's other known kids after it.
+a crash, an archive under a key that exists nowhere. A reader opening an archive therefore tries the envelope's kid first and the archive's other
+known kids after it. **The envelope is not the reader's only way in** (found by an outside audit,
+2026-09-09): rotation rewrites the 4096-byte envelope in place, and a crash inside that write
+leaves a checksum that fails — so a reader handed the registry's `archive_id` and every key the
+record holds treats an envelope that does not decode as *absent*, tries each key against the
+superblock and the index (whose AAD binds `archive_id` ‖ `kid`, which is what decides), reports
+the envelope stale, and the next *Verify* rewrites it before the hash is taken (`APP.md` §3 —
+Open itself never writes); only when no key opens the index is the file corrupt. §10
+already says the envelope is trusted for nothing but a fast lookup.
 
 **R34 — One token, one slot.** No two non-empty slot records in a region may carry the same
 `slot_pubkey`; a decoder refuses the region (alongside R21's `recipient_id` rule), and a writer

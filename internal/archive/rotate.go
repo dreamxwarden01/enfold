@@ -188,6 +188,12 @@ func (a *Archive) Compact(ctx context.Context, progress func(done, total uint64)
 		src := io.NewSectionReader(a.f, int64(r.DataOff), int64(r.StoredSize))
 		r.DataOff = off
 		for {
+			// Per chunk, not per file: one record can be many gigabytes, and a
+			// cancel that waits for the next file is not a cancel (the outside
+			// audit of 2026-09-09).
+			if err := ctx.Err(); err != nil {
+				return hash, 0, err
+			}
 			n, rerr := src.Read(buf)
 			if n > 0 {
 				if err := write(buf[:n], off); err != nil {

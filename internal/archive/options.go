@@ -21,6 +21,15 @@ type Options struct {
 	// as last_writer on every record this handle changes. Required unless
 	// ReadOnly.
 	DeviceID [16]byte
+	// ArchiveID is the archive_id the caller's own record holds for this
+	// file, and it is the reader's way in when the envelope is not
+	// (FORMAT.md R33, amended 2026-09-09): rotation rewrites the 4 KiB
+	// envelope in place, so a crash inside that write leaves a checksum that
+	// fails, and an envelope that does not decode is then treated as absent —
+	// every key is tried against the index at this id, whose AAD binds
+	// archive_id ‖ kid and is what decides. Zero leaves the old behaviour: an
+	// envelope that does not decode is the file's answer.
+	ArchiveID [16]byte
 	// ReadOnly opens without a lock and refuses every mutation.
 	ReadOnly bool
 	// Compress configures the zstd writer: level, window, concurrency,

@@ -1,11 +1,16 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/dreamxwarden01/enfold/internal/archive"
 	"github.com/dreamxwarden01/enfold/internal/compress"
+	"github.com/dreamxwarden01/enfold/internal/format"
 )
 
 // Replace is the in-place edit and its own commit: the record keeps its id,
@@ -129,6 +134,245 @@ func TestCopyMismatchIsShown(t *testing.T) {
 	if st.CopyMismatch {
 		t.Fatalf("flag survived a commit that recorded this copy: %+v", st)
 	}
+}
+
+// The reopen check is on last_seq alone (APP.md §2.3, amended after the
+// outside audit of 2026-09-09). A file behind the record is an older copy
+// restored and is reported; one ahead of it is a receipt that was lost — the
+// commit landed and the registry write did not — and is adopted, the registry
+// brought up to it at the next write. The size is not compared: an aborted
+// transaction's tail leaves the file larger at the same seq, and the archive
+// layer reclaims it.
+func TestReopenAdoptsAFileAheadAndReportsOneBehind(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Seq")
+	if o := h.add(t, id, rootID, PolicySkip, h.src(t, "one.txt", "one")); o.Error != "" {
+		t.Fatalf("add: %+v", o)
+	}
+	if e := h.c.CloseArchive(id); e != nil {
+		t.Fatal(e)
+	}
+	aid, _ := parseID(id)
+	recorded := func() (uint64, uint64) {
+		h.c.mu.Lock()
+		defer h.c.mu.Unlock()
+		sess, _ := h.c.sessionLocked()
+		rec := findRecord(sess.Registry(), aid)
+		return rec.LastSeq, rec.LastStoredSize
+	}
+	recordedAt := func() int64 {
+		h.c.mu.Lock()
+		defer h.c.mu.Unlock()
+		sess, _ := h.c.sessionLocked()
+		return findRecord(sess.Registry(), aid).LastWrittenAt
+	}
+	// staleAt is the time the registry holds along with the seq it holds: the
+	// time of the commit before the one that was lost.
+	const staleAt = int64(1)
+	record := func(seq, size uint64) {
+		t.Helper()
+		if e := h.c.updateRegistry(func(g *registry) error {
+			a := findRecord(g, aid)
+			a.LastSeq, a.LastStoredSize, a.LastWrittenAt = seq, size, staleAt
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	fileSeq, fileSize := recorded()
+
+	// A receipt that never landed: the registry stands a commit behind the
+	// file. The work is the file's and is adopted.
+	record(fileSeq-1, fileSize)
+	st, e := h.c.OpenArchive(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if st.CopyMismatch {
+		t.Fatalf("a file ahead of the record was reported: %+v", st)
+	}
+	if got, _ := recorded(); got != fileSeq {
+		t.Fatalf("the registry was not brought up to the file: seq %d, want %d", got, fileSeq)
+	}
+	// The adopted record names a newer commit, so it must not carry the time
+	// of the older one: the list's "last saved" would then be earlier than
+	// the work it describes (the outside audit of 2026-09-09, finding 5). The
+	// file's own modification time is what that commit happened at.
+	mod := func() int64 {
+		t.Helper()
+		fi, err := os.Stat(h.record(id).LastPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.ModTime().Unix()
+	}()
+	if at := recordedAt(); at == staleAt || at != mod {
+		t.Fatalf("the adopted receipt was written at %d; the file was last written at %d", at, mod)
+	}
+	if got := st.LastSavedAt; got != recordedAt() {
+		t.Fatalf("the status strip says %d, the record %d", got, recordedAt())
+	}
+	if p := h.page(t, id, rootID); p.Total != 1 {
+		t.Fatalf("the adopted copy: %+v", p.Rows)
+	}
+	if e := h.c.CloseArchive(id); e != nil {
+		t.Fatal(e)
+	}
+
+	// A size that disagrees at the same seq says nothing: it is the tail an
+	// aborted transaction left.
+	record(fileSeq, fileSize/2+1)
+	if st, e := h.c.OpenArchive(id); e != nil || st.CopyMismatch {
+		t.Fatalf("a size that disagrees was reported: %+v %v", st, e)
+	}
+	if e := h.c.CloseArchive(id); e != nil {
+		t.Fatal(e)
+	}
+
+	// Behind the record: an older copy of the file — a restored backup —
+	// which is reported and never adopted.
+	record(fileSeq+5, fileSize)
+	st, e = h.c.OpenArchive(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !st.CopyMismatch {
+		t.Fatalf("an older copy was adopted silently: %+v", st)
+	}
+	if got, _ := recorded(); got != fileSeq+5 {
+		t.Fatalf("the record was moved to the older copy: seq %d", got)
+	}
+}
+
+// A verify makes a torn envelope good again (FORMAT.md R33, amended
+// 2026-09-09). Nothing in the app rewrote it before: the archive opened
+// through the archive_id the registry record holds, said so in the log, and
+// stayed not-self-describing for the life of the file — which is the one
+// thing the envelope exists to prevent (the outside audit of 2026-09-09,
+// finding 6). The repair runs before the hash, so what is recorded is the
+// file as it now stands.
+func TestVerifyRepairsATornEnvelope(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Envelope")
+	if o := h.add(t, id, rootID, PolicySkip, h.src(t, "one.txt", "one")); o.Error != "" {
+		t.Fatalf("add: %+v", o)
+	}
+	path := h.record(id).LastPath
+	if e := h.c.CloseArchive(id); e != nil {
+		t.Fatal(e)
+	}
+
+	// The envelope's checksum as a torn in-place write leaves it: it decodes
+	// no longer, so the archive_id of the caller's own record is the way in.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := format.EnvelopeOff + format.SuperblockSize - 32; i < format.EnvelopeOff+format.SuperblockSize; i++ {
+		b[i] ^= 0xff
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ReadEnvelope(path); err == nil {
+		t.Fatal("the envelope still decodes")
+	}
+
+	if _, e := h.c.OpenArchive(id); e != nil {
+		t.Fatal(e)
+	}
+	aid, _ := parseID(id)
+	h.c.mu.Lock()
+	oa := h.c.archives[aid]
+	h.c.mu.Unlock()
+	if !oa.a.EnvelopeStale() {
+		t.Fatal("a torn envelope was not reported on the open")
+	}
+
+	opID, e := h.c.Verify(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != "" {
+		t.Fatalf("verify: %+v", o)
+	}
+	if oa.a.EnvelopeStale() {
+		t.Fatal("the verify left the envelope torn")
+	}
+	env, err := archive.ReadEnvelope(path)
+	if err != nil || env.ArchiveID != aid || env.KID != h.record(id).CurrentKID {
+		t.Fatalf("the envelope was not written again: %+v %v", env, err)
+	}
+	// And the hash the registry now holds is of the repaired file, not of the
+	// bytes before the rewrite: the repair happens before the hash, so
+	// LastCiphertextHash stays true of what is on disk.
+	now, err := oa.a.Hash(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := h.record(id); rec.LastCiphertextHash != now || rec.HashAtSeq != rec.LastSeq {
+		t.Fatalf("the recorded hash is not the repaired file's: %x, the file's %x", rec.LastCiphertextHash, now)
+	}
+}
+
+// The archive's one clock holds for any running operation, whether or not
+// that operation holds the archive's own lock (APP.md §2.3, DESIGN.md §10).
+// An add registers its operation before it walks the source folder and takes
+// opMu only afterwards, and an extract takes it never: the clock looked at
+// readers and compaction alone and could close the archive under either (the
+// outside audit of 2026-09-09).
+func TestTheIdleClockHoldsForARunningOperation(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Idle")
+	// One folder and no file: the extract's plan creates it without opening
+	// a reader, so nothing but the operation itself holds the clock.
+	if _, e := h.c.CreateFolder(id, rootID, "F"); e != nil {
+		t.Fatal(e)
+	}
+	armedAt := h.stat(t, id).ExpiresAt
+
+	// The operation is stopped inside its first progress event — on its own
+	// goroutine, holding neither opMu nor a reader.
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h.rec.onEvent(func(name string, payload any) {
+		o, ok := payload.(OpView)
+		if !ok || name != EventOpProgress || o.Kind != "extract" {
+			return
+		}
+		once.Do(func() {
+			close(held)
+			<-release
+		})
+	})
+	opID, e := h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	<-held
+
+	// Past the archive's idle deadline, twice over. The session's own clock
+	// is a different one and is kept alive here, since a lock would close the
+	// archive for a reason that is not this test's.
+	for i := 0; i < 3; i++ {
+		h.clk.Advance(5 * time.Minute)
+		h.c.Activity()
+	}
+	st, e := h.c.Stat(id)
+	if e != nil {
+		t.Fatalf("the archive was closed under a running operation: %v", e)
+	}
+	if st.ExpiresAt <= armedAt {
+		t.Fatalf("the clock was not re-armed while the operation ran: %+v", st)
+	}
+	close(release)
+	if o := h.rec.waitOp(t, opID); o.Error != "" {
+		t.Fatalf("extract: %+v", o)
+	}
+	h.rec.onEvent(nil)
 }
 
 // Closing an archive whose commit ended indeterminate releases the handle so

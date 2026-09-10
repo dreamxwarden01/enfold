@@ -68,6 +68,7 @@ type Archive struct {
 // archiveID under the key named kid, and opens it.
 func Create(path string, archiveID, kid [16]byte, key [32]byte, opts Options) (*Archive, error) {
 	opts = opts.withDefaults()
+	opts.ArchiveID = archiveID // the id the reopen below opens at (R33)
 	if opts.ReadOnly {
 		return nil, fmt.Errorf("%w: Create with ReadOnly", ErrParams)
 	}
@@ -164,9 +165,13 @@ func ReadEnvelope(path string) (*format.Envelope, error) {
 
 // Open opens the archive at path with the first of keys that opens its
 // index — the one the envelope names first, then the others (R33), which is
-// how an interrupted rotation is recovered from. It never writes to the
-// file and never modifies keys. A writable handle takes an exclusive lock on
-// the file and needs Options.DeviceID.
+// how an interrupted rotation is recovered from. An envelope that does not
+// decode — checksum, magic or version — is treated as absent when the caller
+// supplied Options.ArchiveID, since rotation rewrites it in place and a crash
+// inside that write must not cost the archive: every key is tried at that id
+// and EnvelopeStale then says the envelope is owed a rewrite. It never writes
+// to the file and never modifies keys. A writable handle takes an exclusive
+// lock on the file and needs Options.DeviceID.
 func Open(path string, keys []Key, opts Options) (*Archive, error) {
 	opts = opts.withDefaults()
 	if !opts.ReadOnly && opts.DeviceID == [16]byte{} {
@@ -227,11 +232,18 @@ func (a *Archive) load(keys []Key) error {
 			return err
 		}
 	}
-	env, err := format.DecodeEnvelope(envB[:])
-	if err != nil {
-		return err
+	// The envelope is a fast lookup and nothing more (§10). When it does not
+	// decode it is absent, not a verdict: the caller's own archive_id opens
+	// the file instead, and only a file no key opens is corrupt (R33).
+	env, envErr := format.DecodeEnvelope(envB[:])
+	switch {
+	case envErr == nil:
+		a.env, a.archiveID = env, env.ArchiveID
+	case a.opts.ArchiveID != [16]byte{}:
+		env, a.env, a.archiveID = nil, nil, a.opts.ArchiveID
+	default:
+		return envErr
 	}
-	a.env, a.archiveID = env, env.ArchiveID
 	sb, live, stale, err := format.PickArchiveSuperblock(sbA[:], sbB[:])
 	if err != nil {
 		return err
@@ -251,33 +263,35 @@ func (a *Archive) load(keys []Key) error {
 		return corrupt("index tag in the file differs from the superblock's")
 	}
 	var index *format.Index
-	for pass := 0; pass < 2 && index == nil; pass++ {
-		for _, k := range keys {
-			if (k.KID == env.KID) != (pass == 0) {
-				continue
-			}
-			indexKey := kdf.ArchiveIndexKey(k.Key, a.archiveID)
-			plain, err := openIndex(indexKey, ct, sb, a.archiveID, k.KID)
-			if err != nil {
-				kdf.Zero(indexKey)
-				continue
-			}
-			index, err = format.DecodeIndex(plain)
-			kdf.Zero(plain)
-			if err != nil {
-				kdf.Zero(indexKey)
-				return err
-			}
-			a.kid, a.indexKey = k.KID, indexKey
-			a.wrapKey = kdf.ArchiveWrapKey(k.Key, a.archiveID)
-			break
+	for _, k := range candidateOrder(keys, env) {
+		indexKey := kdf.ArchiveIndexKey(k.Key, a.archiveID)
+		plain, err := openIndex(indexKey, ct, sb, a.archiveID, k.KID)
+		if err != nil {
+			kdf.Zero(indexKey)
+			continue
 		}
+		index, err = format.DecodeIndex(plain)
+		kdf.Zero(plain)
+		if err != nil {
+			kdf.Zero(indexKey)
+			return err
+		}
+		a.kid, a.indexKey = k.KID, indexKey
+		a.wrapKey = kdf.ArchiveWrapKey(k.Key, a.archiveID)
+		break
 	}
 	if index == nil {
+		if env == nil {
+			// No envelope and no key: the file itself is the problem, and the
+			// envelope's own failure is the first thing to say about it.
+			return corrupt("no key opens the index and the envelope does not decode: %v", envErr)
+		}
 		return ErrKey
 	}
 	a.index, a.tree = index, newTree(index)
-	a.envelopeStale = a.kid != env.KID
+	// An envelope that named another kid, or none that decoded at all, is
+	// owed a rewrite; Open never writes, so RepairEnvelope does it (R33).
+	a.envelopeStale = env == nil || a.kid != env.KID
 
 	// The losing copy: what it still references is quarantined from
 	// allocation, so that a torn live copy opens one commit behind. Its
@@ -304,6 +318,30 @@ func (a *Archive) load(keys []Key) error {
 		}
 	}
 	return a.check()
+}
+
+// candidateOrder is the order the keys are tried in: the kid the envelope
+// names first and the archive's other known kids after it (R33), which is
+// what recovers an interrupted rotation. With no envelope every key is a
+// candidate in the order the caller gave them; the index's AAD, which binds
+// archive_id ‖ kid, is what decides in either case. The caller's slice is
+// not touched.
+func candidateOrder(keys []Key, env *format.Envelope) []Key {
+	out := make([]Key, 0, len(keys))
+	if env != nil {
+		for _, k := range keys {
+			if k.KID == env.KID {
+				out = append(out, k)
+			}
+		}
+	}
+	for _, k := range keys {
+		if env != nil && k.KID == env.KID {
+			continue
+		}
+		out = append(out, k)
+	}
+	return out
 }
 
 // liveExtents returns the live records' extents of an index, having checked
@@ -500,8 +538,10 @@ func (a *Archive) Stale() error {
 }
 
 // EnvelopeStale reports that the index opened under a kid other than the
-// envelope's — a key rotation was interrupted before the envelope was
-// rewritten. RepairEnvelope fixes it; Open does not write.
+// envelope's, or that no envelope decoded at all and the archive was opened
+// at Options.ArchiveID — a key rotation interrupted before the envelope was
+// rewritten, or interrupted inside that write (R33). RepairEnvelope fixes
+// either; Open does not write.
 func (a *Archive) EnvelopeStale() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

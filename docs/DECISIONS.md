@@ -3281,3 +3281,33 @@ temporary beside the target and is placed exclusively, so the bar moves within a
 selectable with a right-click *Copy*. One consequence worth knowing: with `SessionAlive` gone,
 everything on the Archive page but *Delete archive…* works while the vault is locked, as APP
 §2.3 has always said it should, the receipt owed until the next unlock.
+
+## 2026-09-09 — The first outside audit: Codex over the tree and the immediate-operations code
+
+The user added a skill that runs the OpenAI Codex CLI as a read-only subprocess, for a second
+pair of eyes that shares none of this project's history and is billed elsewhere. First use: one
+Astra pass (its own subagents failed to launch, so one review rather than three) over the tree
+and the immediate-operations change against FORMAT §11/R39 and APP §2.3/§3/§5 — 27 files,
+eleven findings, spot-checked here before anything was done with them. What held, and what it
+changed: (1) a crash inside the rotation's in-place envelope rewrite left an archive that would
+not open, because the reader decoded the envelope before trying any key; R33 now makes an
+envelope that fails its checksum *absent*, the reader trying the registry's keys against the
+index and rewriting the envelope — the envelope was never trusted for anything else (§10).
+(2) An add or a replace had no deferred abort, so a panic recovered by the operation runner
+left the archive's transaction open until it was closed; every operation now aborts on any exit
+that is not a commit. (3) A cancel arriving after the last check while the commit ran was
+answered as if it had worked; `CancelOp` now says the operation is already committing. (4) The
+idle clock looked at readers and compaction but not at an operation still walking its source
+before taking the archive's lock; it now holds for any running operation. (5) The extract's
+temporary name carried the whole target name plus a suffix, so a valid 255-unit name could not
+be extracted; the temporary is a short random name beside the target. (6) The spooler watch took
+one snapshot at `Begin` and looked again only at `End`, so a job that spooled and finished while
+the print dialog stood was missed — it now polls from `Begin` on and only stops three seconds
+after `End`; and a snapshot that stalls is abandoned at the deadline rather than holding the
+dialog. (7) R20's "no control character" was implemented as C0 and DEL only; `unicode.IsControl`
+now, which adds U+0080–U+009F. (8) Compaction checked for a cancel between files but not inside
+a multi-gigabyte one; it checks per chunk. Two findings became doc corrections rather than code:
+the reopen check compares `last_seq` only (a file ahead of the record is a lost receipt and is
+adopted; the size is not compared, an aborted tail being normal), and the shutdown's receipt
+write is bounded by nothing but a healthy disk. One was declined: that a rotation leaves both
+keys usable is already what R33 says, and the reader tries them in order.

@@ -1,11 +1,15 @@
 package app
 
 import (
+	"context"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/dreamxwarden01/enfold/internal/format"
 )
 
 // An operation is a transaction (APP.md §2.3, DECISIONS 2026-09-09): Begin
@@ -316,6 +320,251 @@ func TestCancelOfARunningAddPublishesNothing(t *testing.T) {
 	}
 	if st := h.stat(t, id); st.Records != 3 || st.Files != 2 {
 		t.Fatalf("after the second add: %+v", st)
+	}
+}
+
+// Every operation that opens a transaction aborts it on any exit that is not
+// a commit (APP.md §2.3). A panic inside the add — here thrown by the
+// progress sink and recovered by the operation runner — used to leave the
+// transaction open, and every later operation on that archive then answered
+// archive.dirty until the handle was closed (the outside audit of
+// 2026-09-09).
+func TestAPanicInsideAnAddLeavesNoTransactionOpen(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Panic")
+
+	big := filepath.Join(h.dir, "big.bin")
+	if err := os.WriteFile(big, incompressible(t, 2<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Thrown on the operation's own goroutine, inside the add's read of its
+	// source: the transaction is open and bytes are already in the file.
+	h.rec.onEvent(func(name string, payload any) {
+		if name != EventOpProgress {
+			return
+		}
+		if o, ok := payload.(OpView); ok && o.Kind == "add" && o.Done > 0 {
+			panic("the progress sink threw")
+		}
+	})
+	opID, e := h.c.AddFiles(id, rootID, []string{big}, PolicySkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != CodeInternal {
+		t.Fatalf("the panicking add: %+v", o)
+	}
+	h.rec.onEvent(nil)
+
+	// Nothing was published, and the archive is clean between operations: the
+	// next one opens a transaction of its own and commits it.
+	if p := h.page(t, id, rootID); p.Total != 0 {
+		t.Fatalf("the panicking add published rows: %+v", p.Rows)
+	}
+	if o := h.add(t, id, rootID, PolicySkip, h.src(t, "after.txt", "after")); o.Error != "" {
+		t.Fatalf("the add after the panic: %+v", o)
+	}
+	if p := h.page(t, id, rootID); p.Total != 1 {
+		t.Fatalf("after the panic and the add: %+v", p.Rows)
+	}
+}
+
+// A cancel that arrives once the commit has been entered is not a cancel:
+// the commit runs under a context no cancel reaches, so the change is
+// published whatever the answer, and reporting it as cancelled would be a
+// lie about what is in the file. CancelOp says the operation is being saved,
+// and the operation's own result stays the real one (the outside audit of
+// 2026-09-09).
+func TestCancelDuringTheCommitIsRefused(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Committing")
+
+	// archive.changed is emitted from inside the commit, on the operation's
+	// own goroutine and before it finishes: a cancel taken there lands in the
+	// window this is about.
+	ids := make(chan string, 1)
+	answers := make(chan *Error, 1)
+	h.rec.onEvent(func(name string, payload any) {
+		if name != EventArchiveChanged {
+			return
+		}
+		select {
+		case opID := <-ids:
+			answers <- h.c.CancelOp(opID)
+		default:
+		}
+	})
+	opID, e := h.c.AddFiles(id, rootID, []string{h.src(t, "one.txt", "one")}, PolicySkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ids <- opID
+	o := h.rec.waitOp(t, opID)
+	h.rec.onEvent(nil)
+	select {
+	case ans := <-answers:
+		if ans == nil || ans.Code != CodeOpCommitting {
+			t.Fatalf("a cancel taken during the commit answered %v", ans)
+		}
+	default:
+		t.Fatal("no cancel was taken during the commit")
+	}
+	if o.Error != "" {
+		t.Fatalf("the committed operation's result is not the real one: %+v", o)
+	}
+	if p := h.page(t, id, rootID); p.Total != 1 {
+		t.Fatalf("the commit the cancel could not stop published nothing: %+v", p.Rows)
+	}
+	// The operation is over: a cancel after it is neither refused nor acted
+	// on, as it never was.
+	if e := h.c.CancelOp(opID); e != nil {
+		t.Fatalf("a cancel after the operation ended: %v", e)
+	}
+}
+
+// The other side of that handover: a cancel that arrives before the commit
+// is entered wins, and the commit is refused rather than run under a context
+// no cancel reaches. Both decisions are made under the state mutex, so there
+// is no instant in which CancelOp answers nil — "it was cancelled" — while
+// the operation goes on to publish (the outside audit of 2026-09-09, finding
+// 3). The cancel here lands exactly in that window: after the operation's
+// last look at its context, before it marks itself committing.
+func TestACancelBeforeTheCommitIsEnteredWins(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Handover")
+
+	atTheWindow, cancelled := make(chan struct{}), make(chan struct{})
+	marked := make(chan bool, 1)
+	opID := h.c.startOp("add", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
+		close(atTheWindow) // the writing is done; the commit is not entered
+		<-cancelled
+		ok := o.markCommitting(ctx)
+		marked <- ok
+		if !ok {
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	})
+	<-atTheWindow
+	if e := h.c.CancelOp(opID); e != nil {
+		t.Fatalf("a cancel before the commit was entered: %v", e)
+	}
+	close(cancelled)
+	if <-marked {
+		t.Fatal("the commit was entered after a cancel had been answered")
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != CodeOpCancelled {
+		t.Fatalf("the cancelled operation: %+v", o)
+	}
+}
+
+// Every operation that opens a transaction aborts it on any exit that is not
+// a commit — a panic raised inside Commit itself included. The flag that
+// tells the deferred guard there is nothing left to abort used to be set
+// before the call, so a panic there escaped the guard: the transaction
+// stayed open and every later operation on that archive answered
+// archive.dirty until the handle was closed (the outside audit of
+// 2026-09-09, finding 4).
+func TestAPanicInsideTheCommitLeavesNoTransactionOpen(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "CommitPanic")
+	aid, _ := parseID(id)
+	h.c.mu.Lock()
+	oa := h.c.archives[aid]
+	h.c.mu.Unlock()
+	if oa == nil {
+		t.Fatal("the archive is not open")
+	}
+
+	// The panic is raised inside Tx.Commit, where no failure of the app's own
+	// can put one: the nil context it is called with is dereferenced there
+	// (archive/tx.go commit reads ctx.Err() first). What the transaction did
+	// before it is a real change, so the commit is not the empty one.
+	func() {
+		oa.opMu.Lock()
+		defer oa.opMu.Unlock()
+		tx, e := h.c.beginOp(oa)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("the commit did not panic")
+			}
+		}()
+		defer tx.end() // the guard: any exit that is not a commit aborts
+		if _, err := tx.tx.AddDir(format.RootID, "F", 0); err != nil {
+			t.Fatal(err)
+		}
+		tx.commit(nil)
+	}()
+
+	// Nothing was published and no transaction was left open: the next
+	// operation begins one of its own and commits it.
+	if p := h.page(t, id, rootID); p.Total != 0 {
+		t.Fatalf("the panicking commit published rows: %+v", p.Rows)
+	}
+	if o := h.add(t, id, rootID, PolicySkip, h.src(t, "after.txt", "after")); o.Error != "" {
+		t.Fatalf("the add after the panicking commit: %+v", o)
+	}
+	if p := h.page(t, id, rootID); p.Total != 1 {
+		t.Fatalf("after the panic and the add: %+v", p.Rows)
+	}
+}
+
+// The temporary an extract builds into is a short hidden name beside the
+// target, never the target's own name with a suffix: a record may carry the
+// 255 UTF-16 code units R20 allows, which is what the volume it came from
+// holds, and 255 plus a suffix is a name no volume will take — the file could
+// not be extracted at all (the outside audit of 2026-09-09).
+func TestExtractOfAName255UnitsLong(t *testing.T) {
+	dir := t.TempDir()
+	longest := strings.Repeat("n", format.MaxNameUnits)
+	tmp, err := extractTempName(filepath.Join(dir, longest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.Dir(tmp); got != dir {
+		t.Fatalf("the temporary is not beside the target: %s", tmp)
+	}
+	base := filepath.Base(tmp)
+	if len(base) > 64 || strings.Contains(base, longest) {
+		t.Fatalf("the temporary carries the target's name: %q", base)
+	}
+	if again, err := extractTempName(filepath.Join(dir, longest)); err != nil || again == tmp {
+		t.Fatalf("two temporaries for one target: %q %v", again, err)
+	}
+
+	// And end to end, where the volume takes such a name at all.
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Long")
+	name := strings.Repeat("n", format.MaxNameUnits-4) + ".txt"
+	src := filepath.Join(h.dir, "src", name)
+	if err := os.MkdirAll(filepath.Dir(src), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("long"), 0o600); err != nil {
+		t.Skipf("this volume refuses a name of %d units: %v", format.MaxNameUnits, err)
+	}
+	if o := h.add(t, id, rootID, PolicySkip, src); o.Error != "" {
+		t.Fatalf("add: %+v", o)
+	}
+	out := outDir(t)
+	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	o := h.rec.waitOp(t, opID)
+	if o.Error != "" || len(o.Results) != 1 || o.Results[0].Outcome != "extracted" {
+		t.Fatalf("the extract of a %d-unit name: %+v", format.MaxNameUnits, o)
+	}
+	if b, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(b) != "long" {
+		t.Fatalf("what landed: %q %v", b, err)
 	}
 }
 

@@ -36,11 +36,17 @@ type op struct {
 	phase     atomic.Value // string
 	cancel    context.CancelFunc
 	over      chan struct{}
-	finished  bool
-	err       *Error
-	results   []FileOutcome
-	c         *Core
-	lastEmit  time.Time
+	// committing is set once the writing is done and the commit has been
+	// entered: from there the operation is being saved under a context no
+	// cancel reaches, and CancelOp answers op.committing rather than
+	// reporting a cancel it did not perform (the outside audit of
+	// 2026-09-09). It is read and written under the state mutex.
+	committing bool
+	finished   bool
+	err        *Error
+	results    []FileOutcome
+	c          *Core
+	lastEmit   time.Time
 }
 
 func (o *op) view() OpView {
@@ -171,15 +177,48 @@ func (c *Core) finishOp(o *op, results []FileOutcome, e *Error) {
 
 // CancelOp cancels a running operation. On a running add or replace this is
 // Abort: nothing is published (APP.md §2.3).
+//
+// An operation that has entered its commit is past that: the commit runs
+// under a context no cancel reaches, so cancelling would publish the change
+// and report it as cancelled all the same. It answers op.committing instead —
+// "The operation is already being saved; it will finish." — and the
+// operation's own result stays the real one.
+//
+// The handover is one critical section: the decision and the cancel that
+// follows it are both under the state mutex, and markCommitting takes the
+// same mutex to look at the context. Either the cancel lands first and the
+// commit is refused — the transaction is aborted and nothing is published —
+// or the commit is entered first and the cancel is refused. There is no
+// instant in between in which a cancel is answered nil while the change is
+// published all the same (the outside audit of 2026-09-09, finding 3).
 func (c *Core) CancelOp(id string) *Error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	o := c.ops[id]
-	c.mu.Unlock()
 	if o == nil {
 		return coded(CodeOpNotFound)
 	}
+	if o.committing && !o.finished {
+		return classify(ErrOpCommitting)
+	}
+	// Under the mutex on purpose: a context.CancelFunc closes a channel and
+	// touches nothing of the core, so it cannot come back in here.
 	o.cancel()
 	return nil
+}
+
+// markCommitting moves the operation into its commit, unless a cancel has
+// already landed: false is a cancel that won, and the caller aborts its
+// transaction and answers the context's error. Called on the operation's own
+// goroutine, with opMu held and the state mutex free.
+func (o *op) markCommitting(ctx context.Context) bool {
+	o.c.mu.Lock()
+	defer o.c.mu.Unlock()
+	if ctx.Err() != nil {
+		return false
+	}
+	o.committing = true
+	return true
 }
 
 // Op returns an operation's current view.
@@ -418,26 +457,35 @@ func (c *Core) addTree(ctx context.Context, o *op, oa *openArchive, parentID [16
 	}
 	count(plan)
 	o.progress(0, total, "adding")
-	tx, e := c.beginOp(oa)
+	t, e := c.beginOp(oa)
 	if e != nil {
 		return nil, e
 	}
+	defer t.end() // any exit that is not the commit below aborts (APP.md §2.3)
 	results := []FileOutcome{}
 	var done uint64
 	wrote := false
-	err := c.runPlan(ctx, o, oa, tx, plan, &results, &done, total, &wrote)
+	err := c.runPlan(ctx, o, oa, t.tx, plan, &results, &done, total, &wrote)
 	if err == nil {
 		err = ctx.Err()
 	}
 	if err != nil || !wrote {
 		// Cancelled, failed, or nothing to write after all: the transaction
 		// is dropped and nothing is published (APP.md §2.3).
-		c.abortOp(oa, tx)
+		t.abort()
 		return results, err
 	}
 	// The commit is not cancellable: the writing is done, and a Cancel that
 	// arrives now would leave the outcome to a race rather than to the user.
-	if e := c.commitOp(context.WithoutCancel(ctx), oa, tx); e != nil {
+	// It is told so — the operation is committing, and CancelOp says that
+	// rather than answering a cancel it did not perform. A cancel that got
+	// in first wins instead: the transaction is dropped, as on any other
+	// cancel, and nothing is published.
+	if !o.markCommitting(ctx) {
+		t.abort()
+		return results, ctx.Err()
+	}
+	if e := t.commit(context.WithoutCancel(ctx)); e != nil {
 		return results, e
 	}
 	return results, nil
@@ -745,25 +793,30 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 		defer f.Close()
 		total := uint64(max64(st.Size(), 0))
 		o.progress(0, total, "replacing")
-		tx, e := c.beginOp(oa)
+		t, e := c.beginOp(oa)
 		if e != nil {
 			return nil, e
 		}
+		defer t.end() // as the add: every exit but the commit is an abort
 		rd := &countingReaderAt{src: f, size: st.Size(), on: func(read int64) {
 			o.progress(uint64(read), total, "replacing")
 		}}
-		if _, err := tx.Replace(ctx, fid, rd, st.Size()); err != nil {
-			c.abortOp(oa, tx)
+		if _, err := t.tx.Replace(ctx, fid, rd, st.Size()); err != nil {
+			t.abort()
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			return nil, err
 		}
 		if err := ctx.Err(); err != nil {
-			c.abortOp(oa, tx)
+			t.abort()
 			return nil, err
 		}
-		if e := c.commitOp(context.WithoutCancel(ctx), oa, tx); e != nil {
+		if !o.markCommitting(ctx) { // a cancel that got in first wins
+			t.abort()
+			return nil, ctx.Err()
+		}
+		if e := t.commit(context.WithoutCancel(ctx)); e != nil {
 			return nil, e
 		}
 		o.progress(total, total, "replacing")
@@ -1040,6 +1093,21 @@ func (c *Core) Verify(id string) (string, *Error) {
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
 		o.progress(0, 1, "hashing")
+		// A verify is where a torn envelope is made good (FORMAT.md R33,
+		// amended 2026-09-09). An envelope that does not name the kid the
+		// index opened under leaves the file readable only through the
+		// registry record that still holds its archive_id — the envelope
+		// exists so that the file is self-describing — and the repair was
+		// left undone because rewriting it changes the ciphertext hash. Here
+		// the hash is recomputed anyway, so the repaired bytes are the ones
+		// hashed and recorded and LastCiphertextHash stays true. A repair
+		// that fails is logged and the verify goes on: the file is readable
+		// either way.
+		if oa.a.EnvelopeStale() {
+			if err := oa.a.RepairEnvelope(); err != nil {
+				c.log("archive %s: the envelope could not be rewritten: %v", oa.name, err)
+			}
+		}
 		h, err := oa.a.Hash(ctx)
 		if err != nil {
 			return nil, err

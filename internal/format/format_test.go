@@ -1859,6 +1859,20 @@ func TestValidateName(t *testing.T) {
 			t.Errorf("%q accepted", n)
 		}
 	}
+	// R20 says no control character, which is every category Cc: the C1
+	// block U+0080–U+009F as much as C0 and DEL. NEL (U+0085) is a line
+	// break on the platforms this extracts to; U+00E9 is not a control character
+	// and a name is not held to ASCII (the outside audit of 2026-09-09).
+	for _, n := range []string{"a\u0085b", "a\u0080b", "a\u009fb", "\u0085"} {
+		if err := ValidateName(n); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%q accepted: a C1 control character is a control character", n)
+		}
+	}
+	for _, n := range []string{"caf\u00e9.txt", "\u00a0nbsp", "na\u00efve"} {
+		if err := ValidateName(n); err != nil {
+			t.Errorf("%q rejected: %v", n, err)
+		}
+	}
 	// A non-BMP scalar is two UTF-16 code units, so 128 of them are 256.
 	if err := ValidateName(strings.Repeat("\U0001F600", 128)); !errors.Is(err, ErrInvalid) {
 		t.Errorf("256 code units accepted")

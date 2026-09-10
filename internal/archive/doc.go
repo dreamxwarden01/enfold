@@ -94,7 +94,13 @@
 // of two keys the registry knows. The reverse order would leave, on a crash,
 // an archive under a key that exists nowhere. Open never writes: an envelope
 // whose kid is not the one that opened the index is reported (EnvelopeStale)
-// and repaired only by RepairEnvelope.
+// and repaired only by RepairEnvelope. The envelope is not the way in, only
+// the fast one (R33, amended after the outside audit of 2026-09-09): it is
+// rewritten in place, so a crash inside that write leaves a checksum that
+// fails, and a caller that passes Options.ArchiveID — the archive_id its own
+// record holds — opens such a file all the same, every key tried against the
+// index, whose AAD binds archive_id and kid. Only a file no key opens is
+// corrupt.
 //
 // # Single writer
 //

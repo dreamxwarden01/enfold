@@ -17,15 +17,6 @@ type Hooks struct {
 	SaveFile func(title, filename, dir string) (string, error)
 	// Reveal shows a path in the file manager.
 	Reveal func(path string) error
-	// PrintBegin and PrintEnd are the print spooler watch around the
-	// recovery key's window.print() (APP.md §3 Shell, §6): Begin snapshots
-	// every local printer's jobs, End polls for up to three seconds after
-	// afterprint and answers whether a new job appeared. A job that later
-	// fails still counts — it was submitted — and an error means the
-	// spooler could not be read, on which the page falls back to its second
-	// confirmation.
-	PrintBegin func() error
-	PrintEnd   func() (bool, error)
 	// Quit runs the shell's quit flow: name any running operations, resolve,
 	// then end the process.
 	Quit func()
@@ -70,37 +61,12 @@ func (s *Shell) SaveFile(title, filename, dir string) (string, error) {
 	return p, nil
 }
 
+// Reveal shows a path in the file manager. The page prints on its own: the
+// recovery key's window.print() is watched by nothing since 2026-09-09, and
+// pressing Print… counts as done (APP.md §6).
 func (s *Shell) Reveal(path string) error {
 	if err := s.h.Reveal(path); err != nil {
 		return &app.Error{Code: app.CodeIO}
 	}
 	return nil
-}
-
-// PrintBegin snapshots the print spooler before window.print(). An error is
-// the spooler being unreadable, which the page answers by asking after the
-// print as it always did (APP.md §6).
-func (s *Shell) PrintBegin() error {
-	if s.h.PrintBegin == nil {
-		return &app.Error{Code: app.CodeInternal}
-	}
-	if err := s.h.PrintBegin(); err != nil {
-		return &app.Error{Code: app.CodeIO}
-	}
-	return nil
-}
-
-// PrintEnd answers whether a print job appeared that PrintBegin did not see:
-// true is a submission — Microsoft Print to PDF is a printer, so a PDF
-// counts, and a job that later fails was still submitted — and false is a
-// print the user cancelled. The error is again the unreadable spooler.
-func (s *Shell) PrintEnd() (bool, error) {
-	if s.h.PrintEnd == nil {
-		return false, &app.Error{Code: app.CodeInternal}
-	}
-	submitted, err := s.h.PrintEnd()
-	if err != nil {
-		return false, &app.Error{Code: app.CodeIO}
-	}
-	return submitted, nil
 }

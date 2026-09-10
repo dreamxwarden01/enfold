@@ -92,8 +92,6 @@ func TestBoundSurface(t *testing.T) {
 			"CloseWindow()",
 			"PickFiles(string, bool) ([]string, error)",
 			"PickFolder(string) (string, error)",
-			"PrintBegin() error",
-			"PrintEnd() (bool, error)",
 			"Quit()",
 			"Reveal(string) error",
 			"SaveFile(string, string, string) (string, error)",

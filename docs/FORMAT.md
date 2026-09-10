@@ -476,10 +476,21 @@ superblock copies are only a fallback if what the losing copy references still e
 transaction never writes into an extent the live superblock references, nor into one the
 previous commit freed — the previous index and free-map extents, and the data of files it
 replaced or deleted — nor into one an open reader still holds; those extents are published as
-free in the map the commit writes, but allocated only from the commit after next. A reader that
-finds the live copy damaged therefore opens the archive exactly one commit behind, with every
-file of that state readable. A writer also never truncates anything but a reservation it made
-itself at the end of the file; space freed at the tail waits for compaction. Open reclaims as
+free in the map the commit writes, but allocated only from the commit after next. **What the
+fallback promises is a complete state, one whose every file is readable**: a reader that finds
+the live copy damaged opens the archive one commit behind — except after a commit that gave the
+tail back, where it opens that same commit's state. A writer also never truncates anything but a reservation it made itself at the end of the file
+within the commit that frees it; space freed at the tail is reclaimed by the **next** commit —
+the quarantine's own expiry — which the archive layer issues at once as an empty commit whenever
+a commit has freed the tail (`APP.md` §2.3), so the losing copy is never left pointing past the
+end of the file. That follow-up commit is what makes the fallback its own state rather than the
+one before it, and there is no other way round it: no placement can shorten the file while a
+copy still references a byte of the run being given back, so the losing copy is retired onto the
+state just committed *before* anything is truncated, and brought onto the follow-up commit's
+state after the flip. Both copies then name one state — the same files, readable — and the
+previous state is spent. That is the price of the truncation this rule requires, and it is paid
+only by a commit that freed the tail; every other commit leaves the fallback one behind, as
+above. Open reclaims as
 free whatever no superblock references (the tail an interrupted transaction appended), and
 never writes: a stale envelope after an interrupted key rotation is reported, not repaired.
 
@@ -1262,7 +1273,8 @@ file is checked by the archive layer, which knows the file size. Nothing in the 
 extent the index references, so a tampered map can waste space but cannot direct a write over
 existing data.
 
-Compaction is an explicit offline operation. It is the only operation that moves file data without
+Compaction is an offline operation, run on request and by the app itself when the free space is
+worth it (`APP.md` §2.3). It is the only operation that moves file data without
 changing a DEK, which is permissible because ciphertext bytes are copied verbatim rather than
 re-encrypted. What it must keep is pinned in R33; what a writer must leave alone between commits,
 in R31.

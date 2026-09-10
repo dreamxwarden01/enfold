@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -654,6 +655,31 @@ type harness struct {
 	clk       *fakeClock
 	rec       *recorder
 	cards     *fakeCards
+	// The core's own log, kept so that a test can look for a line the core
+	// owes — a reclaim skipped under a lock says so and nothing else does.
+	logMu sync.Mutex
+	logs  []string
+}
+
+// log is the core's logger: recorded here and passed on to the test's output.
+func (h *harness) log(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	h.logMu.Lock()
+	h.logs = append(h.logs, line)
+	h.logMu.Unlock()
+	h.t.Log(line)
+}
+
+// logged reports whether the core has said something containing sub.
+func (h *harness) logged(sub string) bool {
+	h.logMu.Lock()
+	defer h.logMu.Unlock()
+	for _, l := range h.logs {
+		if strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 const testPassword = "correct horse battery staple"
@@ -702,7 +728,7 @@ func newHarnessEntangled(t *testing.T, cards *fakeCards, hwPub []byte, password 
 	if cards != nil {
 		cs = cards
 	}
-	c, err := New(Deps{Cards: cs, Events: h.rec, Clock: h.clk, DataDir: filepath.Join(dir, "data"), Log: t.Logf})
+	c, err := New(Deps{Cards: cs, Events: h.rec, Clock: h.clk, DataDir: filepath.Join(dir, "data"), Log: h.log})
 	if err != nil {
 		t.Fatal(err)
 	}

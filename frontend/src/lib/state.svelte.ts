@@ -269,14 +269,14 @@ class Store {
     this.ops[o.id] = o;
     if (!done) return;
     if (o.error) {
-      this.toast(`${opLabel(o.kind)}: ${codeText(o.error)}`, "error");
+      this.toast(`${opLabel(o.kind, o.items)}: ${codeText(o.error)}`, "error");
     } else if (hasTrouble(o.results)) {
       // Something was left out — a kind that differs, a name the tree
       // cannot hold, a skipped subtree. The page it happened on says what
       // happened, item by item; another archive's op gets the summary as a
       // toast, since its own surface is not on screen.
       if (o.archiveId && o.archiveId === this.current) this.results = o;
-      else this.toast(`${opLabel(o.kind)}: ${summaryLine(tally(o.results))}`, "error");
+      else this.toast(`${opLabel(o.kind, o.items)}: ${summaryLine(tally(o.results))}`, "error");
     }
     if (o.archiveId && o.archiveId === this.current) void this.refreshArchive();
     void this.refreshArchives();

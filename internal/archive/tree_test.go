@@ -107,13 +107,16 @@ func TestDeleteDirectoryTombstonesSubtree(t *testing.T) {
 		add(t, a, mid.ID, "b.bin", noise(30000, 202)),
 		add(t, a, deep.ID, "c.bin", noise(30000, 203)),
 	}
-	_, _, free0 := a.Stat()
+	size0, _, _ := a.Stat()
 	seq0 := a.Seq()
 
 	if _, err := a.Delete(ctx, top.ID); err != nil {
 		t.Fatal(err)
 	}
-	if a.Seq() != seq0+1 {
+	// One commit for the subtree, and the one that follows every commit
+	// which leaves a free run at the end of the file (R31 as amended,
+	// trim.go): the three files were the tail, so it comes back here.
+	if a.Seq() != seq0+2 {
 		t.Errorf("the subtree took %d commits", a.Seq()-seq0)
 	}
 	if len(a.Dirs()) != 0 {
@@ -126,8 +129,8 @@ func TestDeleteDirectoryTombstonesSubtree(t *testing.T) {
 	for _, f := range files {
 		bytesFreed += f.StoredSize
 	}
-	if _, _, free1 := a.Stat(); free1 < free0+bytesFreed {
-		t.Errorf("free went %d → %d, expected at least %d more", free0, free1, bytesFreed)
+	if size1, _, _ := a.Stat(); size1 > size0-bytesFreed {
+		t.Errorf("the file went %d → %d, expected at least %d back", size0, size1, bytesFreed)
 	}
 	// R32, the file rule: identity, name, parent and dek_epoch kept, content
 	// zeroed, revision and modified_at advanced.

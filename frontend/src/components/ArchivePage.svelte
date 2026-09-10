@@ -3,8 +3,9 @@
   import type { Collision, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText } from "../lib/strings";
-  import { bytes, count, countdown, dateTime, previewKind, storageLabel } from "../lib/format";
+  import { bytes, countdown, dateTime, previewKind, storageLabel } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
+  import { statusNote } from "../lib/status";
   import { fileNameProblem, newNameProblem } from "../lib/validate";
   import { ROOT_ID, canDrop, countPhrase, deleteBody, deleteCounts, deleteTitle } from "../lib/tree";
   import type { DragState, DropTarget } from "../lib/tree";
@@ -423,10 +424,11 @@
   const resultLine = $derived(summaryLine(tally(results?.results)));
   const resultItems = $derived(troubles(results?.results));
 
-  // The foot's note (LayerFoot): the archive's figures; while the vault is
-  // locked and the archive still open, when it closes.
+  // The foot's note (LayerFoot, lib/status.ts): the archive's figures —
+  // singular at one, and the free space when it is worth knowing — and,
+  // while the vault is locked and the archive still open, when it closes.
   $effect(() => {
-    let note = stat ? `${count(stat.files)} files · ${bytes(stat.size)} · key v${stat.keyVersion}${stat.lastSavedAt ? ` · last saved ${dateTime(stat.lastSavedAt)}` : ""}` : "";
+    let note = statusNote(stat);
     if (!store.unlocked && stat?.expiresAt) note += ` · archive closes in ${countdown(stat.expiresAt, store.now)}`;
     store.footNote = note;
   });

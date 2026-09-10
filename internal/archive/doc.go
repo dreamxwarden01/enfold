@@ -46,12 +46,31 @@
 // freed by the current transaction and by the previous one — so the losing
 // superblock copy, which still references what the previous commit freed,
 // stays fully valid until the commit after next overwrites it, and an archive
-// whose live copy is torn opens one commit behind — and it excludes extents
+// whose live copy is torn opens a complete state whose every file reads: the
+// commit before the live one, or — after a commit that gave the tail back —
+// that same commit's state, both copies having been retired onto it so that
+// the truncation was legal (R31 as amended) — and it excludes extents
 // an open Reader still holds. The map itself is always appended at the end
 // of the file, which is what lets its own extent be known before it is
 // encoded; the index goes first-fit into the pool or is appended. Nothing is
 // truncated except a reservation this transaction made at the end of the
-// file and did not fill. Space freed at the tail is reclaimed by Compact.
+// file and did not fill — and the tail a commit freed, which comes back with
+// the commit after it.
+//
+// # The tail comes back
+//
+// A commit that leaves a free run at the end of the file is followed at
+// once, inside the same Commit call, by a second, empty commit — the same
+// index one sequence further on, its two extents placed as low as anything
+// may lie and its free map without the trailing run — after which the file
+// is truncated (R31 as amended on 2026-09-09, APP.md §2.3). That second
+// commit is the quarantine's own expiry: it is what leaves both copies
+// naming a state that does not reference the freed run, so the truncation
+// can never leave a superblock pointing past the end of the file. trim.go
+// documents the order and what a crash at each step leaves behind. What
+// truncation cannot give back — free space with live data above it — is
+// Compact's, and the caller decides when that is worth its rewrite
+// (APP.md §2.3: 64 MiB and a quarter of the file).
 //
 // A failure at or after the superblock write leaves the outcome unknown; the
 // Archive then refuses every operation (ErrIndeterminate, Broken) and the

@@ -14,8 +14,10 @@ empties it; paste this into the page once to have it dispatch them:
 That is what makes an operation visible: an add, a replace or an extract
 here runs for a few seconds, ticking op.progress by bytes the way the core
 does, and publishes nothing until it commits at its end (APP.md 2.3).
-POST /mock/print {"how": "submitted" | "cancelled" | "error"} chooses what
-the print spooler will say."""
+POST /mock/preview {"name": "reclaim"} plays the compaction the core runs
+itself after a commit that leaves the free space over APP.md 2.3's
+thresholds - the strip's *Reclaiming space*, cancellable, the space back on
+the status line when it commits."""
 import json, os, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -129,10 +131,6 @@ state = {
                  "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives",
                  "lastExtractFolder": "D:/Extracted"},
     "text": {"text": "# Iceland, July 2024\n\nDay 1: Reykjavik...\n", "truncated": False},
-    # What the print spooler will say (APP.md 3 Shell): a job appeared, no
-    # job appeared, or the spooler could not be read at all. Nothing here
-    # goes near a real printer.
-    "print": "submitted",
     # The operations running now, and the events the page has not drained.
     "ops": {},
     "events": [],
@@ -145,6 +143,12 @@ state = {
 # the vault's password waiting in the field beside it; "deadline" is the
 # note the status carries when the five minutes from the touch ran out
 # (APP.md 2.2); "locked" puts it back.
+# "reclaim" is not a vault state but an operation: it plays the compaction
+# the core runs itself after a commit that leaves the free space over
+# APP.md 2.3's thresholds. It is in the same set because it is the same
+# question - "show me that" - and the route tells the two apart by name.
+PREVIEW_OPS = {"reclaim": lambda: start_reclaim()}
+
 PREVIEWS = {
     "pin": {
         "state": "unlocking", "entangled": True, "note": "",
@@ -369,15 +373,18 @@ def op_view(op):
     return {k: v for k, v in op.items() if k != "cancelled"}
 
 
-def start_op(kind, total, commit, seconds=4.0, steps=24):
+def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase=""):
     """An operation is a transaction (APP.md 2.3): it begins, ticks
     op.progress by *bytes* - Done against Total, both plaintext - and
     commits at its end. A Cancel aborts it and publishes nothing: the
-    records the commit would have made are never made."""
+    records the commit would have made are never made. Items is what the
+    operation planned - the files an add, a replace or an extract will
+    write - which is what the strip counts: "Adding 3 files", singular at
+    one (APP.md 3, ruled 2026-09-09)."""
     state["nextOp"] = state.get("nextOp", 0) + 1
     op_id = "op%d" % state["nextOp"]
     op = {"id": op_id, "kind": kind, "archiveId": state["stat"]["id"], "done": 0, "total": total,
-          "phase": "", "startedAt": int(time.time()), "finished": False, "results": []}
+          "items": items, "phase": phase, "startedAt": int(time.time()), "finished": False, "results": []}
     state["ops"][op_id] = op
 
     def run():
@@ -470,9 +477,40 @@ def delete_records(args):
         gone |= set(subtree(rid)) | {rid}
     if not gone:
         return None
+    freed = sum(x["size"] for x in state["records"] if x["id"] in gone and not x["isDir"])
     state["records"][:] = [x for x in state["records"] if x["id"] not in gone]
+    state["stat"]["freeSpace"] += freed
     bump()
+    # The commit that freed the tail has truncated it; what is left is the
+    # holes, and the core takes them itself once they are worth it.
+    if reclaim_due():
+        start_reclaim()
     return None
+
+
+# The free space the core reclaims on (APP.md 2.3): at or above 64 MiB
+# *and* a quarter of the file. Below the quarter the holes stay where they
+# are and the status line says how much of the file they are.
+RECLAIM_FLOOR = 64 * 1024 * 1024
+
+
+def reclaim_due():
+    st = state["stat"]
+    return st["freeSpace"] >= RECLAIM_FLOOR and st["freeSpace"] * 4 >= st["size"]
+
+
+def start_reclaim():
+    """*Reclaiming space* (APP.md 2.3, 6): a compaction the user did not
+    ask for, cancellable, which gives the file's free space back when it
+    commits. Its Items is zero - it moves bytes, not files - and its phase
+    is the compaction it is made of, which the strip does not repeat."""
+    st = state["stat"]
+
+    def commit():
+        st["size"] = max(0, st["size"] - st["freeSpace"])
+        st["freeSpace"] = 0
+
+    return start_op("reclaim", st["size"], commit, seconds=6.0, phase="compacting")
 
 
 def rename_record(args):
@@ -533,7 +571,7 @@ def add_files(args):
         for p in paths:
             add_one(parent, p, False)
 
-    return start_op("add", ADDED_SIZE * len(paths), commit)
+    return start_op("add", ADDED_SIZE * len(paths), commit, items=len(paths))
 
 
 def add_folder(args):
@@ -541,7 +579,7 @@ def add_folder(args):
     bad = a_dir(parent)
     if bad:
         return bad
-    return start_op("add", ADDED_SIZE, lambda: add_one(parent, path, True))
+    return start_op("add", ADDED_SIZE, lambda: add_one(parent, path, True), items=1)
 
 
 def replace_file(args):
@@ -550,7 +588,7 @@ def replace_file(args):
     _, rid, _path = (list(args) + ["", "", ""])[:3]
     if record(rid) is None:
         return Err("file.not_found")
-    return start_op("replace", ADDED_SIZE, lambda: None)
+    return start_op("replace", ADDED_SIZE, lambda: None, items=1)
 
 
 def extract(args):
@@ -562,13 +600,14 @@ def extract(args):
     ids, dest = (list(args) + ["", [], ""])[1:3]
     if not ids:
         return Err("params")
-    total = sum(r["size"] for r in state["records"] if not r["isDir"]) or ADDED_SIZE
+    files = [r for r in state["records"] if not r["isDir"]]
+    total = sum(r["size"] for r in files) or ADDED_SIZE
 
     def commit():
         if dest:
             state["settings"]["lastExtractFolder"] = dest
 
-    return start_op("extract", total, commit)
+    return start_op("extract", total, commit, items=len(files) or 1)
 
 
 def vault_status():
@@ -578,22 +617,6 @@ def vault_status():
     v["ops"] = [op_view(o) for o in state["ops"].values() if not o["finished"]]
     v["openArchives"] = state["vault"]["openArchives"]
     return v
-
-
-def print_begin(args):
-    """The shell snapshots every local printer's jobs (APP.md 3 Shell).
-    Nothing here can submit one; state["print"] says what the poll after
-    afterprint will find."""
-    return Err("io") if state["print"] == "error" else None
-
-
-def print_end(args):
-    """True: a job appeared - the print counts, with no second question.
-    False: the spooler saw nothing, so it was cancelled. A refusal: the
-    spooler could not be read, and only then is the user asked."""
-    if state["print"] == "error":
-        return Err("io")
-    return state["print"] == "submitted"
 
 
 def create_archive(args):
@@ -657,7 +680,7 @@ METHODS = {
     3028646727: rename_record, 585645538: extract,
     913354260: lambda a: "http://127.0.0.1:1/p/x/y", 723007364: lambda a: state["text"],
     1850767145: check_names, 2446376312: cancel_op,             # archive.CancelOp
-    448053830: lambda a: op_view(state["ops"].get(a[0] if a else "", {"id": "", "kind": "add", "archiveId": "", "done": 0, "total": 0, "phase": "", "startedAt": NOW, "finished": True})),
+    448053830: lambda a: op_view(state["ops"].get(a[0] if a else "", {"id": "", "kind": "add", "archiveId": "", "done": 0, "total": 0, "items": 0, "phase": "", "startedAt": NOW, "finished": True})),
     632849442: lambda a: state["slots"], 309727738: lambda a: None, 3159373965: lambda a: None, 1280438677: lambda a: None,
     207819850: lambda a: None, 3463005426: lambda a: None, 3166408438: lambda a: None,  # RevealRecoveryKey, SaveRecoveryKey, DropRecoveryKey
     332274822: lambda a: None,
@@ -687,10 +710,6 @@ METHODS = {
     2652127606: lambda a: state["settings"], 740356410: lambda a: state["settings"].update(a[0]) if a else None,
     3606391931: lambda a: None, 3229291943: lambda a: ["D:/Pictures/a.jpg", "D:/Pictures/b.jpg"], 2529646972: lambda a: "D:/Pictures", 2079207478: lambda a: None,
     842300112: lambda a: None, 1923582270: lambda a: "D:/new.efd", 3130426784: lambda a: None,
-    # The spooler watch around window.print() (APP.md 3 Shell, 6). Nothing
-    # here reaches a printer: state["print"] decides what it answers.
-    3496539485: print_begin,                                    # shell.PrintBegin
-    3980269933: print_end,                                      # shell.PrintEnd
 }
 
 class H(SimpleHTTPRequestHandler):
@@ -721,16 +740,13 @@ class H(SimpleHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")
         if self.path.startswith("/mock/preview"):
-            over = PREVIEWS.get(body.get("name", ""))
+            name = body.get("name", "")
+            if name in PREVIEW_OPS:
+                return self.reply({"ok": True, "op": PREVIEW_OPS[name]()})
+            over = PREVIEWS.get(name)
             if over is None:
-                return self.reply({"ok": False, "names": sorted(PREVIEWS)})
+                return self.reply({"ok": False, "names": sorted(list(PREVIEWS) + list(PREVIEW_OPS))})
             state["vault"].update(over)
-            return self.reply({"ok": True})
-        if self.path.startswith("/mock/print"):
-            how = body.get("how", "")
-            if how not in ("submitted", "cancelled", "error"):
-                return self.reply({"ok": False, "how": ["submitted", "cancelled", "error"]})
-            state["print"] = how
             return self.reply({"ok": True})
         if self.path.startswith("/mock/state"):
             for k, v in body.items():

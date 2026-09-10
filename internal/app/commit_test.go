@@ -487,7 +487,7 @@ func TestAPanicInsideTheCommitLeavesNoTransactionOpen(t *testing.T) {
 	func() {
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
-		tx, e := h.c.beginOp(oa)
+		tx, e := h.c.beginOp(oa, nil)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -608,5 +608,54 @@ func TestExtractRemembersItsFolder(t *testing.T) {
 	}
 	if got := h.c.GetSettings().LastExtractFolder; got != out {
 		t.Fatalf("Set wrote the folder: %q", got)
+	}
+}
+
+// The strip counts (APP.md §3, DECISIONS 2026-09-09 "the strip says what it
+// does"): OpView.Items is what the plan holds, so the operation strip says
+// "Adding 3 files" rather than a phase word, and "Adding 1 file" in the
+// singular. Folders are not among them — they are records the walk makes,
+// not bytes it writes — and an operation that counts nothing carries zero.
+func TestOpViewCountsTheFilesItPlans(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Counted")
+
+	o := h.add(t, id, rootID, PolicySkip,
+		h.src(t, "c1.txt", "one"), h.src(t, "c2.txt", "two"), h.src(t, "c3.txt", "three"))
+	if o.Error != "" || o.Items != 3 {
+		t.Fatalf("three files added: %+v", o)
+	}
+	// A folder of two files under one subfolder: two files, two folders.
+	h.src(t, "tree/inner/d1.txt", "d")
+	h.src(t, "tree/d2.txt", "e")
+	o = h.addFolder(t, id, rootID, filepath.Join(h.dir, "src", "tree"), PolicySkip)
+	if o.Error != "" || o.Items != 2 {
+		t.Fatalf("a folder of two files: %+v", o)
+	}
+	// A replace is one file, in the singular.
+	opID, e := h.c.ReplaceFile(id, h.row(t, id, rootID, "c1.txt").ID, h.src(t, "c1b.txt", "one again"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if o = h.rec.waitOp(t, opID); o.Error != "" || o.Items != 1 {
+		t.Fatalf("replace: %+v", o)
+	}
+	// An extract counts what it will write: the five files, not the folders
+	// it makes on the way.
+	opID, e = h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if o = h.rec.waitOp(t, opID); o.Error != "" || o.Items != 5 {
+		t.Fatalf("extract all: %+v", o)
+	}
+	// An operation with nothing to count says nothing.
+	opID, e = h.c.Verify(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if o = h.rec.waitOp(t, opID); o.Error != "" || o.Items != 0 {
+		t.Fatalf("verify: %+v", o)
 	}
 }

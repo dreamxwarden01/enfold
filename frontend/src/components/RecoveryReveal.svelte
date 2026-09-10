@@ -11,17 +11,18 @@
   // The same string heads the sheet and is document.title while the print
   // runs, which is what Print to PDF offers as the file name.
   //
-  // A print is no longer guessed at: the shell watches the print spooler
-  // around window.print() (Shell.PrintBegin / PrintEnd). A job the spooler
-  // saw is a print, done with no second question; one it did not see is
-  // said to have been cancelled, in place, with *Print…* still offered;
-  // and only a spooler that cannot be read at all falls back to the
-  // second confirmation. *I have written it down* asks its own, as it did.
+  // None of the three asks a second time (ruled 2026-09-09). A print is
+  // not watched for: the spooler watch that once told a print from a
+  // cancelled one could not see *Save as PDF* at all — the WebView's print
+  // dialog writes that PDF itself and no spooler job exists — so pressing
+  // *Print…* counts as done, and so does *I have written it down*. After
+  // any of the three the corner button is *Done*, and one click closes.
   import { tick } from "svelte";
   import Dialog from "./Dialog.svelte";
   import { Keys, Shell, errorOf } from "../lib/api";
   import { codeText } from "../lib/strings";
-  import { askSpooler, recoveryKeyFileName, recoveryKeyTitle, type PrintOutcome } from "../lib/print";
+  import { recoveryKeyFileName, recoveryKeyTitle } from "../lib/print";
+  import { cornerLabel, keptSomehow } from "../lib/reveal";
   import { store } from "../lib/state.svelte";
 
   interface Props {
@@ -37,16 +38,16 @@
   let { url, kind, vaultName, recoveryId = "", ondone }: Props = $props();
   let digits = $state("");
   let failed = $state(false);
-  let ask = $state<"" | "save" | "print" | "written">("");
+  // The one dialog that still stands over this one: where to keep the
+  // text file. Neither the print nor the written-down way asks anything.
+  let ask = $state<"" | "save">("");
   let savedTo = $state("");
   let printedAt = $state("");
-  // What the spooler said about the last print, and whether any print was
-  // ever submitted: a submitted one puts the dialog into its done state as
-  // a save does; a cancelled one is one line, with *Print…* still offered.
-  // Only the last outcome is shown, so the two lines never stand together.
-  let lastPrint = $state<"" | "done" | "cancelled">("");
-  let printedOnce = $state(false);
-  let printing = $state(false);
+  // Whether *Print…* has been pressed and whether *I have written it down*
+  // has: each of them, like a save the core acknowledged, puts the dialog
+  // into its done state at once.
+  let printed = $state(false);
+  let wroteDown = $state(false);
   const handle = $derived(url.slice(url.lastIndexOf("/") + 1));
   const title = $derived(recoveryKeyTitle(recoveryId));
 
@@ -87,67 +88,44 @@
     }
   }
 
-  // How long afterprint is waited for before the print is given up on. The
-  // event is what the poll of the spooler is timed from, and a WebView that
-  // never fires it must not leave the dialog stuck.
-  const afterPrintWaitMs = 30_000;
-
-  // afterprint, not the return of window.print(): the shell's poll of the
-  // spooler starts where the print dialog was dismissed.
-  function afterPrint(): Promise<void> {
-    return new Promise((resolve) => {
-      window.addEventListener("afterprint", () => resolve(), { once: true });
-    });
-  }
-
+  // *Print…* sets the tab's title — which is what Print to PDF offers as
+  // the file name — opens the browser's print dialog, and puts the title
+  // back when the dialog goes down. Nothing is read of what happened
+  // there: pressing it counts as done (APP.md §6).
   async function print() {
-    if (printing) return;
-    printing = true;
-    lastPrint = "";
     printedAt = new Date().toLocaleString();
-    // The sheet carries the time of this print, and the tab's title is
-    // what Print to PDF offers as the file name.
     const held = document.title;
+    // The sheet carries the time of this print, so it is rendered before
+    // the dialog opens over it.
     await tick();
-    // A spooler that cannot even be snapshotted is the unreadable one: the
-    // print still goes ahead and the second question follows it.
-    let watching = true;
-    try {
-      await Shell.PrintBegin();
-    } catch {
-      watching = false;
-    }
-    // Whatever happens from here, the tab's title goes back and *Print…*
-    // is offered again: a print the WebView refuses, or a window closed
-    // over the preview, never fires afterprint, and a dialog left with
-    // *Print…* disabled for good would be the one thing §6 does not allow.
-    let outcome: PrintOutcome = "ask";
+    const restore = () => {
+      document.title = held;
+    };
+    // afterprint, not the return of window.print(): a WebView that keeps
+    // the dialog up returns first, and the title must stand until then.
+    window.addEventListener("afterprint", restore, { once: true });
     try {
       document.title = title;
-      const done = afterPrint();
+      // window.print() holds until the print dialog is dismissed, and
+      // afterprint has fired by the time it returns.
       window.print();
-      await Promise.race([done, new Promise<void>((r) => setTimeout(r, afterPrintWaitMs))]);
-      if (watching) outcome = await askSpooler(() => Shell.PrintEnd());
     } finally {
-      document.title = held;
-      printing = false;
-    }
-    switch (outcome) {
-      case "done":
-        lastPrint = "done";
-        printedOnce = true;
-        break;
-      case "cancelled":
-        lastPrint = "cancelled";
-        break;
-      default:
-        ask = "print";
+      // A print the WebView refuses fires no afterprint at all, and a
+      // title left changed would name the wrong thing for the rest of the
+      // session.
+      if (document.title === title) {
+        window.removeEventListener("afterprint", restore);
+        restore();
+      }
+      printed = true;
     }
   }
 
-  // Once the key has been saved or printed, the dialog is in its done
-  // state: the ways out stay, and *Done* is the accented one.
-  const kept = $derived(!!savedTo || printedOnce);
+  // Once the key has been saved, printed or written down, the dialog is in
+  // its done state: the ways out stay, and *Done* is the accented one
+  // (lib/reveal.ts).
+  const kept = $derived(keptSomehow({ savedTo, printed, wroteDown }));
+  const corner = $derived(cornerLabel({ savedTo, printed, wroteDown }));
 </script>
 
 <Dialog title={kind === "reveal" ? "Recovery key" : "Your recovery key"} onclose={() => {}} covered={ask !== ""}>
@@ -167,24 +145,21 @@
       {#if savedTo}
         <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Saved to {savedTo}.</span></div>
       {/if}
-      {#if lastPrint === "done"}
-        <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Sent to the printer as “{title}”.</span></div>
-      {:else if lastPrint === "cancelled"}
-        <div class="bar attention"><svg class="i i-14"><use href="#i-info" /></svg><span>The print was cancelled.</span></div>
+      {#if printed}
+        <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Sent to print as “{title}”.</span></div>
+      {/if}
+      {#if wroteDown}
+        <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Written down.</span></div>
       {/if}
     {/if}
   {/if}
   {#snippet actions()}
     {#if failed}
       <button type="button" class="btn accent" onclick={finish}>Done</button>
-    {:else if kept}
-      <button type="button" class="btn" onclick={() => (ask = "save")}>{savedTo ? "Save again…" : "Save as a text file…"}</button>
-      <button type="button" class="btn" disabled={printing} onclick={print}>{printedOnce ? "Print again…" : "Print…"}</button>
-      <button type="button" class="btn accent" onclick={finish}>Done</button>
     {:else}
-      <button type="button" class="btn" disabled={!digits} onclick={() => (ask = "save")}>Save as a text file…</button>
-      <button type="button" class="btn" disabled={!digits || printing} onclick={print}>Print…</button>
-      <button type="button" class="btn accent" disabled={!digits} onclick={() => (ask = "written")}>I have written it down</button>
+      <button type="button" class="btn" disabled={!digits} onclick={() => (ask = "save")}>{savedTo ? "Save again…" : "Save as a text file…"}</button>
+      <button type="button" class="btn" disabled={!digits} onclick={print}>{printed ? "Print again…" : "Print…"}</button>
+      <button type="button" class="btn accent" disabled={!digits} onclick={kept ? finish : () => (wroteDown = true)}>{corner}</button>
     {/if}
   {/snippet}
 </Dialog>
@@ -195,23 +170,6 @@
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (ask = "")}>Go back</button>
       <button type="button" class="btn accent" onclick={save}>Choose a place…</button>
-    {/snippet}
-  </Dialog>
-{:else if ask === "print"}
-  <!-- Only when the spooler could not be read at all (APP.md §3 Keys). -->
-  <Dialog title="Did it print?" onclose={() => (ask = "")}>
-    <p>Enfold could not read the print queue, so it cannot tell whether the page printed. Did it, with all 48 digits legible?</p>
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (ask = "")}>Go back</button>
-      <button type="button" class="btn accent" onclick={finish}>Yes, I have the page</button>
-    {/snippet}
-  </Dialog>
-{:else if ask === "written"}
-  <Dialog title="Written down?" onclose={() => (ask = "")}>
-    <p>Have you written down all 48 digits, and checked them against the screen? This key is the way in when nothing else works.</p>
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (ask = "")}>Go back</button>
-      <button type="button" class="btn accent" onclick={finish}>Yes, I have it</button>
     {/snippet}
   </Dialog>
 {/if}

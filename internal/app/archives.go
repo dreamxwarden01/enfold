@@ -65,7 +65,8 @@ type openArchive struct {
 	method      string
 	receiptOwed bool
 	lastSavedAt int64
-	// Preview quiescing for Compact.
+	// Preview quiescing for a compaction, whether the user asked for it or
+	// the core did (APP.md §2.3, Reclaiming space).
 	quiesced bool
 }
 
@@ -723,20 +724,26 @@ func (c *Core) archiveIdle(oa *openArchive, gen uint64) {
 // archive.dirty (ErrTxOpen) until the handle was closed (the outside audit of
 // 2026-09-09).
 type opTx struct {
-	c    *Core
-	oa   *openArchive
-	tx   *archive.Tx
+	c  *Core
+	oa *openArchive
+	tx *archive.Tx
+	// op is the long operation this transaction belongs to, when it belongs
+	// to one: an add, a replace. A rename, a move, a delete and a folder are
+	// their own call and have none. It is the operation the reclaim after
+	// the commit is allowed to see running, since by then it is over.
+	op   *op
 	over bool // committed or aborted: end() has nothing left to do
 }
 
-// beginOp opens the transaction one operation runs in. Caller holds opMu and
-// defers end() before anything else can fail.
-func (c *Core) beginOp(oa *openArchive) (*opTx, *Error) {
+// beginOp opens the transaction one operation runs in; o is the operation it
+// belongs to, or nil for a call that is not one. Caller holds opMu and defers
+// end() before anything else can fail.
+func (c *Core) beginOp(oa *openArchive, o *op) (*opTx, *Error) {
 	tx, err := oa.a.Begin()
 	if err != nil {
 		return nil, c.fail("begin", err)
 	}
-	return &opTx{c: c, oa: oa, tx: tx}, nil
+	return &opTx{c: c, oa: oa, tx: tx, op: o}, nil
 }
 
 // end is the deferred guard: any exit that is not a commit is an abort.
@@ -790,6 +797,10 @@ func (t *opTx) commit(ctx context.Context) *Error {
 	c.emit(EventArchiveChanged, ArchiveChanged{ID: hexID(oa.id), Seq: seq})
 	c.emitArchivesChanged()
 	c.emitState()
+	// The tail of the file came back with the commit itself (FORMAT.md R31
+	// as amended); free space with live data above it is compaction's, and
+	// this is where the core decides that it is worth one (APP.md §2.3).
+	c.reclaimAfterCommit(oa, t.op)
 	return nil
 }
 
@@ -992,7 +1003,7 @@ func (c *Core) CreateFolder(id, parentID, name string) (string, *Error) {
 	}
 	at := c.now().Unix()
 	c.mu.Unlock()
-	t, e := c.beginOp(oa)
+	t, e := c.beginOp(oa, nil)
 	if e != nil {
 		return "", e
 	}
@@ -1037,7 +1048,7 @@ func (c *Core) DeleteRecords(id string, recordIDs []string) *Error {
 	if len(targets) == 0 {
 		return nil
 	}
-	t, e := c.beginOp(oa)
+	t, e := c.beginOp(oa, nil)
 	if e != nil {
 		return e
 	}
@@ -1089,7 +1100,7 @@ func (c *Core) RenameRecord(id, recordID, newName string) *Error {
 		return e
 	}
 	c.mu.Unlock()
-	t, e := c.beginOp(oa)
+	t, e := c.beginOp(oa, nil)
 	if e != nil {
 		return e
 	}
@@ -1177,7 +1188,7 @@ func (c *Core) MoveRecords(id string, recordIDs []string, parentID string) *Erro
 	if len(moving) == 0 {
 		return nil // every record was already there
 	}
-	t, e := c.beginOp(oa)
+	t, e := c.beginOp(oa, nil)
 	if e != nil {
 		return e
 	}

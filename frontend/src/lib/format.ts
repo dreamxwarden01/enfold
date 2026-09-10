@@ -17,6 +17,15 @@ export function count(n: number): string {
   return new Intl.NumberFormat("en-US").format(n);
 }
 
+// plural is the one place a count is written with the thing it counts: "1
+// file", "12,406 files", "1 archive". A count of one is singular
+// everywhere the page counts (APP.md §3, ruled 2026-09-09 — "1 files" was
+// on the status line), and the number is grouped as count() groups it.
+// An irregular plural is given rather than guessed at.
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${count(n)} ${n === 1 ? one : many}`;
+}
+
 function pad(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }

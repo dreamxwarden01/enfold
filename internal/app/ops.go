@@ -33,9 +33,13 @@ type op struct {
 	startedAt time.Time
 	done      atomic.Uint64
 	total     atomic.Uint64
-	phase     atomic.Value // string
-	cancel    context.CancelFunc
-	over      chan struct{}
+	// items is what the operation plans to write — the files of an add, a
+	// replace or an extract — set once, when the plan is made, and zero
+	// until then and for the kinds that count nothing (APP.md §3).
+	items  atomic.Int64
+	phase  atomic.Value // string
+	cancel context.CancelFunc
+	over   chan struct{}
 	// committing is set once the writing is done and the commit has been
 	// entered: from there the operation is being saved under a context no
 	// cancel reaches, and CancelOp answers op.committing rather than
@@ -50,7 +54,11 @@ type op struct {
 }
 
 func (o *op) view() OpView {
-	v := OpView{ID: o.id, Kind: o.kind, ArchiveID: o.archiveID, Done: o.done.Load(), Total: o.total.Load(), StartedAt: o.startedAt.Unix(), Finished: o.finished, Results: o.results}
+	v := OpView{
+		ID: o.id, Kind: o.kind, ArchiveID: o.archiveID,
+		Done: o.done.Load(), Total: o.total.Load(), Items: int(o.items.Load()),
+		StartedAt: o.startedAt.Unix(), Finished: o.finished, Results: o.results,
+	}
 	if p, ok := o.phase.Load().(string); ok {
 		v.Phase = p
 	}
@@ -446,18 +454,26 @@ func (c *Core) addTree(ctx context.Context, o *op, oa *openArchive, parentID [16
 	plan := planNodes(m, d, nodes, policy)
 	c.mu.Unlock()
 	var total uint64
+	var files int
 	var count func(items []*planItem)
 	count = func(items []*planItem) {
 		for _, it := range items {
-			if (it.action == "add" || it.action == "replace") && it.node.size > 0 {
-				total += uint64(it.node.size)
+			if it.action == "add" || it.action == "replace" {
+				// The plan is made: the strip can say how many files this is
+				// (APP.md §3, OpView.Items), folders not among them — they
+				// are records the walk makes, not bytes it writes.
+				files++
+				if it.node.size > 0 {
+					total += uint64(it.node.size)
+				}
 			}
 			count(it.children)
 		}
 	}
 	count(plan)
+	o.items.Store(int64(files))
 	o.progress(0, total, "adding")
-	t, e := c.beginOp(oa)
+	t, e := c.beginOp(oa, o)
 	if e != nil {
 		return nil, e
 	}
@@ -792,8 +808,9 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 		}
 		defer f.Close()
 		total := uint64(max64(st.Size(), 0))
+		o.items.Store(1) // one file, which the strip says in the singular
 		o.progress(0, total, "replacing")
-		t, e := c.beginOp(oa)
+		t, e := c.beginOp(oa, o)
 		if e != nil {
 			return nil, e
 		}
@@ -899,6 +916,7 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		// with file.name, a plan-time invariant and not an item's outcome.
 		used := make(map[string][16]byte, len(items))
 		var total uint64
+		var files int
 		for i := range items {
 			it := &items[i]
 			it.dst = filepath.Join(root, filepath.FromSlash(it.path))
@@ -912,6 +930,10 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 			}
 			used[key] = it.id
 			if !it.isDir {
+				// The plan is resolved, so the strip can say how many files
+				// are coming out (APP.md §3, OpView.Items); the folders it
+				// creates on the way are not files.
+				files++
 				total += it.size
 			}
 		}
@@ -924,6 +946,7 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		gone := map[[16]byte]bool{}
 		var made []extractItem
 		var done uint64
+		o.items.Store(int64(files))
 		o.progress(0, total, "extracting")
 		for _, it := range items {
 			if ctx.Err() != nil {
@@ -1153,16 +1176,34 @@ func (c *Core) Compact(id string) (string, *Error) {
 		c.mu.Unlock()
 		return "", coded(CodeNeedsUnlock)
 	}
-	// Fit before the absolute cap: a rough estimate over 200 MB/s.
-	size := oa.size
-	remaining := c.vault.absoluteAt.Sub(c.now())
-	if est := time.Duration(size/200e6) * time.Second; est > remaining {
+	if !c.compactionFitsLocked(oa) {
 		c.mu.Unlock()
 		return "", coded(CodeTooSlow)
 	}
 	oa.quiesced = true
 	c.mu.Unlock()
-	return c.startOp("compact", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
+	return c.startCompaction(oa, "compact"), nil
+}
+
+// compactionFitsLocked is the rough estimate a compaction is refused on: the
+// whole file rewritten at some 200 MB/s, against what is left of the
+// session's absolute cap. Caller holds the state mutex.
+func (c *Core) compactionFitsLocked(oa *openArchive) bool {
+	remaining := c.vault.absoluteAt.Sub(c.now())
+	return time.Duration(oa.size/200e6)*time.Second <= remaining
+}
+
+// startCompaction runs the compaction machinery under an operation of the
+// given kind: "compact" when the user asked for it, "reclaim" when the core
+// did (APP.md §2.3, Reclaiming space). The two are the same work — previews
+// drained, the handle finished and the path reopened, the receipt recorded
+// before the reopen — and differ in the word the strip shows, in who decided,
+// and in what a failure leaves: a reclaim reopens then too, since the user
+// never asked for it and §2.3 leaves the archive untouched until it finishes,
+// while a Compact they did ask for ends closed. Caller has set oa.quiesced
+// under the state mutex.
+func (c *Core) startCompaction(oa *openArchive, kind string) string {
+	return c.startOp(kind, hexID(oa.id), func(ctx context.Context, o *op) ([]FileOutcome, error) {
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
 		// Drain previews: wait for outstanding readers, bounded.
@@ -1207,6 +1248,17 @@ func (c *Core) Compact(id string) (string, *Error) {
 		}
 		c.mu.Unlock()
 		if err != nil {
+			// A reclaim is the core's own follow-on, and APP.md §2.3 says the
+			// archive is untouched until it finishes — so a cancel of an
+			// operation the user never asked for must not put them out of the
+			// archive they were browsing. The fresh file is discarded and the
+			// handle reopened on the one that was always there; a reopen that
+			// fails leaves the page to find the archive closed, which is what
+			// it already handles. A Compact the user asked for is left as it
+			// was: they chose to leave.
+			if kind == "reclaim" {
+				c.OpenArchive(hexID(oa.id))
+			}
 			c.emitArchivesChanged()
 			c.emitState()
 			return nil, err
@@ -1218,7 +1270,79 @@ func (c *Core) Compact(id string) (string, *Error) {
 		o.progress(1, 1, "compacted")
 		c.emitArchivesChanged()
 		return nil, nil
-	}), nil
+	})
+}
+
+// Reclaiming space (APP.md §2.3, DECISIONS 2026-09-09 "Space comes back").
+// The archive layer gives the file's tail back with the commit that frees it
+// (FORMAT.md R31 as amended), but a hole with live data above it is
+// compaction's, and nobody was going to ask for one: an archive emptied by a
+// delete stood at the size of what it had held. So the core compacts it
+// itself, as a follow-on operation the strip shows as Reclaiming space and a
+// Cancel ends like any other — the fresh file is discarded and the archive is
+// the one it was.
+const (
+	// reclaimFloor is the free space that has to be there before it is worth
+	// rewriting the file, and reclaimShare the share of the file it must
+	// also be: a quarter, where rewriting the live three quarters is worth
+	// the holes. Both are the rule, not a setting; reclaimRule is what the
+	// core measures against, so that a test can lower them.
+	reclaimFloor uint64 = 64 << 20
+	reclaimShare uint64 = 4
+)
+
+// reclaimRule is the pair as one value, so the seam is one field.
+type reclaimRule struct{ floor, share uint64 }
+
+// reclaimAfterCommit is what every commit ends with: the archive is measured
+// against the rule and compacted if it has earned it. The commit's own
+// operation is not one of the operations that hold it off — it is over — and
+// nothing here runs under a lock: Compact is gated on Session.Live, so a
+// commit made while the vault is locked leaves the space to the next
+// qualifying commit and says so in the log. Caller holds opMu, which the
+// compaction's own goroutine then waits for, and no other lock.
+func (c *Core) reclaimAfterCommit(oa *openArchive, self *op) {
+	c.mu.Lock()
+	if !c.reclaimDueLocked(oa, self) {
+		c.mu.Unlock()
+		return
+	}
+	free, size := oa.free, oa.size
+	if _, e := c.sessionLocked(); e != nil {
+		c.log("archive %s: %d bytes free of %d wait for an unlock to be reclaimed", oa.name, free, size)
+		c.mu.Unlock()
+		return
+	}
+	if !c.compactionFitsLocked(oa) {
+		c.log("archive %s: reclaiming %d bytes would not fit before the session's end", oa.name, free)
+		c.mu.Unlock()
+		return
+	}
+	oa.quiesced = true
+	c.mu.Unlock()
+	c.log("archive %s: reclaiming %d bytes of free space in %d", oa.name, free, size)
+	c.startCompaction(oa, "reclaim")
+}
+
+// reclaimDueLocked answers whether the archive has earned the compaction:
+// the free space is over the floor and over its share of the file, the
+// handle is the open one and nothing else is running on it — a compaction
+// started under another operation would only wait on the handle, and one
+// started under a reclaim would be recursive. Caller holds the state mutex.
+func (c *Core) reclaimDueLocked(oa *openArchive, self *op) bool {
+	if c.archives[oa.id] != oa || oa.state != "open" || oa.quiesced {
+		return false
+	}
+	if oa.free < c.reclaim.floor || oa.free*c.reclaim.share < oa.size {
+		return false
+	}
+	id := hexID(oa.id)
+	for _, o := range c.ops {
+		if o != self && !o.finished && o.archiveID == id {
+			return false
+		}
+	}
+	return true
 }
 
 // RotateKey is registry-first (R33, trap 21): the new version published,

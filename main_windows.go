@@ -7,7 +7,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"log"
@@ -28,7 +27,6 @@ import (
 	"github.com/dreamxwarden01/enfold/internal/app/api"
 	"github.com/dreamxwarden01/enfold/internal/app/pivcards"
 	"github.com/dreamxwarden01/enfold/internal/brand"
-	"github.com/dreamxwarden01/enfold/internal/spool"
 )
 
 //go:embed all:frontend/dist
@@ -58,12 +56,8 @@ type shell struct {
 	lock *lockWatch
 	log  func(string, ...any)
 
-	profile string
-	winMu   sync.Mutex
-	// printMu holds the spooler watch for one print at a time: the page's
-	// dialog is modal, so a second print cannot start under the first.
-	printMu  sync.Mutex
-	spool    *spool.Watch
+	profile  string
+	winMu    sync.Mutex
 	quitMu   sync.Mutex
 	quitting bool
 	settings func() app.Settings
@@ -99,7 +93,6 @@ func main() {
 	s.settings = core.GetSettings
 
 	vault, archives, archive, keys, settings := api.Services(core)
-	s.spool = spool.New(spool.System{})
 	shellSvc := api.NewShell(api.Hooks{
 		ShowWindow:  s.ensureWindow,
 		CloseWindow: s.closeWindow,
@@ -107,8 +100,6 @@ func main() {
 		PickFolder:  s.pickFolder,
 		SaveFile:    s.saveFile,
 		Reveal:      s.reveal,
-		PrintBegin:  s.printBegin,
-		PrintEnd:    s.printEnd,
 		Quit:        s.quit,
 	})
 
@@ -421,33 +412,6 @@ func (s *shell) saveFile(title, filename, dir string) (string, error) {
 
 func (s *shell) reveal(path string) error {
 	return s.app.Env.OpenFileManager(path, true)
-}
-
-// The print spooler watch around the recovery key's print (APP.md §6): the
-// jobs standing before window.print(), then a poll that runs from there until
-// End answers after afterprint, so a job that spools and completes while the
-// dialog stands is caught as well. Nothing here ever submits a job; an error
-// is the spooler being unreadable — including one that does not answer in
-// time — and the page then asks the user as it always did.
-func (s *shell) printBegin() error {
-	s.printMu.Lock()
-	defer s.printMu.Unlock()
-	if err := s.spool.Begin(); err != nil {
-		s.log("print: the spooler could not be read: %v", err)
-		return err
-	}
-	return nil
-}
-
-func (s *shell) printEnd() (bool, error) {
-	s.printMu.Lock()
-	defer s.printMu.Unlock()
-	submitted, err := s.spool.End(context.Background())
-	if err != nil {
-		s.log("print: the spooler could not be read: %v", err)
-		return false, err
-	}
-	return submitted, nil
 }
 
 // quit is the tray's and the page's Quit: the running operations are named

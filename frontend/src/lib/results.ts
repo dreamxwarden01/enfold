@@ -6,7 +6,7 @@
 // file.name, file.exists. The summary counts them and the failures are
 // listed with the code's own copy.
 import type { FileOutcome } from "./api";
-import { leaf } from "./format";
+import { leaf, plural } from "./format";
 import { codeText } from "./strings";
 
 export interface Tally {
@@ -27,10 +27,6 @@ export function tally(results: FileOutcome[] | null | undefined): Tally {
     if (Object.prototype.hasOwnProperty.call(t, r.outcome)) t[r.outcome as keyof Tally]++;
   }
   return t;
-}
-
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? "" : "s"}`;
 }
 
 // summaryLine names what happened, folders beside files and in that order:

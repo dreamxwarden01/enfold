@@ -12,7 +12,8 @@
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, warningCopy } from "../lib/strings";
-  import { bytes, count, date, dateTime } from "../lib/format";
+  import { bytes, count, date, dateTime, plural } from "../lib/format";
+  import { freeWorthShowing } from "../lib/status";
   import { DEFAULT_METHOD, METHODS, METHOD_NOTE, methodWord } from "../lib/method";
   import { foreignPath } from "../lib/paths";
   import { purgeAfter } from "../lib/retention";
@@ -361,13 +362,13 @@
 
   // The foot's note (LayerFoot): what is selected, else how many there are.
   $effect(() => {
-    store.footNote = sel ? `${sel.name} selected` : `${rows.length} archive(s)`;
+    store.footNote = sel ? `${sel.name} selected` : plural(rows.length, "archive");
   });
 </script>
 
 <div class="layer-head">
   <h1 class="t-title">{st?.displayName || "Vault"}</h1>
-  <span class="chip num">{rows.length} archive{rows.length === 1 ? "" : "s"} shown · {bytes(shownSize)} stored</span>
+  <span class="chip num">{plural(rows.length, "archive")} shown · {bytes(shownSize)} stored</span>
   {#if st}<span class="t-quiet">vault file {bytes(st.vaultFileSize)} · changed {dateTime(st.modifiedAt)}</span>{/if}
   {#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>Locked</span>{/if}
 </div>
@@ -487,8 +488,14 @@
           <div class="fact"><dt>KID</dt><dd class="mono" title={det?.currentKid}>{det?.currentKid || "—"}</dd></div>
           <div class="fact"><dt>Compression</dt><dd>{methodWord(sel.method)}</dd></div>
           {#if sel.receiptOwed}<div class="fact"><dt>Receipt</dt><dd>pending</dd></div>{/if}
-          {#if sel.hashBehind > 0}<div class="fact"><dt>Verified</dt><dd>{sel.hashBehind} save(s) ago</dd></div>{/if}
-          {#if sel.open && sel.storedSize > 0 && sel.freeSpace > sel.storedSize * 0.3}<div class="fact"><dt>Free space</dt><dd>compact when convenient</dd></div>{/if}
+          {#if sel.hashBehind > 0}<div class="fact"><dt>Verified</dt><dd>{plural(sel.hashBehind, "save")} ago</dd></div>{/if}
+          <!-- The figure, not advice: the core reclaims the space itself
+               after a commit that leaves it over APP.md §2.3's thresholds,
+               so "compact when convenient" would tell the user to do what
+               has already been done. What is left below the quarter is
+               why the file is bigger than the files inside it, and the
+               same floor decides whether it is worth saying (lib/status.ts). -->
+          {#if sel.open && freeWorthShowing(sel.freeSpace)}<div class="fact"><dt>Free space</dt><dd>{bytes(sel.freeSpace)}</dd></div>{/if}
         </dl>
 
         <div class="pad pathblock">

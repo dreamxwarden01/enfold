@@ -3311,3 +3311,29 @@ the reopen check compares `last_seq` only (a file ahead of the record is a lost 
 adopted; the size is not compared, an aborted tail being normal), and the shutdown's receipt
 write is bounded by nothing but a healthy disk. One was declined: that a rotation leaves both
 keys usable is already what R33 says, and the reader tries them in order.
+
+## 2026-09-09 — Space comes back; the print watch retired; the reveal asks nothing twice; the strip counts
+
+The user's second pass on the built app. *A deleted file left the archive its old size* — an
+emptied archive of 8 GB — because deletion is a tombstone and cryptographic erasure and the space
+waited in the free map for the next add or a compaction, with R31 forbidding a writer to truncate
+what the previous superblock still references. Ruled: a cancelled add truncates at `Abort` (it
+already did); a commit that frees the file's tail is followed at once by an empty commit that
+truncates it — the quarantine lasts exactly one commit and that is the one — and any commit
+leaving the free space at or above 64 MiB and a quarter of the file is followed by a compaction
+the core runs itself, shown as *Reclaiming space* and cancellable. WinRAR rewrites the whole
+archive on every delete; a quarter is where rewriting the live three quarters is worth the
+holes.
+
+*The print watch is retired.* It lagged two seconds on a cancel and could not see *Save as PDF*
+at all: the WebView's print dialog writes that PDF itself and no spooler job exists. The
+alternative — the system print dialog through the WebView2 API, which does spool every path —
+is not reachable through Wails, and the user chose the simpler contract over more machinery:
+pressing *Print…* counts as done, and so does *I have written it down*, with no second
+confirmation for either ("a user set on clicking out is not stopped by a second dialog; the key
+can be shown again, and the vault is empty at that moment"). `internal/spool`, `Shell.PrintBegin`
+and `Shell.PrintEnd` go; DECISIONS keeps their story.
+
+*The strip says what it does*: "Adding — adding" becomes *Adding 3 files*, `OpView.Items`
+carrying the planned count; a count of one is singular everywhere ("1 files" was on the status
+line).

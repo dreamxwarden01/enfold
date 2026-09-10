@@ -441,7 +441,16 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   still holds free, so nothing is lost and nothing leaks. A Delete asks first, on the page —
   "Permanently delete 3 files and 1 folder from ECON 280? A folder takes everything beneath it.
   This cannot be undone." — and then commits; deletion is cryptographic erasure (FORMAT R32).
-  Rename, Move and CreateFolder commit at once, with no question. **Compact and RotateKey are
+  Rename, Move and CreateFolder commit at once, with no question. **Space comes back** (ruled
+  2026-09-09, after an emptied archive stood at 8 GB): a cancelled add's appended bytes are
+  truncated at `Abort` (the archive layer's rule); a commit that frees the tail of the file is
+  followed at once by a second, empty commit that truncates it — R31's quarantine lasts one
+  commit, and that commit is this one, so the losing superblock never points past the end of the
+  file; and after any commit that leaves the free space at or above **64 MiB and a quarter of
+  the file**, the core runs `Compact` as a follow-on operation shown as *Reclaiming space* —
+  cancellable, the archive untouched until it finishes, previews quiesced as for any compaction
+  — so an archive emptied by a delete does not stay the size of what it held. The thresholds are
+  constants for now. **Compact and RotateKey are
   gated on `Session.Live()`** before they start (`NeedsUnlock`); an operation's own commit is
   not — the archive key is in memory — and the receipt it owes waits for the session. The
   commit — index seal, free map, two syncs — runs under the archive's own mutex only, so the
@@ -688,8 +697,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   than from the caller, sibling checks are per parent and case folded against the transaction's
   own index (FORMAT R39), and nothing is looked up by a path — there is no whole-name lookup any
   more.
-- Events: `archive.changed {ID, Seq}` and progress as above. Progress is by **bytes**, not by
-  file: an add, a replace and an extract count the bytes read of the file in hand, so a single
+- Events: `archive.changed {ID, Seq}` and progress as above. `OpView` carries `Items`, the files an
+  add, a replace or an extract plans, known once the plan is made, so the strip can say *Adding 3
+  files* rather than the phase word; a count of one is singular everywhere the page counts.
+  Progress is by **bytes**, not by file: an add, a replace and an extract count the bytes read of the file in hand, so a single
   large file moves the bar (at most ten events a second, as before); `Done`/`Total` are plaintext
   bytes. `ArchiveStat` loses `Dirty`, `CapAt` and `SessionAlive` and gains `Records` (live files
   and directories); `Save`, `Discard` and `KeepOpen` are gone; `CancelOp` on a running Add or
@@ -752,24 +763,12 @@ sentinel of every package with a catch-all `internal` — and services are regis
   prints no header or footer of its own — the one browser-provided output the page invokes (§4:
   previews are
   decrypted content and stay without one; a recovery key is meant to leave the machine) — the
-  page can tell a print from a cancelled one: the shell watches the print spooler — `Shell.PrintBegin()`
-  snapshots the jobs of every local printer **and starts a poller that reads the spooler every
-  250 ms from there until `PrintEnd` answers**, so a job that spools and completes while the
-  dialog stands — in no queue either call would have read on its own — is caught as well;
-  `window.print()` runs, and `Shell.PrintEnd()` waits up to three seconds after `afterprint`,
-  returning the moment a new job has been seen (Microsoft
-  Print to PDF is a printer, so a PDF counts; a job that later fails still counts — it was
-  submitted, as BitLocker counts it) — so a print the spooler saw is done with no second question,
-  and one the spooler answered for without holding anything new is said to have been cancelled
-  with *Print…* still offered; only when
-  the spooler cannot be read at all does the second confirmation follow ("it printed,
-  and all 48 digits are legible") — and a window that passes with no reading coming back at all
-  is exactly that, an unreadable spooler, never a cancellation: a stalled spooler and a cancelled
-  print are indistinguishable, and the sheet may be standing in the tray. A watch nobody ends —
-  the page throws inside `window.print()`, the dialog goes down mid-print — is spent after five
-  minutes: the poller stops, and a `PrintEnd` after that errors like one without a `PrintBegin`;
-  **written down** — a second confirmation ("all 48 digits,
-  checked against the screen") before the dialog closes. After a save the core acknowledged the
+  page does not try to tell a print from a cancelled one (ruled 2026-09-09: the WebView's own print
+  dialog offers *Save as PDF*, which never touches the print spooler, so a spooler watch missed the
+  likeliest path — built, measured at a two-second lag on a cancel, and retired): pressing
+  *Print…* counts as done. So does **written down**: one click, no second confirmation — a user
+  set on leaving is not stopped by one, the key can be shown again from the Keys page, and at the
+  moment it is first shown the vault holds nothing yet. After a save the core acknowledged the
   dialog closes on *Done*. The handle is the URL's token: the one-time GET consumes the URL,
   not the value, which the core keeps for the reveal's life — until `DropRecoveryKey(handle)`
   when the dialog closes, ten minutes, or a lock trigger, which drops every held key (§2.1) — so
@@ -804,12 +803,7 @@ registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
 
-**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `PrintBegin()` / `PrintEnd()
-bool` (the spooler watch around `window.print()`, §6; `PrintBegin` snapshots and starts the
-poller, erroring when the spooler cannot be read within its own three seconds, so the page falls
-back before it prints rather than after; `PrintEnd` answers false when the spooler answered and
-held nothing new, and errors both when the spooler cannot be read and when its whole window
-passes with no reading coming back), `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
+**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
 `Reveal`, `Quit`
 (names the running operations, if any, in a native Yes/No question — the only buttons a Windows
 message box has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
@@ -926,8 +920,9 @@ used (`settings.json`, `lastArchiveFolder`); a chosen path where a file already 
 in place — "A file is already there. Enfold never overwrites; choose another name." — whatever
 the dialog's own replace prompt said; a cancelled dialog creates nothing — the Tampered state, the status strip with the countdown and Lock). Archive (the breadcrumb drawn from `Page`'s `Crumbs` alone — ids, never a path — its first crumb
 the archive's name and its last the folder being shown, paged table with pending markers, preview pane — image, video, audio through the
-loopback URL, text through `PreviewText`, everything else "Extract…" — the operation strip (the
-running operation's name, a bar that moves by bytes, *Cancel* for an add or a replace; no pending
+loopback URL, text through `PreviewText`, everything else "Extract…" — the operation strip (the running operation's name with its count — *Adding 3 files*, *Adding 1
+file*, *Extracting 12 files*, *Reclaiming space* — a bar that moves by bytes, *Cancel* for an add,
+a replace or a reclaim; no pending
 bar, no Save, no Discard: every operation commits at its end, §2.3), the toolbar:
 one *Add* button whose menu holds *Add files*, *Add folder* and *Create folder* (a staged
 directory record, written at save whether or not a file was added into it — FORMAT R39), *Extract all* (the whole archive, whatever is selected — the pane's *Extract…* is the
@@ -995,11 +990,8 @@ a text file…*, which first says what place to choose and then opens the native
 `Enfold Keystore Recovery Key <ID>.txt` — BitLocker's own shape, "BitLocker Recovery Key
 <id>", with the key's ID (FORMAT §18.4) and never the vault's name, which says nothing about
 which sheet this is; the same string heads the text file and the sheet, and the page sets
-`document.title` to it for the print, which is what Print to PDF offers as the file name. The last two ask once more, in a second dialog over the
-first with a distinct button, never a tick beside the same one: "Did it print, with all 48
-digits legible?" / "Have you written down all 48 digits, checked against the screen?" — *Go
-back*, or *Yes, I have the page* / *Yes, I have it*; after a save the core acknowledged the
-button is *Done*. It says the
+`document.title` to it for the print, which is what Print to PDF offers as the file name. None asks a second time: after a save the core acknowledged, a print, or *I have written it
+down*, the corner button is *Done* and one click closes the dialog. It says the
 key can be shown again from the Keys page — unlock, then prove a YubiKey or a password once
 more — and, when the fetch of the one-time URL fails (a window recreated after the one fetch),
 that the key can be shown again from there, with *Done* as the one way out. It is not dismissed

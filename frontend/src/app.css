@@ -684,6 +684,9 @@ p.dim { color: var(--ink-2); }
 /* The name keeps its room and the byte readout does not shuffle the bar as
    the figures grow (APP.md §6: progress is by bytes). */
 .op .opname { flex: none; }
+/* The phase, where it says something the name does not (lib/ops.ts): a
+   second, quieter line's worth of words beside the first. */
+.op .opphase { flex: none; color: var(--ink-2); }
 .op .opbytes { flex: none; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; z-index: 20; }
 .dialog { width: 460px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); overflow: auto; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-window); padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }

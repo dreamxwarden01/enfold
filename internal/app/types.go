@@ -324,13 +324,22 @@ type FileOutcome struct {
 	Code    Code   `json:"code,omitempty"`
 }
 
-// OpView is a running or finished long operation.
+// OpView is a running or finished long operation. Kind is add | replace |
+// extract | compact | reclaim | verify | rotate; reclaim is the compaction
+// the core runs itself after a commit that leaves the free space over
+// APP.md §2.3's thresholds, and the strip shows it as Reclaiming space.
 type OpView struct {
-	ID        string        `json:"id"`
-	Kind      string        `json:"kind"`
-	ArchiveID string        `json:"archiveId,omitempty"`
-	Done      uint64        `json:"done"`
-	Total     uint64        `json:"total"`
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	ArchiveID string `json:"archiveId,omitempty"`
+	Done      uint64 `json:"done"`
+	Total     uint64 `json:"total"`
+	// Items is what the operation plans: the files an add, a replace or an
+	// extract will write, known once the plan is made and zero before that
+	// and for every operation without a count. It is what lets the strip say
+	// "Adding 3 files" rather than a phase word — and "Adding 1 file", since
+	// a count of one is singular wherever the page counts (APP.md §3).
+	Items     int           `json:"items"`
 	Phase     string        `json:"phase"`
 	StartedAt int64         `json:"startedAt"`
 	Finished  bool          `json:"finished"`

@@ -497,13 +497,21 @@ func TestTransactionAndMutations(t *testing.T) {
 	}
 }
 
+// The quarantine is what a commit that does not give the tail back leaves
+// behind: a replace frees the old extent and appends the new one, so the
+// file keeps its length and no follow-up commit retires the losing copy
+// (trim.go). The freed extent is then the one R31 protects.
 func TestQuarantineAndReuse(t *testing.T) {
 	a, _ := newFixture(t, Options{})
 	data := noise(100000, 9)
 	first := add(t, a, root, "a", data)
 	firstExt := extent{Off: a.record(first.ID).DataOff, Len: first.StoredSize}
-	if _, err := a.Delete(ctx, first.ID); err != nil {
+	seq := a.Seq()
+	if _, _, err := a.Replace(ctx, first.ID, bytes.NewReader(data), int64(len(data))); err != nil {
 		t.Fatal(err)
+	}
+	if a.Seq() != seq+1 {
+		t.Fatalf("the replace gave a tail back (%d commits): the quarantine is not what this test is watching", a.Seq()-seq)
 	}
 	// The next transaction must not reuse the extent the previous commit
 	// freed (the losing superblock still references it); the one after may.
@@ -528,13 +536,17 @@ func TestQuarantineAndReuse(t *testing.T) {
 // TestQuarantineProtectsFallback is the case R31's quarantine exists for: a
 // transaction in flight allocates while the live superblock copy is then
 // found damaged. The fallback state must still have every extent it
-// references — including the one the last commit freed.
+// references — including the one the last commit freed. The commit here is a
+// replace, which frees an extent without leaving a tail, so nothing retires
+// the losing copy and the quarantine is what stands between the two states
+// (a delete's freed tail is trim.go's, and is proved there).
 func TestQuarantineProtectsFallback(t *testing.T) {
 	a, fx := newFixture(t, Options{})
 	data := noise(80000, 33)
 	keep := add(t, a, root, "keep", text(20000, 34))
 	victim := add(t, a, root, "victim", data)
-	if _, err := a.Delete(ctx, victim.ID); err != nil { // state N frees the victim's extent
+	// State N frees the victim's old extent and appends its new content.
+	if _, _, err := a.Replace(ctx, victim.ID, bytes.NewReader(text(30000, 35)), 30000); err != nil {
 		t.Fatal(err)
 	}
 	// Transaction N+1: a same-size add that first-fit would put into the
@@ -784,7 +796,11 @@ func TestRotateKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.KID() != newKey.KID || a.EnvelopeStale() || rec.Seq != 5 {
+	// Seven commits for five changes: the delete gave the file's tail back
+	// and so did the rotation, which frees the index and free map it
+	// replaces, and each of those is followed by its empty commit (R31 as
+	// amended, trim.go).
+	if a.KID() != newKey.KID || a.EnvelopeStale() || rec.Seq != 7 {
 		t.Fatalf("after rotation: kid %x stale %v seq %d", a.KID(), a.EnvelopeStale(), rec.Seq)
 	}
 	if got := extract(t, a, infos[0].ID); !bytes.Equal(got, text(30000, 50)) {

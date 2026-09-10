@@ -4,6 +4,7 @@
 // spelling, the walk a vanished folder asks for, what a drag may be
 // dropped on, and how a selection is counted for the delete confirmation —
 // so it can be tested without a DOM or a core.
+import { plural } from "./format";
 
 // The root is the all-zero id: the same value the format writes as a
 // top-level record's parent_id, spelled one way by the core, the page, the
@@ -112,10 +113,6 @@ export function deleteCounts(rows: Kinded[]): Counts {
     files: rows.filter((r) => !r.isDir).length,
     folders: rows.filter((r) => r.isDir).length,
   };
-}
-
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? "" : "s"}`;
 }
 
 // countPhrase: "1 file", "2 folders", "2 files and 1 folder"; empty for

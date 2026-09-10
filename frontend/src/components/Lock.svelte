@@ -4,7 +4,7 @@
   import { CeremonyStep, Keys, Shell, Vault, VaultState, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { codeText, retriesText, stepText, warningCopy } from "../lib/strings";
-  import { dateTime, leaf } from "../lib/format";
+  import { dateTime, leaf, plural } from "../lib/format";
   import { fade } from "svelte/transition";
   import { onMount, untrack } from "svelte";
   import { motion, delay, LEAVE, OUT } from "../lib/motion";
@@ -423,7 +423,7 @@
               {#if (st?.openArchives ?? 0) > 0}
                 <div class="bar">
                   <svg class="i i-14"><use href="#i-info" /></svg>
-                  <span class="grow num">{st?.openArchives} archive(s) still open — browsing works, saving needs the vault.</span>
+                  <span class="grow num">{plural(st?.openArchives ?? 0, "archive")} still open — browsing works, saving needs the vault.</span>
                   <button type="button" class="btn link" onclick={() => store.go(store.current ? "archive" : "archives")}>Show</button>
                 </div>
               {/if}

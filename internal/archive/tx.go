@@ -726,6 +726,12 @@ func (tx *Tx) abortLocked() {
 // the registry needs to know. A transaction that changed nothing commits
 // nothing. After a failure at or after the commit point the Archive is
 // Broken; before it, the transaction is aborted and the Archive usable.
+//
+// A commit that leaves a free run at the end of the file gives it back: the
+// archive layer issues at once, inside this call, the empty commit R31's
+// amended quarantine rule needs before the file may be truncated (trim.go).
+// The sequence then advances by two rather than by one, and the Receipt is
+// the one that follows the truncation.
 func (tx *Tx) Commit(ctx context.Context) (Receipt, error) {
 	a := tx.a
 	a.mu.Lock()
@@ -842,7 +848,16 @@ func (a *Archive) commit(ctx context.Context, tx *Tx, index *format.Index, kid [
 	a.freeMapRebuilt = nil
 	tx.done = true
 	a.tx = nil
-	return Receipt{Seq: next.Seq, Size: a.size, WrittenAt: now()}, nil
+	// The tail comes back (R31 as amended, APP.md §2.3): a commit that left
+	// a free run at the end of the file is followed at once by the empty
+	// commit that lets it be truncated. A failure before that commit's own
+	// flip is nobody's to hear — this one is durable, and the next commit
+	// finds the tail and tries again; one at or after it breaks the Archive
+	// like any other indeterminate commit.
+	if err := a.reclaimTail(plain, kid, indexKey); err != nil {
+		return Receipt{}, err
+	}
+	return Receipt{Seq: a.sb.Seq, Size: a.size, WrittenAt: now()}, nil
 }
 
 // One-transaction conveniences.

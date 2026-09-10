@@ -284,8 +284,11 @@ func (a *Archive) Compact(ctx context.Context, progress func(done, total uint64)
 	lock := a.lock
 	a.lock = nil
 	if lock != nil {
-		lock.releaseOS()
-		defer lock.releasePath()
+		lock.release()
+	}
+	if claim := a.claim; claim != "" {
+		a.claim = ""
+		defer releasePath(claim, true)
 	}
 	a.f.Close()
 	if a.wPlain != nil {

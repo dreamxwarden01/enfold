@@ -15,8 +15,12 @@ var (
 	// ErrReadOnly: the Archive was opened read-only, or the operation needs a
 	// writer.
 	ErrReadOnly = errors.New("archive: read-only")
-	// ErrBusy: another writable handle holds this archive.
-	ErrBusy = errors.New("archive: already open for writing")
+	// ErrBusy: this archive is already open. One handle per path per process
+	// (doc.go "Handles"): a path a writable handle holds is open to no other
+	// handle, and a path any handle holds is open to no writer. Another
+	// process holding the file's exclusive lock ends here too, as does an
+	// operation that needs the readers closed.
+	ErrBusy = errors.New("archive: already open")
 	// ErrIndeterminate: a commit failed at or after its commit point; the
 	// file may hold either state. Reopen it (Archive.Broken).
 	ErrIndeterminate = errors.New("archive: commit outcome unknown")

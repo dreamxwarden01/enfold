@@ -2,6 +2,7 @@ package archive
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
@@ -63,14 +64,49 @@ import (
 // state whose every file is readable, not a state one commit old.
 
 // failTrimAt stands in for a disk that fails one of the follow-up commit's
-// two superblock writes, for the crash-safety tests: it is called with the
-// number of the step above that is about to run — 3, the flip, and 4, the
-// other copy — and a non-nil answer stops that write. It is nil outside those
-// tests, which set it while nothing else runs.
-var failTrimAt func(step int) error
+// writes, for the crash-safety tests. It is called with the number of the
+// step above that is about to write and the write itself — the bytes and the
+// offset they go to, so that a test can check afterwards what the file kept —
+// and answers how much of the write reaches the file before it fails: 0 for a
+// write the crash caught before it began — a power cut, which leaves the step
+// simply undone — and n > 0 for a torn write, whose outcome only a reopen can
+// tell. A fail of false lets the write through. Every step calls it once
+// except 2, which calls it twice: the index, then the free map. It is nil
+// outside those tests, which set it while nothing else runs.
+var failTrimAt func(step int, b []byte, off uint64) (tear int, fail bool)
 
-// trimFails asks the seam whether the given step is to fail.
-func trimFails(step int) bool { return failTrimAt != nil && failTrimAt(step) != nil }
+// errTornWrite is what the seam fails a write with; a real disk's error
+// stands in its place outside the tests.
+var errTornWrite = errors.New("the disk did not take the whole write")
+
+// trimWrite runs one of the follow-up commit's writes, through the seam when
+// one is armed. It reports whether the write began — false only when the seam
+// stopped it before its first byte, which is the crash that leaves a step
+// undone; a real disk's error is never that certain, so it counts as begun
+// and the step must treat the write as half-done.
+func (a *Archive) trimWrite(step int, b []byte, off uint64) (begun bool, err error) {
+	tear, fail := 0, false
+	if failTrimAt != nil {
+		tear, fail = failTrimAt(step, b, off)
+	}
+	if !fail {
+		_, err := a.f.WriteAt(b, int64(off))
+		return true, err
+	}
+	if tear <= 0 {
+		return false, errTornWrite
+	}
+	if tear > len(b) {
+		tear = len(b)
+	}
+	if _, err := a.f.WriteAt(b[:tear], int64(off)); err != nil {
+		return true, err
+	}
+	if err := a.f.Sync(); err != nil {
+		return true, err
+	}
+	return true, errTornWrite
+}
 
 // reclaimTail runs the follow-up commit described above, if the file can be
 // made shorter by it. plain is the index just committed — the follow-up
@@ -169,7 +205,10 @@ func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error
 	if err != nil {
 		return nil
 	}
-	if _, err := a.f.WriteAt(encOlder, int64(loserCopy.ArchiveSuperblockOff())); err != nil {
+	if _, err := a.trimWrite(1, encOlder, loserCopy.ArchiveSuperblockOff()); err != nil {
+		// Torn or not written: the losing copy is the one that may be lost,
+		// and the live one still names the state just committed. Nothing was
+		// truncated and nothing follows.
 		return nil
 	}
 	if err := a.f.Sync(); err != nil {
@@ -194,7 +233,9 @@ func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error
 		return nil
 	}
 	next.IndexTag = tag
-	if _, err := a.f.WriteAt(sealed, int64(next.IndexOff)); err != nil {
+	// Both writes go where the state just committed holds free space and no
+	// superblock points, so a torn one leaves nothing but bytes nobody reads.
+	if _, err := a.trimWrite(2, sealed, next.IndexOff); err != nil {
 		return nil
 	}
 	encMap, hash, err := holes.freeMap().Hash()
@@ -205,7 +246,7 @@ func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error
 		return nil // the map was planned at a size it did not encode to
 	}
 	next.FreeMapOff, next.FreeMapLen, next.FreeMapHash = at+ilen, mlen, hash
-	if _, err := a.f.WriteAt(encMap, int64(next.FreeMapOff)); err != nil {
+	if _, err := a.trimWrite(2, encMap, next.FreeMapOff); err != nil {
 		return nil
 	}
 	if err := a.f.Sync(); err != nil {
@@ -215,12 +256,15 @@ func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error
 	if err != nil {
 		return nil
 	}
-	if trimFails(3) {
-		return nil
-	}
 
-	// 3. The flip: the follow-up commit's commit point.
-	if _, err := a.f.WriteAt(encNext, int64(loserCopy.ArchiveSuperblockOff())); err != nil {
+	// 3. The flip: the follow-up commit's commit point. A crash that caught
+	// it before its first byte left the first commit standing and is nobody's
+	// to hear; a write that began and failed leaves the outcome unknown, like
+	// any other commit's, and breaks the Archive.
+	if begun, err := a.trimWrite(3, encNext, loserCopy.ArchiveSuperblockOff()); err != nil {
+		if !begun {
+			return nil
+		}
 		a.broken = fmt.Errorf("%w: the follow-up commit's superblock write failed: %v", ErrIndeterminate, err)
 		return a.broken
 	}
@@ -237,8 +281,8 @@ func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error
 	settled := false
 	older2 := next
 	older2.Seq = next.Seq - 1
-	if enc2, err := older2.Encode(); err == nil && !trimFails(4) {
-		if _, err := a.f.WriteAt(enc2, int64(loserCopy.Other().ArchiveSuperblockOff())); err == nil {
+	if enc2, err := older2.Encode(); err == nil {
+		if _, err := a.trimWrite(4, enc2, loserCopy.Other().ArchiveSuperblockOff()); err == nil {
 			settled = a.f.Sync() == nil
 		}
 	}

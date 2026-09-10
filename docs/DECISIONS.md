@@ -3337,3 +3337,17 @@ and `Shell.PrintEnd` go; DECISIONS keeps their story.
 *The strip says what it does*: "Adding — adding" becomes *Adding 3 files*, `OpView.Items`
 carrying the planned count; a count of one is singular everywhere ("1 files" was on the status
 line).
+
+**Audited the same evening by Codex** (read-only, two subagents, 20 files): the mechanism holds
+under honest `Sync` — retirement keeps recovery, `seq-1` makes no tie, one torn write leaves a
+valid copy, both copies cannot tear from one crash, the relocated index carries the right AAD
+and key, the free-map hash matches, an interrupted follow-up never double-frees. Two findings
+kept: a read-only handle opened beside a writable one in the same process registers its readers
+with itself, so a trim could truncate under it — the archive layer now refuses that second open
+(`ErrBusy`) where the path is spelled the same way, that table being keyed on the canonical
+path, and R31 says why every other reader fails closed instead: a foreign process's, and a
+read-only handle under a `\?\` spelling, a junction or a short name, which no lock catches
+either; and the whole rule assumes an honest `Sync`, now written into R31. Two test gaps closed:
+the crash seam tears and fails writes rather than skipping them, and an interrupted follow-up is
+retried on the same handle. One prompt lesson: telling Codex "do not run any tool" stops it
+reading files; say what it may not do.

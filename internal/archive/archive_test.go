@@ -197,10 +197,16 @@ func TestCreateAndOpen(t *testing.T) {
 	if err != nil || env.ArchiveID != fx.archiveID || env.KID != fx.key.KID {
 		t.Fatalf("envelope: %+v %v", env, err)
 	}
-	// A second writable handle is refused; a read-only one is not.
+	// One handle per path per process (doc.go "Handles"): neither a second
+	// writer nor a read-only handle beside this one.
 	if _, err := Open(fx.path, []Key{fx.key}, fx.opts); !errors.Is(err, ErrBusy) {
 		t.Errorf("second writer: %v", err)
 	}
+	if _, err := Open(fx.path, []Key{fx.key}, Options{ReadOnly: true}); !errors.Is(err, ErrBusy) {
+		t.Errorf("read-only handle beside a writer: %v", err)
+	}
+	a.Close()
+	// A read-only handle of its own opens, and refuses every write.
 	ro, err := Open(fx.path, []Key{fx.key}, Options{ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +218,6 @@ func TestCreateAndOpen(t *testing.T) {
 		t.Errorf("repair through read-only: %v", err)
 	}
 	ro.Close()
-	a.Close()
 	// Wrong key, wrong kid, no keys.
 	if _, err := Open(fx.path, []Key{{KID: fx.key.KID, Key: rnd32(t)}}, fx.opts); !errors.Is(err, ErrKey) {
 		t.Errorf("wrong key: %v", err)
@@ -231,6 +236,73 @@ func TestCreateAndOpen(t *testing.T) {
 	}
 	// After Close the lock is gone and the file reopens.
 	fx.open(t)
+}
+
+// One handle per path per process (doc.go "Handles", FORMAT.md R31 as amended
+// on 2026-09-09): the extents a writer may not truncate are the ones its own
+// Readers hold, so a second handle — whose Readers the first cannot see, and
+// which takes no OS lock at all when it is read-only — is refused.
+func TestOneHandlePerPathPerProcess(t *testing.T) {
+	a, fx := newFixture(t, Options{})
+	ro := fx.opts
+	ro.ReadOnly = true
+	// Another spelling of the same path is the same claim: it is cleaned and,
+	// on Windows, folded to one case before it is looked up.
+	uncleaned := filepath.Dir(fx.path) + string(filepath.Separator) + "." + string(filepath.Separator) + filepath.Base(fx.path)
+
+	for _, tc := range []struct {
+		what string
+		path string
+		opts Options
+	}{
+		{"a second writer", fx.path, fx.opts},
+		{"a read-only handle beside a writer", fx.path, ro},
+		{"a read-only handle on an uncleaned path", uncleaned, ro},
+	} {
+		if b, err := Open(tc.path, []Key{fx.key}, tc.opts); !errors.Is(err, ErrBusy) {
+			if err == nil {
+				b.Close()
+			}
+			t.Errorf("%s: %v", tc.what, err)
+		}
+	}
+	a.Close()
+
+	// The path is free again, and two read-only handles share it — neither
+	// writes, so neither can move the ground under the other.
+	r1, err := Open(fx.path, []Key{fx.key}, ro)
+	if err != nil {
+		t.Fatalf("read-only after the writer closed: %v", err)
+	}
+	r2, err := Open(fx.path, []Key{fx.key}, ro)
+	if err != nil {
+		t.Fatalf("a second read-only handle: %v", err)
+	}
+	if _, err := Open(fx.path, []Key{fx.key}, fx.opts); !errors.Is(err, ErrBusy) {
+		t.Errorf("a writer beside two readers: %v", err)
+	}
+	r1.Close()
+	if _, err := Open(fx.path, []Key{fx.key}, fx.opts); !errors.Is(err, ErrBusy) {
+		t.Errorf("a writer beside the reader that is left: %v", err)
+	}
+	r2.Close()
+	r2.Close() // idempotent, and it does not give a claim back twice
+
+	// Every claim given back: the path opens for writing again. An Open that
+	// fails gives its claim back too.
+	if _, err := Open(fx.path, []Key{{KID: fx.key.KID, Key: rnd32(t)}}, fx.opts); !errors.Is(err, ErrKey) {
+		t.Errorf("wrong key: %v", err)
+	}
+	b := fx.open(t)
+	if _, err := Open(fx.path, []Key{fx.key}, ro); !errors.Is(err, ErrBusy) {
+		t.Errorf("read-only beside the reopened writer: %v", err)
+	}
+	b.Close()
+	c, err := Open(fx.path, []Key{fx.key}, ro)
+	if err != nil {
+		t.Fatalf("read-only after the writer closed again: %v", err)
+	}
+	c.Close()
 }
 
 func TestAddAndExtract(t *testing.T) {

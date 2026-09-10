@@ -30,7 +30,9 @@ type Options struct {
 	// archive_id ‖ kid and is what decides. Zero leaves the old behaviour: an
 	// envelope that does not decode is the file's answer.
 	ArchiveID [16]byte
-	// ReadOnly opens without a lock and refuses every mutation.
+	// ReadOnly opens without an OS lock and refuses every mutation. It does
+	// not open beside another handle on the same file: one handle per path
+	// per process either way (doc.go "Handles").
 	ReadOnly bool
 	// Compress configures the zstd writer: level, window, concurrency,
 	// padding (DESIGN.md §11 trap 8 — the mitigation for the compressed-size

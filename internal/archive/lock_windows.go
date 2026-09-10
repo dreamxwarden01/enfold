@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -17,18 +16,16 @@ import (
 // far past any offset the file will reach, locked through LockFileEx — a
 // Windows byte-range lock is mandatory and would block reads of the range
 // by other handles, so it must not cover real data — so that another
-// process fails to lock it, plus a process-wide table of paths, so that a
-// second handle in this process fails before touching the file.
+// process fails to lock it. A second handle in this process never reaches
+// the lock: the registry of open paths (registry.go) refuses it first, and
+// that registry holds read-only handles too, which take no OS lock at all.
 type fileLock struct {
-	f    *os.File
-	path string
+	f *os.File
 }
 
-var (
-	openMu    sync.Mutex
-	openPaths = map[string]struct{}{}
-)
-
+// canonical is the key a path is held under, here and in the registry: an
+// absolute, cleaned path, folded to lower case because Windows file names
+// are compared that way.
 func canonical(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -37,41 +34,19 @@ func canonical(path string) string {
 	return strings.ToLower(filepath.Clean(abs))
 }
 
-func lockFile(f *os.File, path string) (*fileLock, error) {
-	key := canonical(path)
-	openMu.Lock()
-	if _, busy := openPaths[key]; busy {
-		openMu.Unlock()
-		return nil, ErrBusy
-	}
-	openPaths[key] = struct{}{}
-	openMu.Unlock()
+func lockFile(f *os.File) (*fileLock, error) {
 	err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, lockRange())
 	if err != nil {
-		openMu.Lock()
-		delete(openPaths, key)
-		openMu.Unlock()
 		return nil, fmt.Errorf("%w: %v", ErrBusy, err)
 	}
-	return &fileLock{f: f, path: key}, nil
+	return &fileLock{f: f}, nil
 }
 
-// releaseOS drops the OS lock; the file must still be open.
-func (l *fileLock) releaseOS() error {
-	return windows.UnlockFileEx(windows.Handle(l.f.Fd()), 0, 1, 0, lockRange())
-}
-
-// releasePath drops the in-process claim on the path.
-func (l *fileLock) releasePath() {
-	openMu.Lock()
-	delete(openPaths, l.path)
-	openMu.Unlock()
-}
-
+// release drops the OS lock; the file must still be open. The claim on the
+// path is the Archive's own and outlives this by as long as it must
+// (Compact holds it across the rename).
 func (l *fileLock) release() error {
-	err := l.releaseOS()
-	l.releasePath()
-	return err
+	return windows.UnlockFileEx(windows.Handle(l.f.Fd()), 0, 1, 0, lockRange())
 }
 
 // lockRange is the locked byte: offset 2^62, beyond any file the format

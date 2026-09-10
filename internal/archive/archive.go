@@ -26,12 +26,13 @@ import (
 // only around its bookkeeping, not while a file is compressed and sealed, so
 // readers keep serving while a large file is added.
 type Archive struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
-	size uint64
-	opts Options
-	lock *fileLock
+	mu    sync.Mutex
+	f     *os.File
+	path  string
+	size  uint64
+	opts  Options
+	lock  *fileLock
+	claim string // the registry key this handle holds the path under
 
 	env       *format.Envelope
 	archiveID [16]byte
@@ -172,6 +173,13 @@ func ReadEnvelope(path string) (*format.Envelope, error) {
 // and EnvelopeStale then says the envelope is owed a rewrite. It never writes
 // to the file and never modifies keys. A writable handle takes an exclusive
 // lock on the file and needs Options.DeviceID.
+//
+// One handle per path per process (doc.go "Handles"): a path this process
+// already holds a writable handle on is refused with ErrBusy, whether the
+// second handle would write or only read, and so is a writable handle on a
+// path a read-only one holds. Two read-only handles are allowed. Close gives
+// the path back. The rule is R31's: the extents a writer must not truncate
+// are the ones its own Readers hold, which a second handle's Readers are not.
 func Open(path string, keys []Key, opts Options) (*Archive, error) {
 	opts = opts.withDefaults()
 	if !opts.ReadOnly && opts.DeviceID == [16]byte{} {
@@ -183,6 +191,17 @@ func Open(path string, keys []Key, opts Options) (*Archive, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("%w: no keys", ErrParams)
 	}
+	claim, err := claimPath(path, !opts.ReadOnly)
+	if err != nil {
+		return nil, err
+	}
+	a := &Archive{path: path, opts: opts, claim: claim, held: map[extent]int{}, readers: map[*Reader]struct{}{}}
+	ok := false
+	defer func() {
+		if !ok {
+			a.Close()
+		}
+	}()
 	flag := os.O_RDWR
 	if opts.ReadOnly {
 		flag = os.O_RDONLY
@@ -191,15 +210,9 @@ func Open(path string, keys []Key, opts Options) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Archive{f: f, path: path, opts: opts, held: map[extent]int{}, readers: map[*Reader]struct{}{}}
-	ok := false
-	defer func() {
-		if !ok {
-			a.Close()
-		}
-	}()
+	a.f = f
 	if !opts.ReadOnly {
-		lock, err := lockFile(f, path)
+		lock, err := lockFile(f)
 		if err != nil {
 			return nil, err
 		}
@@ -812,6 +825,12 @@ func (a *Archive) teardown() error {
 	}
 	if a.f != nil {
 		err = errors.Join(err, a.f.Close())
+	}
+	// The path last, so that a handle taking it up sees a file this one has
+	// already let go of.
+	if a.claim != "" {
+		releasePath(a.claim, !a.opts.ReadOnly)
+		a.claim = ""
 	}
 	return err
 }

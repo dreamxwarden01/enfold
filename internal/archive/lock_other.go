@@ -7,23 +7,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"syscall"
 )
 
 // fileLock is an exclusive lock on an archive open for writing: flock on
-// the descriptor, plus a process-wide table of paths so that a second handle
-// in this process fails before touching the file.
+// the descriptor, so that another process fails to take it. A second handle
+// in this process never reaches the lock: the registry of open paths
+// (registry.go) refuses it first, and that registry holds read-only handles
+// too, which take no OS lock at all.
 type fileLock struct {
-	f    *os.File
-	path string
+	f *os.File
 }
 
-var (
-	openMu    sync.Mutex
-	openPaths = map[string]struct{}{}
-)
-
+// canonical is the key a path is held under, here and in the registry: an
+// absolute, cleaned path, case kept.
 func canonical(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -32,40 +29,18 @@ func canonical(path string) string {
 	return filepath.Clean(abs)
 }
 
-func lockFile(f *os.File, path string) (*fileLock, error) {
-	key := canonical(path)
-	openMu.Lock()
-	if _, busy := openPaths[key]; busy {
-		openMu.Unlock()
-		return nil, ErrBusy
-	}
-	openPaths[key] = struct{}{}
-	openMu.Unlock()
+func lockFile(f *os.File) (*fileLock, error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		openMu.Lock()
-		delete(openPaths, key)
-		openMu.Unlock()
 		return nil, fmt.Errorf("%w: %v", ErrBusy, err)
 	}
-	return &fileLock{f: f, path: key}, nil
+	return &fileLock{f: f}, nil
 }
 
-// releaseOS drops the OS lock; the file must still be open.
-func (l *fileLock) releaseOS() error {
-	return syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
-}
-
-// releasePath drops the in-process claim on the path.
-func (l *fileLock) releasePath() {
-	openMu.Lock()
-	delete(openPaths, l.path)
-	openMu.Unlock()
-}
-
+// release drops the OS lock; the file must still be open. The claim on the
+// path is the Archive's own and outlives this by as long as it must
+// (Compact holds it across the rename).
 func (l *fileLock) release() error {
-	err := l.releaseOS()
-	l.releasePath()
-	return err
+	return syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
 }
 
 // placeExclusive moves tmp to path, failing with os.ErrExist if path exists

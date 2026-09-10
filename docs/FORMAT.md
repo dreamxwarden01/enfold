@@ -479,20 +479,28 @@ replaced or deleted — nor into one an open reader still holds; those extents a
 free in the map the commit writes, but allocated only from the commit after next. **What the
 fallback promises is a complete state, one whose every file is readable**: a reader that finds
 the live copy damaged opens the archive one commit behind — except after a commit that gave the
-tail back, where it opens that same commit's state. A writer also never truncates anything but a reservation it made itself at the end of the file
-within the commit that frees it; space freed at the tail is reclaimed by the **next** commit —
-the quarantine's own expiry — which the archive layer issues at once as an empty commit whenever
-a commit has freed the tail (`APP.md` §2.3), so the losing copy is never left pointing past the
-end of the file. That follow-up commit is what makes the fallback its own state rather than the
-one before it, and there is no other way round it: no placement can shorten the file while a
-copy still references a byte of the run being given back, so the losing copy is retired onto the
-state just committed *before* anything is truncated, and brought onto the follow-up commit's
-state after the flip. Both copies then name one state — the same files, readable — and the
-previous state is spent. That is the price of the truncation this rule requires, and it is paid
-only by a commit that freed the tail; every other commit leaves the fallback one behind, as
-above. Open reclaims as
-free whatever no superblock references (the tail an interrupted transaction appended), and
-never writes: a stale envelope after an interrupted key rotation is reported, not repaired.
+tail back, where it opens that same commit's state. A writer also never truncates anything but a
+reservation it made itself at the end of the file within the commit that frees it; space freed
+at the tail is reclaimed by the **next** commit — the quarantine's own expiry — which the
+archive layer issues at once as an empty commit whenever a commit has freed the tail (`APP.md`
+§2.3), so the losing copy is never left pointing past the end of the file. That follow-up commit
+is what makes the fallback its own state rather than the one before it, and there is no other
+way round it: no placement can shorten the file while a copy still references a byte of the run
+being given back, so the losing copy is retired onto the state just committed *before* anything
+is truncated, and brought onto the follow-up commit's state after the flip. Both copies then
+name one state — the same files, readable — and the previous state is spent. That is the price
+of the truncation this rule requires, and it is paid only by a commit that freed the tail; every
+other commit leaves the fallback one behind, as above. Two things this rule assumes, written
+down after an outside audit (2026-09-09): **`Sync` is honest** — a drive that acknowledges a
+write before it is persistent voids every ordering here, as it voids every journaling file
+system's, and no barrier the format could add would restore it; and **the readers a writer
+protects are its own** — the extents an open `Reader` holds are known to the handle that opened
+it, so a second handle on the same file in the same process is refused while a writable one is
+open (the archive layer's rule), and a reader in another process, which the writer's lock does
+not stop, fails closed on the chunk it was reading (a tag that does not verify, or an extent
+past the end of the file) and is never served wrong bytes. Open reclaims as free whatever no
+superblock references (the tail an interrupted transaction appended), and never writes: a stale
+envelope after an interrupted key rotation is reported, not repaired.
 
 **R32 — A tombstone keeps its identity and its merge fields and nothing else.** Deleting a file
 sets `state = 2` and advances `revision`, `last_writer` and `modified_at`; it keeps `file_id`,

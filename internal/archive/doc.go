@@ -121,12 +121,37 @@
 // index, whose AAD binds archive_id and kid. Only a file no key opens is
 // corrupt.
 //
+// # Handles
+//
+// One handle per path per process. Open refuses a second handle on a path a
+// writable one already holds — a read-only handle as much as another writer —
+// and refuses a writable handle on a path a read-only one holds; both are
+// ErrBusy, and Close gives the path back. Two read-only handles are allowed,
+// since neither writes.
+//
+// The reason is R31's: the extents a writer may not reuse or truncate are the
+// ones its own open Readers hold, entries in that handle's own map. A second
+// handle's Readers are invisible to it — and a read-only handle takes no OS
+// lock, so the file's exclusive lock does not stop one either — so a trim
+// (trim.go) could cut the file back over an extent a Reader on the other
+// handle was still reading. Refusing the second open is what makes "the
+// readers a writer protects are its own" true, rather than merely intended,
+// for handles opened under the same spelling of the path: the registry's key
+// is the canonical path (registry.go), so a `\\?\` spelling, a junction, an
+// 8.3 short name or a substituted drive is a different key, and only a
+// writable handle is then caught by the lock on the file itself.
+// Everything else — a read-only handle under another spelling, and a reader
+// in another process, which no lock of ours reaches — is outside the rule: it
+// fails closed on the chunk it was reading — a tag that does not verify, or
+// an extent past the end of the file — and is never served the wrong bytes.
+//
 // # Single writer
 //
-// A writable Archive holds an exclusive lock on the file for its life, and the
-// package refuses a second writable handle on the same path within the
-// process. In-place transactions on a folder a sync client rewrites are not
-// supported; there, Compact into a fresh file is the safe pattern.
+// A writable Archive holds an exclusive lock on the file for its life, which
+// is what refuses a writer in another process; a second handle in this one is
+// refused before that, by the rule above. In-place transactions on a folder a
+// sync client rewrites are not supported; there, Compact into a fresh file is
+// the safe pattern.
 //
 // # Secrets
 //

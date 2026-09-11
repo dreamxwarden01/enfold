@@ -8,12 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf16"
 
@@ -358,22 +358,51 @@ type dragStage struct {
 	bytes      int64
 	extractDur time.Duration
 
+	// looked is whether the watch has already reported its first look, and
+	// expectStaged whether the extraction had written every staged file by the
+	// time the watch began. The second one is what makes a file that is missing
+	// at the very first tick a removal -- the target renamed it away inside those
+	// 250 ms -- rather than a file that was never written at all.
+	looked       bool
+	expectStaged bool
+
+	// removed is the folder actually being gone from disk, and it is deliberately
+	// not the same fact as deleted: deleted means the stage is resolved and its
+	// watcher stopped, which a forced close whose delete FAILED also is. Only
+	// removed says there is nothing left, and removeErr is why there is.
+	removed   bool
+	removeErr error
+
 	stopOnce sync.Once
 	stop     chan struct{}
 }
 
-// liveStages is every stage this process still watches, by folder. The sweeper
-// consults it so that the ten-minute sweep never races the watcher of a folder
-// this run is still looking after, and the exit path prints what is left.
+// liveStages is every stage this process still watches, by folder -- every one,
+// not the drag that happened to be last. The sweeper consults it so that the
+// ten-minute sweep never races the watcher of a folder this run is still looking
+// after, and both close paths walk it so that a drag left behind by an earlier
+// gesture is cleaned up rather than forgotten. A stage leaves this set the
+// moment its fate is decided, so that a folder whose delete failed is the
+// sweep's to take from then on.
 var liveStages = struct {
 	mu sync.Mutex
 	m  map[string]*dragStage
 }{m: make(map[string]*dragStage)}
 
-// currentStage is the stage of the drag that is running, for the two paths that
-// cannot be handed one: the window's close guard and the exit path. It is an
-// atomic because EndOperation can arrive on a thread of the target's.
-var currentStage atomic.Pointer[dragStage]
+// allStages is every stage this process ever made, in the order it made them.
+// Unlike liveStages it keeps them after they are resolved, because the exit
+// summary has to be able to say what became of each -- above all of one whose
+// folder is still on disk because a delete failed.
+var allStages = struct {
+	mu   sync.Mutex
+	list []*dragStage
+}{}
+
+func knownStages() []*dragStage {
+	allStages.mu.Lock()
+	defer allStages.mu.Unlock()
+	return append([]*dragStage(nil), allStages.list...)
+}
 
 // newDragStage makes the folder, writes the manifest and works out the paths,
 // all BEFORE DoDragDrop -- which is the whole point of the early half of the
@@ -439,6 +468,9 @@ func newDragStage(parent string, files []synthFile, cfg stageConfig) (*dragStage
 	liveStages.mu.Lock()
 	liveStages.m[root] = s
 	liveStages.mu.Unlock()
+	allStages.mu.Lock()
+	allStages.list = append(allStages.list, s)
+	allStages.mu.Unlock()
 	return s, nil
 }
 
@@ -452,6 +484,20 @@ func (s *dragStage) setState(state string) {
 		return
 	}
 	s.state = state
+	s.mu.Unlock()
+
+	if err := s.persistManifest(state); err != nil {
+		logf("staging: could not update the manifest to %q: %v", state, err)
+		return
+	}
+	logf("staging: manifest state -> %q", state)
+}
+
+// persistManifest writes this stage's manifest out in the given state. It is
+// separate from setState because the manifest has to be writable again after a
+// delete that only half succeeded, where the state has not changed at all.
+func (s *dragStage) persistManifest(state string) error {
+	s.mu.Lock()
 	created := s.created
 	paths := append([]string(nil), s.paths...)
 	s.mu.Unlock()
@@ -462,7 +508,7 @@ func (s *dragStage) setState(state string) {
 			rel = append(rel, r)
 		}
 	}
-	err := writeManifest(s.root, stageManifest{
+	return writeManifest(s.root, stageManifest{
 		Tool:    manifestTool,
 		Version: manifestVersion,
 		PID:     os.Getpid(),
@@ -470,11 +516,6 @@ func (s *dragStage) setState(state string) {
 		State:   state,
 		Files:   rel,
 	})
-	if err != nil {
-		logf("staging: could not update the manifest to %q: %v", state, err)
-		return
-	}
-	logf("staging: manifest state -> %q", state)
 }
 
 // pathList is what a CF_HDROP rendering names right now. It never changes: the
@@ -652,65 +693,110 @@ func (s *dragStage) stageEarly() {
 func (s *dragStage) writeFiles() error {
 	buf := make([]byte, producerChunk)
 	for i := range s.files {
-		f := &s.files[i]
-		path := s.paths[i]
-		if dir := filepath.Dir(path); dir != s.root {
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return fmt.Errorf("creating %s: %w", dir, err)
-			}
+		if err := s.writeOne(&s.files[i], s.paths[i], buf); err != nil {
+			return err
 		}
-		start := time.Now()
-		fh, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-		if err != nil {
-			return fmt.Errorf("creating %s: %w", path, err)
-		}
-		// Marked written before a single byte goes in: a file that exists at all
-		// is plaintext somebody has to delete, and the cleanup has to know about
-		// it even if the write below fails halfway.
-		s.mu.Lock()
-		s.written = true
-		s.mu.Unlock()
-
-		var off int64
-		nextMark := int64(readThrottleBytes)
-		for off < f.size {
-			n := int64(len(buf))
-			if r := f.size - off; r < n {
-				n = r
-			}
-			// -fail-extract fails partway through the first file on purpose: a
-			// failure that leaves half a file behind is the case worth seeing,
-			// both for what Explorer shows and for what the cleanup does with it.
-			if s.cfg.failExtract && off > 0 {
-				fh.Close()
-				return fmt.Errorf("-fail-extract: simulated failure after %d bytes of %s", off, filepath.Base(path))
-			}
-			patternAt(f.seed, off, buf[:n])
-			if f.delay > 0 {
-				time.Sleep(time.Duration(float64(f.delay) * float64(n) / float64(1<<20)))
-			}
-			if _, err := fh.Write(buf[:n]); err != nil {
-				fh.Close()
-				return fmt.Errorf("writing %s: %w", path, err)
-			}
-			off += n
-			s.mu.Lock()
-			s.bytes += n
-			s.mu.Unlock()
-			if off >= nextMark {
-				logf("staging: %s -- %d of %d bytes (%.0f%%), %s elapsed",
-					filepath.Base(path), off, f.size, 100*float64(off)/float64(f.size),
-					time.Since(start).Round(time.Millisecond))
-				for nextMark <= off {
-					nextMark += readThrottleBytes
-				}
-			}
-		}
-		if err := fh.Close(); err != nil {
-			return fmt.Errorf("closing %s: %w", path, err)
-		}
-		logf("staging: wrote %s (%d bytes) in %s", path, f.size, time.Since(start).Round(time.Millisecond))
 	}
+	return nil
+}
+
+// writeOne is one file's half of the extraction. It is a method of its own only
+// because a -file source needs a handle whose lifetime is this file's and not
+// the whole set's.
+func (s *dragStage) writeOne(f *synthFile, path string, buf []byte) error {
+	if dir := filepath.Dir(path); dir != s.root {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
+		}
+	}
+
+	// Where the bytes come from: the generator for a synthetic file, the -file
+	// source for a real one. Everything else about the write is the same either
+	// way -- the one fixed buffer, the delay per MiB, the progress lines, the
+	// failure injection -- because what is being measured is the write and the
+	// target's wait for it, not the producer.
+	fill := func(off int64, dst []byte) error {
+		patternAt(f.seed, off, dst)
+		return nil
+	}
+	if f.source != "" {
+		src, err := openSourceForReading(f.source)
+		if err != nil {
+			return fmt.Errorf("opening the -file source %s: %w", f.source, err)
+		}
+		defer src.Close()
+		fill = func(off int64, dst []byte) error {
+			if _, err := io.ReadFull(src, dst); err != nil {
+				return fmt.Errorf("reading %s at offset %d: %w (the source changed under the drag)", f.source, off, err)
+			}
+			return nil
+		}
+		logf("staging: %s is a copy of %s (%d bytes); the source is opened for reading only and is never written to, renamed or deleted",
+			filepath.Base(path), f.source, f.size)
+	}
+
+	start := time.Now()
+	fh, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", path, err)
+	}
+	// Marked written before a single byte goes in: a file that exists at all
+	// is plaintext somebody has to delete, and the cleanup has to know about
+	// it even if the write below fails halfway.
+	s.mu.Lock()
+	s.written = true
+	s.mu.Unlock()
+
+	var off int64
+	nextMark := int64(readThrottleBytes)
+	for off < f.size {
+		n := int64(len(buf))
+		if r := f.size - off; r < n {
+			n = r
+		}
+		// -fail-extract fails partway through the first file on purpose: a
+		// failure that leaves half a file behind is the case worth seeing,
+		// both for what Explorer shows and for what the cleanup does with it.
+		if s.cfg.failExtract && off > 0 {
+			fh.Close()
+			return fmt.Errorf("-fail-extract: simulated failure after %d bytes of %s", off, filepath.Base(path))
+		}
+		if err := fill(off, buf[:n]); err != nil {
+			fh.Close()
+			return err
+		}
+		if f.delay > 0 {
+			time.Sleep(time.Duration(float64(f.delay) * float64(n) / float64(1<<20)))
+		}
+		if _, err := fh.Write(buf[:n]); err != nil {
+			fh.Close()
+			return fmt.Errorf("writing %s: %w", path, err)
+		}
+		off += n
+		s.mu.Lock()
+		s.bytes += n
+		s.mu.Unlock()
+		if off >= nextMark {
+			logf("staging: %s -- %d of %d bytes (%.0f%%), %s elapsed",
+				filepath.Base(path), off, f.size, 100*float64(off)/float64(f.size),
+				time.Since(start).Round(time.Millisecond))
+			for nextMark <= off {
+				nextMark += readThrottleBytes
+			}
+		}
+	}
+	if err := fh.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", path, err)
+	}
+	// A copy of a real file carries the original's modification time, so that
+	// what the target ends up with is the file it was offered rather than a file
+	// that was made during the drag. The source itself is not touched.
+	if !f.modTime.IsZero() {
+		if err := os.Chtimes(path, f.modTime, f.modTime); err != nil {
+			logf("staging: could not give %s the source's modification time: %v", path, err)
+		}
+	}
+	logf("staging: wrote %s (%d bytes) in %s", path, f.size, time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
@@ -761,10 +847,21 @@ func stagedFileInUse(path string) (inUse bool, exists bool, err error) {
 // deleting 5 GiB inside a call the target is waiting to return from would be a
 // stall this prototype caused.
 func (s *dragStage) startWatch() {
+	if !s.armWatch() {
+		return
+	}
+	go s.watchLoop()
+}
+
+// armWatch is startWatch without the goroutine: it sets the watch up and says
+// whether there is one to run. Separated so that a test can drive poll by hand
+// at the moment of its choosing -- the first tick above all, which is where the
+// interesting transition turned out to be.
+func (s *dragStage) armWatch() bool {
 	s.mu.Lock()
 	if s.watching || s.deleted {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	s.watching = true
 	now := time.Now()
@@ -772,10 +869,16 @@ func (s *dragStage) startWatch() {
 	for _, p := range s.paths {
 		s.watch = append(s.watch, stagedFile{path: p, since: now})
 	}
+	// Whether every staged file was on disk when the watch began. It is snapshot
+	// here rather than read at each tick because it is a statement about the
+	// past: it is what makes an absence at the first tick a removal.
+	s.expectStaged = s.extracted && !s.failed && s.written
+	staged := s.expectStaged
 	s.mu.Unlock()
 	logf("staging: watching %d staged file(s) every 250 ms with an exclusive open; "+
-		"\"in use by another process\" is somebody reading it, \"gone\" is somebody moving it", len(s.paths))
-	go s.watchLoop()
+		"\"in use by another process\" is somebody reading it, \"gone\" is somebody moving it; "+
+		"the extraction had written every one of them: %v", len(s.paths), staged)
+	return true
 }
 
 func (s *dragStage) watchLoop() {
@@ -793,55 +896,143 @@ func (s *dragStage) watchLoop() {
 	}
 }
 
+// fileProbe is one exclusive open's answer about a staged file. It is a value
+// rather than a call inside the transition logic so that the whole table --
+// including the first observation, which is where this went wrong -- can be
+// tested without a file system and without a drag.
+type fileProbe struct {
+	exists bool
+	inUse  bool
+}
+
+// lookWord is how a file looked the first time the watch saw it, for the one
+// line per stage that says what the watch started from.
+func lookWord(p fileProbe) string {
+	switch {
+	case !p.exists:
+		return "missing"
+	case p.inUse:
+		return "present, in use by another process"
+	default:
+		return "present, free"
+	}
+}
+
+// observe folds one probe into a watched file's state and returns the lines the
+// transition is worth. It mutates w and nothing else.
+//
+// staged says the extraction had written every staged file before the watch
+// began, and it is what makes the FIRST observation a transition like any other.
+// That is a defect turned into behaviour: a same-volume drop is a rename, and
+// Explorer can finish it inside the 250 ms before the first tick -- in the round
+// that found this, the desktop copy's mtime was the staged file's to the
+// millisecond. The earlier shape had no case for "missing the first time it was
+// looked at", so it said nothing, the file never counted as gone, and the stage
+// sat in "handed-out" over an empty folder until the scavenge took it an hour
+// later. A completed move is the cleanest end a drag has, and it has to be
+// recognised as one.
+func (w *stagedFile) observe(p fileProbe, staged bool, now time.Time) []string {
+	var lines []string
+	if !w.seen {
+		switch {
+		case p.exists:
+			// The ordinary start. No transition line: the first look is reported
+			// once per stage, for every file at once, by the caller.
+			w.seen, w.exists, w.since = true, true, now
+			w.inUse = p.inUse
+			if p.inUse {
+				w.everUsed = true
+			}
+			return nil
+		case staged:
+			w.seen, w.gone, w.exists, w.since = true, true, false, now
+			return append(lines, fmt.Sprintf(
+				"staged file GONE (moved away by the target) before the first poll tick: %s "+
+					"-- the extraction had written it, so the target took it within the first 250 ms", w.path))
+		default:
+			// Nothing was ever written here: the drag ended before the extraction
+			// ran, or it failed short of this file. An absence is not a removal,
+			// and there is nothing to conclude from it.
+			return nil
+		}
+	}
+	switch {
+	case p.exists && w.gone:
+		// It came back: a target that moved the file and put it back, or a
+		// probe that raced a rename. Say so rather than leave the stage
+		// believing there is nothing left to clean up.
+		lines = append(lines, fmt.Sprintf("staged file is back: %s", w.path))
+		w.gone, w.exists, w.since = false, true, now
+	case !p.exists && !w.gone:
+		// A file that was there and is not any more was taken, not closed:
+		// this is what a same-volume move looks like from the source's side,
+		// and it is the one outcome that leaves nothing to clean up.
+		lines = append(lines, fmt.Sprintf("staged file GONE (moved away by the target): %s (it had existed for %s)",
+			w.path, now.Sub(w.since).Round(time.Millisecond)))
+		w.gone, w.exists, w.inUse, w.since = true, false, false, now
+		return lines
+	case !p.exists:
+		// Gone, and still gone.
+		return lines
+	}
+	if p.inUse != w.inUse {
+		if p.inUse {
+			lines = append(lines, fmt.Sprintf("staged file in use by another process: %s (free for %s before this)",
+				w.path, now.Sub(w.since).Round(time.Millisecond)))
+			w.everUsed = true
+		} else {
+			lines = append(lines, fmt.Sprintf("staged file free: %s (in use for %s)",
+				w.path, now.Sub(w.since).Round(time.Millisecond)))
+		}
+		w.inUse = p.inUse
+		w.since = now
+	}
+	return lines
+}
+
+// firstLookLine is the one line per stage that says what the watch found the
+// first time it looked. Without it a log that goes straight from "watching 1
+// staged file(s)" to a cleanup decision never says whether the file was there.
+func firstLookLine(root string, looks []string) string {
+	const shown = 8
+	if len(looks) > shown {
+		looks = append(append([]string(nil), looks[:shown]...),
+			fmt.Sprintf("and %d more", len(looks)-shown))
+	}
+	return fmt.Sprintf("staging: the watch's first look at %s: %s", root, strings.Join(looks, "; "))
+}
+
 // poll probes every staged file, logs the transitions, and then asks the policy
 // what to do. It returns true when the stage is finished with and the loop
 // should end.
 func (s *dragStage) poll(now time.Time) bool {
-	var lines []string
+	var lines, looks []string
 	s.mu.Lock()
+	first := !s.looked
+	s.looked = true
+	staged := s.expectStaged
 	for i := range s.watch {
 		w := &s.watch[i]
 		inUse, exists, err := stagedFileInUse(w.path)
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("staging: probing %s failed: %v (that says nothing about the consumer)", w.path, err))
-			continue
-		}
-		switch {
-		case exists && !w.seen:
-			w.seen, w.exists, w.since = true, true, now
-		case exists && w.gone:
-			// It came back: a target that moved the file and put it back, or a
-			// probe that raced a rename. Say so rather than leave the stage
-			// believing there is nothing left to clean up.
-			lines = append(lines, fmt.Sprintf("staged file is back: %s", w.path))
-			w.gone, w.exists, w.since = false, true, now
-		case !exists && w.seen && !w.gone:
-			// A file that was there and is not any more was taken, not closed:
-			// this is what a same-volume move looks like from the source's side,
-			// and it is the one outcome that leaves nothing to clean up.
-			lines = append(lines, fmt.Sprintf("staged file GONE (moved away by the target): %s (it had existed for %s)",
-				w.path, now.Sub(w.since).Round(time.Millisecond)))
-			w.gone, w.exists, w.inUse, w.since = true, false, false, now
-			continue
-		case !exists:
-			continue
-		}
-		if inUse != w.inUse {
-			if inUse {
-				lines = append(lines, fmt.Sprintf("staged file in use by another process: %s (free for %s before this)",
-					w.path, now.Sub(w.since).Round(time.Millisecond)))
-				w.everUsed = true
-			} else {
-				lines = append(lines, fmt.Sprintf("staged file free: %s (in use for %s)",
-					w.path, now.Sub(w.since).Round(time.Millisecond)))
+			if first {
+				looks = append(looks, fmt.Sprintf("%s: could not be probed", filepath.Base(w.path)))
 			}
-			w.inUse = inUse
-			w.since = now
+			continue
 		}
+		p := fileProbe{exists: exists, inUse: inUse}
+		if first {
+			looks = append(looks, fmt.Sprintf("%s: %s", filepath.Base(w.path), lookWord(p)))
+		}
+		lines = append(lines, w.observe(p, staged, now)...)
 	}
 	ev := s.eventsLocked(now)
 	s.mu.Unlock()
 
+	if first {
+		logf("%s", firstLookLine(s.root, looks))
+	}
 	for _, l := range lines {
 		logf("%s", l)
 	}
@@ -1039,18 +1230,49 @@ func (s *dragStage) applyDecision(d stageDecision, now time.Time) bool {
 // -- will recognise as abandoned and take.
 func (s *dragStage) remove(force bool) bool {
 	s.setState(stateDone)
+	logf("staging: deleting %s (forced=%v)", s.root, force)
 	err := removeTreeNoReparse(s.root)
 	if err == nil {
+		s.mu.Lock()
+		s.removed, s.removeErr = true, nil
+		s.mu.Unlock()
 		s.finish()
 		logf("staging folder deleted: %s", s.root)
 		return true
 	}
+	s.mu.Lock()
+	s.removeErr = err
+	s.mu.Unlock()
+	// The error verbatim, as Windows gave it: a sharing violation here names the
+	// one thing that stands between a forced exit and a folder full of
+	// plaintext, and a summary of it would not.
 	logf("staging folder could NOT be deleted: %s: %v", s.root, err)
+	if busy := stagedTreeInUse(s.root); busy != "" {
+		logf("staging: %s is still open by another process, which is why the delete failed", busy)
+	}
+	// A delete that only half succeeded usually takes the manifest with it --
+	// os.ReadDir is sorted, so manifest.json goes before or after the payload
+	// depending on nothing but its name -- and a folder without a manifest of
+	// ours is a folder the sweep is forbidden to touch ever again. That would
+	// turn a failed delete into plaintext left on disk for good, so the manifest
+	// goes back, in "done", which is exactly what the sweep looks for.
+	if s.onDisk() {
+		if _, ok := readManifest(s.root); !ok {
+			if werr := s.persistManifest(stateDone); werr != nil {
+				logf("staging: %s has lost its manifest to the partial delete and it could not be rewritten (%v): the scavenge will not recognise the folder",
+					s.root, werr)
+			} else {
+				logf("staging: the partial delete took the manifest of %s with it; it has been rewritten as %q so the scavenge still recognises the folder",
+					s.root, stateDone)
+			}
+		}
+	}
 	if !force {
 		// Left for the sweep. Nothing is retried here every 250 ms: a consumer
 		// holding a file open would produce the same line four times a second,
 		// and the folder is now manifested "done", which is exactly what the
 		// sweep looks for.
+		logf("staging: %s is left manifested %q for the scavenge", s.root, stateDone)
 		s.finish()
 		return true
 	}
@@ -1110,16 +1332,22 @@ func (s *dragStage) tryDeleteAtReboot() {
 			dirs = append(dirs, path)
 			return nil
 		}
-		logDeleteAtReboot(path)
+		deleteAtReboot(path)
 		return nil
 	})
 	if err != nil {
 		logf("staging: walking the staging folder failed: %v", err)
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
-		logDeleteAtReboot(dirs[i])
+		deleteAtReboot(dirs[i])
 	}
 }
+
+// deleteAtReboot is the call above, behind a variable for one reason: a test of
+// the forced close has to be able to see that the attempt was made without the
+// test machine ending up with real PendingFileRenameOperations entries for its
+// temporary directories.
+var deleteAtReboot = logDeleteAtReboot
 
 func logDeleteAtReboot(path string) {
 	p, err := windows.UTF16PtrFromString(path)
@@ -1236,6 +1464,69 @@ func (s *dragStage) noteDragEnded(result string) {
 	s.startWatch()
 }
 
+// forceCloseAllStages is the second close, and it visits EVERY staging folder
+// this run still has registered rather than the drag that happened to be last.
+//
+// This is a defect turned into behaviour. In a two-drag round the first drag
+// stalled inside the target -- Explorer never opened the staged file, and the
+// folder kept five gigabytes of plaintext in state "handed-out" -- while the
+// second completed as a move. The forced close logged exactly one deletion, the
+// second drag's already-empty folder, and never so much as looked at the first:
+// the only pointer it had was to the last stage. Both halves of the fix are
+// here: every unresolved stage is kept in liveStages until it is resolved, and
+// the close walks them all, saying what it attempted and what came of it.
+func forceCloseAllStages() {
+	stages := remainingStages()
+	if len(stages) == 0 {
+		logf("staging: the forced close has nothing to visit: no staging folder of this run is still registered")
+		return
+	}
+	logf("staging: the forced close visits every staging folder still registered (%d)", len(stages))
+	for i, s := range stages {
+		logf("staging: forced close %d of %d: %s", i+1, len(stages), s.root)
+		s.noteForcedClose()
+		logf("staging: forced close %d of %d ended: %s -- %s", i+1, len(stages), s.root, s.disposition())
+	}
+	logStagesLeftOnDisk("after the forced close")
+}
+
+// quietCloseAllStages is the ordinary close, over every registered stage for the
+// same reason: an earlier drag's folder is no less this run's to decide about
+// than the last one's.
+func quietCloseAllStages() {
+	for _, s := range remainingStages() {
+		s.closeQuietly()
+	}
+}
+
+// stagesLeftOnDisk is every folder this run made that is still there, whatever
+// the reason -- handed out and waiting for the scavenge, kept by -keep, or left
+// by a delete that failed.
+func stagesLeftOnDisk() []*dragStage {
+	var left []*dragStage
+	for _, s := range knownStages() {
+		if s.onDisk() {
+			left = append(left, s)
+		}
+	}
+	return left
+}
+
+// logStagesLeftOnDisk names them, with the manifest state and the error of the
+// delete that failed if one did. On disk a folder left behind on purpose and a
+// folder a cleanup skipped look identical; only this says which it is.
+func logStagesLeftOnDisk(when string) {
+	left := stagesLeftOnDisk()
+	if len(left) == 0 {
+		logf("staging: no staging folder of this run is left on disk (%s)", when)
+		return
+	}
+	logf("staging: %d staging folder(s) of this run are left on disk (%s):", len(left), when)
+	for _, s := range left {
+		logf("    %s: %s", s.root, s.disposition())
+	}
+}
+
 // noteForcedClose is the second close: the window is going away with staged
 // files still in use. It runs on the window thread and runs to completion there,
 // because the process is about to exit and the watcher will not get another tick.
@@ -1243,6 +1534,9 @@ func (s *dragStage) noteForcedClose() {
 	s.mu.Lock()
 	if s.deleted {
 		s.mu.Unlock()
+		// Resolved by its own watcher between the close and this call. Say so
+		// rather than pass over it in silence, which is what hid the defect.
+		logf("staging: %s was already resolved before the forced close: %s", s.root, s.disposition())
 		return
 	}
 	s.forced = true
@@ -1297,6 +1591,34 @@ func (s *dragStage) inUseNow() []string {
 	return busy
 }
 
+// onDisk is the honest answer to "is this folder still there", asked of the
+// file system rather than of what the stage believes. A close that decided to
+// delete and a delete that succeeded are two different facts.
+func (s *dragStage) onDisk() bool {
+	_, err := os.Lstat(s.root)
+	return err == nil
+}
+
+// disposition is one line of what became of a folder, for the close and exit
+// summaries.
+func (s *dragStage) disposition() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dispositionLocked()
+}
+
+func (s *dragStage) dispositionLocked() string {
+	switch {
+	case s.removed:
+		return fmt.Sprintf("deleted (manifest state %q at the end)", s.state)
+	case s.removeErr != nil:
+		return fmt.Sprintf("LEFT ON DISK, manifest state %q: the delete failed: %v", s.state, s.removeErr)
+	case s.cfg.keep:
+		return fmt.Sprintf("LEFT ON DISK by -keep, manifest state %q", s.state)
+	}
+	return fmt.Sprintf("LEFT ON DISK for the scavenge, manifest state %q", s.state)
+}
+
 // summary is the per-drag result line: everything asked for, when, what the
 // extraction did, and where the folder stands.
 func (s *dragStage) summary() string {
@@ -1315,8 +1637,9 @@ func (s *dragStage) summary() string {
 	} else {
 		b.WriteString("    extraction: never ran\n")
 	}
-	fmt.Fprintf(&b, "    handed out=%v, async negotiated=%v, EndOperation=%v, manifest state=%q, deleted=%v\n",
+	fmt.Fprintf(&b, "    handed out=%v, async negotiated=%v, EndOperation=%v, manifest state=%q, resolved=%v\n",
 		s.handedOut, s.asyncOp, s.endOp, s.state, s.deleted)
+	fmt.Fprintf(&b, "    the folder: %s\n", s.dispositionLocked())
 	for i := range s.watch {
 		w := &s.watch[i]
 		fmt.Fprintf(&b, "    %s: everUsed=%v, inUse=%v, gone=%v\n", w.path, w.everUsed, w.inUse, w.gone)

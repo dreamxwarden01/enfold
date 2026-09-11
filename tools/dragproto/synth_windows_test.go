@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -385,6 +386,136 @@ func TestBuildFileSet(t *testing.T) {
 	del := buildFileSet(fileSetConfig{count: 1, size: 1 << 20, delay: 5 * time.Millisecond})
 	if del[0].delay != 5*time.Millisecond {
 		t.Errorf("delay not carried into the file set")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// -file: real files instead of synthetic ones.
+
+// writeSource makes a file that stands in for the user's video: bytes that are
+// not the generator's, under t.TempDir() and nowhere else.
+func writeSource(t *testing.T, name string, size int) (path string, want []byte) {
+	t.Helper()
+	want = make([]byte, size)
+	for i := range want {
+		want[i] = byte(i*7 + 11)
+	}
+	path = filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A modification time in the past, so that "the copy carries the source's"
+	// is a claim the test can tell from "the copy was made just now".
+	old := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	return path, want
+}
+
+// TestSourceFilesDescribesTheRealFile: the descriptor and the DROPFILES list
+// take the source's own base name, its real size and its real modification
+// time, because the whole point of -file is that what lands at the destination
+// is indistinguishable from the original.
+func TestSourceFilesDescribesTheRealFile(t *testing.T) {
+	path, want := writeSource(t, "holiday.mp4", 4096)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := sourceFiles([]string{path}, false, 3*time.Millisecond)
+	if err != nil {
+		t.Fatalf("sourceFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("sourceFiles gave %d file(s), want 1", len(files))
+	}
+	f := files[0]
+	if f.name != "holiday.mp4" {
+		t.Errorf("the offered name is %q, want the source's base name", f.name)
+	}
+	if f.size != int64(len(want)) {
+		t.Errorf("the offered size is %d, want %d", f.size, len(want))
+	}
+	if !f.modTime.Equal(info.ModTime()) {
+		t.Errorf("the offered modification time is %s, want the source's %s", f.modTime, info.ModTime())
+	}
+	if f.source != path {
+		t.Errorf("the source is recorded as %q, want %q", f.source, path)
+	}
+	if f.delay != 3*time.Millisecond {
+		t.Errorf("-delay is not carried onto a -file entry")
+	}
+
+	// And the descriptor uses that time rather than the set's.
+	blob := encodeFileGroupDescriptorW(files, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	d := blob[fileGroupDescWHdr:]
+	ft := uint64(binary.LittleEndian.Uint32(d[fdOffLastWriteTime+4:]))<<32 |
+		uint64(binary.LittleEndian.Uint32(d[fdOffLastWriteTime:]))
+	if wantFT := uint64(info.ModTime().UnixNano()/100) + 116444736000000000; ft != wantFT {
+		t.Errorf("the descriptor's ftLastWriteTime is %d, want the source's %d", ft, wantFT)
+	}
+
+	// -folder still puts it under the relative folder, by name only.
+	sub, err := sourceFiles([]string{path}, true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub[0].name != protoFolder+"holiday.mp4" {
+		t.Errorf("-folder -file gave the name %q", sub[0].name)
+	}
+}
+
+// TestSourceFilesRefusesWhatItCannotOffer: every refusal happens before a window
+// exists, because a drag that discovers this halfway has already handed a name
+// to a target.
+func TestSourceFilesRefusesWhatItCannotOffer(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := sourceFiles([]string{filepath.Join(dir, "no-such-file.mp4")}, false, 0); err == nil {
+		t.Error("a path that does not exist was accepted")
+	} else if !strings.Contains(err.Error(), "-file ") {
+		t.Errorf("the refusal does not name the flag: %v", err)
+	}
+	if _, err := sourceFiles([]string{dir}, false, 0); err == nil {
+		t.Error("a directory was accepted as a file to offer")
+	} else if !strings.Contains(err.Error(), "directory") {
+		t.Errorf("the refusal does not say it is a directory: %v", err)
+	}
+	// One bad path among good ones refuses the whole run: a set that silently
+	// dropped an entry would be measured as if it were complete.
+	good, _ := writeSource(t, "good.bin", 16)
+	if _, err := sourceFiles([]string{good, filepath.Join(dir, "missing.bin")}, false, 0); err == nil {
+		t.Error("a set with one missing path was accepted")
+	}
+}
+
+// TestProducerServesASourceFile: the virtual-file route reads the source rather
+// than the generator, from whatever offset the stream is at.
+func TestProducerServesASourceFile(t *testing.T) {
+	path, want := writeSource(t, "clip.mp4", producerChunk+777)
+	f := &synthFile{name: "clip.mp4", size: int64(len(want)), source: path}
+
+	got := make([]byte, len(want))
+	p := newProducer(f, 0)
+	if n := p.read(got); n != len(want) {
+		t.Fatalf("the producer served %d bytes, want %d", n, len(want))
+	}
+	p.close()
+	if !bytes.Equal(got, want) {
+		t.Fatal("the producer served bytes that are not the source's")
+	}
+
+	// From an offset, which is what a seek then a read does.
+	const off = producerChunk + 13
+	tail := make([]byte, len(want)-off)
+	p = newProducer(f, off)
+	if n := p.read(tail); n != len(tail) {
+		t.Fatalf("the producer served %d bytes from offset %d, want %d", n, off, len(tail))
+	}
+	p.close()
+	if !bytes.Equal(tail, want[off:]) {
+		t.Fatal("the producer served the wrong bytes from an offset")
 	}
 }
 

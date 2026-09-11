@@ -3741,3 +3741,31 @@ and the measured facts of the two real drops are in `docs/research/drag-out.md`,
 work (the external player, other shell integrations) consults them instead of running the
 research again (the user's ask).
 
+**The staged route, measured.** The user's `-hdrop` round (research file, last section):
+Explorer asks for `CF_HDROP` during the hover and takes future paths; it negotiates the
+asynchronous protocol for a `CF_HDROP` source but never calls `EndOperation`, so the design's
+"delete at `EndOperation`" is a courtesy and the scavenge is the mechanism; with the object
+agile the extraction ran on Explorer's thread; a same-volume drop was a move, instant, nothing
+left to clean; and the *Replace* of an existing 5 GiB file stalled before Explorer touched
+the source — the second time, once on each route — while `avp.exe` scanned, which points at
+the machine's on-access scanner holding a large file's open and not at either route; an
+attribution test without the prototype is the next step. Nothing in the design changes; the
+scavenge's place in it is confirmed.
+
+**Confirmed, and one more rule** (2026-09-11, 00:40). With Kaspersky paused the same
+*Replace* of the 5 GiB file completed at once and the process exited cleanly: the stall was
+the scanner's on-access read of a large unfamiliar file, held across Explorer's open, on
+either route. The user, having watched the pause before Explorer starts: "this must be why
+WinRAR and 7-Zip still show an extraction progress window after the drop — we need one too,
+the strip we show when adding files would do; the user must never think we froze, and the
+whole window freezing is out of the question." APP §3: the staging phase is the operation
+strip — *Preparing 2 files*, by bytes, *Cancel* — the request running on Explorer's thread so
+the window stays alive, a cancel failing the request so Explorer abandons the drop.
+The strip has two phases (the user's refinement): *Preparing N files* with its bar and
+*Cancel* while the request runs, then *Awaiting Windows Explorer*, no bar, once Explorer has
+the paths — cleared when the staged files are gone, when `EndOperation` comes, or when they
+have been read and left alone for five seconds. And the scanner is not a release concern: "a
+5 GB .bin dropped into a temporary folder and immediately operated on looks suspicious, and
+getting locked for a scan is normal behaviour; real use will not see such a file, and if it
+does, that is the user's to sort out."
+

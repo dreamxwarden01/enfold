@@ -94,6 +94,20 @@ func effectName(e uint32) string {
 	return s
 }
 
+// asyncEffectNote is the difference between "the target refused" and "the target
+// took it and is not telling you here". DoDragDrop's effect out-parameter is
+// DROPEFFECT_NONE for an asynchronous drop whatever the target ends up doing --
+// the round that moved a 5 GiB file to the desktop logged NONE for a move that
+// completed -- so a line that does not say which of the two it is invites the
+// wrong reading. It is keyed on InOperation, which is the source's own way of
+// asking whether the operation is still running after DoDragDrop returned.
+func asyncEffectNote(inOperation bool) string {
+	if !inOperation {
+		return ""
+	}
+	return " (asynchronous: the effect is not reported here)"
+}
+
 // tymedName renders a TYMED mask; GetData callers routinely OR several together.
 func tymedName(t uint32) string {
 	s := ""

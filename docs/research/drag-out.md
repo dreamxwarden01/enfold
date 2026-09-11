@@ -568,3 +568,42 @@ a close guard that refuses to tear down a data object while a drop is in flight 
 close forces it and leaves the streams answering `STG_E_REVERTED`), and — after the ruling for
 the staged route — an `-hdrop` mode that stages synthetic files and hands Explorer `CF_HDROP`
 by delayed rendering, to measure that route the same way.
+
+### The staged route, measured (2026-09-11, 00:28)
+
+`-hdrop -n 1 -size 5GiB -agile`, dropped onto the desktop where the previous evening's 5 GiB
+file still lay, then — after the user deleted that file — dropped again:
+
+- Explorer asked for `CF_HDROP` **twice during the hover** and accepted the future paths it was
+  given (the files did not exist yet). After the button's release its first request ran the
+  extraction inside `GetData`: 5 GiB written in 6.4 s (about 840 MB/s, the synthetic
+  generator), on Explorer's own thread — with `-agile`, 390 of the 726 COM calls ran off the
+  drag thread. Four more `CF_HDROP` requests followed and were answered with the same paths.
+- Explorer negotiated the asynchronous protocol for a `CF_HDROP` source (`StartOperation`,
+  `InOperation` true) and `DoDragDrop` returned `DRAGDROP_S_DROP` with `DROPEFFECT_NONE` —
+  the effect of an asynchronous drop is not reported there. **`EndOperation` never came**, not
+  in the 80 s the process ran, not even for the drop that completed; `EndOperation` is not a
+  cleanup signal for this route, the scavenge is.
+- The first drop — a *Replace* over the existing 5 GiB file — stalled exactly as the
+  virtual-file drop had: Explorer's copy engine never opened the staged file at all (the
+  exclusive-share poll saw it free throughout) and its progress dialog stuck; the staged
+  plaintext was left behind. The second drop, onto a desktop with no file of that name, was a
+  **same-volume move**: the staged file was gone at once and the desktop file carries the
+  staged file's write time — no second pass over the bytes. The stall therefore belongs to
+  replacing a large existing destination on this machine, where Kaspersky's on-access scan of
+  a 5 GiB file it has not seen holds the open for minutes (`avp.exe` at the top of the CPU,
+  the shell sluggish, the previous evening's `Get-FileHash` "hang" on the same file); it is
+  not the route's. Attribution test proposed: replace the same file with a plain Explorer
+  copy, no prototype involved.
+- Peak working set 60.8 MiB. A close while both drops were still "in operation" was refused
+  once and forced on the second; the forced cleanup deleted only the last drag's (empty)
+  folder — a prototype defect — and the stalled drag's folder with its 5 GiB stayed.
+- **Confirmed** (00:40, Kaspersky paused by the user): the same *Replace* over the existing
+  5 GiB file completed at once — a same-volume move — and the process exited without a
+  pause. Kaspersky had been reading the large synthetic files at tens of MB/s with `avp.exe`
+  at 5% CPU: an on-access scan of a file it had never seen, held across Explorer's open. The
+  stall belongs to the machine's scanner, on either route. What the user then ruled: the wait
+  before Explorer starts (the extraction inside the post-release `GetData`, 6.4 s here) must
+  be visible in Enfold — the operation strip, by bytes, cancellable — and the window must never
+  freeze; that is why WinRAR and 7-Zip show a progress window at exactly that moment.
+

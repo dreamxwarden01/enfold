@@ -5,6 +5,9 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 	"unicode/utf16"
@@ -27,6 +30,41 @@ type synthFile struct {
 	// delay is how long the producer takes per MiB, to stand in for a slow
 	// decrypt. It runs on the producer's goroutine, never on the caller's.
 	delay time.Duration
+
+	// source is -file: a real file on disk whose bytes this entry serves instead
+	// of the generator's. It exists because a 5 GiB file of synthetic pattern is
+	// exactly what an on-access scanner treats as worth a full scan, and a
+	// measurement of Explorer taken through a scanner's stall is a measurement of
+	// the scanner. A real video is an ordinary file to everything that watches.
+	//
+	// The source is READ and nothing else, ever: never written to, never renamed,
+	// never deleted, and opened without FILE_SHARE_DELETE so that nothing else
+	// takes it away mid-read either.
+	source string
+	// modTime is the source's, for the descriptor and for the staged copy. Zero
+	// for a synthetic file, which then takes the whole set's -- see
+	// encodeFileGroupDescriptorW.
+	modTime time.Time
+}
+
+// openSourceForReading opens a -file source the only way this program ever opens
+// one: read access, shared with other readers and with writers, and NOT shared
+// for delete. "You cannot request a sharing mode that conflicts with the access
+// mode that is specified in an existing request that has an open handle", so
+// leaving FILE_SHARE_DELETE out is what stops anything from unlinking the user's
+// video while a drag is reading it.
+func openSourceForReading(path string) (*os.File, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
 }
 
 // The pattern is printable, 64-byte lines ending in '\n', so that the small
@@ -115,6 +153,25 @@ func newProducer(f *synthFile, off int64) *producer {
 
 func (p *producer) run(off int64) {
 	defer close(p.out)
+
+	// A -file source is opened once per producer and read sequentially from the
+	// offset this producer starts at. A seek retires the producer and makes a new
+	// one, so the handle's lifetime is exactly this goroutine's.
+	var src *os.File
+	if p.file.source != "" {
+		fh, err := openSourceForReading(p.file.source)
+		if err != nil {
+			logf("producer: cannot open the -file source %s: %v -- this stream will serve nothing", p.file.source, err)
+			return
+		}
+		defer fh.Close()
+		if _, err := fh.Seek(off, io.SeekStart); err != nil {
+			logf("producer: cannot seek %s to %d: %v", p.file.source, off, err)
+			return
+		}
+		src = fh
+	}
+
 	for off < p.file.size {
 		// Check for a stop before generating anything. Relying on the selects
 		// below alone would work, but only probabilistically: with a drain
@@ -131,7 +188,17 @@ func (p *producer) run(off int64) {
 			n = r
 		}
 		buf := make([]byte, n)
-		patternAt(p.file.seed, off, buf)
+		if src != nil {
+			// A short read means the source changed under the drag. The stream
+			// ends here rather than serving bytes that are not the file's; the
+			// target sees a truncated file and the log says why.
+			if _, err := io.ReadFull(src, buf); err != nil {
+				logf("producer: reading %s at offset %d: %v -- the stream ends here", p.file.source, off, err)
+				return
+			}
+		} else {
+			patternAt(p.file.seed, off, buf)
+		}
 		if p.file.delay > 0 {
 			d := time.Duration(float64(p.file.delay) * float64(n) / float64(1<<20))
 			select {
@@ -226,13 +293,19 @@ const (
 const descriptorFlags = fdAttributes | fdFileSize | fdWritesTime | fdProgressUI | fdUnicode
 
 // encodeFileGroupDescriptorW lays out FILEGROUPDESCRIPTORW followed by one
-// FILEDESCRIPTORW per file. write is the last-write time every descriptor
-// claims; it is a parameter rather than time.Now so that a test can pin it.
+// FILEDESCRIPTORW per file. write is the last-write time a descriptor claims
+// when the file has none of its own; it is a parameter rather than time.Now so
+// that a test can pin it. A -file entry has one of its own -- the source's real
+// modification time, which is what makes the dropped copy look like the file it
+// came from rather than like something made just now.
 func encodeFileGroupDescriptorW(files []synthFile, write time.Time) []byte {
 	buf := make([]byte, fileGroupDescWHdr+fileDescriptorWSize*len(files))
 	binary.LittleEndian.PutUint32(buf[0:], uint32(len(files)))
-	ft := windows.NsecToFiletime(write.UnixNano())
 	for i, f := range files {
+		ft := windows.NsecToFiletime(write.UnixNano())
+		if !f.modTime.IsZero() {
+			ft = windows.NsecToFiletime(f.modTime.UnixNano())
+		}
 		d := buf[fileGroupDescWHdr+i*fileDescriptorWSize:][:fileDescriptorWSize]
 		binary.LittleEndian.PutUint32(d[fdOffFlags:], descriptorFlags)
 		binary.LittleEndian.PutUint32(d[fdOffFileAttributes:], fileAttributeNormal)
@@ -318,6 +391,57 @@ func buildFileSet(c fileSetConfig) []synthFile {
 		})
 	}
 	return files
+}
+
+// ---------------------------------------------------------------------------
+// -file: real files instead of synthetic ones.
+
+// sourceFiles turns the -file paths into the set the drag offers. Every refusal
+// happens HERE, before a window exists and before anything is staged: a drag
+// that discovers halfway through that its source is a directory has already
+// handed a name out to a target, and there is no taking that back.
+//
+// The descriptor gets the source's own base name, its real size and its real
+// modification time, because the point of -file is that what lands at the
+// destination is indistinguishable from the original -- to a scanner above all.
+func sourceFiles(paths []string, folder bool, delay time.Duration) ([]synthFile, error) {
+	prefix := ""
+	if folder {
+		prefix = protoFolder
+	}
+	out := make([]synthFile, 0, len(paths))
+	for _, p := range paths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, fmt.Errorf("-file %s: %w", p, err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return nil, fmt.Errorf("-file %s: %w", p, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("-file %s: it is a directory; -file names one existing file (give it once per file)", p)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("-file %s: not an ordinary file (mode %s)", p, info.Mode())
+		}
+		// Readable is proved by opening it, not by the mode bits: on Windows the
+		// answer comes from an ACL and from whatever else has the file open, and
+		// neither is visible in a FileInfo.
+		fh, err := openSourceForReading(abs)
+		if err != nil {
+			return nil, fmt.Errorf("-file %s: it cannot be read: %w", p, err)
+		}
+		fh.Close()
+		out = append(out, synthFile{
+			name:    prefix + filepath.Base(abs),
+			size:    info.Size(),
+			delay:   delay,
+			source:  abs,
+			modTime: info.ModTime(),
+		})
+	}
+	return out, nil
 }
 
 // humanSize renders a byte count the way the default file is named:

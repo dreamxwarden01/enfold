@@ -846,10 +846,19 @@ sentinel of every package with a catch-all `internal` — and services are regis
   owning process — so a scavenge can tell an abandoned folder from a live one. **When the files
   are written**: a `CF_HDROP` request that arrives during the hover — targets do ask, Raymond
   Chen and 7-Zip's comments are the witness — is answered with the *final* paths (never a
-  placeholder: Edge caches the early names, 7-Zip found); the files themselves are written by
-  the first request after the button's release — the core's `Extract` with `replace` into the
-  folder, shown on the page's strip as *Preparing 2 files* and cancellable there — and a
-  request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
+  placeholder: Edge caches the early names, 7-Zip found); the files themselves are written by the first request after the button's release — the
+  core's `Extract` with `replace` into the folder — **and that phase is visible** (ruled
+  2026-09-11 after the measured 5 GiB drop: Explorer shows nothing until the request returns,
+  and a user who sees nothing move thinks the program is dead — the reason WinRAR and 7-Zip
+  put a progress window on the screen at that moment): the page's operation strip says *Preparing 2 files*, moves by bytes, and offers *Cancel*; the
+  window never freezes, since the request runs on Explorer's thread (the object being agile)
+  and the WebView's stays free; a cancel fails the request and Explorer abandons the drop.
+  When the request has returned and Explorer has the paths, the strip changes to a second
+  phase with no bar and no *Cancel* — **Awaiting Windows Explorer** — which clears when the
+  staged files are gone (a same-volume move), when Explorer says it has finished
+  (`EndOperation`, should it call it), or when the files have been read and then left alone
+  for five seconds; whatever happens to the folder after that is the scavenge's business, not
+  the strip's — and a request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
   rather than hand out half-written files, which 7-Zip's does not. A target that needs the
   files to exist at hover time (Sticky Notes refuses a path that is not there) is the
   measurement the prototype makes before the rule is final; if such targets matter, a small

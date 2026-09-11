@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strconv"
@@ -85,6 +86,7 @@ func main() {
 	var (
 		count  = flag.Int("n", 2, "number of virtual files to offer")
 		size   = sizeFlag(5 << 30)
+		source pathList
 		delay  = flag.Int("delay", 0, "milliseconds the producer takes per MiB, to simulate a slow decrypt")
 		folder = flag.Bool("folder", false, `put the files under a relative folder "Proto\" in the descriptor`)
 		hash   = flag.Bool("hash", false, "also compute the SHA-256 of files larger than 64 MiB")
@@ -128,6 +130,8 @@ func main() {
 			"with -hdrop: at launch and every ten minutes, delete manifested staging folders older than this")
 	)
 	flag.Var(&size, "size", "size of the first file, e.g. 5GiB, 256MiB, 1048576")
+	flag.Var(&source, "file",
+		"offer this existing file instead of a synthetic one; may be given several times, and combines with -hdrop, -agile, -delay and -folder")
 	flag.Parse()
 
 	// Before anything is created: every object asks agileMode what it is, and
@@ -145,12 +149,24 @@ func main() {
 
 	app.write = time.Now()
 	app.streamAtEnd = streamAtEnd
-	app.files = buildFileSet(fileSetConfig{
-		count:  *count,
-		size:   int64(size),
-		delay:  time.Duration(*delay) * time.Millisecond,
-		folder: *folder,
-	})
+	if len(source) > 0 {
+		// Every refusal happens here, before OleInitialize and before a window
+		// exists: a drag that discovers its source is a directory has already
+		// named a file to a target.
+		files, err := sourceFiles(source, *folder, time.Duration(*delay)*time.Millisecond)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "dragproto: %v\n", err)
+			os.Exit(2)
+		}
+		app.files = files
+	} else {
+		app.files = buildFileSet(fileSetConfig{
+			count:  *count,
+			size:   int64(size),
+			delay:  time.Duration(*delay) * time.Millisecond,
+			folder: *folder,
+		})
+	}
 
 	app.hdrop = *hdrop
 	if app.hdrop {
@@ -175,7 +191,15 @@ func main() {
 		fmt.Printf("dragproto: %d virtual file(s)\n", len(app.files))
 	}
 	for i, f := range app.files {
-		fmt.Printf("  [%d] %-40s %14d bytes\n", i, f.name, f.size)
+		if f.source != "" {
+			fmt.Printf("  [%d] %-40s %14d bytes  <- %s\n", i, f.name, f.size, f.source)
+		} else {
+			fmt.Printf("  [%d] %-40s %14d bytes\n", i, f.name, f.size)
+		}
+	}
+	if len(source) > 0 {
+		fmt.Printf("  -file: real files, read only -- the sources are never written to, renamed or deleted\n")
+		fmt.Printf("         (-n and -size name the synthetic set and are not used here)\n")
 	}
 	if app.hdrop {
 		fmt.Printf("  staging under %s\\<random 8 hex>\n", app.stageParent)
@@ -271,12 +295,19 @@ func main() {
 	}
 	logf("%d drag(s) started; %d COM interface cells still registered", app.drags, comRegistrySize())
 	logf("%s", comCallSummary())
-	// A staging folder still here at exit is not a leak: a folder whose paths
-	// were handed out is meant to outlive the process, and the next launch's
-	// sweep is what removes it. Saying which ones, and why, is the difference
-	// between that and forgetting.
-	for _, s := range remainingStages() {
-		logf("staging folder left behind: %s", s.summary())
+	// A staging folder still here at exit is not necessarily a leak: a folder
+	// whose paths were handed out is meant to outlive the process, and the next
+	// launch's sweep is what removes it. A folder left because its delete failed
+	// is a different thing entirely, and on disk the two are indistinguishable.
+	// So every folder of this run that is still there is named, with what became
+	// of it -- the file system asked, not the stage's own belief, and every stage
+	// this run made asked, not only the last one.
+	if made := knownStages(); len(made) > 0 {
+		left := stagesLeftOnDisk()
+		logf("%d staging folder(s) made this run, %d still on disk", len(made), len(left))
+		for _, s := range left {
+			logf("staging folder left behind -- %s: %s", s.disposition(), s.summary())
+		}
 	}
 	// An object still alive here is one the target never let go of. Its own
 	// summary line is printed when it dies, and it is not going to die, so it is
@@ -310,11 +341,24 @@ func printHashes(files []synthFile, wantBig bool) {
 	}
 }
 
-// fileSHA256 hashes a synthetic file without going through a stream or a
-// producer: the generator is the definition of the file's contents, and hashing
-// it directly means -delay does not slow the hash down.
+// fileSHA256 hashes a file without going through a stream or a producer: for a
+// synthetic file the generator is the definition of its contents, and hashing it
+// directly means -delay does not slow the hash down; for a -file source it is
+// the source itself, read once, so that Get-FileHash on what lands at the
+// destination can be compared against the original.
 func fileSHA256(f *synthFile) string {
 	h := sha256.New()
+	if f.source != "" {
+		src, err := openSourceForReading(f.source)
+		if err != nil {
+			return fmt.Sprintf("(unreadable: %v)", err)
+		}
+		defer src.Close()
+		if _, err := io.Copy(h, src); err != nil {
+			return fmt.Sprintf("(unreadable: %v)", err)
+		}
+		return hex.EncodeToString(h.Sum(nil))
+	}
 	buf := make([]byte, 1<<20)
 	for off := int64(0); off < f.size; {
 		n := int64(len(buf))
@@ -450,9 +494,7 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			logf("WM_DESTROY with a transfer still in flight; the target is about to lose these:")
 			logTransferInventory()
 			revokeLiveStreams()
-			if s := currentStage.Load(); s != nil {
-				s.noteForcedClose()
-			}
+			forceCloseAllStages()
 		}
 		procPostQuitMessage.Call(0)
 		return 0
@@ -501,6 +543,9 @@ func windowText() string {
 	}
 	for i, f := range app.files {
 		fmt.Fprintf(&b, "    [%d]  %s   -   %s\r\n", i, f.name, humanSize(f.size))
+		if f.source != "" {
+			fmt.Fprintf(&b, "         from %s (read only)\r\n", f.source)
+		}
 	}
 	if app.hdrop {
 		fmt.Fprintf(&b, "\r\nStaging under %s\r\n", app.stageParent)
@@ -597,16 +642,18 @@ func revokeLiveStreams() {
 	}
 }
 
-// stagedFilesInUse is the -hdrop half of the close guard: a staging folder whose
-// files somebody else has open right now. The COM half cannot see this at all --
-// a CF_HDROP target holds no object of ours, it holds paths -- so the two are
-// asked separately and either one defers a close.
+// stagedFilesInUse is the -hdrop half of the close guard: a staged file somebody
+// else has open right now, in ANY staging folder this run still has registered.
+// The COM half cannot see this at all -- a CF_HDROP target holds no object of
+// ours, it holds paths -- so the two are asked separately and either one defers
+// a close. Asking only the last drag's folder is how an earlier drag that is
+// still being read gets closed out from under its consumer.
 func stagedFilesInUse() []string {
-	s := currentStage.Load()
-	if s == nil {
-		return nil
+	var busy []string
+	for _, s := range remainingStages() {
+		busy = append(busy, s.inUseNow()...)
 	}
-	return s.inUseNow()
+	return busy
 }
 
 // mayClose decides what a WM_CLOSE does. It runs on the window thread only.
@@ -615,22 +662,18 @@ func mayClose() bool {
 	busy := stagedFilesInUse()
 	switch {
 	case len(live) == 0 && len(busy) == 0:
-		// Nothing is being served and nothing is being read. The staging folder,
-		// if there is one, decides its own fate: a folder whose paths were handed
-		// out is deliberately left behind for the scavenge, because a consumer
-		// may open them long after this process has gone.
-		if s := currentStage.Load(); s != nil {
-			s.closeQuietly()
-		}
+		// Nothing is being served and nothing is being read. Each staging folder
+		// decides its own fate: a folder whose paths were handed out is
+		// deliberately left behind for the scavenge, because a consumer may open
+		// them long after this process has gone.
+		quietCloseAllStages()
 		return true
 
 	case endOpAfterClose.Load() && len(busy) == 0:
 		// This WM_CLOSE is the one EndOperation posted. The operation is over;
 		// that the target has not finished letting go is its own business.
 		logf("the drop operation ended after the deferred close; closing now")
-		if s := currentStage.Load(); s != nil {
-			s.closeQuietly()
-		}
+		quietCloseAllStages()
 		return true
 
 	case !closeDeferred.Load():
@@ -650,12 +693,10 @@ func mayClose() bool {
 			logf("    staged file still open by another process: %s", p)
 		}
 		revokeLiveStreams()
-		if s := currentStage.Load(); s != nil {
-			// The forced path is the only one that calls
-			// MOVEFILE_DELAY_UNTIL_REBOOT, and it calls it to record what an
-			// unelevated process gets rather than to rely on it.
-			s.noteForcedClose()
-		}
+		// Every staging folder still registered, not just the last drag's, and
+		// the only path that calls MOVEFILE_DELAY_UNTIL_REBOOT -- to record what
+		// an unelevated process gets, rather than to rely on it.
+		forceCloseAllStages()
 		return true
 	}
 }
@@ -699,7 +740,6 @@ func startDrag() {
 			return
 		}
 		stage = s
-		currentStage.Store(s)
 		logf("staging folder for drag %d: %s", app.drags, s.root)
 		for i, p := range s.paths {
 			logf("    [%d] %s (%d bytes) -- the path the file WILL have", i, p, app.files[i].size)
@@ -748,25 +788,39 @@ func startDrag() {
 	start := time.Now()
 	ret, _, _ := procDoDragDrop.Call(dataObj.unknown(), srcObj.unknown(),
 		allowed, uintptr(unsafe.Pointer(&effect)))
-	logf("DoDragDrop returned %s after %s, effect = %s",
-		hrName(ret), time.Since(start).Round(time.Millisecond), effectName(effect))
-	if stage != nil {
-		// "If the return value is DRAGDROP_S_DROP, DoDragDrop calls
-		// IDropTarget::Drop ... The DoDragDrop function returns the last effect
-		// code to the source"; DRAGDROP_S_CANCEL is the cancel. An effect of
-		// DROPEFFECT_NONE after a drop means the target took nothing, which for
-		// the staging folder is the same situation as a cancel.
-		stage.noteDragEnded(fmt.Sprintf("DoDragDrop -> %s, effect %s", hrName(ret), effectName(effect)))
-	}
+	took := time.Since(start)
 
 	// Step 3: "After DoDragDrop returns, call InOperation."
 	//
 	// Through syscallPinned, like every other indirect call here: pfInAsyncOp is
 	// an out-parameter, and syscall.SyscallN would leave it wherever escape
 	// analysis put it -- which is the stack, which can move under a callback.
+	//
+	// It is asked BEFORE the return is logged because the answer is what that
+	// line means: for an asynchronous drop the effect out-parameter is
+	// DROPEFFECT_NONE whatever the target goes on to do with the data, and a
+	// round where a 5 GiB file was moved to the desktop logged NONE for it.
 	var inOp uint32
 	hr, _, _ = syscallPinned(asyncVtbl.InOperation, asyncPtr, uintptr(unsafe.Pointer(&inOp)))
+
+	logf("DoDragDrop returned %s after %s, effect = %s%s",
+		hrName(ret), took.Round(time.Millisecond), effectName(effect), asyncEffectNote(inOp != 0))
 	logf("source called InOperation -> %s, pfInAsyncOp = 0x%08X", hrName(hr), inOp)
+	if stage != nil {
+		// "If the return value is DRAGDROP_S_DROP, DoDragDrop calls
+		// IDropTarget::Drop ... The DoDragDrop function returns the last effect
+		// code to the source"; DRAGDROP_S_CANCEL is the cancel.
+		//
+		// The effect is NOT read as a refusal when the operation is
+		// asynchronous, and that is measured rather than assumed: a drop that
+		// moved a 5 GiB file to the desktop returned DRAGDROP_S_DROP with
+		// DROPEFFECT_NONE. Nothing here decides anything from it -- what the
+		// target did is learnt from the staged files themselves -- and the note
+		// on the line is so that a reader of the log does not decide otherwise.
+		stage.noteDragEnded(fmt.Sprintf("DoDragDrop -> %s, effect %s%s",
+			hrName(ret), effectName(effect), asyncEffectNote(inOp != 0)))
+	}
+
 	if inOp != 0 {
 		logf("the target is extracting on a thread of its own; the data object stays alive until EndOperation")
 	} else {
@@ -796,6 +850,20 @@ func startDrag() {
 }
 
 // ---------------------------------------------------------------------------
+
+// pathList is -file, which may be given several times. flag.Value's Set is
+// called once per occurrence, so appending is the whole of it.
+type pathList []string
+
+func (p *pathList) String() string { return strings.Join(*p, ", ") }
+
+func (p *pathList) Set(v string) error {
+	if v == "" {
+		return fmt.Errorf("-file needs a path")
+	}
+	*p = append(*p, v)
+	return nil
+}
 
 // sizeFlag accepts a plain byte count or a binary suffix, so that -size 256MiB
 // reads the way the file names do.

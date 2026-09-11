@@ -1,8 +1,8 @@
 # dragproto — the drag-out prototype
 
-A stand-alone Windows program that drags synthetic files — by default one of 5 GiB — out of
-its own window and onto the desktop or an Explorer folder, with a pure-Go, cgo-free OLE drag
-source behind it. It has **two modes**, because the design tried one route and then ruled for
+A stand-alone Windows program that drags files — synthetic ones, by default one of 5 GiB, or
+real ones with `-file` — out of its own window and onto the desktop or an Explorer folder, with
+a pure-Go, cgo-free OLE drag source behind it. It has **two modes**, because the design tried one route and then ruled for
 the other:
 
 - **virtual files** (the default): `IDataObject` offering `FileGroupDescriptorW` plus one
@@ -58,6 +58,7 @@ go build .\tools\dragproto
 | --- | --- | --- |
 | `-n` | `2` | How many virtual files the drag offers. `-n 1` is the big file alone; beyond 2 you get 1 MiB fillers, to see a descriptor with several entries. |
 | `-size` | `5GiB` | Size of the first file. Accepts `5GiB`, `256MiB`, `64m`, or a plain byte count. The file is named after it (`enfold-proto-5GiB.bin`). |
+| `-file` | — | Offer **this existing file** instead of a synthetic one. May be given several times, once per file, and combines with `-hdrop`, `-agile`, `-delay` and `-folder`. The source is **read and nothing else** — never written to, renamed or deleted, and opened without `FILE_SHARE_DELETE` so nothing else can take it away mid-read. The descriptor and `CF_HDROP` use the source's own base name, real size and real modification time; under `-hdrop` the "extraction" is a copy of it into the staging folder, through the same 256 KiB buffer with the same `-delay` and progress lines. A path that is missing, a directory, or unreadable is refused **before any window opens**. `-n` and `-size` name the synthetic set and are not used when `-file` is given. |
 | `-delay` | `0` | Milliseconds the producer takes per MiB, to stand in for a slow decrypt. `-delay 50` makes 5 GiB take about four and a half minutes. |
 | `-folder` | off | Put the files under a relative folder `Proto\` in the descriptor name. |
 | `-hash` | off | Also compute the SHA-256 of files larger than 64 MiB. Off by default because 5 GiB takes a while; when on it runs on a goroutine and prints when it finishes. |
@@ -75,7 +76,7 @@ go build .\tools\dragproto
 | `-copy-only` | off | Allow `DROPEFFECT_COPY` only and prefer copy. The default allows **copy and move** and prefers **move**, which is 7-Zip's practice: the staged file is a disposable copy, so a same-volume drop is one rename with nothing left to clean up. |
 | `-scavenge` | `1h` | At launch and every ten minutes, delete **manifested** staging folders older than this whose state is not `live`. This is the cleanup policy, not a backstop — see "How `-hdrop` cleans up". |
 
-`-n`, `-size`, `-delay`, `-folder` and `-agile` all apply to `-hdrop` too. `-delay` there is a
+`-n`, `-size`, `-file`, `-delay`, `-folder` and `-agile` all apply to `-hdrop` too. `-delay` there is a
 sleep per MiB *inside the extraction*, which is inside `GetData`, which is the target waiting.
 `-streamat` and `-hash` are virtual-file only (`-hash` still prints the digests, and they are
 still what the dropped file must hash to). Under `-folder`, `CF_HDROP` names the **folder**,
@@ -148,6 +149,14 @@ Experiments 1–10 are the default mode's; the staged route's are 11–17, below
      *different* streams (different `IStream#n` in the log) never wait for each other.
    - With `-agile` those two callers can be on two different threads, which is the first time
      that mutex has had anything real to do. The behaviour is the same: they take turns.
+
+   > **For the large-file runs, prefer `-file` with a real video.** A 5 GB synthetic `.bin` is
+   > exactly the shape an on-access scanner holds for a full scan, and a run measured through a
+   > scanner's stall is a measurement of the scanner rather than of Explorer — the `Replace`
+   > stall in "Findings so far" is that suspicion written down. `./dragproto.exe -hdrop -file
+   > "D:\media\holiday.mp4"` offers the real file under its own name, size and modification
+   > time; the source is read and nothing else. Keep a synthetic run beside it when the point
+   > is the *generator* (experiment 6's digests), and use `-file` when the point is Explorer.
 
 5. **Memory.** Run the default 5 GiB drag, drop it somewhere with room, and watch
    `dragproto.exe` in Task Manager while Explorer copies. What matters is that it stays
@@ -263,7 +272,13 @@ Experiments 1–10 are the default mode's; the staged route's are 11–17, below
 go build ./tools/dragproto
 ./dragproto.exe -hdrop -n 1 -size 1MiB 2> hdrop-1MiB.log      # start here
 ./dragproto.exe -hdrop -n 1 -size 5GiB -agile 2> hdrop-5GiB.log
+./dragproto.exe -hdrop -file "D:\media\holiday.mp4" -agile 2> hdrop-video.log   # a real large file
 ```
+
+For anything large, prefer the third line. A multi-gigabyte synthetic `.bin` is what an
+on-access scanner stops to read in full, and a measurement taken through that is a measurement
+of the scanner; a real video is an ordinary file to everything watching. `-file` reads the
+source and does nothing else to it.
 
 What happens, in order, and what each step is there to measure:
 
@@ -277,15 +292,23 @@ What happens, in order, and what each step is there to measure:
    Notes refuses a path that is not there, so the first name handed out has to be the real one.
 3. **The button comes up.** `QueryContinueDrag` sees it, arms the extraction, and every format
    request from then on is logged with its timing relative to that moment.
-4. **The first `GetData(CF_HDROP)` after the release** writes the files, inside the call. The
+4. **The first `GetData(CF_HDROP)` after the release** writes the files, inside the call — for
+   a `-file` entry that write is a copy of the source, through the same buffer, and the copy
+   takes the source's modification time so the dropped file looks like the original. The
    log says how long the target waited and on which thread it ran — with `-agile` that should
    be a thread of Explorer's, which is the whole reason the real thing is agile. A failed or
    cancelled extraction **fails `GetData`** with `E_UNEXPECTED` rather than handing out names.
 5. **Every later request** returns the same paths and rewrites nothing.
 6. **Afterwards** each staged file is polled every 250 ms with an exclusive open
-   (`CreateFileW`, `dwShareMode` 0). `staged file in use by another process` is somebody
-   reading it, `staged file free` is that ending, and `staged file GONE (moved away by the
-   target)` is a same-volume move — which is the outcome the move-preferred default is *for*.
+   (`CreateFileW`, `dwShareMode` 0). The watch says what it found the first time it looked
+   (`the watch's first look at …: file.bin: present, free`), and then only transitions:
+   `staged file in use by another process` is somebody reading it, `staged file free` is that
+   ending, and `staged file GONE (moved away by the target)` is a same-volume move — which is
+   the outcome the move-preferred default is *for*. **The first look is a transition too**: a
+   rename can finish inside those first 250 ms, and a file the extraction wrote that is already
+   missing when the watch first looks is logged as `GONE … before the first poll tick`. When
+   every staged file has gone that way the drag is over in the cleanest way it can be, and the
+   manifest goes to `done` and the empty folder with it.
 
 Note what is deliberately **not** offered: `CFSTR_INDRAGLOOP`. The Shell Data Object page tells
 targets that they "should not use the `IDataObject::GetData` method to render Shell data before
@@ -310,6 +333,17 @@ is not locked right now says nothing about whether a consumer will reopen it. So
   is older than `-scavenge` (default an hour, WinRAR's threshold). A folder something still
   has open is retried with a bounded backoff — 1 s, 10 s, 60 s — and then left for the next
   sweep. A folder without our manifest is never touched, and a reparse point is never followed.
+- **When every staged file has been moved away**, which is what a same-volume drop does, the
+  drag ended in the cleanest way it can: the manifest goes to `done` and the empty folder goes
+  with it, there and then. This counts the move that finished *before the watch's first tick*
+  too — a rename is fast enough to beat 250 ms, and a round where it did is what put this
+  sentence here.
+- **A forced close visits every staging folder this run still has registered**, not the drag
+  that happened to be last, and logs each attempt with its result: the exact error Windows gave
+  for a delete that failed, which file was still open, and what `MOVEFILE_DELAY_UNTIL_REBOOT`
+  said. A folder left behind keeps (or gets back) its manifest, because a folder without one is
+  a folder the sweep is forbidden to touch. The exit summary then names every folder of the run
+  still on disk and why it is there.
 - **`MOVEFILE_DELAY_UNTIL_REBOOT` is recorded, not relied on.** Only a forced close calls it,
   and only so that the log says what an unelevated process gets: the flag "can be used only if
   the process is in the context of a user who belongs to the administrators group or the
@@ -325,7 +359,11 @@ breaks late consumers.
 Experiments 11–17. Same discipline as above: keep the log, and report what the dialogs said.
 
 11. **Onto the desktop.** `./dragproto.exe -hdrop -n 1 -size 1MiB 2> hdrop-desktop.log`, then
-    the 5 GiB one. The question the whole route was chosen for: **which copy dialog appears?**
+    the 5 GiB one — and for that one prefer a **real file**:
+    `./dragproto.exe -hdrop -file "D:\media\holiday.mp4" 2> hdrop-video.log`, because a 5 GB
+    synthetic `.bin` looks suspicious to a scanner and gets held for a full scan, which is a
+    stall in the measurement that has nothing to do with the protocol.
+    The question the whole route was chosen for: **which copy dialog appears?**
     The modern one with a speed graph, a pause button and a *More details* pane — the thing the
     virtual-file route could never get — or the plain one? Does it show a rate and a time
     estimate? Does *Pause* work, and does *Cancel*?
@@ -460,18 +498,63 @@ about tearing down, and it is why the close behaviour exists:
   is over, and skipping `OleUninitialize` rather than pulling the references out from under
   the target on the way past.
 
-**The staged route (`-hdrop`): not yet measured.** The mode is written, its encoding, its state
-machine, its cleanup table and its scavenge rule are under test, and nothing has been dropped
-with it yet. Everything experiments 11–17 ask is open, and five of them are open in a way that
-changes the design:
+**The staged route (`-hdrop`), first real drops: 1 MiB and 5 GiB onto the desktop, two drags in
+one process.** Measurements, in the order the questions were asked:
 
-- whether Explorer asks for `CF_HDROP` **during the hover** at all, and how many times;
-- **which copy dialog** a `CF_HDROP` source gets — the whole reason the route was chosen;
-- whether Explorer negotiates the **asynchronous protocol** for a `CF_HDROP` source, and so
-  whether `EndOperation` ever arrives to say the transfer is over;
-- what Explorer does while the extraction holds `GetData` for a minute and a half;
-- whether a target that needs the files at hover time (Sticky Notes, an upload box) fails
-  without `-stage-early`.
+- **Explorer asks for `CF_HDROP` during the hover, twice**, and takes the **future paths**
+  without complaint — the files do not exist yet and it does not care. The rule that the first
+  name handed out has to be the final one is therefore not theoretical.
+- **It negotiates the asynchronous protocol for a `CF_HDROP` source**: `SetAsyncMode`,
+  `StartOperation`, and `InOperation` → true after `DoDragDrop` returned. That answers one open
+  question — and the next measurement takes the answer away again.
+- **`EndOperation` did not arrive within 80 s, not even for a move that had already completed.**
+  So for this route `EndOperation` is **not** a cleanup signal, whatever the handshake says: the
+  file was gone from the staging folder seconds after the drop and the source was never told.
+  The **scavenge** is the mechanism; watching the files is the only thing that reports progress.
+- **`DoDragDrop` returned `DRAGDROP_S_DROP` with `effect = DROPEFFECT_NONE` for a move that
+  completed.** For an asynchronous drop the effect out-parameter is not where the answer is, so
+  the log now says `(asynchronous: the effect is not reported here)` when `InOperation` is true.
+  Read on its own, that `NONE` looks exactly like a refusal.
+- **With `-agile` the extraction really did run on Explorer's thread**: 390 of 726 calls arrived
+  off the drag thread, `GetData` and the 5 GiB write inside it among them. That is the opposite
+  of the apartment-bound finding above, where every call in the whole log was on the STA, and it
+  is the reason the real thing is agile.
+- **A same-volume drop is an instant move.** The desktop file's modification time equals the
+  staged file's: nothing re-read the bytes, the file was renamed out of
+  `%LOCALAPPDATA%\Enfold-dragproto\drag\…` into the desktop folder. That is what the
+  move-preferred default is for, and it is why "the staged copy is disposable" is not just a
+  nice property on paper.
+- **A `Replace` over an existing 5 GiB file stalled before Explorer ever opened the source.**
+  The machine's on-access scanner (Kaspersky, `avp.exe`) was reading large files at tens of MB/s
+  throughout. Attributed to the scanner rather than to the protocol — **to be confirmed with the
+  scanner paused**, which is the next run's job.
+
+**Two defects the same round exposed, both now fixed and under test.** They are recorded because
+each was invisible in the log rather than loud:
+
+- **A forced close cleaned only the last drag's folder.** Drag 1 stalled in the target and its
+  folder kept a 5 GiB staged file in state `handed-out`; drag 2 completed as a move. The forced
+  close logged one deletion — drag 2's, already empty — and never so much as attempted drag 1's,
+  because the close path held a pointer to the *current* stage. Five gigabytes of plaintext were
+  left behind with nothing in the log to say so. Every unresolved stage is now kept in a
+  registry, the close walks all of them, each attempt and its result is logged (the exact
+  Windows error, which file was open, what delete-at-reboot returned), a folder left behind gets
+  its manifest back so the sweep can still recognise it, and the exit summary names every folder
+  of the run still on disk.
+- **A move that beat the watch's first tick was never logged.** Drag 2's staged file was renamed
+  away inside the 250 ms between `watching 1 staged file(s)` and the first poll. The poll had no
+  case for "already missing the first time it was looked at", so it said nothing, the file never
+  counted as gone, and the stage sat in `handed-out` over an empty folder waiting for a scavenge
+  an hour away. The first observation is now a transition like any other: the watch reports what
+  it found (`present, free` / `present, in use` / `missing`), a file the extraction wrote and
+  that is missing at the first tick is logged as `GONE … before the first poll tick`, and a
+  stage whose files have all gone that way ends then and there.
+
+**Still open after this round:** which copy dialog a `CF_HDROP` source gets on a *slow*
+extraction (the 5 GiB write finished in about 7 s, too fast to watch), what Explorer does while
+the extraction holds `GetData` for a minute and a half (`-delay`), whether a target that needs
+the files at hover time (Sticky Notes, an upload box) fails without `-stage-early`, and whether
+the `Replace` stall survives pausing the scanner.
 
 ## What to paste back
 

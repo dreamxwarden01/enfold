@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf16"
+
+	"golang.org/x/sys/windows"
 )
 
 // The staged route's tests. None of them opens a window, starts a drag or
@@ -413,6 +416,72 @@ func TestStageFolderDragNamesTheFolder(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("%s: %v", p, err)
 		}
+	}
+}
+
+// TestStageCopiesASourceFileAndLeavesItAlone is -file through the staged route:
+// the "extraction" is a copy of a real file into the staging folder. Two things
+// are asserted, and the second matters more than the first -- the copy is
+// byte-identical, and the source is exactly as it was. A prototype that moved,
+// truncated or re-dated somebody's video would be a prototype that ate the thing
+// it was pointed at.
+func TestStageCopiesASourceFileAndLeavesItAlone(t *testing.T) {
+	// Bigger than one producer chunk, so the copy goes round its loop more than
+	// once and a short final chunk is exercised.
+	path, want := writeSource(t, "holiday.mp4", producerChunk+4097)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := sourceFiles([]string{path}, false, 0)
+	if err != nil {
+		t.Fatalf("sourceFiles: %v", err)
+	}
+	s := newTestStage(t, stageConfig{}, files)
+	s.arm()
+	paths, _, hr := s.requestPaths()
+	if hr != sOK {
+		t.Fatalf("the extraction returned %s", hrName(hr))
+	}
+	if len(paths) != 1 || filepath.Base(paths[0]) != "holiday.mp4" {
+		t.Fatalf("the staged paths are %q, want one named after the source", paths)
+	}
+
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("the staged copy: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("the staged copy is %d bytes and does not match the source (%d bytes)", len(got), len(want))
+	}
+	// The copy carries the source's modification time, so what the target ends
+	// up with is the file it was offered rather than one made during the drag.
+	staged, err := os.Stat(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !staged.ModTime().Equal(before.ModTime()) {
+		t.Errorf("the staged copy is dated %s, want the source's %s", staged.ModTime(), before.ModTime())
+	}
+
+	// The source: same size, same modification time, same bytes, still there.
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("the source is gone after the extraction: %v", err)
+	}
+	if after.Size() != before.Size() {
+		t.Errorf("the source is now %d bytes, was %d", after.Size(), before.Size())
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("the source is now dated %s, was %s", after.ModTime(), before.ModTime())
+	}
+	stillThere, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stillThere, want) {
+		t.Error("the source's own bytes changed")
 	}
 }
 
@@ -841,5 +910,446 @@ func TestHDropDataObjectFormats(t *testing.T) {
 	globalFree(medium.data)
 	if v := binary.LittleEndian.Uint32(four); v != dropEffectMove {
 		t.Fatalf("CFSTR_PREFERREDDROPEFFECT = %s, want DROPEFFECT_MOVE", effectName(v))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Watching the staged files: the transitions, the first tick included.
+
+// TestWatchedFileTransitions is the per-file decision table, and the first four
+// cases are the defect it was written for. A same-volume drop is a rename, and
+// Explorer can finish it inside the 250 ms before the watch's first tick: the
+// file is then already missing the first time it is looked at. The earlier shape
+// had no case for that at all, so it logged nothing, the file never counted as
+// gone, and the stage sat in "handed-out" over an empty folder.
+func TestWatchedFileTransitions(t *testing.T) {
+	now := time.Now()
+	was := now.Add(-2 * time.Second)
+	cases := []struct {
+		name   string
+		start  stagedFile
+		probe  fileProbe
+		staged bool
+		// the four facts the cleanup policy reads back out
+		seen, gone, inUse, everUsed bool
+		line                        string // a substring the transition must log; "" means silence
+	}{
+		{
+			name:  "missing at the first tick, and the extraction had written it: a move that beat the watch",
+			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{}, staged: true,
+			seen: true, gone: true,
+			line: "GONE (moved away by the target) before the first poll tick",
+		},
+		{
+			name:  "missing at the first tick with nothing ever written: not a removal",
+			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{}, staged: false,
+			line: "",
+		},
+		{
+			name:  "present at the first tick: the first-look line says it, not a transition",
+			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{exists: true}, staged: true,
+			seen: true,
+			line: "",
+		},
+		{
+			name:  "present and already being read at the first tick",
+			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{exists: true, inUse: true}, staged: true,
+			seen: true, inUse: true, everUsed: true,
+			line: "",
+		},
+		{
+			name:  "a file that was there and is not any more was moved",
+			start: stagedFile{path: `C:\stage\a.bin`, seen: true, exists: true, since: was}, probe: fileProbe{}, staged: true,
+			seen: true, gone: true,
+			line: "GONE (moved away by the target)",
+		},
+		{
+			name:  "a target opened it",
+			start: stagedFile{path: `C:\stage\a.bin`, seen: true, exists: true, since: was},
+			probe: fileProbe{exists: true, inUse: true}, staged: true,
+			seen: true, inUse: true, everUsed: true,
+			line: "in use by another process",
+		},
+		{
+			name:  "and let go of it again",
+			start: stagedFile{path: `C:\stage\a.bin`, seen: true, exists: true, inUse: true, everUsed: true, since: was},
+			probe: fileProbe{exists: true}, staged: true,
+			seen: true, everUsed: true,
+			line: "staged file free",
+		},
+		{
+			name:  "gone and still gone is not said twice",
+			start: stagedFile{path: `C:\stage\a.bin`, seen: true, gone: true, since: was}, probe: fileProbe{}, staged: true,
+			seen: true, gone: true,
+			line: "",
+		},
+		{
+			name:  "a file that comes back is said out loud",
+			start: stagedFile{path: `C:\stage\a.bin`, seen: true, gone: true, since: was},
+			probe: fileProbe{exists: true}, staged: true,
+			seen: true,
+			line: "staged file is back",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := tc.start
+			lines := w.observe(tc.probe, tc.staged, now)
+			if w.seen != tc.seen || w.gone != tc.gone || w.inUse != tc.inUse || w.everUsed != tc.everUsed {
+				t.Fatalf("seen=%v gone=%v inUse=%v everUsed=%v; want %v/%v/%v/%v",
+					w.seen, w.gone, w.inUse, w.everUsed, tc.seen, tc.gone, tc.inUse, tc.everUsed)
+			}
+			got := strings.Join(lines, "\n")
+			if tc.line == "" {
+				if got != "" {
+					t.Fatalf("the transition logged %q; this one has nothing to say", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.line) {
+				t.Fatalf("the transition logged %q, want it to contain %q", got, tc.line)
+			}
+		})
+	}
+}
+
+// TestFirstLookLineNamesEveryFile: the one line per stage that says what the
+// watch started from. A log that goes straight from "watching 1 staged file(s)"
+// to a cleanup decision never says whether the file was there at all.
+func TestFirstLookLineNamesEveryFile(t *testing.T) {
+	line := firstLookLine(`C:\stage\abcd1234`, []string{"a.bin: present, free", "b.bin: missing"})
+	for _, want := range []string{`C:\stage\abcd1234`, "first look", "a.bin: present, free", "b.bin: missing"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("the first-look line %q does not mention %q", line, want)
+		}
+	}
+	if got := lookWord(fileProbe{exists: true, inUse: true}); !strings.Contains(got, "in use") {
+		t.Errorf("a file being read at the first look is described as %q", got)
+	}
+	if got := lookWord(fileProbe{}); got != "missing" {
+		t.Errorf("a file that is not there at the first look is described as %q", got)
+	}
+	// Many files must not turn one line into a hundred.
+	long := make([]string, 20)
+	for i := range long {
+		long[i] = "f.bin: missing"
+	}
+	if !strings.Contains(firstLookLine("root", long), "and 12 more") {
+		t.Error("the first-look line does not bound itself for a drag of twenty files")
+	}
+}
+
+// TestMoveBeforeTheFirstTickEndsTheDrag is the same defect end to end: the
+// target renames the staged file away before the watch's first tick, and the
+// stage has to recognise the completed move -- the cleanest end a drag has --
+// rather than sit in "handed-out" over an empty folder until the scavenge.
+func TestMoveBeforeTheFirstTickEndsTheDrag(t *testing.T) {
+	isolateStages(t)
+	log := captureLog(t)
+
+	s := newTestStage(t, stageConfig{}, []synthFile{{name: "moved.bin", size: 4096, seed: 71}})
+	s.arm()
+	if _, _, hr := s.requestPaths(); hr != sOK {
+		t.Fatalf("the extraction returned %s", hrName(hr))
+	}
+	// The drop: a same-volume move, which from here is a rename away. It happens
+	// before the watch has looked even once.
+	if err := os.Rename(s.paths[0], filepath.Join(t.TempDir(), "moved.bin")); err != nil {
+		t.Fatalf("simulating the target's move: %v", err)
+	}
+	s.mu.Lock()
+	s.dragOver = true
+	s.mu.Unlock()
+	if !s.armWatch() {
+		t.Fatal("the watch did not arm")
+	}
+	if !s.poll(time.Now()) {
+		t.Fatal("the first poll did not finish the stage; a completed move is the end of a drag")
+	}
+
+	out := log()
+	for _, want := range []string{
+		"the watch's first look",
+		"moved.bin: missing",
+		"GONE (moved away by the target) before the first poll tick",
+		"every staged file was moved away by the target",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the log never said %q:\n%s", want, out)
+		}
+	}
+	s.mu.Lock()
+	state, removed, gone := s.state, s.removed, s.watch[0].gone
+	s.mu.Unlock()
+	if !gone {
+		t.Error("the staged file is not marked gone after a move that beat the first tick")
+	}
+	if state != stateDone {
+		t.Errorf("the manifest state is %q, want %q", state, stateDone)
+	}
+	if !removed {
+		t.Error("the empty staging folder was not deleted")
+	}
+	if _, err := os.Stat(s.root); !os.IsNotExist(err) {
+		t.Errorf("the staging folder survived a completed move: %v", err)
+	}
+}
+
+// TestFirstTickWithNothingWrittenIsNotAMove: the other half of the same
+// decision. A drag that ended before the extraction ever ran has no files, and
+// their absence at the first tick must not be read as a target taking them.
+func TestFirstTickWithNothingWrittenIsNotAMove(t *testing.T) {
+	isolateStages(t)
+	log := captureLog(t)
+
+	s := newTestStage(t, stageConfig{}, []synthFile{{name: "never.bin", size: 4096, seed: 72}})
+	s.mu.Lock()
+	s.dragOver = true
+	s.mu.Unlock()
+	if !s.armWatch() {
+		t.Fatal("the watch did not arm")
+	}
+	s.poll(time.Now())
+
+	out := log()
+	if !strings.Contains(out, "never.bin: missing") {
+		t.Errorf("the first look did not report the missing file:\n%s", out)
+	}
+	if strings.Contains(out, "GONE") {
+		t.Errorf("a file that was never written was reported as moved away:\n%s", out)
+	}
+	if !strings.Contains(out, "the drag ended and nothing was ever written") {
+		t.Errorf("the cleanup did not take the empty folder for the right reason:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The forced close, over every stage this run made.
+
+// isolateStages gives one test the two stage registries to itself. The forced
+// close and the exit summary walk every stage this process made, so a test that
+// asserts on "every" must not inherit the stages of the tests before it.
+func isolateStages(t *testing.T) {
+	t.Helper()
+	allStages.mu.Lock()
+	prevAll := allStages.list
+	allStages.list = nil
+	allStages.mu.Unlock()
+	liveStages.mu.Lock()
+	prevLive := liveStages.m
+	liveStages.m = make(map[string]*dragStage)
+	liveStages.mu.Unlock()
+	t.Cleanup(func() {
+		allStages.mu.Lock()
+		allStages.list = prevAll
+		allStages.mu.Unlock()
+		liveStages.mu.Lock()
+		liveStages.m = prevLive
+		liveStages.mu.Unlock()
+	})
+}
+
+// holdOpen keeps a file open the way a consumer reading a dropped file does:
+// CreateFileW with dwShareMode 0, which is what makes the delete below fail with
+// a sharing violation rather than succeed quietly.
+func holdOpen(t *testing.T, path string) {
+	t.Helper()
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ, 0, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatalf("holding %s open: %v", path, err)
+	}
+	t.Cleanup(func() { windows.CloseHandle(h) })
+}
+
+// TestForcedCloseVisitsEveryStage is the first defect of the two-drag round. The
+// first drag stalled in the target and its folder kept five gigabytes of
+// plaintext; the second completed as a move and left an empty folder. The forced
+// close logged exactly one deletion -- the second drag's -- and never looked at
+// the first, because all it had was a pointer to the stage that happened to be
+// last. Both have to be visited, and the one that cannot be deleted has to be
+// reported rather than silently skipped.
+func TestForcedCloseVisitsEveryStage(t *testing.T) {
+	isolateStages(t)
+	log := captureLog(t)
+
+	// The delete-at-reboot attempt is recorded, not made: a test must not leave
+	// PendingFileRenameOperations entries on the machine it runs on.
+	var reboot []string
+	prevReboot := deleteAtReboot
+	deleteAtReboot = func(path string) {
+		reboot = append(reboot, path)
+		logf("staging: MoveFileExW(%s, NULL, MOVEFILE_DELAY_UNTIL_REBOOT) attempted; the test recorded it instead of calling it", path)
+	}
+	t.Cleanup(func() { deleteAtReboot = prevReboot })
+
+	parent := t.TempDir()
+	mk := func(name string, seed uint64) *dragStage {
+		t.Helper()
+		s, err := newDragStage(parent, []synthFile{{name: name, size: 2048, seed: seed}}, stageConfig{maxAge: time.Hour})
+		if err != nil {
+			t.Fatalf("newDragStage: %v", err)
+		}
+		t.Cleanup(s.finish)
+		s.arm()
+		if _, _, hr := s.requestPaths(); hr != sOK {
+			t.Fatalf("the extraction for %s returned %s", name, hrName(hr))
+		}
+		return s
+	}
+
+	// Drag one: handed out, and a consumer still has the file open.
+	stuck := mk("stuck.bin", 81)
+	holdOpen(t, stuck.paths[0])
+	// Drag two: the target moved the file away, so only the manifest is left.
+	moved := mk("moved.bin", 82)
+	if err := os.Remove(moved.paths[0]); err != nil {
+		t.Fatalf("simulating the target's move: %v", err)
+	}
+
+	forceCloseAllStages()
+
+	out := log()
+	// Both visited, and the log says so in a way that counts them.
+	for _, s := range []*dragStage{stuck, moved} {
+		if !strings.Contains(out, "forced close 1 of 2: "+s.root) && !strings.Contains(out, "forced close 2 of 2: "+s.root) {
+			t.Errorf("the forced close never visited %s:\n%s", s.root, out)
+		}
+	}
+
+	// The one that could be deleted was.
+	if !moved.removed {
+		t.Error("the emptied staging folder was not deleted by the forced close")
+	}
+	if _, err := os.Stat(moved.root); !os.IsNotExist(err) {
+		t.Errorf("the emptied staging folder survived: %v", err)
+	}
+
+	// The one that could not be is reported, with the error Windows gave and the
+	// delete-at-reboot attempt, and it is still there.
+	if stuck.removed {
+		t.Fatal("the staging folder whose file is held open was reported as deleted")
+	}
+	if stuck.removeErr == nil {
+		t.Fatal("the failed delete left no error behind, so nothing could be reported")
+	}
+	for _, want := range []string{
+		"staging folder could NOT be deleted: " + stuck.root,
+		"is still open by another process",
+		"MOVEFILE_DELAY_UNTIL_REBOOT",
+		"1 staging folder(s) of this run are left on disk (after the forced close)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the log never said %q:\n%s", want, out)
+		}
+	}
+	if len(reboot) == 0 {
+		t.Error("the forced close never attempted MOVEFILE_DELAY_UNTIL_REBOOT on what would not go")
+	} else {
+		var sawFile, sawDir bool
+		for _, p := range reboot {
+			if p == stuck.paths[0] {
+				sawFile = true
+			}
+			if p == stuck.root {
+				sawDir = true
+			}
+		}
+		if !sawFile || !sawDir {
+			t.Errorf("delete-at-reboot was attempted on %q; want the file and its folder", reboot)
+		}
+	}
+	if _, err := os.Stat(stuck.paths[0]); err != nil {
+		t.Errorf("the file that could not be deleted is gone after all: %v", err)
+	}
+	// And the folder is still one the sweep can recognise. A partial delete
+	// takes the manifest with it, and a folder without ours is one the sweep is
+	// forbidden to touch -- which would make a failed delete permanent.
+	m, ok := readManifest(stuck.root)
+	if !ok {
+		t.Fatal("the folder left behind has no manifest of ours, so no sweep will ever take it")
+	}
+	if m.State != stateDone {
+		t.Errorf("the folder left behind is manifested %q, want %q", m.State, stateDone)
+	}
+	if remove, why := scavengeVerdict(scavengeFacts{
+		haveManifest: true, state: m.State, age: 2 * time.Hour, maxAge: time.Hour,
+	}); !remove {
+		t.Errorf("a later sweep would leave the folder behind: %s", why)
+	}
+
+	// And the exit summary can still name it, which the live set alone cannot:
+	// the stage is resolved, so it has left liveStages for the sweep to take.
+	left := stagesLeftOnDisk()
+	if len(left) != 1 || left[0] != stuck {
+		t.Fatalf("stagesLeftOnDisk() named %d folder(s), want just %s", len(left), stuck.root)
+	}
+	if d := left[0].disposition(); !strings.Contains(d, "LEFT ON DISK") || !strings.Contains(d, "the delete failed") {
+		t.Errorf("the disposition of the folder left behind is %q", d)
+	}
+	if stageIsActive(stuck.root) {
+		t.Error("a resolved stage is still in the live set, so the scavenge would never take its folder")
+	}
+}
+
+// TestQuietCloseVisitsEveryStage is the same rule for the ordinary close: an
+// earlier drag's folder is no less this run's to decide about than the last
+// one's. The two decisions differ, and both have to be taken.
+func TestQuietCloseVisitsEveryStage(t *testing.T) {
+	isolateStages(t)
+	log := captureLog(t)
+
+	parent := t.TempDir()
+	mk := func(name string, seed uint64, handOut bool) *dragStage {
+		t.Helper()
+		s, err := newDragStage(parent, []synthFile{{name: name, size: 512, seed: seed}}, stageConfig{maxAge: time.Hour})
+		if err != nil {
+			t.Fatalf("newDragStage: %v", err)
+		}
+		t.Cleanup(s.finish)
+		if handOut {
+			s.arm()
+			if _, _, hr := s.requestPaths(); hr != sOK {
+				t.Fatalf("the extraction for %s returned %s", name, hrName(hr))
+			}
+		}
+		return s
+	}
+	handed := mk("handed.bin", 91, true)
+	untouched := mk("untouched.bin", 92, false)
+
+	quietCloseAllStages()
+
+	out := log()
+	// The folder whose paths a target has is left for the scavenge; the one
+	// nothing was ever told about goes now. Both decisions were taken.
+	if _, err := os.Stat(handed.root); err != nil {
+		t.Errorf("the close deleted a folder whose paths were handed out: %v", err)
+	}
+	if _, err := os.Stat(untouched.root); !os.IsNotExist(err) {
+		t.Errorf("the close left a folder nothing was ever handed out of: %v", err)
+	}
+	if !strings.Contains(out, "the window is closing, but the paths were handed out; "+handed.root) {
+		t.Errorf("the close said nothing about %s:\n%s", handed.root, out)
+	}
+	if !strings.Contains(out, "staging folder deleted: "+untouched.root) {
+		t.Errorf("the close said nothing about %s:\n%s", untouched.root, out)
+	}
+}
+
+// TestAsyncEffectNote: DoDragDrop's effect out-parameter is DROPEFFECT_NONE for
+// an asynchronous drop whatever the target goes on to do -- the round that moved
+// a 5 GiB file to the desktop logged NONE for a move that completed -- so the
+// line has to say so rather than let NONE be read as a refusal.
+func TestAsyncEffectNote(t *testing.T) {
+	if note := asyncEffectNote(true); !strings.Contains(note, "asynchronous") || !strings.Contains(note, "not reported here") {
+		t.Fatalf("the asynchronous note is %q", note)
+	}
+	if note := asyncEffectNote(false); note != "" {
+		t.Fatalf("a synchronous drop's effect line was annotated with %q; there the effect IS the answer", note)
 	}
 }

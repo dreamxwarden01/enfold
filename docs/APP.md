@@ -826,33 +826,51 @@ sentinel of every package with a catch-all `internal` — and services are regis
   *Shorten* or *Rename…* asks again, *Skip* always there. No loop over names runs unbounded anywhere: keep-both numbering already stops at a bounded
   count — and when every name to `(999)` is taken the outcome is `failed` with `file.exists`,
   not `skipped` — and at the first refusal that is not "already exists" (checked 2026-09-10),
-  and *Shorten* stops at one rune. **A drag out of the window** onto the desktop or an Explorer folder (designed 2026-09-10 after
-  an outside research pass; a prototype, `tools/dragproto`, came first and worked — **the
-  mechanism below is provisional**: the first real drops showed Explorer's legacy
-  "copying from a device" progress dialog for a stream source and a copy that stalled, uncancellable,
-  behind a locked destination, so a second research pass weighs this route against the
-  temp-file route of 7-Zip and WinRAR before anything enters the shell; DECISIONS has both
-  drops): the page cancels its
-  own `dragstart` and, on a press-and-move over selected rows, calls `Shell.DragOut(archiveID,
-  recordIDs)`; the shell, on the UI thread — which has called `OleInitialize` itself, Wails
-  never does — starts one native OLE drag (`DoDragDrop`, `DROPEFFECT_COPY` only) with a
-  pure-Go, cgo-free data object offering **virtual files**: `FileGroupDescriptorW` (names,
-  sizes, dates; a folder as its files under relative paths) and `FileContents` as one `IStream`
-  per file that decrypts as Explorer reads it, never a byte staged on disk (7-Zip and WinRAR
-  extract to %TEMP% first and hand Explorer `CF_HDROP`; Enfold does not write plaintext where
-  it was not asked to), with `IDataObjectAsyncCapability` so Explorer copies in the background,
-  the drag holding the archive open like a reader (a Leave drains behind it, a Close kills it,
-  the streams' reads then fail). **The destination and its conflicts are Explorer's**: a
-  standard drag source never learns where the drop landed nor which files were written, and
-  Explorer shows its own *Replace or Skip Files* dialog when a name is taken — the very dialog
-  ours is modelled on, asked when the conflict occurs and not before — so a drag out is not an
-  `Extract` of the core's, no policy applies, nothing is recorded, and a drop Explorer cancels
-  or fails half-way is Explorer's to report. The reads must never stall the STA: decryption
-  runs on a goroutine of its own into a bounded buffer the stream's `Read` drains, and `Stat`,
-  `Seek` (to the start, and forward) and a second request for the same file are answered
-  honestly. What the prototype decides: a stand-alone window dragging a synthetic 5 GiB virtual
-  file onto the desktop, watched for memory, Explorer's dialog on a collision, a cancel, and a
-  stalled read. `Extract` with the all-zero id extracts everything from the root straight into the
+  and *Shorten* stops at one rune. **A drag out of the window** onto the desktop or an Explorer folder (ruled 2026-09-10, late,
+  after three research passes and two real drops — DECISIONS has them): **the staged route**,
+  7-Zip's and WinRAR's, with what their authors and users learnt folded in. The page cancels
+  its own `dragstart` and, on a press-and-move over selected rows, calls
+  `Shell.DragOut(archiveID, recordIDs)`; the shell, on the UI thread — which has called
+  `OleInitialize` itself, Wails never does — starts one native OLE drag (`DoDragDrop`) with a
+  pure-Go, cgo-free data object, agile (the free-threaded marshaler aggregated, `IAgileObject`
+  answered) so that what runs inside the drop's `GetData` runs on Explorer's worker thread and
+  never the WebView's. It offers `CF_HDROP` by **delayed rendering** and, beside it,
+  `CFSTR_PREFERREDDROPEFFECT` = *move* with both *copy* and *move* allowed: the staged copy is
+  disposable, so a drop on the same volume — the desktop, from `%LOCALAPPDATA%` — is one rename,
+  no second pass over the bytes and nothing left to clean, and a drop on another volume is
+  Explorer's copy followed by Explorer's own deletion of the staging; **a move never touches the
+  record** (7-Zip's ruling, for the same reasons: deleting a member is a rewrite and a risk).
+  **The staging folder** is one per drag, `%LOCALAPPDATA%\Enfold\drag\<id>` (never `%TEMP%`:
+  ours to scavenge, outside what OneDrive backs up, on the volume most drops land on), made
+  atomically before the drag with a small manifest beside its files — created-at, state, the
+  owning process — so a scavenge can tell an abandoned folder from a live one. **When the files
+  are written**: a `CF_HDROP` request that arrives during the hover — targets do ask, Raymond
+  Chen and 7-Zip's comments are the witness — is answered with the *final* paths (never a
+  placeholder: Edge caches the early names, 7-Zip found); the files themselves are written by
+  the first request after the button's release — the core's `Extract` with `replace` into the
+  folder, shown on the page's strip as *Preparing 2 files* and cancellable there — and a
+  request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
+  rather than hand out half-written files, which 7-Zip's does not. A target that needs the
+  files to exist at hover time (Sticky Notes refuses a path that is not there) is the
+  measurement the prototype makes before the rule is final; if such targets matter, a small
+  selection may be written at the first request. **When the folder goes**: at once when the
+  drag ends with nothing handed out (Escape, a refused drop); at `EndOperation` when the target
+  negotiated the asynchronous protocol (that ends *its* transfer — not every later use of the
+  paths by whatever the target was); otherwise the folder outlives the drop and even the
+  process, because consumers open the paths late (a browser reads a dropped file when the
+  upload starts, a configuration dialog kept 7-Zip's paths for minutes, FileZilla and VMware
+  broke on early deletion) — and the **scavenge** removes what is ours: at launch and every ten
+  minutes while running, every manifested folder whose state is not live and whose age is
+  past **one hour** (WinRAR's threshold; a longer one lingers plaintext for nothing), a folder
+  still in use (a sharing violation on an exclusive open) retried with bounded backoff — 1 s,
+  10 s, 60 s — and left for the next sweep, never traversing a reparse point, never touching a
+  folder without our manifest. Delete-at-reboot (`MOVEFILE_DELAY_UNTIL_REBOOT`) is not relied
+  on: it needs an administrator, and Chromium's use of it is an attempt, not a guarantee. The
+  explicit *Extract…* stays for what staging serves badly — a large transfer to a network
+  share, the whole archive (*Extract all*). Everything is logged per drag: the formats asked
+  for and when, the extraction's start, end, result and bytes, `DoDragDrop`'s result and
+  effect, the asynchronous negotiation and its end, every deletion attempt with the Windows
+  error, never a file name. `Extract` with the all-zero id extracts everything from the root straight into the
   destination and is greyed while `ArchiveStat.Records` is zero (live files and folders
   together; the file count alone cannot say whether the tree holds anything). `PreviewURL(id,
   fileID)`, `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over

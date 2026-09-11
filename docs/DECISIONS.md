@@ -3693,3 +3693,51 @@ the desktop, an explicit *Extract…* as the escape hatch, never `CF_HDROP` sile
 reconsider only if plaintext staging became acceptable. The decision is the user's and is
 pending.
 
+**Ruled: the staged route** (the user, after the second pass): "B — fewer problems ahead, and
+the common practice. A drag is one or two files the user wants out quickly; double the space
+is nothing next to a copy that stalls half-way and starts over. For the whole archive I use
+*Extract all* and name the folder." APP §3 rewritten: `CF_HDROP` by delayed rendering, a
+staging folder per drag under `%LOCALAPPDATA%\Enfold\drag`, hover-time requests answered with
+the paths the files will have, the extraction run by the drop's own request after release,
+`EndOperation` the signal to delete, an hourly scavenge at launch and delete-at-reboot as the
+backstops, `DROPEFFECT_COPY` only, the object agile so the extraction never runs on the
+WebView's thread. The prototype's virtual-file work stays as the record of what that route
+does. A third research pass — 7-Zip's source and both archivers' communities on the staging
+folder's lifetime — precedes the shell integration.
+
+**The third research pass** (Codex Astra, 62 sources, 7-Zip's source read at 26.03): what
+the archivers actually do. 7-Zip makes an empty `7zE<8 hex>` directory straight under
+`GetTempPath` before `DoDragDrop`; hover-time `CF_HDROP` requests get that directory's path,
+the button's release arms the copy, and the next `GetData` runs the extraction with a modal
+progress window inside the still-outstanding `DoDragDrop` — but `GetData` returns the names
+whether the extraction succeeded or not, and the directory is a stack object whose destructor
+makes one recursive delete and never retries, with no launch-time sweep anywhere in the
+inspected code (24.04 added a manual "delete temporary files" window). Its comments name the
+consumers its early placeholder broke — Sticky Notes refuses a path that does not exist, Edge
+caches the early name — and its tracker holds the other side: deleting after `DoDragDrop`
+took the files from under FileZilla, VMware, a configuration dialog that kept the paths for
+minutes, TeraCopy; Igor Pavlov: "another program can't open input files in that case". 7-Zip
+advertises copy *and* move and returns *move* without touching the member — a same-volume
+move of the staged copy is faster and keeps creation time — and refuses to delete members on
+a drag (a rewrite, a risk). WinRAR stages under its configurable temporary folder and deletes
+externally used files, drags included, on a later run once they are an hour old, because
+"external applications may still need them". Chromium stages a dragged download and marks it
+for deletion at reboot — which needs an administrator and deletes a directory only when empty
+— and ignores the result; it is an attempt. Windows' asynchronous protocol ends *the target's
+transfer* at `EndOperation`, not every later use of a path, and no trace proved Explorer
+negotiates it for a `CF_HDROP` source at all; a currently unlocked file says nothing about
+whether a consumer reopens it later. Folded into APP §3: a manifested folder per drag under
+`%LOCALAPPDATA%\Enfold\drag`; final paths at hover, the extraction at the post-release request,
+a failed extraction failing `GetData`; copy and move allowed with move preferred and the record
+never touched; deletion at once for a drag that handed nothing out, at `EndOperation` when
+negotiated, and otherwise by a scavenge at launch and every ten minutes of manifested folders
+older than an hour, retried with bounded backoff — never delete-at-reboot; the explicit
+*Extract…* for what staging serves badly. The reviewer proposed a 24-hour grace; the user's
+threshold stays WinRAR's hour, plaintext being the cost that matters here.
+
+**The findings kept.** The three passes' raw findings — positions, every finding with its
+confidence, its verification status and the URLs the researcher opened, and its own gaps —
+and the measured facts of the two real drops are in `docs/research/drag-out.md`, so that later
+work (the external player, other shell integrations) consults them instead of running the
+research again (the user's ask).
+

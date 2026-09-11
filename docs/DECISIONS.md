@@ -3828,3 +3828,12 @@ WebView2 hands the page one `File` per `CF_HDROP` path for a self-drop whose pat
 exist — if it did not, a self-drop would be judged foreign and the *Move* would silently not
 happen; the first real self-drop says.
 
+**The first launch died.** Every start after the integration ended at "application created":
+`OleInitialize` had been wrapped in `application.InvokeSync` before `Run`, and in Wails
+beta.16 the platform implementation that `InvokeSync` dispatches through is made inside
+`Run` (`a.impl = newPlatformApp(a)`), so the call dereferenced nil on the main goroutine —
+a panic no handler sees in a windowed process. The implementer had read the module and
+concluded the opposite; the module says otherwise. The main goroutine is the main thread
+(Wails locks it at package init), so `InitOLE` is called directly. Recorded as the kind of
+claim to check by running, not by reading, when the run is allowed.
+

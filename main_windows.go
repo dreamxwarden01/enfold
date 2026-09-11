@@ -152,20 +152,22 @@ func main() {
 
 	// OLE on the main thread, before the window (APP.md §3): DoDragDrop
 	// belongs to the thread that owns the window and runs its message loop,
-	// and Wails never calls OleInitialize itself. That thread is this one —
-	// Wails locks the main goroutine to its OS thread at init and
-	// application.New made the hidden dispatch window on it — so InvokeSync,
-	// which runs its function inline when called from the main thread and
-	// posts to that window from any other, is the same dispatch every later
-	// main-thread call uses and here costs nothing. A failure is logged and
-	// leaves the drag out unsupported; nothing else needs OLE.
-	application.InvokeSync(func() {
-		if err := dragout.InitOLE(); err != nil {
-			logger.printf("start: %v; the drag out is unavailable", err)
-			return
-		}
+	// and Wails never calls OleInitialize itself. That thread is this one:
+	// Wails locks the main goroutine to its OS thread at package init
+	// (init_desktop.go), and Run's newPlatformApp captures that same thread
+	// as the main-loop thread. It is called DIRECTLY, not through
+	// application.InvokeSync: before Run the application has no platform
+	// implementation yet (application.go, Run: a.impl = newPlatformApp(a)),
+	// and InvokeSync dereferences it — the first build died here, silently,
+	// on every launch (2026-09-11). WebView2's later CoInitializeEx on this
+	// thread finds the apartment already initialised and returns S_FALSE.
+	// A failure is logged and leaves the drag out unsupported; nothing else
+	// needs OLE.
+	if err := dragout.InitOLE(); err != nil {
+		logger.printf("start: %v; the drag out is unavailable", err)
+	} else {
 		s.oleReady.Store(true)
-	})
+	}
 
 	sweepProfile(profile)
 	port, err := core.Start()

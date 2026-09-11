@@ -3768,4 +3768,9 @@ have been read and left alone for five seconds. And the scanner is not a release
 5 GB .bin dropped into a temporary folder and immediately operated on looks suspicious, and
 getting locked for a scan is normal behaviour; real use will not see such a file, and if it
 does, that is the user's to sort out."
+**One gesture** (2026-09-11, before the integration): a page's HTML5 drag cannot become the
+native drag and two drags cannot run at once, so the list's rows stop being HTML5-draggable
+and every press-and-move starts the native drag; a release over Enfold's own window is a
+self-drop — nothing extracted, the folder deleted at once — that the page turns into the
+`Move` it always was, by the ids it kept in flight; a release anywhere else is the drag out.
 

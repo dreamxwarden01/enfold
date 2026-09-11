@@ -828,9 +828,18 @@ sentinel of every package with a catch-all `internal` — and services are regis
   not `skipped` — and at the first refusal that is not "already exists" (checked 2026-09-10),
   and *Shorten* stops at one rune. **A drag out of the window** onto the desktop or an Explorer folder (ruled 2026-09-10, late,
   after three research passes and two real drops — DECISIONS has them): **the staged route**,
-  7-Zip's and WinRAR's, with what their authors and users learnt folded in. The page cancels
-  its own `dragstart` and, on a press-and-move over selected rows, calls
-  `Shell.DragOut(archiveID, recordIDs)`; the shell, on the UI thread — which has called
+  7-Zip's and WinRAR's, with what their authors and users learnt folded in. **One gesture serves
+  the list's own moves and the drag out** (ruled 2026-09-11): rows are not HTML5-draggable —
+  a press-and-move over selected rows calls `Shell.DragOut(archiveID, recordIDs)` and the
+  native drag runs from there, since a page's own drag cannot become one and two drags cannot
+  run at once; the page keeps the ids in flight. A release over Enfold's own window — the
+  drop source's `QueryContinueDrag` sees where the button came up — is a **self-drop**: the
+  data object answers the drop's `CF_HDROP` request with the future paths and extracts
+  nothing, the folder is deleted at once, and the page, receiving the WebView's drop on a
+  folder row, the `..` row or the heading with paths under the staging root, performs `Move`
+  of the ids in flight to that target instead of an add (a drop elsewhere on the page is
+  nothing); real files dropped in from Explorer are told apart by their paths and go on being
+  the add of §3. A release anywhere else is the drag out proper: the shell, on the UI thread — which has called
   `OleInitialize` itself, Wails never does — starts one native OLE drag (`DoDragDrop`) with a
   pure-Go, cgo-free data object, agile (the free-threaded marshaler aggregated, `IAgileObject`
   answered) so that what runs inside the drop's `GetData` runs on Explorer's worker thread and
@@ -1174,8 +1183,8 @@ item opens a *What happened* dialog listing each with its code's copy, beside th
 ("2 files added · 1 folder created · 1 skipped"), and an op of another archive gets the summary
 as a toast; a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
 is said by a toast naming it, the page having walked its crumbs upwards; the name column takes the width the others do not need — Size, Type and Modified are fixed;
-drag-and-drop in (§3's drop) and, when it exists, out (§3's drag out: virtual files, Explorer's
-own conflict dialog); the extract dialog and the conflict dialogs of §3; the
+drag-and-drop in (§3's drop) and out (§3's drag out — the staged route; the same native drag
+serves the list's own moves, a self-drop being a `Move`); the extract dialog and the conflict dialogs of §3; the
 locked banner, one line — "The vault is locked. This archive stays open while you are here." — and
 no timeout of the archive's own (§2.3)). Keys & backups (slots, Add a key,
 Remove — greyed while the invariant would refuse — Rotate now (its dialog says every way in is

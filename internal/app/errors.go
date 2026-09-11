@@ -193,6 +193,13 @@ const (
 	// did not finish."
 	CodeReclaimIncomplete Code = "archive.reclaim_incomplete"
 
+	// The drag out of the window (APP.md §3, dragout.go). CodeDragUnsupported:
+	// OLE could not be initialised on the window's thread, or this is not
+	// Windows, so no native drag can run; CodeDragBusy: a drag is already
+	// running, and two cannot run at once in one process.
+	CodeDragUnsupported Code = "drag.unsupported"
+	CodeDragBusy        Code = "drag.busy"
+
 	CodeParams Code = "params"
 	CodeIO     Code = "io"
 )

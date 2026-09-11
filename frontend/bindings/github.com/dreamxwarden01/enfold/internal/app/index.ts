@@ -16,6 +16,7 @@ export type {
     Collision,
     Crumb,
     Difference,
+    DragOutResult,
     EntangledState,
     ExistingFile,
     FileInfo,

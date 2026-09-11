@@ -10,8 +10,30 @@
 // @ts-ignore: Unused imports
 import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as app$0 from "../models.js";
+
 export function CloseWindow(): $CancellablePromise<void> {
     return $Call.ByID(3606391931);
+}
+
+/**
+ * DragOut is the one gesture of APP.md §3: a press-and-move over selected
+ * rows starts one native drag of those records out of the window, and this
+ * call blocks until DoDragDrop returns — the window stays alive meanwhile,
+ * since the drag pumps its messages on the main thread. The staged copy is
+ * extracted by the drop's own request under an operation of kind dragout,
+ * which the strip follows (preparing, then awaiting) and which ends when
+ * the drag reports how it ended (OpView.DragResult). A release over
+ * Enfold's own window is a self-drop: nothing is extracted, and the page —
+ * receiving the WebView's drop with paths under Folder — performs the Move
+ * of the ids it kept in flight. drag.unsupported when no native drag can
+ * run, drag.busy while one is running, params for an empty or root
+ * selection, and the archive's own codes.
+ */
+export function DragOut(archiveID: string, recordIDs: string[] | null): $CancellablePromise<app$0.DragOutResult> {
+    return $Call.ByID(945813141, archiveID, recordIDs);
 }
 
 export function PickFiles(title: string, multiple: boolean): $CancellablePromise<string[] | null> {

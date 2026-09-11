@@ -850,9 +850,12 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Explorer's copy followed by Explorer's own deletion of the staging; **a move never touches the
   record** (7-Zip's ruling, for the same reasons: deleting a member is a rewrite and a risk).
   **The staging folder** is one per drag, `%LOCALAPPDATA%\Enfold\drag\<id>` (never `%TEMP%`:
-  ours to scavenge, outside what OneDrive backs up, on the volume most drops land on), made
-  atomically before the drag with a small manifest beside its files — created-at, state, the
-  owning process — so a scavenge can tell an abandoned folder from a live one. **When the files
+  ours to scavenge, outside what OneDrive backs up, on the volume most drops land on), made atomically before the drag, its small manifest — created-at, state, the owning process —
+  at the folder's top and the files themselves under an `items` folder beneath it, so that no
+  dragged name can collide with the manifest (a record may be called `manifest.json`) and a
+  scavenge can tell an abandoned folder from a live one; a delete that fails half-way leaves
+  the manifest in place (rewritten if it was taken), since a folder without it is one the
+  scavenge may never touch. **When the files
   are written**: a `CF_HDROP` request that arrives during the hover — targets do ask, Raymond
   Chen and 7-Zip's comments are the witness — is answered with the *final* paths (never a
   placeholder: Edge caches the early names, 7-Zip found); the files themselves are written by the first request after the button's release — the
@@ -863,11 +866,12 @@ sentinel of every package with a catch-all `internal` — and services are regis
   window never freezes, since the request runs on Explorer's thread (the object being agile)
   and the WebView's stays free; a cancel fails the request and Explorer abandons the drop.
   When the request has returned and Explorer has the paths, the strip changes to a second
-  phase with no bar and no *Cancel* — **Awaiting Windows Explorer** — which clears when the
-  staged files are gone (a same-volume move), when Explorer says it has finished
-  (`EndOperation`, should it call it), or when the files have been read and then left alone
-  for five seconds; whatever happens to the folder after that is the scavenge's business, not
-  the strip's — and a request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
+  phase with no bar and no *Cancel* — **Awaiting Windows Explorer** — which clears when the staged items — files and folders alike — are gone (a same-volume move),
+  when Explorer says it has finished (`EndOperation`, should it call it), when the files have
+  been read and then left alone for five seconds, or when the target has let the data object
+  go and five seconds pass with no read (a consumer that keeps the paths for a later read —
+  a browser's upload box — would otherwise hold the strip for ever; the folder stays for it);
+  whatever happens to the folder after that is the scavenge's business, not the strip's — and a request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
   rather than hand out half-written files, which 7-Zip's does not. A target that needs the
   files to exist at hover time (Sticky Notes refuses a path that is not there) is the
   measurement the prototype makes before the rule is final; if such targets matter, a small

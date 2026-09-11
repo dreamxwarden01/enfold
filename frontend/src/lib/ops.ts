@@ -3,7 +3,7 @@
 // so the strip has one job — name what is running, move a bar by the bytes
 // the core reports, and offer *Cancel* where a cancel means something.
 import { plural } from "./format";
-import { reclaimedText } from "./strings";
+import { dragOutCopy, reclaimedText } from "./strings";
 
 // opLabel is the running operation's name, as the strip says it: the verb
 // and what it is working on — *Adding 3 files*, *Adding 1 file*,
@@ -12,8 +12,17 @@ import { reclaimedText } from "./strings";
 // operation planned; it is zero until the plan is made and for every kind
 // that counts nothing, and the bare verb stands until it arrives. There is
 // no "save": nothing is staged between operations any more.
-export function opLabel(kind: string, items = 0): string {
+//
+// A drag out is named by where it has got to (APP.md §3, ruled
+// 2026-09-11): *Preparing 2 files* while the drop's own request runs the
+// extraction, *Awaiting Windows Explorer* once Explorer has the paths —
+// and, with no phase given, as its toast names it once it has ended.
+export function opLabel(kind: string, items = 0, phase = ""): string {
   switch (kind) {
+    case "dragout":
+      if (phase === "preparing") return counted(dragOutCopy.preparing, items);
+      if (phase === "awaiting") return dragOutCopy.awaiting;
+      return counted(dragOutCopy.name, items);
     case "add":
       return counted("Adding", items);
     case "replace":
@@ -49,7 +58,8 @@ function counted(verb: string, items: number): string {
 // name has already put in the user's words. "starting" is the phase every
 // operation carries before it has done anything, so it is a restatement
 // too: it says nothing about where the work has got to, and the strip's
-// own presence already says the operation began.
+// own presence already says the operation began. A drag out's phases are
+// its name (opLabel), so they are never said beside it.
 const restatements = new Set([
   "starting",
   "adding",
@@ -60,6 +70,9 @@ const restatements = new Set([
   "moving",
   "verified",
   "rotated",
+  "dragging",
+  "preparing",
+  "awaiting",
 ]);
 
 export function opPhase(phase: string | undefined): string {
@@ -73,9 +86,30 @@ export function opPhase(phase: string | undefined): string {
 // holds free — and a reclaim is a compaction the user never asked for, so
 // it is theirs to stop; the archive is untouched until it finishes. A
 // compaction they did ask for, a rotation and a verify are not the user's
-// to abort halfway, and an extract has already written files on disk.
-export function cancellable(kind: string): boolean {
+// to abort halfway, and an extract has already written files on disk. A
+// drag out is cancellable while it is *Preparing* — the cancel fails the
+// drop's request and Explorer abandons the drop — and not once Explorer
+// has the paths: nothing of it is left to end (APP.md §3).
+export function cancellable(kind: string, phase = ""): boolean {
+  if (kind === "dragout") return phase === "preparing";
   return kind === "add" || kind === "replace" || kind === "reclaim";
+}
+
+// stripShows: whether the strip has anything to say about a running
+// operation. Every operation is shown from the moment it begins but the
+// drag out during its hover — the drag itself is on the screen under the
+// cursor, and the strip's two phases begin when the button is released
+// (APP.md §3).
+export function stripShows(kind: string, phase = ""): boolean {
+  return !(kind === "dragout" && phase !== "preparing" && phase !== "awaiting");
+}
+
+// hasBar: whether the strip draws a bar for the operation — indeterminate
+// until Total is known, and moving by bytes once it is. *Awaiting Windows
+// Explorer* is the one phase without: the bytes are written, and what
+// Explorer does with them is not measured here.
+export function hasBar(kind: string, phase = ""): boolean {
+  return !(kind === "dragout" && phase === "awaiting");
 }
 
 // reclaimedLine is when a finished reclaim says what the file system got

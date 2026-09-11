@@ -160,6 +160,10 @@ export const codeCopy: Record<CodeKey, string> = {
   // own words (refusedCopy); these are the codes' lines for a list.
   [Code.CodeFileNameRefused]: "The destination cannot take a name this long.",
   [Code.CodeFilePathRefused]: "The folder's path is too long for this destination.",
+  // The drag out of the window (APP.md §3): no native drag can run here,
+  // or one is already running.
+  [Code.CodeDragUnsupported]: "Dragging files out of the window is not available.",
+  [Code.CodeDragBusy]: "Another drag is still running.",
   [Code.CodeParams]: "Enfold refused the request.",
   [Code.CodeIO]: "A file could not be read or written.",
 };
@@ -197,6 +201,21 @@ export const archivePageCopy = {
 export function reclaimedText(returned: number): string {
   return `Reclaimed ${bytes(returned)}`;
 }
+
+// The drag out of the window on the operation strip (APP.md §3, ruled
+// 2026-09-11 after the measured 5 GiB drop): the files are written by the
+// drop's own request, after the button's release, and Explorer shows
+// nothing until that request returns — a user who sees nothing move
+// thinks the program is dead. So the strip says *Preparing 2 files* with
+// the bar and *Cancel* while the request runs, then *Awaiting Windows
+// Explorer* — no bar, no Cancel — once Explorer has the paths; nothing at
+// all during the hover, and a finished drag out that failed is named
+// by the verb its toast counts with (ops.ts opLabel).
+export const dragOutCopy = {
+  preparing: "Preparing",
+  awaiting: "Awaiting Windows Explorer",
+  name: "Dragging out",
+};
 
 // ---- The extract dialog and what an `ask` comes back with (APP.md §3,
 // §6, ruled 2026-09-10) ----------------------------------------------

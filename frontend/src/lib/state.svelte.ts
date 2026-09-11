@@ -2,7 +2,7 @@
 // the little the page adds (route, selection, toasts). Every event is
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
-import { Archive, Archives, Keys, Settings, Vault, errorOf, Code } from "./api";
+import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code } from "./api";
 import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, warningCopy } from "./strings";
@@ -20,8 +20,16 @@ import { PAGE_LIMIT, applyReply, hasMore, liveIds, nextOffset } from "./paging";
 import type { Listing } from "./paging";
 import { opErrorLine, opLabel, reclaimedLine } from "./ops";
 import type { Outcome } from "./outcome";
+import { answer as answerDrag, beginFlight, land, ownDrop } from "./dragout";
+import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
+
+// How long a self-drop's flight waits for the WebView's drop once the call
+// has answered (settleDrag): the two travel different roads and either may
+// arrive first, and a release over the window's frame brings no drop at
+// all.
+export const SELF_DROP_GRACE = 1000;
 
 export interface Toast {
   id: number;
@@ -160,6 +168,22 @@ class Store {
   // and not whether a secret was asked (APP.md §2.2, §13).
   unlockMethod = $state("");
   drop = $state<Drop | null>(null);
+  // The drag out of the window in flight (APP.md §3, lib/dragout.ts): the
+  // ids the gesture took and the folder they left, from the press-and-move
+  // until Shell.DragOut has answered and, for a self-drop, the WebView's
+  // drop has said where it landed. A second gesture while one is in flight
+  // is ignored; a Leave or Close drops it with the page.
+  dragOut = $state<Flight | null>(null);
+  // The Move a self-drop asks for, handed to the page — which performs it
+  // and says a refusal against the target — the way `drop` is handed over.
+  selfDrop = $state<PendingMove | null>(null);
+  // The drag's folder the last drag out named (DragOutResult.folder, the
+  // manifest at its top and every path handed out under its items): a
+  // self-drop's own drop can reach the page after the call has answered
+  // and the flight is over, and its paths — under this folder, files that
+  // never exist — must not be an add.
+  private lastDragFolder = "";
+  private dragGrace: ReturnType<typeof setTimeout> | undefined;
   now = $state(Date.now());
   // booted: the first Status() call has completed — a reply, or a failure
   // with a status accepted from an event meanwhile — and the page draws
@@ -299,6 +323,12 @@ class Store {
     Events.On("op.done", (e) => this.applyOp(e.data as OpView, true));
     Events.On("shell.drop", (e) => {
       const d = e.data as Drop;
+      // Our own staged paths coming back from a self-drop are never an
+      // add (APP.md §3): the Move, if there is one, is the landing's
+      // business (dragLanded). Real files from Explorer go on being the
+      // add of §3 — a flight still waiting for its landing included
+      // (lib/dragout.ts ownDrop).
+      if (ownDrop(d.paths ?? [], this.dragOut, this.lastDragFolder)) return;
       if (!d.archiveId) {
         this.toast("Drop files onto an open archive's file list.", "error");
         return;
@@ -806,6 +836,73 @@ class Store {
     }
   }
 
+  // beginDragOut is the one gesture's start (APP.md §3, §6, ruled
+  // 2026-09-11): a press-and-move over selected rows. The native drag runs
+  // from Shell.DragOut, which answers when DoDragDrop has returned — the
+  // strip follows the operation meanwhile — and the ids stay in flight
+  // until the answer and, for a self-drop, the WebView's landing add up to
+  // a verdict (lib/dragout.ts). A gesture while one is in flight is
+  // ignored, and so is one with nothing selected.
+  async beginDragOut(ids: string[]): Promise<void> {
+    const id = this.current;
+    if (!id || this.dragOut || ids.length === 0) return;
+    // The names the loaded rows give the ids, so a drop can be told to be
+    // this gesture's own (lib/dragout.ts ownNames); ids past the loaded
+    // rows — a whole folder taken by Ctrl+A — have none to give.
+    const byId = new Map((this.page?.rows ?? []).map((r) => [r.id, r.name]));
+    const names = ids.map((i) => byId.get(i)).filter((n): n is string => n !== undefined);
+    this.dragOut = beginFlight(ids, this.dirId, names);
+    let a;
+    try {
+      a = await Shell.DragOut(id, ids);
+    } catch (e) {
+      // drag.busy, drag.unsupported, or the plan's own refusal — a name two
+      // records would share at the top of the staging folder, an id gone.
+      if (this.dragOut && this.current === id) this.dragOut = null;
+      this.toast(codeText(errorOf(e).code), "error");
+      return;
+    }
+    this.lastDragFolder = a.folder;
+    const f = this.dragOut;
+    if (!f || this.current !== id) return; // the page was left under the drag
+    const r = answerDrag(f, a, a.opId);
+    this.dragOut = r.flight;
+    this.settleDrag(r.verdict);
+  }
+
+  // dragLanded is the WebView's own drop while a drag is in flight: on a
+  // folder row, the `..` row or the heading — the page names which — or
+  // elsewhere on the page; or someone else's files, which the page tells
+  // apart by their names (lib/dragout.ts ownNames) and which end the
+  // flight with nothing to do while the drop goes on being the add of §3.
+  // Nothing lands without a flight.
+  dragLanded(l: Landed): void {
+    const f = this.dragOut;
+    if (!f) return;
+    const r = land(f, l);
+    this.dragOut = r.flight;
+    this.settleDrag(r.verdict);
+  }
+
+  // settleDrag ends the flight on a verdict, or keeps it while the other
+  // half is still to come. A self-drop answered before its landing waits a
+  // moment for the WebView's drop, which travels a different road from the
+  // call's return; a release over the window frame itself never lands on
+  // the page, and the flight ends as nothing.
+  private settleDrag(v: Verdict): void {
+    clearTimeout(this.dragGrace);
+    if (v.kind === "wait") {
+      if (this.dragOut?.answer?.selfDrop) {
+        this.dragGrace = setTimeout(() => {
+          this.dragOut = null;
+        }, SELF_DROP_GRACE);
+      }
+      return;
+    }
+    this.dragOut = null;
+    if (v.kind === "move") this.selfDrop = v.move;
+  }
+
   // dropArchive tells the core the page is gone and forgets what the page
   // held. Leaving is `Archives.Leave`, never `Close` (APP.md §2.3, ruled
   // 2026-09-10): the archive closes at once and its keys go, unless a
@@ -826,6 +923,12 @@ class Store {
     this.results = null;
     this.sel = emptySelection();
     this.focusAfter = null;
+    // A drag in flight goes with the page too: Leave lets its operation
+    // finish and Close cancels it, and neither has a page left to move
+    // anything on.
+    clearTimeout(this.dragGrace);
+    this.dragOut = null;
+    this.selfDrop = null;
     // A question the page did not answer goes with the page: the archive
     // closes behind it, and nothing could re-issue for it.
     for (const o of Object.values(this.ops)) {

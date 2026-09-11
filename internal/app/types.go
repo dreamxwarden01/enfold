@@ -370,7 +370,7 @@ type ExistingFile struct {
 }
 
 // OpView is a running or finished long operation. Kind is add | replace |
-// extract | compact | reclaim | verify | rotate; reclaim is the in-place
+// extract | compact | reclaim | verify | rotate | dragout; reclaim is the in-place
 // compaction the core runs itself after a commit, or after the last reader
 // closes, when the plan would give the file system enough of the tail back
 // (APP.md §2.3, FORMAT.md R40), and the strip shows it as Reclaiming space.
@@ -405,6 +405,30 @@ type OpView struct {
 	// (APP.md §2.3). Zero for every other kind, and for a run that ended
 	// before its first commit.
 	Returned uint64 `json:"returned"`
+	// DragResult is how a drag out ended, on a finished dragout and nothing
+	// else (APP.md §3, dragout.go): self_drop — the button came up over
+	// Enfold's own window, nothing was extracted and the page performs the
+	// Move of the ids it kept in flight; cancelled, refused, moved, ended,
+	// idle or failed for the drag out proper. A dragout's Phase is dragging
+	// during the hover, preparing while the drop's request runs the
+	// extraction — Items and Total say what — and awaiting, with no Total,
+	// once Explorer has the paths.
+	DragResult string `json:"dragResult,omitempty"`
+}
+
+// DragOutResult is what Shell.DragOut answers once the native drag's
+// DoDragDrop has returned (APP.md §3): whether the release was a self-drop —
+// the page then performs a Move of the ids in flight — whether the
+// extraction had run by then, DoDragDrop's own effect (DROPEFFECT_NONE for
+// an asynchronous drop whatever the target did), the staging folder the
+// drop's paths lie under, and the id of the dragout operation the strip
+// follows.
+type DragOutResult struct {
+	SelfDrop  bool   `json:"selfDrop"`
+	Extracted bool   `json:"extracted"`
+	Effect    uint32 `json:"effect"`
+	Folder    string `json:"folder"`
+	OpID      string `json:"opId"`
 }
 
 // SlotBrief names one recovery slot of an incoming file, so that a dialog

@@ -42,8 +42,16 @@ type op struct {
 	// zero for every other kind (OpView.Returned).
 	returned atomic.Uint64
 	phase    atomic.Value // string
-	cancel   context.CancelFunc
-	over     chan struct{}
+	// dragResult is a drag out's end — self_drop | cancelled | refused |
+	// moved | ended | idle | failed — set as the drag reports it and empty
+	// for every other kind (OpView.DragResult, dragout.go).
+	dragResult atomic.Value // string
+	// ctx is the operation's own context, cancelled by CancelOp and by the
+	// archive's kill switch; the drag out's extraction runs under it from a
+	// thread of Explorer's, which is why it is kept on the operation.
+	ctx    context.Context
+	cancel context.CancelFunc
+	over   chan struct{}
 	// policy and destination are an extract's, fixed before the operation
 	// is registered and empty for every other kind (OpView.Policy).
 	policy, destination string
@@ -69,6 +77,9 @@ func (o *op) view() OpView {
 	}
 	if p, ok := o.phase.Load().(string); ok {
 		v.Phase = p
+	}
+	if r, ok := o.dragResult.Load().(string); ok {
+		v.DragResult = r
 	}
 	if o.err != nil {
 		v.Error = o.err.Code
@@ -152,7 +163,7 @@ func (c *Core) startOp(kind, archiveID string, fn func(ctx context.Context, o *o
 // on — an extract's policy and destination — and is nil for the rest.
 func (c *Core) startOpWith(kind, archiveID string, describe func(o *op), fn func(ctx context.Context, o *op) ([]FileOutcome, error)) string {
 	ctx, cancel := context.WithCancel(context.Background())
-	o := &op{id: randomID(), kind: kind, archiveID: archiveID, startedAt: c.now(), cancel: cancel, over: make(chan struct{}), c: c}
+	o := &op{id: randomID(), kind: kind, archiveID: archiveID, startedAt: c.now(), ctx: ctx, cancel: cancel, over: make(chan struct{}), c: c}
 	o.phase.Store("starting")
 	if describe != nil {
 		describe(o)
@@ -1008,183 +1019,193 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		if len(items) == 0 {
 			return nil, coded(CodeFileNotFound)
 		}
-		// Every target is resolved before the first byte, case-folded
-		// destinations de-duplicated, each asserted to lie under dir. Every
-		// record satisfying R20 and R39 does, so a failure means the index
-		// is not the one the reader validated: the whole operation fails
-		// with file.name, a plan-time invariant and not an item's outcome.
-		// A `names` entry that lands two records of the plan on one path
-		// is the caller's, and params — no policy resolves a collision
-		// between two files of one extract. The fold is R39's own, the one
-		// the index checks live siblings with (format.FoldKey, Unicode
-		// simple folding): a lower-casing would let "ſ.txt" past a planned
-		// "s.txt", which strings.EqualFold — and the sibling rule — calls
-		// one name (the outside review's finding 5).
-		used := make(map[string]*extractItem, len(items))
-		var total uint64
-		var files int
-		for i := range items {
-			it := &items[i]
-			it.dst = filepath.Join(root, filepath.FromSlash(it.out))
-			rel, err := filepath.Rel(root, filepath.Clean(it.dst))
-			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				return nil, coded(CodeFileName)
-			}
-			key := format.FoldKey(it.dst)
-			if other, dup := used[key]; dup && other.id != it.id {
-				if it.renamed || other.renamed {
-					return nil, coded(CodeParams)
-				}
-				return nil, coded(CodeFileName)
-			}
-			used[key] = it
-			if !it.isDir {
-				// The plan is resolved, so the strip can say how many files
-				// are coming out (APP.md §3, OpView.Items); the folders it
-				// creates on the way are not files.
-				files++
-				total += it.size
-			}
+		return c.extractItems(ctx, o, oa, items, root, policy, "extracting")
+	}), nil
+}
+
+// extractItems writes a resolved plan under root: the extract's own
+// (extractPlan) and the drag out's (dragPlan, dragout.go), which differ in
+// where the paths start and in nothing else — the same targets, the same
+// outcomes, the same progress by bytes under phase, the same refusals per
+// record. The destination root itself failing is the operation's error,
+// before any outcome.
+func (c *Core) extractItems(ctx context.Context, o *op, oa *openArchive, items []extractItem, root string, policy ExtractPolicy, phase string) ([]FileOutcome, error) {
+	// Every target is resolved before the first byte, case-folded
+	// destinations de-duplicated, each asserted to lie under dir. Every
+	// record satisfying R20 and R39 does, so a failure means the index
+	// is not the one the reader validated: the whole operation fails
+	// with file.name, a plan-time invariant and not an item's outcome.
+	// A `names` entry that lands two records of the plan on one path
+	// is the caller's, and params — no policy resolves a collision
+	// between two files of one extract. The fold is R39's own, the one
+	// the index checks live siblings with (format.FoldKey, Unicode
+	// simple folding): a lower-casing would let "ſ.txt" past a planned
+	// "s.txt", which strings.EqualFold — and the sibling rule — calls
+	// one name (the outside review's finding 5).
+	used := make(map[string]*extractItem, len(items))
+	var total uint64
+	var files int
+	for i := range items {
+		it := &items[i]
+		it.dst = filepath.Join(root, filepath.FromSlash(it.out))
+		rel, err := filepath.Rel(root, filepath.Clean(it.dst))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, coded(CodeFileName)
 		}
-		if err := os.MkdirAll(root, 0o700); err != nil {
-			return nil, err
+		key := format.FoldKey(it.dst)
+		if other, dup := used[key]; dup && other.id != it.id {
+			if it.renamed || other.renamed {
+				return nil, coded(CodeParams)
+			}
+			return nil, coded(CodeFileName)
 		}
-		results := make([]FileOutcome, 0, len(items))
-		at := make(map[[16]byte]int, len(items))
-		gone := map[[16]byte]bool{}
-		// refused are the directories the destination would not take and
-		// everything beneath them: reported once, for the top, as a skipped
-		// subtree is — nothing beneath is attempted or listed (APP.md §3).
-		refused := map[[16]byte]bool{}
-		var made []extractItem
-		var done uint64
-		o.items.Store(int64(files))
-		o.progress(0, total, "extracting")
-		for _, it := range items {
-			if ctx.Err() != nil {
-				return results, ctx.Err()
-			}
-			// Every outcome names the record and carries the archive copy's
-			// size and date — known before the first byte — so a conflict
-			// can be re-issued by id and compared without walking the tree.
-			res := FileOutcome{Name: it.path, Path: it.dst, IsDir: it.isDir, ID: hexID(it.id), ModifiedAt: it.modifiedAt}
-			if !it.isDir {
-				res.Size = it.size
-			}
-			if refused[it.parentID] {
-				refused[it.id] = true
-				continue
-			}
-			at[it.id] = len(results)
-			if gone[it.parentID] {
-				// A directory that cannot be created takes its subtree with
-				// it, each record beneath it failing in turn.
-				res.Outcome, res.Code = "failed", CodeIO
-				gone[it.id] = true
-				results = append(results, res)
-				continue
-			}
-			if it.isDir {
-				// Created into the parent the order has already made; an
-				// existing folder is used as it stands — never renamed,
-				// never pre-Lstat'ed, never emptied.
-				err := c.extractFS.makeDir(it.dst)
-				switch {
-				case err == nil:
-					res.Outcome = "created"
-					made = append(made, it)
-				case errors.Is(err, os.ErrExist):
-					res.Outcome = "skipped"
-				case refusedByVolume(err):
-					// The volume would not take the folder's name — a
-					// directory's name_refused, as a file's is, since a
-					// shorter one may do and the page asks (Shorten, Rename…,
-					// Skip); nothing beneath it is attempted or listed until
-					// it has one, so the subtree is reported once, for its
-					// top (APP.md §3, ruled 2026-09-10; the outside review's
-					// finding 6).
-					res.Outcome, res.Code = "name_refused", CodeFileNameRefused
-					refused[it.id] = true
-				default:
-					res.Outcome, res.Code = "failed", CodeIO
-					gone[it.id] = true
-				}
-				results = append(results, res)
-				continue
-			}
-			// The operation itself holds the archive open (finishOp is what
-			// closes one nothing holds), so this reader is counted for the
-			// compaction's drain alone: the run this extraction's readers
-			// could unblock is planned when the extraction ends, as every
-			// operation's end plans one (finishOp), and not here.
-			c.mu.Lock()
-			oa.readers++
-			c.mu.Unlock()
-			base := done
-			count := func(written uint64) { o.progress(base+written, total, "extracting") }
-			err := extractFile(ctx, c.extractFS, oa.a, it.id, it.dst, policy == ExtractReplace, count)
-			// Keep-both numbering is bounded — " (2)" to " (999)" — and
-			// stops at the first refusal that is not "already exists": a
-			// name the volume would not take is that record's outcome, not
-			// a reason to try a longer one (APP.md §3, checked 2026-09-10).
-			for n := 2; err != nil && errors.Is(err, os.ErrExist) && policy == ExtractRename && n < 1000; n++ {
-				res.Path = renamed(it.dst, n)
-				err = extractFile(ctx, c.extractFS, oa.a, it.id, res.Path, false, count)
-			}
-			c.mu.Lock()
-			oa.readers--
-			c.mu.Unlock()
+		used[key] = it
+		if !it.isDir {
+			// The plan is resolved, so the strip can say how many files
+			// are coming out (APP.md §3, OpView.Items); the folders it
+			// creates on the way are not files.
+			files++
+			total += it.size
+		}
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
+	results := make([]FileOutcome, 0, len(items))
+	at := make(map[[16]byte]int, len(items))
+	gone := map[[16]byte]bool{}
+	// refused are the directories the destination would not take and
+	// everything beneath them: reported once, for the top, as a skipped
+	// subtree is — nothing beneath is attempted or listed (APP.md §3).
+	refused := map[[16]byte]bool{}
+	var made []extractItem
+	var done uint64
+	o.items.Store(int64(files))
+	o.progress(0, total, phase)
+	for _, it := range items {
+		if ctx.Err() != nil {
+			return results, ctx.Err()
+		}
+		// Every outcome names the record and carries the archive copy's
+		// size and date — known before the first byte — so a conflict
+		// can be re-issued by id and compared without walking the tree.
+		res := FileOutcome{Name: it.path, Path: it.dst, IsDir: it.isDir, ID: hexID(it.id), ModifiedAt: it.modifiedAt}
+		if !it.isDir {
+			res.Size = it.size
+		}
+		if refused[it.parentID] {
+			refused[it.id] = true
+			continue
+		}
+		at[it.id] = len(results)
+		if gone[it.parentID] {
+			// A directory that cannot be created takes its subtree with
+			// it, each record beneath it failing in turn.
+			res.Outcome, res.Code = "failed", CodeIO
+			gone[it.id] = true
+			results = append(results, res)
+			continue
+		}
+		if it.isDir {
+			// Created into the parent the order has already made; an
+			// existing folder is used as it stands — never renamed,
+			// never pre-Lstat'ed, never emptied.
+			err := c.extractFS.makeDir(it.dst)
 			switch {
 			case err == nil:
-				res.Outcome = "extracted"
-			case errors.Is(err, os.ErrExist) && policy == ExtractAsk:
-				// The collision is the page's to resolve: it asks and
-				// re-issues Extract for the chosen ids with replace or
-				// rename. Existing is a stat taken after the collision was
-				// seen — by the cheap pre-check or by the exclusive create's
-				// refusal — and decides nothing: nothing is ever placed over
-				// a file on a stat's word (APP.md §3). A file that went in
-				// between leaves the outcome with none.
-				res.Outcome, res.Existing = "conflict", existingFile(res.Path)
-			case errors.Is(err, os.ErrExist) && policy == ExtractRename:
-				// Every name to (999) was taken: keep-both was asked for
-				// and nothing was kept, which is a failure and not a skip
-				// (APP.md §3, the outside review's finding 40).
-				res.Outcome, res.Code = "failed", CodeFileExists
+				res.Outcome = "created"
+				made = append(made, it)
 			case errors.Is(err, os.ErrExist):
 				res.Outcome = "skipped"
-			case ctx.Err() != nil:
-				return results, ctx.Err()
-			case errors.Is(err, errNameRefused):
-				// The final name is what the volume refused; a shorter one
-				// may do, and the page asks (Shorten, Rename…, Skip).
+			case refusedByVolume(err):
+				// The volume would not take the folder's name — a
+				// directory's name_refused, as a file's is, since a
+				// shorter one may do and the page asks (Shorten, Rename…,
+				// Skip); nothing beneath it is attempted or listed until
+				// it has one, so the subtree is reported once, for its
+				// top (APP.md §3, ruled 2026-09-10; the outside review's
+				// finding 6).
 				res.Outcome, res.Code = "name_refused", CodeFileNameRefused
-			case errors.Is(err, errPathRefused):
-				// The temporary — a fixed short name in the same folder —
-				// is what it refused: the path, and no name helps.
-				res.Outcome, res.Code = "path_refused", CodeFilePathRefused
+				refused[it.id] = true
 			default:
-				res.Outcome, res.Code = "failed", classify(err).Code
+				res.Outcome, res.Code = "failed", CodeIO
+				gone[it.id] = true
 			}
 			results = append(results, res)
-			done += it.size
-			o.progress(done, total, "extracting")
+			continue
 		}
-		// Each directory this extraction created then takes its modified_at,
-		// deepest first and only once everything beneath it has landed; a
-		// folder that was already there keeps its own time (DESIGN trap 28),
-		// and a time that will not set leaves the folder created with io.
-		sort.SliceStable(made, func(i, j int) bool { return made[i].depth > made[j].depth })
-		for _, it := range made {
-			t := time.Unix(it.modifiedAt, 0)
-			if err := os.Chtimes(it.dst, t, t); err != nil {
-				if i, ok := at[it.id]; ok {
-					results[i].Code = CodeIO
-				}
+		// The operation itself holds the archive open (finishOp is what
+		// closes one nothing holds), so this reader is counted for the
+		// compaction's drain alone: the run this extraction's readers
+		// could unblock is planned when the extraction ends, as every
+		// operation's end plans one (finishOp), and not here.
+		c.mu.Lock()
+		oa.readers++
+		c.mu.Unlock()
+		base := done
+		count := func(written uint64) { o.progress(base+written, total, phase) }
+		err := extractFile(ctx, c.extractFS, oa.a, it.id, it.dst, policy == ExtractReplace, count)
+		// Keep-both numbering is bounded — " (2)" to " (999)" — and
+		// stops at the first refusal that is not "already exists": a
+		// name the volume would not take is that record's outcome, not
+		// a reason to try a longer one (APP.md §3, checked 2026-09-10).
+		for n := 2; err != nil && errors.Is(err, os.ErrExist) && policy == ExtractRename && n < 1000; n++ {
+			res.Path = renamed(it.dst, n)
+			err = extractFile(ctx, c.extractFS, oa.a, it.id, res.Path, false, count)
+		}
+		c.mu.Lock()
+		oa.readers--
+		c.mu.Unlock()
+		switch {
+		case err == nil:
+			res.Outcome = "extracted"
+		case errors.Is(err, os.ErrExist) && policy == ExtractAsk:
+			// The collision is the page's to resolve: it asks and
+			// re-issues Extract for the chosen ids with replace or
+			// rename. Existing is a stat taken after the collision was
+			// seen — by the cheap pre-check or by the exclusive create's
+			// refusal — and decides nothing: nothing is ever placed over
+			// a file on a stat's word (APP.md §3). A file that went in
+			// between leaves the outcome with none.
+			res.Outcome, res.Existing = "conflict", existingFile(res.Path)
+		case errors.Is(err, os.ErrExist) && policy == ExtractRename:
+			// Every name to (999) was taken: keep-both was asked for
+			// and nothing was kept, which is a failure and not a skip
+			// (APP.md §3, the outside review's finding 40).
+			res.Outcome, res.Code = "failed", CodeFileExists
+		case errors.Is(err, os.ErrExist):
+			res.Outcome = "skipped"
+		case ctx.Err() != nil:
+			return results, ctx.Err()
+		case errors.Is(err, errNameRefused):
+			// The final name is what the volume refused; a shorter one
+			// may do, and the page asks (Shorten, Rename…, Skip).
+			res.Outcome, res.Code = "name_refused", CodeFileNameRefused
+		case errors.Is(err, errPathRefused):
+			// The temporary — a fixed short name in the same folder —
+			// is what it refused: the path, and no name helps.
+			res.Outcome, res.Code = "path_refused", CodeFilePathRefused
+		default:
+			res.Outcome, res.Code = "failed", classify(err).Code
+		}
+		results = append(results, res)
+		done += it.size
+		o.progress(done, total, phase)
+	}
+	// Each directory this extraction created then takes its modified_at,
+	// deepest first and only once everything beneath it has landed; a
+	// folder that was already there keeps its own time (DESIGN trap 28),
+	// and a time that will not set leaves the folder created with io.
+	sort.SliceStable(made, func(i, j int) bool { return made[i].depth > made[j].depth })
+	for _, it := range made {
+		t := time.Unix(it.modifiedAt, 0)
+		if err := os.Chtimes(it.dst, t, t); err != nil {
+			if i, ok := at[it.id]; ok {
+				results[i].Code = CodeIO
 			}
 		}
-		return results, nil
-	}), nil
+	}
+	return results, nil
 }
 
 // extractPlan resolves the set and orders it parents-first. A record reached

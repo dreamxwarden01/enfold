@@ -73,6 +73,13 @@ type Deps struct {
 	Volumes Volumes     // nil: the platform's own answer
 	Log     Logger      // nil: discard
 	DataDir string      // %LOCALAPPDATA%\Enfold; settings.json lives here
+	// Drag starts the native drag out of the window (dragout.go): the
+	// shell's dragout.Begin on Windows, a test's fake. nil: drag.unsupported.
+	Drag DragStarter
+	// DragRoot is where every drag stages, %LOCALAPPDATA%\Enfold\drag in
+	// the application (APP.md §3); empty is DataDir\drag. Tests inject a
+	// temporary directory: the scavenge deletes folders under it.
+	DragRoot string
 }
 
 // Core is the application state. One per process. Every method is safe
@@ -181,6 +188,7 @@ func (c *Core) Start() (previewPort int, err error) {
 		}
 	}
 	c.sweepStaging()
+	c.startDragScavenge()
 	c.scanRetired()
 	if path != "" {
 		name := c.settings.DisplayName

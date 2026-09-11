@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ArchiveStat, FileRow, Page, VaultStatus } from "./api";
+import type { ArchiveStat, DragOutResult, FileRow, Page, VaultStatus } from "./api";
 
 // The store's ordering rules (APP.md §2.4, §6, ruled 2026-09-10): which
 // reply is applied and which is dropped, what a navigation clears, and
@@ -16,6 +16,7 @@ const m = vi.hoisted(() => ({
   Status: vi.fn(),
   List: vi.fn(),
   Leave: vi.fn(),
+  DragOut: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -37,6 +38,7 @@ vi.mock("./api", async () => {
     ...actual,
     Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children },
     Archives: { List: m.List, Leave: m.Leave },
+    Shell: { DragOut: m.DragOut },
     Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: never },
     Keys: { Slots: never, EntangledState: never },
     Settings: { Get: never },
@@ -44,6 +46,10 @@ vi.mock("./api", async () => {
 });
 
 type Store = typeof import("./state.svelte").store;
+// The grace a self-drop's flight waits for its landing (the store's own
+// SELF_DROP_GRACE; the module is re-imported per test, so the number is
+// pinned here).
+const SELF_DROP_GRACE = 1000;
 
 const ROOT = "0".repeat(32);
 
@@ -84,6 +90,7 @@ beforeEach(async () => {
   m.Status.mockReset();
   m.List.mockReset().mockResolvedValue([]);
   m.Leave.mockReset().mockResolvedValue(undefined);
+  m.DragOut.mockReset();
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -302,5 +309,199 @@ describe("the boot gate (booted)", () => {
     expect(store.booted).toBe(true);
     expect(store.bootFailed).toBe("");
     expect(store.status?.seq).toBe(5);
+  });
+});
+
+// The one gesture's flight (APP.md §3, §6, ruled 2026-09-11, lib/dragout.ts):
+// the store calls Shell.DragOut once and keeps the ids in flight until the
+// answer and, for a self-drop, the WebView's landing add up to a verdict —
+// a Move handed to the page, or nothing.
+describe("the drag out in flight (beginDragOut)", () => {
+  // The drag's folder Shell.DragOut answers, the manifest at its top, and
+  // the items folder beneath it where every path handed out lies.
+  const STAGING = "C:\\Users\\me\\AppData\\Local\\Enfold\\drag\\1a2b3c4d";
+  const ITEMS = `${STAGING}\\items`;
+  const went = (selfDrop: boolean): DragOutResult => ({ selfDrop, extracted: !selfDrop, effect: selfDrop ? 0 : 2, folder: STAGING, opId: "op9" });
+
+  it("calls Shell.DragOut once with the archive and the ids, and ignores a second gesture meanwhile", async () => {
+    await open(["x", "y", "d1"]);
+    const d = deferred<DragOutResult>();
+    m.DragOut.mockReturnValueOnce(d.promise);
+    const first = store.beginDragOut(["x", "y"]);
+    expect(store.dragOut?.ids).toEqual(["x", "y"]);
+    expect(store.dragOut?.names).toEqual(["x", "y"]); // the loaded rows name them
+    expect(store.dragOut?.from).toBe(ROOT);
+    await store.beginDragOut(["d1"]); // ignored: one is in flight
+    expect(m.DragOut).toHaveBeenCalledTimes(1);
+    expect(m.DragOut).toHaveBeenCalledWith("a", ["x", "y"]);
+    d.resolve(went(false));
+    await first;
+    expect(store.dragOut).toBeNull(); // the strip follows the operation from here
+    expect(store.selfDrop).toBeNull();
+  });
+
+  it("starts nothing for an empty selection", async () => {
+    await open(["x"]);
+    await store.beginDragOut([]);
+    expect(m.DragOut).not.toHaveBeenCalled();
+    expect(store.dragOut).toBeNull();
+  });
+
+  it("hands the page the Move when a self-drop is answered and then lands on a folder row", async () => {
+    await open(["x", "d1"]);
+    const d = deferred<DragOutResult>();
+    m.DragOut.mockReturnValueOnce(d.promise);
+    const p = store.beginDragOut(["x"]);
+    d.resolve(went(true));
+    await p;
+    expect(store.dragOut).not.toBeNull(); // waiting for the landing
+    expect(store.dragOut?.opId).toBe("op9");
+    store.dragLanded({ id: "d1", at: "row", isDir: true });
+    expect(store.selfDrop).toEqual({ ids: ["x"], to: "d1", at: "row" });
+    expect(store.dragOut).toBeNull();
+  });
+
+  it("hands the page the same Move when the landing comes before the answer", async () => {
+    await open(["x", "d1"]);
+    const d = deferred<DragOutResult>();
+    m.DragOut.mockReturnValueOnce(d.promise);
+    const p = store.beginDragOut(["x"]);
+    store.dragLanded({ id: "d1", at: "row", isDir: true });
+    expect(store.selfDrop).toBeNull(); // not yet: the answer may say it went out
+    d.resolve(went(true));
+    await p;
+    expect(store.selfDrop).toEqual({ ids: ["x"], to: "d1", at: "row" });
+    expect(store.dragOut).toBeNull();
+  });
+
+  it("moves nothing when the self-drop landed elsewhere, or on a file", async () => {
+    await open(["x", "y"]);
+    m.DragOut.mockResolvedValueOnce(went(true));
+    await store.beginDragOut(["x"]);
+    store.dragLanded("elsewhere");
+    expect(store.selfDrop).toBeNull();
+    expect(store.dragOut).toBeNull();
+    m.DragOut.mockResolvedValueOnce(went(true));
+    await store.beginDragOut(["x"]);
+    store.dragLanded({ id: "y", at: "row", isDir: false });
+    expect(store.selfDrop).toBeNull();
+    expect(store.dragOut).toBeNull();
+  });
+
+  it("names only the ids the loaded rows can: a whole folder taken past them keeps its count", async () => {
+    await open(["x"], 3);
+    m.DragOut.mockResolvedValueOnce(went(false));
+    const p = store.beginDragOut(["x", "y", "z"]);
+    expect(store.dragOut?.ids).toEqual(["x", "y", "z"]);
+    expect(store.dragOut?.names).toEqual(["x"]);
+    await p;
+  });
+
+  it("ends the flight as nothing when someone else's files land on the page meanwhile", async () => {
+    await open(["x", "d1"]);
+    m.DragOut.mockResolvedValueOnce(went(true));
+    await store.beginDragOut(["x"]);
+    expect(store.dragOut).not.toBeNull(); // the grace: waiting for the landing
+    store.dragLanded("foreign");
+    expect(store.dragOut).toBeNull();
+    expect(store.selfDrop).toBeNull();
+  });
+
+  it("lets a self-drop that never lands on the page go after a moment", async () => {
+    vi.useFakeTimers();
+    await open(["x"]);
+    m.DragOut.mockResolvedValueOnce(went(true));
+    await store.beginDragOut(["x"]);
+    expect(store.dragOut).not.toBeNull();
+    vi.advanceTimersByTime(SELF_DROP_GRACE + 1);
+    expect(store.dragOut).toBeNull();
+    expect(store.selfDrop).toBeNull();
+  });
+
+  it("says why when the call is refused, and the flight is over", async () => {
+    await open(["x"]);
+    m.DragOut.mockRejectedValueOnce(new Error("drag.busy"));
+    await store.beginDragOut(["x"]);
+    expect(store.dragOut).toBeNull();
+    expect(store.toasts.map((t) => t.kind)).toEqual(["error"]);
+  });
+
+  it("lands nothing without a flight", async () => {
+    await open(["x", "d1"]);
+    store.dragLanded({ id: "d1", at: "row", isDir: true });
+    expect(store.selfDrop).toBeNull();
+  });
+
+  it("goes with the page when the archive is left", async () => {
+    await open(["x"]);
+    const d = deferred<DragOutResult>();
+    m.DragOut.mockReturnValueOnce(d.promise);
+    const p = store.beginDragOut(["x"]);
+    store.leaveArchive();
+    expect(store.dragOut).toBeNull();
+    d.resolve(went(true));
+    await p;
+    store.dragLanded({ id: "d1", at: "row", isDir: true });
+    expect(store.selfDrop).toBeNull();
+  });
+
+  // The shell's drop (APP.md §3): a self-drop's own paths come back as a
+  // drop too — under the drag's folder, files that never exist — and are
+  // never an add; real files from Explorer go on being one, a flight
+  // waiting for its landing notwithstanding (the review's finding 3).
+  describe("and the shell's drop", () => {
+    const drop = (paths: string[]) => m.handlers["shell.drop"]({ data: { paths, isDir: paths.map(() => false), archiveId: "a", dirId: ROOT } });
+
+    it("is never an add while the drag is in flight and the paths name its items", async () => {
+      m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+      store.boot();
+      await open(["x"]);
+      const d = deferred<DragOutResult>();
+      m.DragOut.mockReturnValueOnce(d.promise);
+      const p = store.beginDragOut(["x"]);
+      drop([`${ITEMS}\\x`]); // before the answer: told by its name
+      expect(store.drop).toBeNull();
+      d.resolve(went(true));
+      await p;
+      drop([`${ITEMS}\\x`]); // in the grace: under the drag's folder
+      expect(store.drop).toBeNull();
+    });
+
+    it("is never an add after the flight when the paths lie under the drag's folder", async () => {
+      m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+      store.boot();
+      await open(["x"]);
+      m.DragOut.mockResolvedValueOnce(went(true));
+      await store.beginDragOut(["x"]);
+      store.dragLanded("elsewhere");
+      expect(store.dragOut).toBeNull();
+      drop([`${ITEMS}\\x`]);
+      expect(store.drop).toBeNull();
+    });
+
+    it("is the add of §3 for a real file dropped while a self-drop still waits for its landing", async () => {
+      m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+      store.boot();
+      await open(["x"]);
+      m.DragOut.mockResolvedValueOnce(went(true));
+      await store.beginDragOut(["x"]);
+      expect(store.dragOut).not.toBeNull(); // the grace
+      drop(["D:\\Pictures\\a.jpg"]);
+      expect(store.drop?.paths).toEqual(["D:\\Pictures\\a.jpg"]);
+    });
+
+    it("is the add of §3 for real files, before and after a drag", async () => {
+      m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+      store.boot();
+      await open(["x"]);
+      const dropped = () => store.drop?.paths;
+      drop(["D:\\Pictures\\a.jpg"]);
+      expect(dropped()).toEqual(["D:\\Pictures\\a.jpg"]);
+      store.drop = null;
+      m.DragOut.mockResolvedValueOnce(went(false));
+      await store.beginDragOut(["x"]);
+      drop(["D:\\Pictures\\b.jpg"]);
+      expect(dropped()).toEqual(["D:\\Pictures\\b.jpg"]);
+    });
   });
 });

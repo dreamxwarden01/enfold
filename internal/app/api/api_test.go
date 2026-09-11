@@ -92,6 +92,7 @@ func TestBoundSurface(t *testing.T) {
 		},
 		"Shell": {
 			"CloseWindow()",
+			"DragOut(string, []string) (app.DragOutResult, error)",
 			"PickFiles(string, bool) ([]string, error)",
 			"PickFolder(string) (string, error)",
 			"Quit()",

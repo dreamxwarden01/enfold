@@ -27,7 +27,22 @@ mounted, and the preview URL - served by this mock at /p/<token>/<id> -
 answers 404 the moment the token is gone. Archives.Leave unmounts at once
 and leaves the archive DRAINING while one of its own operations still runs
 (the row keeps open: true until it ends, then archives.changed with open:
-false); Archives.Close is the kill switch and cancels that operation."""
+false); Archives.Close is the kill switch and cancels that operation.
+
+The drag out of the window (APP.md 3, ruled 2026-09-10/11) is played as
+far as a browser can play it: Shell.DragOut answers a fake dragout
+operation that hovers, then runs *Preparing N files* by bytes (Cancel
+works), then *Awaiting Windows Explorer*, and ends moved. POST /mock/state
+{"drag": {"selfDrop": true}} makes the next drag a self-drop - the call
+answers selfDrop with nothing extracted, and the page performs the Move of
+the ids it kept in flight when the WebView's drop lands on a folder row
+(dispatch a drop event on one, since a native drag cannot run here: the
+page tells its own drop by the names it carries, one File per dragged
+record, so build the event's dataTransfer with a File of each selected
+row's name - a drop of other names is Explorer's and stays an add) - and
+{"drag": {"fail": "file.name_refused"}} fails the extraction half-way
+through the preparing phase, which fails the drop's request (dragResult
+failed)."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -171,6 +186,9 @@ state = {
     # the URL is 404 whatever it says (APP.md 2.3, 4).
     "mounted": None,
     "token": "",
+    # The drag out's switches (drag_out): a self-drop, or an extraction
+    # that fails while preparing. Both are read at the next DragOut.
+    "drag": {"selfDrop": False, "fail": ""},
 }
 
 # Scenes the lock screen cannot reach on its own here (the mock dispatches
@@ -935,6 +953,181 @@ def extract(args):
     return start_op("extract", total, commit, items=len(files), policy=policy, destination=dest)
 
 
+# ---- the drag out of the window (APP.md 3, ruled 2026-09-10/11) --------
+#
+# The staged route: one native drag per gesture, the staging folder under
+# %LOCALAPPDATA%\Enfold\drag, the files written by the drop's own request
+# after the button's release - the strip's *Preparing N files* - and then
+# *Awaiting Windows Explorer* until the staged files are gone. The mock has
+# no OLE and no Explorer, so the phases run on a clock.
+
+DRAG_ROOT = "C:\\Users\\me\\AppData\\Local\\Enfold\\drag\\"
+DRAG_HOVER = 1.0       # the hover, before the fake release
+DRAG_PREPARING = 3.0   # the drop's request running the extraction
+DRAG_AWAITING = 2.5    # until the staged files are gone
+DRAG_TICK = 0.1        # how often a waiting phase looks for a cancel
+
+# One native drag at a time (APP.md 3 "One gesture"): a second DragOut is
+# drag.busy only while DoDragDrop would still be running - until the first
+# call has returned - and not for as long as its operation awaits Explorer,
+# which is the Go core's Begin/Run contract (the outside review's finding
+# 11 on the mock).
+drag_running = threading.Lock()
+
+
+def drag_plan(ids):
+    """The records a drag stages, each with its path under the items
+    folder: every selected record at the top under its own name, wherever
+    it sits in the tree, and a selected directory's whole subtree beneath
+    it - never the ancestors up to the root, which an extract writes and a
+    drag does not (APP.md 3, dragout.go). The walk goes from the root
+    through every folder, selected or not, so a selection inside an
+    unselected parent is staged too (the outside review's finding 10 on the
+    mock: it was skipped, and the plan came out empty)."""
+    want = set(ids)
+    out = []
+
+    def walk(pid, under):
+        for c in children(pid):
+            if under is not None:
+                rel = under + "\\" + c["name"]
+            elif c["id"] in want:
+                rel = c["name"]
+            else:
+                rel = None
+            if rel is not None:
+                out.append((c, rel))
+            if c["isDir"]:
+                walk(c["id"], rel)
+    walk(ROOT_ID, None)
+    return out
+
+
+def drag_out(args):
+    """Shell.DragOut(archiveID, recordIDs): blocks until DoDragDrop would
+    return - after the preparing phase for a drop Explorer takes, at once
+    for a self-drop - and answers the DragOutResult. The dragout operation
+    it registers is the strip's: "dragging" during the hover (not shown),
+    "preparing" by bytes with Items = the files, "awaiting" with no Total,
+    and op.done with dragResult saying how it ended. An empty selection or
+    the root is params, an id that is not live file.not_found, two
+    records that would take one name at the top file.exists, and a second
+    drag while the first has not returned drag.busy."""
+    archive_id, ids = (list(args) + ["", []])[:2]
+    if state.get("mounted") != archive_id:
+        return Err("archive.not_open")
+    ids = ids or []
+    if not ids or ROOT_ID in ids:
+        return Err("params")
+    if not drag_running.acquire(blocking=False):
+        return Err("drag.busy")
+    try:
+        return run_drag(archive_id, ids)
+    finally:
+        drag_running.release()
+
+
+def run_drag(archive_id, ids):
+    """The drag itself, under the running lock: what drag_out answers."""
+    tops = []
+    for rid in ids:
+        r = record(rid)
+        if r is None:
+            return Err("file.not_found")
+        tops.append(r["name"].lower())
+    if len(set(tops)) != len(tops):
+        return Err("file.exists")
+    plan = drag_plan(ids)
+    files = [r for r, _ in plan if not r["isDir"]]
+    total = sum(r["size"] for r in files)
+    folder = DRAG_ROOT + secrets.token_hex(4)
+    self_drop = bool(state["drag"].get("selfDrop"))
+    fail = state["drag"].get("fail") or ""
+
+    state["nextOp"] = state.get("nextOp", 0) + 1
+    op_id = "op%d" % state["nextOp"]
+    op = {"id": op_id, "kind": "dragout", "archiveId": archive_id, "done": 0, "total": 0,
+          "items": len(files), "phase": "dragging", "startedAt": int(time.time()), "finished": False,
+          "results": [], "returned": 0}
+    state["ops"][op_id] = op
+    emit("op.progress", op_view(op))
+
+    def outcome(planned, code=""):
+        # The path is the drag's folder, then items, then the record's
+        # place beneath a selected top (dragout.Result.Folder).
+        r, rel = planned
+        res = {"path": folder + "\\items\\" + rel, "name": path_of(r), "isDir": r["isDir"],
+               "outcome": "created" if r["isDir"] else "extracted",
+               "id": r["id"], "size": 0 if r["isDir"] else r["size"], "modifiedAt": r["modifiedAt"]}
+        if code:
+            res["outcome"], res["code"] = "failed", code
+        return res
+
+    returned = threading.Event()
+    result = {"selfDrop": False, "extracted": False, "effect": 0, "folder": folder, "opId": op_id}
+
+    def end(reason, error="", results=None):
+        op["finished"] = True
+        op["dragResult"] = reason
+        if error:
+            op["error"] = error
+        if results is not None:
+            op["results"] = results
+        emit("op.done", op_view(op))
+        returned.set()
+        finish_drain(archive_id)
+
+    def run():
+        time.sleep(DRAG_HOVER)
+        if op.get("cancelled"):
+            return end("cancelled", "op.cancelled")
+        if self_drop:
+            # The button came up over Enfold's own window: nothing is
+            # extracted, the folder goes at once, and the page performs
+            # the Move (APP.md 3).
+            result["selfDrop"] = True
+            return end("self_drop")
+        op["phase"], op["total"] = "preparing", total
+        emit("op.progress", op_view(op))
+        steps = 24
+        for i in range(1, steps + 1):
+            time.sleep(DRAG_PREPARING / steps)
+            if op.get("cancelled"):
+                # The cancel fails the drop's request and Explorer
+                # abandons the drop.
+                return end("cancelled", "op.cancelled")
+            if fail and i == steps // 2:
+                # A record could not be written: the request fails rather
+                # than hand out half-written files, and the drag ends
+                # failed with the extraction's code - refused is a target
+                # that let the data object go without ever asking.
+                out = [outcome(pl) for pl in plan[:-1]] + [outcome(plan[-1], fail)] if plan else []
+                return end("failed", fail, out)
+            op["done"] = total * i // steps
+            emit("op.progress", op_view(op))
+        # Explorer has the paths: DoDragDrop returns and the strip waits.
+        op["phase"], op["total"], op["done"] = "awaiting", 0, 0
+        emit("op.progress", op_view(op))
+        result["extracted"] = True
+        result["effect"] = 2  # DROPEFFECT_MOVE: a same-volume drop is one rename
+        returned.set()
+        # A cancel or a Close while awaiting ends the operation there and
+        # then as cancelled, like the core: nothing of the drag is left to
+        # end - the files are Explorer's - and the strip must not linger
+        # behind a page that has closed (dragout.go wait).
+        waited = 0.0
+        while waited < DRAG_AWAITING:
+            time.sleep(DRAG_TICK)
+            waited += DRAG_TICK
+            if op.get("cancelled"):
+                return end("cancelled", "op.cancelled")
+        end("moved", results=[outcome(pl) for pl in plan])
+
+    threading.Thread(target=run, daemon=True).start()
+    returned.wait()
+    return result
+
+
 # ---- an archive's lifetime (APP.md 2.3, ruled 2026-09-10) --------------
 #
 # An open archive has no timeout of its own. Leaving its page closes it at
@@ -1171,6 +1364,7 @@ METHODS = {
     2652127606: lambda a: state["settings"], 740356410: lambda a: state["settings"].update(a[0]) if a else None,
     3606391931: lambda a: None, 3229291943: lambda a: ["D:/Pictures/a.jpg", "D:/Pictures/b.jpg"], 2529646972: lambda a: "D:/Pictures", 2079207478: lambda a: None,
     842300112: lambda a: None, 1923582270: lambda a: "D:/new.efd", 3130426784: lambda a: None,
+    945813141: drag_out,                                        # shell.DragOut (APP.md 3)
 }
 
 class H(SimpleHTTPRequestHandler):

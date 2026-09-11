@@ -9,7 +9,9 @@
   import { statusNote } from "../lib/status";
   import { fileNameProblem, newNameProblem } from "../lib/validate";
   import { ROOT_ID, canDrop, countPhrase, deleteBody, deleteCounts, deleteTitle } from "../lib/tree";
-  import type { DragState, DropTarget, Kinded } from "../lib/tree";
+  import type { DropTarget, Kinded } from "../lib/tree";
+  import { ownNames, pastThreshold } from "../lib/dragout";
+  import type { DropAt, Flight, PendingMove } from "../lib/dragout";
   import { summaryLine, tally, troubles } from "../lib/results";
   import { destinationFor } from "../lib/extract";
   import { allOf, conflictsOf, namesFor, planIsEmpty, reissuePlan } from "../lib/conflicts";
@@ -108,10 +110,57 @@
   const rowIcon = (r: FileRow) => fileIcon(r.name, r.isDir);
 
   // The row's own click (lib/selection.ts): plain selects one and sets the
-  // anchor, Ctrl toggles, Shift ranges from the anchor.
+  // anchor, Ctrl toggles, Shift ranges from the anchor. A click whose
+  // press already selected the row, or became a drag, is spent: the press
+  // ran the same rules once, and a second run would toggle the row back.
   function click(e: MouseEvent, r: FileRow) {
+    const p = press;
+    press = null;
+    if (p && p.id === r.id && (p.selected || p.dragged)) return;
     moveError = null;
     store.selectClick(r.id, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
+  }
+
+  // The one gesture (APP.md §3, §6, ruled 2026-09-11): rows are not
+  // HTML5-draggable — a page's own drag cannot become the native one, and
+  // two drags cannot run at once — so a press on a row, then movement past
+  // the threshold, calls Shell.DragOut with the selection and the native
+  // drag runs from there, serving the list's own moves (a self-drop) and
+  // the drag out alike. A press on an unselected row first selects it by
+  // the click's own rules, as a file manager does, so the drag takes that
+  // row with the modifiers' meaning; a press on a selected row takes the
+  // selection as it stands. The checkbox is the checkbox's, and only the
+  // primary button presses.
+  let press: { id: string; x: number; y: number; selected: boolean; dragged: boolean } | null = null;
+
+  function pointerdown(e: PointerEvent, r: FileRow) {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("input")) return;
+    let selectedNow = false;
+    if (!selected.has(r.id)) {
+      moveError = null;
+      store.selectClick(r.id, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
+      selectedNow = true;
+    }
+    press = { id: r.id, x: e.clientX, y: e.clientY, selected: selectedNow, dragged: false };
+    window.addEventListener("pointermove", pressMove);
+    window.addEventListener("pointerup", pressEnd);
+    window.addEventListener("pointercancel", pressEnd);
+  }
+
+  function pressMove(e: PointerEvent) {
+    const p = press;
+    if (!p || !pastThreshold(e.clientX - p.x, e.clientY - p.y)) return;
+    pressEnd();
+    p.dragged = true;
+    // The native drag takes the mouse from here; a second gesture while
+    // this one is in flight is ignored by the store.
+    void store.beginDragOut([...store.sel.ids]);
+  }
+
+  function pressEnd() {
+    window.removeEventListener("pointermove", pressMove);
+    window.removeEventListener("pointerup", pressEnd);
+    window.removeEventListener("pointercancel", pressEnd);
   }
 
   // A row's checkbox toggles that row alone and makes it the anchor; the
@@ -385,43 +434,66 @@
   });
 
   // A drag of the selection onto a folder row, onto `..` (up one level) or
-  // onto the heading (to the root) is a Move (APP.md §6). It is refused
-  // whole and in place — nothing is staged when any item fails — so the
-  // reason is shown against the target that was aimed at, and the
-  // selection stays where it was. `at` says which surface that was: the
-  // parent's id is the root's when the folder shown is one level down,
-  // and the refusal must sit where the drag went.
-  type DropAt = "row" | "up" | "head";
-  let drag = $state<DragState | null>(null);
+  // onto the heading (to the root) is a Move (APP.md §6): the native drag
+  // of the one gesture released over Enfold's own window — a self-drop —
+  // whose landing the WebView's own drop reports here while the ids are in
+  // flight (store.dragOut, lib/dragout.ts). It is refused whole and in
+  // place — nothing is staged when any item fails — so the reason is shown
+  // against the target that was aimed at, and the selection stays where it
+  // was. `at` says which surface that was: the parent's id is the root's
+  // when the folder shown is one level down, and the refusal must sit
+  // where the drag went. Without a flight these handlers do nothing, and
+  // the drop bubbles to the runtime's own listener: real files from
+  // Explorer are the add of §3, which the shell reports (store.drop). A
+  // flight alone does not make a drop ours (the outside review's finding
+  // 3): a self-drop answered over the window frame waits a moment for its
+  // landing, and a real Explorer drop in that moment — its files' names
+  // not the gesture's, lib/dragout.ts ownNames — is the add as always,
+  // left to bubble, and ends the flight with nothing to do.
   let dropTarget = $state<{ id: string; at: DropAt } | null>(null);
   let moveError = $state<{ id: string; at: DropAt; text: string } | null>(null);
   const upTarget = $derived<DropTarget | null>(parentId ? { id: parentId, isDir: true } : null);
   const headTarget: DropTarget = { id: ROOT_ID, isDir: true };
 
-  function dragStart(e: DragEvent, r: FileRow) {
-    // Dragging a row outside the selection takes that row alone, the way
-    // a file manager does.
-    const ids = selected.has(r.id) ? chosenIds : [r.id];
-    if (ids.length === 0) {
-      e.preventDefault();
-      return;
-    }
-    drag = { ids, from: dirId };
-    moveError = null;
-    e.dataTransfer?.setData("text/plain", ids.join(" "));
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  }
+  // The names a drop carries: one File per item dropped, a folder as its
+  // name.
+  const dropNames = (e: DragEvent) => Array.from(e.dataTransfer?.files ?? [], (f) => f.name);
 
-  function dragEnd() {
-    drag = null;
-    dropTarget = null;
+  // While a drag hovers its names are hidden from the page, but not how
+  // many files it carries: one that does not carry the flight's count is
+  // someone else's, and the runtime's own hover effect is left to it.
+  function foreignHover(e: DragEvent, f: Flight): boolean {
+    const items = e.dataTransfer?.items;
+    if (!items) return false;
+    let files = 0;
+    for (const it of items) if (it.kind === "file") files++;
+    return files !== f.ids.length;
   }
 
   function over(e: DragEvent, t: DropTarget, at: DropAt) {
-    if (!canDrop(t, drag)) return;
+    const f = store.dragOut;
+    if (!f || foreignHover(e, f)) return;
+    // Ours: the runtime's document-level listener must not see it, since
+    // it would set the effect to none over the heading, which is outside
+    // the file-drop target, and Explorer's cursor over a file row would
+    // otherwise offer a copy that means nothing.
     e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    dropTarget = { id: t.id, at };
+    e.stopPropagation();
+    const ok = canDrop(t, f);
+    if (e.dataTransfer) e.dataTransfer.dropEffect = ok ? "move" : "none";
+    dropTarget = ok ? { id: t.id, at } : null;
+  }
+
+  // The list's blank area under our own drag: no effect, and a release
+  // there is nothing (APP.md §3). A row's handler has already stopped the
+  // event by the time it would reach here.
+  function overBlank(e: DragEvent) {
+    const f = store.dragOut;
+    if (!f || foreignHover(e, f)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    dropTarget = null;
   }
 
   function leave(t: DropTarget, at: DropAt) {
@@ -431,23 +503,48 @@
   const isOver = (id: string, at: DropAt) => dropTarget?.id === id && dropTarget.at === at;
   const refusedAt = (id: string, at: DropAt) => moveError?.id === id && moveError.at === at;
 
-  async function dropOn(e: DragEvent, t: DropTarget, at: DropAt) {
-    if (!drag) return;
+  function dropOn(e: DragEvent, t: DropTarget, at: DropAt) {
+    const f = store.dragOut;
+    if (!f) return;
+    dropTarget = null;
+    if (!ownNames(dropNames(e), f)) {
+      // Someone else's files: the runtime's listener gets the drop and
+      // the shell reports the add; the flight is over.
+      store.dragLanded("foreign");
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
-    const d = drag;
-    drag = null;
+    store.dragLanded({ id: t.id, at, isDir: t.isDir });
+  }
+
+  // A drop that reached the window without landing on a target: elsewhere
+  // on the page, which is nothing for a self-drop; the runtime's listener
+  // has had it already, and what it reports (store.drop) is told apart by
+  // its paths. A foreign drop ends the flight the same way, as nothing.
+  function dropElsewhere(e: DragEvent) {
     dropTarget = null;
-    // A drop onto the folder the rows are already in, onto a row staged
-    // for deletion, or onto a file is a no-op: nothing is sent.
-    if (!canDrop(t, d)) return;
+    const f = store.dragOut;
+    if (f) store.dragLanded(ownNames(dropNames(e), f) ? "elsewhere" : "foreign");
+  }
+
+  // The Move a self-drop adds up to (store.selfDrop): performed here, so
+  // that a refusal is said against the target it was aimed at.
+  $effect(() => {
+    const m = store.selfDrop;
+    if (!m) return;
+    store.selfDrop = null;
+    void moveTo(m);
+  });
+
+  async function moveTo(m: PendingMove) {
     try {
-      await Archive.Move(id, d.ids, t.id);
+      await Archive.Move(id, m.ids, m.to);
       moveError = null;
       store.clearSelection();
       await store.refreshArchive();
     } catch (err) {
-      moveError = { id: t.id, at, text: codeText(errorOf(err).code) };
+      moveError = { id: m.to, at: m.at, text: codeText(errorOf(err).code) };
     }
   }
 
@@ -656,7 +753,7 @@
   });
 </script>
 
-<svelte:window onkeydown={shortcut} />
+<svelte:window onkeydown={shortcut} ondrop={dropElsewhere} />
 
 <div class="layer-head">
   <button type="button" class="btn subtle back" onclick={() => { store.leaveArchive(); }}>Archives</button>
@@ -672,7 +769,7 @@
       onclick={() => void store.enterDir(ROOT_ID)}
       ondragover={(e) => over(e, headTarget, "head")}
       ondragleave={() => leave(headTarget, "head")}
-      ondrop={(e) => void dropOn(e, headTarget, "head")}
+      ondrop={(e) => dropOn(e, headTarget, "head")}
     >{archiveName}</button>
   </h1>
   <div class="grow"></div>
@@ -732,7 +829,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
     <div class="tablewrap" data-file-drop-target="true" data-archive-id={id} data-dir-id={dirId}
       role="region" aria-label="Files" bind:this={listEl} onclick={blank} onscroll={scrolled}
-      ondragenter={() => { if (!drag) dropping = true; }} ondragleave={() => (dropping = false)} ondrop={() => (dropping = false)}>
+      ondragenter={() => { if (!store.dragOut) dropping = true; }} ondragover={overBlank} ondragleave={() => (dropping = false)} ondrop={() => (dropping = false)}>
       {#if rows.length === 0 && !parentId}
         <div class="empty">{listCopy.emptyRoot}</div>
       {:else}
@@ -773,7 +870,7 @@
                 onkeydown={upKeydown}
                 ondragover={(e) => over(e, upTarget, "up")}
                 ondragleave={() => leave(upTarget, "up")}
-                ondrop={(e) => void dropOn(e, upTarget, "up")}
+                ondrop={(e) => dropOn(e, upTarget, "up")}
               >
                 <td class="chk"></td>
                 <td class="sel-mark">
@@ -793,15 +890,13 @@
                 aria-selected={selected.has(r.id)}
                 class:drop-into={isOver(r.id, "row")}
                 class:refused={refusedAt(r.id, "row")}
-                draggable={true}
+                onpointerdown={(e) => pointerdown(e, r)}
                 onclick={(e) => click(e, r)}
                 ondblclick={() => open(r)}
                 onkeydown={(e) => keydown(e, r)}
-                ondragstart={(e) => dragStart(e, r)}
-                ondragend={dragEnd}
                 ondragover={(e) => over(e, { id: r.id, isDir: r.isDir }, "row")}
                 ondragleave={() => leave({ id: r.id, isDir: r.isDir }, "row")}
-                ondrop={(e) => void dropOn(e, { id: r.id, isDir: r.isDir }, "row")}
+                ondrop={(e) => dropOn(e, { id: r.id, isDir: r.isDir }, "row")}
               >
                 <td class="chk"><input type="checkbox" checked={selected.has(r.id)} tabindex="-1" aria-label={listCopy.tickRow(r.name)} onclick={(e) => tick1(e, r)} ondblclick={(e) => e.stopPropagation()} /></td>
                 <td class="sel-mark">

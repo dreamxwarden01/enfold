@@ -565,10 +565,13 @@ thead th .caret.on.asc { transform: rotate(180deg); }
 .file-split { display: grid; grid-template-columns: 1fr 264px; gap: 16px; flex: 1; min-height: 0; padding-bottom: 14px; }
 .file-split.dropping .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
 /* A drag of the selection onto a folder row, onto `..` or onto the heading
-   is a Move (APP.md §6): the target the drag is over wears the accent
-   wash, and a refusal — the whole move refused, in place — is said against
-   that target, where the drag was aimed. The name cell lets the line wrap
-   under the name; no other cell does. */
+   is a Move (APP.md §6) — since 2026-09-11 the native drag of the one
+   gesture, released over Enfold's own window (APP.md §3): rows are not
+   HTML5-draggable, a press-and-move starts the drag through the shell, and
+   the WebView's own drop reports where it landed. The target the drag is
+   over wears the accent wash, and a refusal — the whole move refused, in
+   place — is said against that target, where the drag was aimed. The name
+   cell lets the line wrap under the name; no other cell does. */
 tbody tr.drop-into td { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); }
 /* The name keeps its own nowrap, whatever the cell does, so it ellipsizes
    in the refused row as in every other. */
@@ -735,6 +738,9 @@ tbody tr.up .fname { color: var(--ink-2); }
    second, quieter line's worth of words beside the first. */
 .op .opphase { flex: none; color: var(--ink-2); }
 .op .opbytes { flex: none; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* *Awaiting Windows Explorer* has no bar (APP.md §3): the words stand alone
+   at the strip's left, the room the bar would take left empty. */
+.op .grow { flex: 1; }
 .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; z-index: 20; }
 .dialog { width: 460px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); overflow: auto; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-window); padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
 .dialog h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; }

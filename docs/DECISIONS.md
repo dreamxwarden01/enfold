@@ -3774,3 +3774,57 @@ and every press-and-move starts the native drag; a release over Enfold's own win
 self-drop — nothing extracted, the folder deleted at once — that the page turns into the
 `Move` it always was, by the ids it kept in flight; a release anywhere else is the drag out.
 
+## 2026-09-11 — Drag out, integrated
+
+Two Opus implementers (the first interrupted by the session's limit and resumed on top of its
+own half — it had lifted the prototype faithfully; four things were wrong or unfinished),
+then the outside review, then two fixers. **What landed.** `internal/dragout` is the
+prototype's COM runtime made a library: the pinned vtables, the refcounts with the
+self-reference ledger, the free-threaded marshaler aggregated and `IAgileObject` answered,
+the `CF_HDROP` data object with `IDataObjectAsyncCapability`, the enumerator, the drop source
+that arms the extraction on the button's release and tells a self-drop from the window under
+the cursor, the staging folder — `manifest.json` at its top, the items under `items\` so that
+a record called `manifest.json` cannot touch it — with its state machine (hover requests
+answered with the paths the items will have; the first request after the release runs the
+caller's extraction inside `GetData` and fails it if the extraction failed or was cancelled,
+even a cancel that lands during the last file's placement), the watch over every item, files
+and folders alike, and the four ways *Awaiting* ends (gone, `EndOperation`, read then idle
+five seconds, released then five seconds with no read — the last because a target that keeps
+the paths for a later read would hold the strip for ever, and because Explorer never calls
+`EndOperation`: the async self-reference is given back when the target's own references
+reach zero), the cleanup table (a drag that ended without a drop and wrote nothing deletes at
+once; an accepted drop waits for the target to let go) and the scavenge that asks the
+exclusive-open question before it deletes, deletes the manifest last and rewrites it when a
+delete fails half-way, backs off 1 s, 10 s, 60 s, never enters a reparse point, and logs no
+file name. `InitOLE` runs on Wails' main thread through `InvokeSync` before the window exists
+(WebView2's later `CoInitializeEx` on that thread becomes an `S_FALSE`, not a mode change) and
+`UninitOLE` runs last at shutdown, skipping `OleUninitialize` while a target still holds an
+object. `Shell.DragOut(archiveID, ids)` asks the core for the plan, runs `DoDragDrop` on the
+main thread — whose modal loop keeps the WebView alive — and returns `{SelfDrop, Extracted,
+Effect, Folder, OpID}` when the drag ends. The core's operation of kind `dragout` holds the
+archive like any operation (Leave lets it finish, Close cancels it), runs the existing extract
+machinery with `replace` into the items folder as its callback, and moves through `dragging`
+(the hover, nothing shown), `preparing` (*Preparing N files*, by bytes, *Cancel*) and
+`awaiting` (*Awaiting Windows Explorer*, no bar) to a `DragResult` of `self_drop`,
+`cancelled`, `refused`, `moved`, `ended`, `idle` or `failed`; the scavenge runs at `Start` and
+every ten minutes. The page's rows are no longer HTML5-draggable: a press-and-move past four
+pixels calls `DragOut` once with the selection, and a drop that lands back on a folder row,
+the `..` row or the heading is the gesture's own only when it carries the gesture's own names
+(or paths under the drag's folder), in which case it is the `Move` the list always had; any
+other drop in that second is a real file's add. The mock plays the phases on a clock.
+
+**The review** (Codex Astra, 36 files, 348k tokens): fourteen findings, three high — a
+dragged record named `manifest.json` would have overwritten the manifest (hence `items\`); a
+sweep whose delete failed half-way took its own manifest with it and so abandoned the
+plaintext for good (hence manifest last, rewritten on failure); and a real file dropped
+during a self-drop's one-second grace would have moved the previous selection (hence the
+drop's identity by names and paths) — and eleven medium, all applied: the async
+self-reference hid the target's release; directory-only moves never completed; a cancel
+during the last placement still succeeded; release-and-idle was undocumented (now the fourth
+way, in APP §3); cancelled drags waited for the target; the sweep deleted before asking; the
+per-drag trace lacked the formats and the bytes; and four in the mock. Nine of the
+implementers' deviations were judged sound. Not yet measured in the real window: that
+WebView2 hands the page one `File` per `CF_HDROP` path for a self-drop whose paths do not
+exist — if it did not, a self-drop would be judged foreign and the *Move* would silently not
+happen; the first real self-drop says.
+

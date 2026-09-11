@@ -27,6 +27,7 @@ import (
 	"github.com/dreamxwarden01/enfold/internal/app/api"
 	"github.com/dreamxwarden01/enfold/internal/app/pivcards"
 	"github.com/dreamxwarden01/enfold/internal/brand"
+	"github.com/dreamxwarden01/enfold/internal/dragout"
 )
 
 //go:embed all:frontend/dist
@@ -61,6 +62,9 @@ type shell struct {
 	quitMu   sync.Mutex
 	quitting bool
 	settings func() app.Settings
+	// oleReady: OleInitialize succeeded on the main thread, so a native
+	// drag can run (APP.md §3). Read by the core's Drag hook.
+	oleReady atomic.Bool
 }
 
 // secretRefused tells the page that a submitted secret was not accepted
@@ -80,11 +84,13 @@ func main() {
 
 	s := &shell{log: logger.printf}
 	core, err := app.New(app.Deps{
-		Cards:   pivcards.New(),
-		Events:  s,
-		Input:   lastInput{},
-		Log:     logger.printf,
-		DataDir: dataDir,
+		Cards:    pivcards.New(),
+		Events:   s,
+		Input:    lastInput{},
+		Log:      logger.printf,
+		DataDir:  dataDir,
+		Drag:     s.beginDrag,
+		DragRoot: filepath.Join(dataDir, "drag"),
 	})
 	if err != nil {
 		fatal(err)
@@ -101,6 +107,7 @@ func main() {
 		SaveFile:    s.saveFile,
 		Reveal:      s.reveal,
 		Quit:        s.quit,
+		DragOut:     s.dragOut,
 	})
 
 	profile := filepath.Join(dataDir, "WebView2")
@@ -142,6 +149,23 @@ func main() {
 	// below touches the profile or the vault.
 	s.app = application.New(opts)
 	logger.printf("start: application created")
+
+	// OLE on the main thread, before the window (APP.md §3): DoDragDrop
+	// belongs to the thread that owns the window and runs its message loop,
+	// and Wails never calls OleInitialize itself. That thread is this one —
+	// Wails locks the main goroutine to its OS thread at init and
+	// application.New made the hidden dispatch window on it — so InvokeSync,
+	// which runs its function inline when called from the main thread and
+	// posts to that window from any other, is the same dispatch every later
+	// main-thread call uses and here costs nothing. A failure is logged and
+	// leaves the drag out unsupported; nothing else needs OLE.
+	application.InvokeSync(func() {
+		if err := dragout.InitOLE(); err != nil {
+			logger.printf("start: %v; the drag out is unavailable", err)
+			return
+		}
+		s.oleReady.Store(true)
+	})
 
 	sweepProfile(profile)
 	port, err := core.Start()
@@ -424,6 +448,41 @@ func (s *shell) reveal(path string) error {
 	return s.app.Env.OpenFileManager(path, true)
 }
 
+// beginDrag is the core's Deps.Drag: the native drag of internal/dragout,
+// or none while OLE could not be initialised on the main thread.
+func (s *shell) beginDrag(o dragout.Options) (app.DragHandle, error) {
+	if !s.oleReady.Load() {
+		return nil, dragout.ErrUnsupported
+	}
+	d, err := dragout.Begin(o)
+	if err != nil {
+		// A nil interface, not an interface over a nil *Drag.
+		return nil, err
+	}
+	return d, nil
+}
+
+// dragOut is Shell.DragOut (APP.md §3): the core plans the drag and
+// registers its operation, and the drag itself runs on the main thread —
+// DoDragDrop pumps messages, so the WebView stays alive — through the same
+// InvokeSync the rest of the shell's main-thread work uses; the bound call,
+// on its own goroutine, blocks until DoDragDrop returns. The window's HWND
+// is what the drop source compares with the window under the cursor at the
+// button's release to tell a self-drop apart.
+func (s *shell) dragOut(archiveID string, recordIDs []string) (app.DragOutResult, *app.Error) {
+	var hwnd uintptr
+	if w := s.window(); w != nil {
+		hwnd = uintptr(w.NativeWindow())
+	}
+	d, e := s.core.BeginDragOut(archiveID, recordIDs, hwnd)
+	if e != nil {
+		return app.DragOutResult{}, e
+	}
+	var res app.DragOutResult
+	application.InvokeSync(func() { res, e = d.Run() })
+	return res, e
+}
+
 // quit is the tray's and the page's Quit: the running operations are named
 // and the quit confirmed, then the ordered shutdown runs and the process
 // ends. Never asked twice. There are no unsaved changes to ask about since
@@ -503,6 +562,12 @@ func (s *shell) onShutdown() {
 	if s.profile != "" {
 		os.RemoveAll(s.profile)
 	}
+	// OLE last, on the main thread — Wails runs this hook through InvokeSync
+	// — after everything else: a staging folder nothing was handed out of
+	// goes, one a target has is left for the next launch's scavenge, and the
+	// apartment is closed unless Explorer still holds a data object of ours,
+	// which is then revoked rather than pulled from under it (APP.md §3).
+	dragout.UninitOLE()
 }
 
 // securityHeaders is the asset middleware (§4): the CSP names the preview

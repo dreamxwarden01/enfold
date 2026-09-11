@@ -20,6 +20,10 @@ type Hooks struct {
 	// Quit runs the shell's quit flow: name any running operations, resolve,
 	// then end the process.
 	Quit func()
+	// DragOut runs the native drag of the selected records out of the window
+	// on the shell's main thread and returns when it has ended (APP.md §3);
+	// nil when the shell has no native drag.
+	DragOut func(archiveID string, recordIDs []string) (app.DragOutResult, *app.Error)
 }
 
 // Shell is the window and the native dialogs.
@@ -69,4 +73,24 @@ func (s *Shell) Reveal(path string) error {
 		return &app.Error{Code: app.CodeIO}
 	}
 	return nil
+}
+
+// DragOut is the one gesture of APP.md §3: a press-and-move over selected
+// rows starts one native drag of those records out of the window, and this
+// call blocks until DoDragDrop returns — the window stays alive meanwhile,
+// since the drag pumps its messages on the main thread. The staged copy is
+// extracted by the drop's own request under an operation of kind dragout,
+// which the strip follows (preparing, then awaiting) and which ends when
+// the drag reports how it ended (OpView.DragResult). A release over
+// Enfold's own window is a self-drop: nothing is extracted, and the page —
+// receiving the WebView's drop with paths under Folder — performs the Move
+// of the ids it kept in flight. drag.unsupported when no native drag can
+// run, drag.busy while one is running, params for an empty or root
+// selection, and the archive's own codes.
+func (s *Shell) DragOut(archiveID string, recordIDs []string) (app.DragOutResult, error) {
+	if s.h.DragOut == nil {
+		return app.DragOutResult{}, &app.Error{Code: app.CodeDragUnsupported}
+	}
+	r, e := s.h.DragOut(archiveID, recordIDs)
+	return r, asErr(e)
 }

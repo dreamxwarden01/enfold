@@ -11,8 +11,12 @@
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText, warningCopy } from "../lib/strings";
+  import { archivesCopy, codeText, listCopy, warningCopy } from "../lib/strings";
   import { bytes, count, date, dateTime, plural } from "../lib/format";
+  import { clickRow, emptySelection, selectAll, survive, toggleRow } from "../lib/selection";
+  import type { Selection } from "../lib/selection";
+  import { clickShownHeader, paneRow, shownTicked } from "../lib/archlist";
+  import { dialogIsUp } from "../lib/dialogs";
   import { freeWorthShowing } from "../lib/status";
   import { DEFAULT_METHOD, METHODS, METHOD_NOTE, methodWord } from "../lib/method";
   import { foreignPath } from "../lib/paths";
@@ -28,14 +32,32 @@
   import DeleteArchiveDialog from "./DeleteArchiveDialog.svelte";
   import MergeDialog from "./MergeDialog.svelte";
 
-  let selected = $state<string | null>(null);
-  const sel = $derived(store.archives.find((a) => a.id === selected) ?? null);
+  // The selection (APP.md §6, ruled 2026-09-10): the ticks, under the file
+  // list's rules (lib/selection.ts) over the rows the filter shows, and
+  // the row last clicked, which the details pane shows while it is ticked
+  // — else the sole ticked row, else nothing but a count (lib/archlist.ts).
+  // Kept on the page: nothing here pages or restarts under it.
+  let sel = $state<Selection>(emptySelection());
+  let lastClicked = $state<string | null>(null);
+  const paneId = $derived(paneRow(sel, lastClicked));
+  const pane = $derived(store.archives.find((a) => a.id === paneId) ?? null);
+  // one: the archive an action that takes one archive works on — the
+  // pane's row, and only while exactly one is ticked; every such action
+  // is greyed otherwise, the pane's own buttons included.
+  const one = $derived(sel.ids.size === 1 ? pane : null);
   const st = $derived(store.status);
   const unlocked = $derived(store.unlocked);
   const tampered = $derived(st?.tampered ?? false);
-  // The record read whole, and only when it is the selected one: a reply
-  // for a record the user has left is not this pane's (APP.md §13).
-  const det = $derived(store.details && sel && store.details.archiveId === sel.id ? store.details : null);
+  // The record read whole, and only when it is the pane's: a reply for a
+  // record the user has left is not this pane's (APP.md §13).
+  const det = $derived(store.details && pane && store.details.archiveId === pane.id ? store.details : null);
+
+  // pick is what a create or a delete begun elsewhere does: that one row
+  // ticked, clicked, and so in the pane.
+  function pick(id: string) {
+    sel = { ids: new Set([id]), anchor: id };
+    lastClicked = id;
+  }
 
   let creating = $state(false);
   let newName = $state("");
@@ -142,6 +164,69 @@
   // does not match the visible rows reads as a bug (APP.md §13).
   const shownSize = $derived(rows.reduce((n, a) => n + (a.storedSize || 0), 0));
 
+  // The rows as they stand on screen, top to bottom: what Shift ranges
+  // over, what the header and Ctrl+A tick.
+  const order = $derived(rows.map((a) => a.id));
+  const allTicked = $derived(shownTicked(sel, order));
+
+  // A row that left the list — forgotten, or gone with a lock — leaves
+  // the ticks too; a row the filter merely hides keeps its tick.
+  $effect(() => {
+    const live = new Set(store.archives.map((a) => a.id));
+    untrack(() => {
+      const next = survive(sel, live);
+      if (next !== sel) sel = next;
+      if (lastClicked !== null && !live.has(lastClicked)) lastClicked = null;
+    });
+  });
+
+  // The row's own click (lib/selection.ts): plain selects one and sets the
+  // anchor, Ctrl toggles, Shift ranges from the anchor. Whichever it was,
+  // this is the row last clicked.
+  function click(e: MouseEvent, id: string) {
+    sel = clickRow(sel, order, id, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
+    lastClicked = id;
+  }
+
+  // A row's checkbox toggles that row alone and makes it the anchor; the
+  // row click's own rules do not run (APP.md §6).
+  function tick1(e: Event, id: string) {
+    e.stopPropagation();
+    sel = toggleRow(sel, id);
+    lastClicked = id;
+  }
+
+  // The header's checkbox ticks the rows the filter shows, and clears
+  // when they are all ticked.
+  function tickAll(e: Event) {
+    e.stopPropagation();
+    sel = clickShownHeader(sel, order);
+  }
+
+  // The list's blank area — under the last row, beside the table — clears
+  // the ticks and the anchor; a header cell sorts and is not blank.
+  function blank(e: MouseEvent) {
+    const t = e.target as HTMLElement;
+    if (!t.closest("tbody tr") && !t.closest("thead")) {
+      sel = emptySelection();
+      lastClicked = null;
+    }
+  }
+
+  // Ctrl+A ticks the rows the filter shows when the focus is in the list
+  // or on the page's body — never in the filter input, which keeps its
+  // own select-all — and not while a dialog is up (lib/dialogs.ts).
+  let listEl = $state<HTMLDivElement | undefined>();
+  function shortcut(e: KeyboardEvent) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || (e.key !== "a" && e.key !== "A")) return;
+    const t = e.target as HTMLElement | null;
+    if (!t || t.closest("input, textarea, select, [contenteditable]")) return;
+    if (t !== document.body && !listEl?.contains(t)) return;
+    if (dialogIsUp()) return;
+    e.preventDefault();
+    sel = selectAll(sel, order);
+  }
+
   function sortOn(k: SortKey) {
     if (sortKey === k) sortAsc = !sortAsc;
     else {
@@ -158,10 +243,12 @@
   // The draft is the store's, keyed by archive id, so it survives a visit
   // to another page; dirty is derived by diffing it against the record and
   // is never stored (APP.md §6).
-  const draft = $derived(sel ? store.recordDraft[sel.id] : undefined);
+  const draft = $derived(pane ? store.recordDraft[pane.id] : undefined);
   const nameChanged = $derived(!!draft && draft.name !== draft.base.name);
   const descChanged = $derived(!!draft && draft.description !== draft.base.description);
-  const editable = $derived(!!sel && unlocked && !tampered && sel.forgottenAt === 0);
+  // An edit takes one archive, like any action: greyed unless exactly one
+  // is ticked (APP.md §6).
+  const editable = $derived(!!one && unlocked && !tampered && one.forgottenAt === 0);
 
   const pending = $derived.by((): PendingItem[] => {
     if (!draft) return [];
@@ -190,7 +277,7 @@
   // never made and write the old value back on Save (APP.md §6). A draft
   // the user has touched is left alone: it is theirs.
   $effect(() => {
-    const a = sel;
+    const a = pane;
     if (!a) return;
     const d = store.recordDraft[a.id];
     if (!d) {
@@ -203,17 +290,17 @@
     if (d.name === d.base.name && d.description === d.base.description) stage(a);
   });
 
-  // The record is read when the selection changes, not when the modal
+  // The record is read when the pane's row changes, not when the modal
   // opens and not on every advancing status (APP.md §13): loadDetails
   // reads store.unlocked before its first await, so an unguarded call
   // would make every vault.state event re-issue Archives.Details.
   $effect(() => {
-    const id = selected;
+    const id = paneId;
     untrack(() => void store.loadDetails(id));
   });
 
   async function saveRecord() {
-    const a = sel;
+    const a = one;
     const d = draft;
     if (!a || !d) return;
     saving = true;
@@ -253,8 +340,8 @@
       const id = await Archives.Create(p, name, newMethod);
       creating = false;
       newExists = "";
-      selected = id;
       await store.refreshArchives();
+      pick(id); // once the row is in the list, or the prune would drop the tick
       await store.refreshSettings(); // the folder this create remembered
     } catch (e) {
       const code = errorOf(e).code;
@@ -288,13 +375,13 @@
   // with archive.busy while a preview reader is live, and a refusal on
   // the consent screen would offer neither the close nor a reason.
   function ask(mode: "delete" | "forget"): DeleteAsk | null {
-    const a = sel;
+    const a = one;
     if (!a) return null;
     return { id: a.id, name: a.name, path: a.path, createdAt: det?.createdAt ?? 0, mode };
   }
 
   async function startDelete(mode: "delete" | "forget") {
-    const a = sel;
+    const a = one;
     const snap = ask(mode);
     if (!a || !snap) return;
     if (a.open && !(await closeFirst(snap.id))) return;
@@ -328,7 +415,7 @@
     const want = store.deleteAfterClose;
     if (!want) return;
     store.deleteAfterClose = null;
-    selected = want;
+    pick(want);
     void (async () => {
       await store.loadDetails(want);
       const a = store.archives.find((x) => x.id === want);
@@ -342,17 +429,20 @@
     })();
   });
 
-  // The keyboard path: Space selects, Enter opens, the arrows move focus.
+  // The keyboard path: Space selects, Enter selects and opens, the arrows
+  // move focus.
   function rowKey(e: KeyboardEvent, id: string) {
     const el = e.currentTarget as HTMLElement;
     switch (e.key) {
       case " ":
         e.preventDefault();
-        selected = id;
+        sel = clickRow(sel, order, id);
+        lastClicked = id;
         break;
       case "Enter":
         e.preventDefault();
-        selected = id;
+        sel = clickRow(sel, order, id);
+        lastClicked = id;
         void store.openArchive(id);
         break;
       case "ArrowDown":
@@ -380,14 +470,17 @@
         : undefined,
   );
 
-  const foreign = $derived(!!sel && foreignPath(sel.path));
-  const purge = $derived(sel ? purgeAfter(sel.forgottenAt) : 0);
+  const foreign = $derived(!!pane && foreignPath(pane.path));
+  const purge = $derived(pane ? purgeAfter(pane.forgottenAt) : 0);
 
-  // The foot's note (LayerFoot): what is selected, else how many there are.
+  // The foot's note (LayerFoot): the one selected, else how many are, else
+  // how many there are.
   $effect(() => {
-    store.footNote = sel ? `${sel.name} selected` : plural(rows.length, "archive");
+    store.footNote = one ? archivesCopy.selectedName(one.name) : sel.ids.size > 1 ? archivesCopy.selectedCount(sel.ids.size) : plural(rows.length, "archive");
   });
 </script>
+
+<svelte:window onkeydown={shortcut} />
 
 <div class="layer-head">
   <h1 class="t-title">{st?.displayName || "Vault"}</h1>
@@ -398,22 +491,24 @@
 
 <div class="layer-body">
   <div class="cmdbar">
-    <button type="button" class="btn accent" disabled={!sel || (!unlocked && !sel.open)} onclick={() => sel && store.openArchive(sel.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
+    <!-- Every action that takes one archive works on the pane's row and is
+         greyed unless exactly one is ticked (APP.md §6, ruled 2026-09-10). -->
+    <button type="button" class="btn accent" disabled={!one || (!unlocked && !one.open)} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
     <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive</button>
     <div class="sep"></div>
     <!-- Never gated on the archive being open (APP.md §2.3, ruled
          2026-09-10): the core opens it for the operation and closes it
          again, so there is no "open the archive first". -->
-    <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} title={opReason} onclick={() => sel && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(sel.id) })}>Compact</button>
-    <button type="button" class="btn subtle" disabled={!sel || !unlocked || tampered} title={opReason} onclick={() => sel && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(sel.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key</button>
-    <button type="button" class="btn subtle" disabled={!sel || !unlocked} title={!unlocked ? codeText(Code.CodeVaultLocked) : undefined} onclick={() => sel && run(Archives.Verify(sel.id))}><svg class="i i-14"><use href="#i-check" /></svg>Verify</button>
-    <button type="button" class="btn subtle" disabled={!sel || !unlocked} onclick={() => sel && run(sel.hidden ? Archives.Unhide(sel.id) : Archives.Hide(sel.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{sel?.hidden ? "Unhide" : "Hide"}</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered} title={opReason} onclick={() => one && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(one.id) })}>Compact</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered} title={opReason} onclick={() => one && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(one.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked} title={!unlocked ? codeText(Code.CodeVaultLocked) : undefined} onclick={() => one && run(Archives.Verify(one.id))}><svg class="i i-14"><use href="#i-check" /></svg>Verify</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked} onclick={() => one && run(one.hidden ? Archives.Unhide(one.id) : Archives.Hide(one.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{one?.hidden ? "Unhide" : "Hide"}</button>
     <div class="sep"></div>
     <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => run(Archives.CheckFiles())}>Check files</button>
     <button type="button" class="btn subtle" disabled={!unlocked || tampered} onclick={importRecords}><svg class="i i-14"><use href="#i-backup" /></svg>Import records…</button>
     <div class="sep"></div>
-    <button type="button" class="btn subtle danger" disabled={!sel || !unlocked || tampered || sel.forgottenAt > 0} onclick={() => void startDelete("forget")}>Forget key…</button>
-    <button type="button" class="btn subtle danger" disabled={!sel || !unlocked || tampered} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
+    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || one.forgottenAt > 0} onclick={() => void startDelete("forget")}>Forget key…</button>
+    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
     <div class="grow"></div>
     <label class="filterbox"><span class="vh">Filter</span><input class="input" type="search" placeholder="Filter" bind:value={filter} /></label>
     <label class="check"><input type="checkbox" bind:checked={store.showHidden} onchange={() => store.refreshArchives()} />Show hidden</label>
@@ -433,14 +528,22 @@
 
   <div class="arch-split">
     <div class="arch-list">
-      <div class="tablewrap">
+      <!-- A click on the list's blank area clears the ticks and the anchor
+           (APP.md §6); a click that lands on a row is the row's, and a
+           header cell sorts. -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
+      <div class="tablewrap" role="region" aria-label={archivesCopy.listLabel} bind:this={listEl} onclick={blank}>
         {#if rows.length === 0}
           <div class="empty">{filter.trim() ? "No archive matches that." : unlocked ? "No archives yet. Create one, or open a file you already have." : "No archives are open."}</div>
         {:else}
+          <!-- The same checkboxes as the file list's, under the same rules:
+               the header ticks the rows the filter shows and is ticked
+               exactly when all of them are, never a third state. -->
           <table>
-            <colgroup><col /><col class="w-size" /><col class="w-files" /><col class="w-date" /><col class="w-key" /><col class="w-status" /></colgroup>
+            <colgroup><col class="w-check" /><col /><col class="w-size" /><col class="w-files" /><col class="w-date" /><col class="w-key" /><col class="w-status" /></colgroup>
             <thead>
               <tr>
+                <th scope="col" class="chk"><input type="checkbox" checked={allTicked} aria-label={archivesCopy.tickAll} onclick={tickAll} /></th>
                 <th scope="col" aria-sort={ariaSort("name")}><button type="button" onclick={() => sortOn("name")}>Name<svg class="i i-14 caret" class:on={sortKey === "name"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
                 <th scope="col" aria-sort={ariaSort("size")}><button type="button" onclick={() => sortOn("size")}>Size<svg class="i i-14 caret" class:on={sortKey === "size"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
                 <th scope="col" aria-sort={ariaSort("files")}><button type="button" onclick={() => sortOn("files")}>Files<svg class="i i-14 caret" class:on={sortKey === "files"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
@@ -452,7 +555,8 @@
             <tbody>
               {#each rows as a, i (a.id)}
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
-                <tr tabindex={selected === a.id || (!selected && i === 0) ? 0 : -1} aria-selected={selected === a.id} class:forgotten={a.forgottenAt > 0} onclick={() => (selected = a.id)} ondblclick={() => store.openArchive(a.id)} onkeydown={(e) => rowKey(e, a.id)}>
+                <tr tabindex={paneId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={sel.ids.has(a.id)} class:forgotten={a.forgottenAt > 0} onclick={(e) => click(e, a.id)} ondblclick={() => store.openArchive(a.id)} onkeydown={(e) => rowKey(e, a.id)}>
+                  <td class="chk"><input type="checkbox" checked={sel.ids.has(a.id)} tabindex="-1" aria-label={listCopy.tickRow(a.name)} onclick={(e) => tick1(e, a.id)} ondblclick={(e) => e.stopPropagation()} /></td>
                   <td class="sel-mark">
                     <div class="fname">
                       <svg class="i i-14"><use href="#i-box" /></svg>
@@ -476,9 +580,12 @@
       </div>
     </div>
 
+    <!-- The pane shows the row last clicked while it is ticked, else the
+         sole ticked row, else nothing but a count; its buttons take one
+         archive and are greyed unless exactly one is ticked (APP.md §6). -->
     <aside class="details" aria-label="Selected archive">
-      {#if sel}
-        <div class="details-head"><div class="eyebrow">Selected</div><h3>{sel.name}</h3></div>
+      {#if pane}
+        <div class="details-head"><div class="eyebrow">Selected</div><h3>{pane.name}</h3></div>
 
         {#if purge}
           <div class="pad">
@@ -486,7 +593,7 @@
               <svg class="i i-14"><use href="#i-warn" /></svg>
               <div class="why">
                 <span>Forgotten — restore it to open this archive again; its key is dropped at the first unlock after {date(purge)}.</span>
-                <button type="button" class="btn sm" disabled={!unlocked || tampered} onclick={() => sel && run(Archives.Restore(sel.id)).then(() => store.refreshArchives())}>Restore</button>
+                <button type="button" class="btn sm" disabled={!one || !unlocked || tampered} onclick={() => one && run(Archives.Restore(one.id)).then(() => store.refreshArchives())}>Restore</button>
               </div>
             </div>
           </div>
@@ -496,60 +603,60 @@
           <div class="pad fields">
             <div class="field">
               <div class="field-top"><label for="ar-name">Name</label></div>
-              <input id="ar-name" class="input" class:invalid={nameChanged && !!nameProblem(draft.name)} aria-invalid={nameChanged && nameProblem(draft.name) ? "true" : undefined} bind:value={store.recordDraft[sel.id].name} disabled={!editable} />
+              <input id="ar-name" class="input" class:invalid={nameChanged && !!nameProblem(draft.name)} aria-invalid={nameChanged && nameProblem(draft.name) ? "true" : undefined} bind:value={store.recordDraft[pane.id].name} disabled={!editable} />
             </div>
             <div class="field">
               <div class="field-top"><label for="ar-desc">Description</label><span class="hint">a second line in the list</span></div>
-              <textarea id="ar-desc" class="input area" class:invalid={descChanged && !!descriptionProblem(draft.description)} aria-invalid={descChanged && descriptionProblem(draft.description) ? "true" : undefined} rows="2" bind:value={store.recordDraft[sel.id].description} disabled={!editable}></textarea>
+              <textarea id="ar-desc" class="input area" class:invalid={descChanged && !!descriptionProblem(draft.description)} aria-invalid={descChanged && descriptionProblem(draft.description) ? "true" : undefined} rows="2" bind:value={store.recordDraft[pane.id].description} disabled={!editable}></textarea>
             </div>
           </div>
         {/if}
 
         <dl class="facts">
-          <div class="fact"><dt>Size</dt><dd>{sel.storedSize ? bytes(sel.storedSize) : "—"}</dd></div>
-          {#if sel.open}<div class="fact"><dt>Files</dt><dd>{count(sel.files)}</dd></div>{/if}
+          <div class="fact"><dt>Size</dt><dd>{pane.storedSize ? bytes(pane.storedSize) : "—"}</dd></div>
+          {#if pane.open}<div class="fact"><dt>Files</dt><dd>{count(pane.files)}</dd></div>{/if}
           <div class="fact"><dt>Created</dt><dd>{det ? dateTime(det.createdAt) : "—"}</dd></div>
-          <div class="fact"><dt>Last saved</dt><dd>{dateTime(sel.lastWrittenAt)}</dd></div>
-          <div class="fact"><dt>Key version</dt><dd>v{sel.keyVersion}</dd></div>
+          <div class="fact"><dt>Last saved</dt><dd>{dateTime(pane.lastWrittenAt)}</dd></div>
+          <div class="fact"><dt>Key version</dt><dd>v{pane.keyVersion}</dd></div>
           <div class="fact"><dt>KID</dt><dd class="mono" title={det?.currentKid}>{det?.currentKid || "—"}</dd></div>
-          <div class="fact"><dt>Compression</dt><dd>{methodWord(sel.method)}</dd></div>
-          {#if sel.receiptOwed}<div class="fact"><dt>Receipt</dt><dd>pending</dd></div>{/if}
-          {#if sel.hashBehind > 0}<div class="fact"><dt>Verified</dt><dd>{plural(sel.hashBehind, "save")} ago</dd></div>{/if}
+          <div class="fact"><dt>Compression</dt><dd>{methodWord(pane.method)}</dd></div>
+          {#if pane.receiptOwed}<div class="fact"><dt>Receipt</dt><dd>pending</dd></div>{/if}
+          {#if pane.hashBehind > 0}<div class="fact"><dt>Verified</dt><dd>{plural(pane.hashBehind, "save")} ago</dd></div>{/if}
           <!-- The figure, not advice: the core reclaims the space itself
                after a commit that leaves it over APP.md §2.3's thresholds,
                so "compact when convenient" would tell the user to do what
                has already been done. What is left below the quarter is
                why the file is bigger than the files inside it, and the
                same floor decides whether it is worth saying (lib/status.ts). -->
-          {#if sel.open && freeWorthShowing(sel.freeSpace)}<div class="fact"><dt>Free space</dt><dd>{bytes(sel.freeSpace)}</dd></div>{/if}
+          {#if pane.open && freeWorthShowing(pane.freeSpace)}<div class="fact"><dt>Free space</dt><dd>{bytes(pane.freeSpace)}</dd></div>{/if}
         </dl>
 
         <div class="pad pathblock">
           <div class="plabel">{foreign ? "Last seen on another system at" : "File"}</div>
-          <div class="ppath" title={sel.path}>{sel.path || "—"}</div>
+          <div class="ppath" title={pane.path}>{pane.path || "—"}</div>
           <div class="row">
-            {#if !foreign}<button type="button" class="btn link" onclick={() => sel && void Shell.Reveal(sel.path)}>Show in Explorer</button>{/if}
-            <button type="button" class="btn link" disabled={!unlocked} onclick={() => sel && locate(sel)}>Locate…</button>
+            {#if !foreign}<button type="button" class="btn link" disabled={!one} onclick={() => one && void Shell.Reveal(one.path)}>Show in Explorer</button>{/if}
+            <button type="button" class="btn link" disabled={!one || !unlocked} onclick={() => one && locate(one)}>Locate…</button>
           </div>
         </div>
 
-        {#if sel.note === "archive.file_missing"}
-          <div class="pad"><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText(sel.note)}</span></div></div>
+        {#if pane.note === "archive.file_missing"}
+          <div class="pad"><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText(pane.note)}</span></div></div>
         {/if}
 
         <div class="details-actions">
-          <button type="button" class="btn accent wide" disabled={!unlocked && !sel.open} onclick={() => sel && store.openArchive(sel.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
+          <button type="button" class="btn accent wide" disabled={!one || (!unlocked && !one.open)} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
           <div class="row2">
-            {#if sel.open}<button type="button" class="btn" onclick={() => sel && run(Archives.Close(sel.id)).then(() => store.refreshArchives())}>Close</button>{/if}
-            <button type="button" class="btn" disabled={!det} onclick={() => (showDetails = true)}>Details…</button>
+            {#if pane.open}<button type="button" class="btn" disabled={!one} onclick={() => one && run(Archives.Close(one.id)).then(() => store.refreshArchives())}>Close</button>{/if}
+            <button type="button" class="btn" disabled={!det || !one} onclick={() => (showDetails = true)}>Details…</button>
           </div>
         </div>
 
         {#if pending.length > 0}
-          <SaveBar items={pending} {invalid} busy={saving} onsave={() => void saveRecord()} ondiscard={() => sel && stage(sel)} />
+          <SaveBar items={pending} {invalid} busy={saving} onsave={() => void saveRecord()} ondiscard={() => pane && stage(pane)} />
         {/if}
       {:else}
-        <div class="empty">Select an archive.</div>
+        <div class="empty">{sel.ids.size > 1 ? archivesCopy.selectedCount(sel.ids.size) : archivesCopy.selectOne}</div>
       {/if}
     </aside>
   </div>
@@ -599,7 +706,7 @@
     createdAt={del.createdAt}
     mode={del.mode}
     onclose={() => (del = null)}
-    ondone={() => { void store.refreshArchives(); void store.loadDetails(selected); }}
+    ondone={() => { void store.refreshArchives(); void store.loadDetails(paneId); }}
   />
 {/if}
 

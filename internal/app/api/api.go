@@ -215,10 +215,23 @@ type Archive struct {
 
 // Page lists the children of one directory of the committed snapshot. dirID
 // is a record id — the all-zero id is the archive's root — never a path, and
-// one that no longer names a live directory is file.not_found.
+// one that no longer names a live directory is file.not_found. sortBy is one
+// or two signed keys, comma-separated: the column — name, size, type or
+// modified, a leading "-" for descending — then optionally name or -name,
+// the direction the name breaks ties in; "" is name (APP.md §3). limit is
+// clamped to 1 000; zero or less is 200.
 func (a *Archive) Page(id, dirID, sortBy string, offset, limit int) (app.Page, error) {
 	p, e := a.c.Page(id, dirID, sortBy, offset, limit)
 	return p, asErr(e)
+}
+
+// Children answers every live child of dirID — its id and its kind — in the
+// order sortBy names — Page's grammar — and nothing else: what the header's
+// tick and Ctrl+A select is the folder, loaded or not, and what a Delete's
+// question counts, files and folders apart, past the rows loaded (APP.md §3).
+func (a *Archive) Children(id, dirID, sortBy string) ([]app.ChildRef, error) {
+	kids, e := a.c.Children(id, dirID, sortBy)
+	return kids, asErr(e)
 }
 
 func (a *Archive) Stat(id string) (app.ArchiveStat, error) {
@@ -270,9 +283,13 @@ func (a *Archive) Move(id string, recordIDs []string, parentID string) error {
 // "replace" (the default when empty), "skip", "rename", or "ask" — which
 // extracts everything that collides with nothing and reports each collision
 // as a conflict outcome carrying the existing file's size and date, for the
-// page to ask about and re-issue (APP.md §3).
-func (a *Archive) Extract(id string, recordIDs []string, dir, policy string) (string, error) {
-	op, e := a.c.Extract(id, recordIDs, dir, app.ExtractPolicy(policy))
+// page to ask about and re-issue (APP.md §3). names, usually empty, maps a
+// record id to the one path element to write it under in this extract only
+// — what Shorten and Rename… send after a name_refused outcome: the record
+// is untouched, a name that breaks R20 is params, a directory's new name
+// carries its subtree, and the outcome's path is the one actually written.
+func (a *Archive) Extract(id string, recordIDs []string, dir, policy string, names map[string]string) (string, error) {
+	op, e := a.c.Extract(id, recordIDs, dir, app.ExtractPolicy(policy), names)
 	return op, asErr(e)
 }
 

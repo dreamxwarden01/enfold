@@ -233,7 +233,7 @@ func TestExtractProgressMovesInsideOneFile(t *testing.T) {
 		}
 	})
 	defer h.rec.onEvent(nil)
-	opID, e := h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip)
+	opID, e := h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -555,7 +555,7 @@ func TestExtractOfAName255UnitsLong(t *testing.T) {
 		t.Fatalf("add: %+v", o)
 	}
 	out := outDir(t)
-	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip)
+	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -580,7 +580,7 @@ func TestExtractMakesItsDestinationAndKeepsNoFolder(t *testing.T) {
 
 	// A destination that does not exist yet is created (APP.md §3).
 	out := filepath.Join(outDir(t), "made", "here")
-	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip)
+	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -631,7 +631,7 @@ func TestOpViewCountsTheFilesItPlans(t *testing.T) {
 	}
 	// An extract counts what it will write: the five files, not the folders
 	// it makes on the way.
-	opID, e = h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip)
+	opID, e = h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip, nil)
 	if e != nil {
 		t.Fatal(e)
 	}

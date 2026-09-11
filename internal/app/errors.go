@@ -154,11 +154,29 @@ const (
 	// seal.
 	CodeTreeBounds    Code = "file.tree_bounds"
 	CodeSourceChanged Code = "file.source_changed"
-	CodeContentHash   Code = "file.content_hash"
-	CodeNoSpace       Code = "archive.no_space"
-	CodeDictInUse     Code = "archive.dictionary_in_use"
-	CodeOpNotFound    Code = "op.not_found"
-	CodeOpCancelled   Code = "op.cancelled"
+	// The two refusals of an extract's destination (APP.md §3, ruled
+	// 2026-09-10). R20 holds Windows' rules on the way in, so the name
+	// itself fits a Windows volume; what cannot be known beforehand is the
+	// path's whole length and the volume's own limit (an SMB share, an
+	// exFAT stick), and only the destination's refusal says so.
+	// CodeFileNameRefused: the final name — a file's on placement, or a
+	// directory's on its creation, whose subtree is then reported once for
+	// its top — was refused: the outcome `name_refused`, and the page
+	// offers Shorten, Rename… and Skip. "The destination cannot take a name
+	// this long."
+	CodeFileNameRefused Code = "file.name_refused"
+	// CodeFilePathRefused: the temporary — a fixed short name in the same
+	// folder — was refused, so the path and not the leaf is the problem
+	// and no name helps — the outcome `path_refused`, Skip and Skip all
+	// like it. "The folder's path is too long for this destination." The
+	// destination root's own refusal is the operation's error under this
+	// code, before any outcome.
+	CodeFilePathRefused Code = "file.path_refused"
+	CodeContentHash     Code = "file.content_hash"
+	CodeNoSpace         Code = "archive.no_space"
+	CodeDictInUse       Code = "archive.dictionary_in_use"
+	CodeOpNotFound      Code = "op.not_found"
+	CodeOpCancelled     Code = "op.cancelled"
 	// CodeOpCommitting: the cancel arrived after the writing was done and
 	// the commit had been entered, which runs under a context no cancel
 	// reaches. The change is being published and the operation's result will
@@ -226,6 +244,12 @@ func classify(err error) *Error {
 			return coded(m.code)
 		}
 	}
+	// A volume's refusal of a path reaching here bare — the destination
+	// root of an extract, which is the operation's error before any outcome
+	// (APP.md §3) — is the path's, since nothing marked it as a name's.
+	if refusedByVolume(err) {
+		return coded(CodeFilePathRefused)
+	}
 	return coded(CodeInternal)
 }
 
@@ -257,8 +281,12 @@ var classifyTable = []struct {
 
 	// Operations. The reclaim's wrap stands before the archive's sentinels
 	// it carries inside: the outcome is the run's, the cause is the log's.
+	// The two refusals of an extract are wraps the same way: extractFile
+	// marks which step the volume refused, and the code is the mark's.
 	{ErrOpCommitting, CodeOpCommitting},
 	{errReclaimIncomplete, CodeReclaimIncomplete},
+	{errNameRefused, CodeFileNameRefused},
+	{errPathRefused, CodeFilePathRefused},
 
 	// Keystore.
 	{keystore.ErrIndeterminate, CodeIndeterminate},

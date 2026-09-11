@@ -129,6 +129,22 @@ export function planIsEmpty(p: Reissue): boolean {
   return p.replace.length === 0 && p.rename.length === 0;
 }
 
+// namesFor is what a conflict's re-issue carries in `names`: of the names
+// the extract that met the conflict was issued with — what a *Shorten* or
+// *Rename…* chose after a refusal — the ones for the ids re-issued, so
+// the file is replaced or numbered under the name the destination
+// accepted and not the record's own, which it had refused (APP.md §3: a
+// collision under the new name follows policy). Null with none to carry,
+// which is the usual case: an extract issued without names.
+export function namesFor(ids: readonly string[], names: Record<string, string> | null | undefined): Record<string, string> | null {
+  if (!names) return null;
+  const out: Record<string, string> = {};
+  for (const id of ids) {
+    if (names[id] !== undefined) out[id] = names[id];
+  }
+  return Object.keys(out).length === 0 ? null : out;
+}
+
 // allOf is *Replace all* and *Skip all* taken over every row at once.
 export function allOf(rows: ConflictRow[], d: Decision): Record<string, Decision> {
   const out: Record<string, Decision> = {};

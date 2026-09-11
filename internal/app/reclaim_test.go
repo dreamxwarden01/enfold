@@ -137,7 +137,7 @@ func (h *harness) extractsAll(t *testing.T, id string, rows []FileRow) {
 	for _, r := range rows {
 		ids = append(ids, r.ID)
 	}
-	opID, e := h.c.Extract(id, ids, outDir(t), ExtractSkip)
+	opID, e := h.c.Extract(id, ids, outDir(t), ExtractSkip, nil)
 	if e != nil {
 		t.Fatalf("extract: %v", e)
 	}
@@ -983,7 +983,7 @@ func TestTheRunStartsWhenTheOperationARunningPreviewClosedUnderEnds(t *testing.T
 		})
 	})
 	ids := []string{stay[0].ID, stay[1].ID}
-	opID, e := h.c.Extract(id, ids, outDir(t), ExtractSkip)
+	opID, e := h.c.Extract(id, ids, outDir(t), ExtractSkip, nil)
 	if e != nil {
 		t.Fatalf("extract: %v", e)
 	}

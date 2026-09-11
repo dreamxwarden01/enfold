@@ -6,9 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
+
+// refusedByVolume reports a name or a path the destination would not take
+// (APP.md §3, ruled 2026-09-10): ERROR_FILENAME_EXCED_RANGE (206, the path
+// as a whole is over what the volume or the API takes), ERROR_INVALID_NAME
+// (123, what NTFS answers for a component it cannot hold) and ENAMETOOLONG,
+// which Go's syscall package defines on Windows too. The three are the
+// destination's to say and are never known beforehand: R20 checked the name
+// on the way in against Windows' own rules, and what is left is the path's
+// length and the volume's own limits.
+func refusedByVolume(err error) bool {
+	return errors.Is(err, windows.ERROR_FILENAME_EXCED_RANGE) ||
+		errors.Is(err, windows.ERROR_INVALID_NAME) ||
+		errors.Is(err, syscall.ENAMETOOLONG)
+}
 
 // placeExclusive moves tmp onto path and refuses to replace anything there:
 // MoveFileEx with no MOVEFILE_REPLACE_EXISTING, so a file that appears

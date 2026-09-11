@@ -303,6 +303,16 @@ type Page struct {
 	Crumbs []Crumb   `json:"crumbs"`
 }
 
+// ChildRef is one child of a directory as Children answers it (APP.md §3):
+// the record's id and its kind, nothing else — enough for the header's
+// tick and Ctrl+A to select the folder, and for a Delete's question to
+// count files and folders apart when the selection reaches past the rows
+// loaded, without a row rendered for each.
+type ChildRef struct {
+	ID    string `json:"id"`
+	IsDir bool   `json:"isDir"`
+}
+
 // Collision is what CheckNames reports: the kind on both sides — what is
 // being offered and what is in the way — so the dialog can say "Photos is a
 // file here" and grey Replace whenever the two differ (APP.md §3).
@@ -316,7 +326,11 @@ type Collision struct {
 // FileOutcome is one record's result inside a batch operation. IsDir tells a
 // directory's outcome from a file's: created (a directory record made) and
 // entered (an existing one descended into) are a directory's, added and
-// replaced a file's (APP.md §3).
+// replaced a file's (APP.md §3). name_refused and path_refused are an
+// extract's (ruled 2026-09-10): the destination would not take the final
+// name — a file's or a directory's, whose subtree is then reported once,
+// for its top — or the temporary's path, and the rest of the batch was
+// written; Path is then the name that was refused.
 //
 // ID, Size and ModifiedAt are the archive copy's — the record's id as every
 // other view spells it (32 lowercase hex digits), its plaintext size and its
@@ -326,10 +340,13 @@ type Collision struct {
 // page re-issue an extract for the conflicts it was told about, and draw the
 // compare list's archive side, without walking the tree (APP.md §3).
 type FileOutcome struct {
+	// Path is the file on disk — an add's source, an extract's destination,
+	// the path actually written when a `names` entry renamed the record
+	// for that extract — and Name the record's joined archive path.
 	Path    string `json:"path"`
 	Name    string `json:"name"`
 	IsDir   bool   `json:"isDir"`
-	Outcome string `json:"outcome"` // added | replaced | created | entered | skipped | extracted | conflict | failed
+	Outcome string `json:"outcome"` // added | replaced | created | entered | skipped | extracted | conflict | name_refused | path_refused | failed
 	Code    Code   `json:"code,omitempty"`
 	// ID is the record's id, empty where the outcome has none yet (a source
 	// an add refused or skipped, a folder it could not make).

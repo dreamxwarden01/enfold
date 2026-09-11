@@ -143,7 +143,10 @@
   );
 </script>
 
-<Dialog {title} onclose={phase === "busy" ? undefined : onclose}>
+<!-- Esc: nothing while busy, Go back where that is the way out, else the
+     Cancel or the Close; the backdrop closes only the phases whose one
+     action is Close (APP.md §7). -->
+<Dialog {title} onclose={phase === "busy" ? undefined : phase === "mismatch-confirm" ? () => (phase = "mismatch") : onclose} dismissable={phase === "done" || phase === "error"}>
   {#if phase === "consent" || phase === "busy"}
     {#if mode === "forget"}
       <p>The record is dropped softly: it keeps its keys for thirty days, shows under <em>Show hidden</em> as forgotten, and <em>Restore</em> brings it back. The file at the path below is left exactly as it is.</p>

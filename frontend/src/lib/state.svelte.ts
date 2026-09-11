@@ -3,7 +3,7 @@
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
 import { Archive, Archives, Keys, Settings, Vault, errorOf, Code } from "./api";
-import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpView, Page, SettingsView, SlotView, VaultStatus } from "./api";
+import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
@@ -11,6 +11,13 @@ import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
 import { hasTrouble, summaryLine, tally } from "./results";
 import { hasConflicts } from "./conflicts";
+import { hasRefusals } from "./refused";
+import { DEFAULT_SORT, sortString } from "./sort";
+import type { SortState } from "./sort";
+import { clickRow, emptySelection, selectAll, survive, toggleRow } from "./selection";
+import type { Modifiers, Selection } from "./selection";
+import { PAGE_LIMIT, applyReply, hasMore, liveIds, nextOffset } from "./paging";
+import type { Listing } from "./paging";
 import { opErrorLine, opLabel, reclaimedLine } from "./ops";
 import type { Outcome } from "./outcome";
 
@@ -71,12 +78,38 @@ class Store {
   // own folder (APP.md §3, ruled 2026-09-10). Kept here so the field is
   // right even while the vault is locked and the list is not being read.
   currentPath = $state("");
-  page = $state<Page | null>(null);
+  // The listing held: every row from offset zero to what has arrived, at
+  // one Seq, paged in as the list scrolls (APP.md §2.4, lib/paging.ts).
+  page = $state<Listing | null>(null);
   // The directory the page is showing, as an id: the all-zero id is the
-  // archive's root (APP.md §3). The breadcrumb is the page's own Crumbs,
+  // archive's root (APP.md §3). The heading is the page's own Crumbs,
   // never built from this.
   dirId = $state(ROOT_ID);
-  sortBy = $state("name");
+  // The list's order (APP.md §6, lib/sort.ts): the column, its direction
+  // and the Name column's own as the tie-break. Kept while the archive is
+  // open; an archive opens on name.
+  sort = $state<SortState>(DEFAULT_SORT);
+  // The selection (APP.md §6, lib/selection.ts): the ticked ids and the
+  // anchor Shift ranges from. Kept here rather than on the page so that a
+  // newer listing can prune it — the ids that still exist survive — and
+  // so that entering a folder and going up clear it, wherever that was
+  // asked from. Every change goes through the setter, which counts them:
+  // a reply that arrives for a selection since changed is dropped by the
+  // count (selectFolder).
+  #sel = $state<Selection>(emptySelection());
+  private selGen = 0;
+
+  get sel(): Selection {
+    return this.#sel;
+  }
+
+  set sel(s: Selection) {
+    this.#sel = s;
+    this.selGen++;
+  }
+  // The row to focus once the listing lands: after going up, the folder
+  // just left (APP.md §6).
+  focusAfter = $state<string | null>(null);
   // The last batch operation of the open archive that did not go through
   // whole (a failed or skipped item): the page shows what happened once,
   // and clears it (APP.md §3, FileOutcome).
@@ -87,6 +120,15 @@ class Store {
   // scene and cannot be lost to a race between Extract's return and the
   // op's end (APP.md §3, ruled 2026-09-10).
   handledConflicts = $state<Record<string, true>>({});
+  // The extracts whose refused names the page has answered, the same way
+  // (refusedQuestion, APP.md §3, ruled 2026-09-10).
+  handledRefusals = $state<Record<string, true>>({});
+  // The `names` an extract was issued with, by op id — what a *Shorten* or
+  // *Rename…* chose — kept while the op can still ask, so that a conflict
+  // the renamed file then meets is re-issued under the same name and not
+  // the record's own, which the destination has already refused (APP.md
+  // §3, the review's finding 7). Dropped with the op.
+  extractNames: Record<string, Record<string, string>> = {};
   slots = $state<SlotView[]>([]);
   // The vault's entangled password (APP.md §13): one switch for the whole
   // vault, its On known while Locked, its CanEnable only while Unlocked.
@@ -119,7 +161,18 @@ class Store {
   unlockMethod = $state("");
   drop = $state<Drop | null>(null);
   now = $state(Date.now());
+  // booted: the first Status() call has completed — a reply, or a failure
+  // with a status accepted from an event meanwhile — and the page draws
+  // the scene the newest accepted status names; until then it draws
+  // nothing of the vault's, never the lock scene (APP.md §2.4, ruled
+  // 2026-09-10). An event that lands before the reply is applied by its
+  // Seq like any other but does not open the gate (the review's finding
+  // 14: a Locked event drew the lock scene while the reply still to come
+  // said Unlocked).
   booted = $state(false);
+  // bootFailed: the first Status() failed with nothing accepted meanwhile —
+  // what it said, shown as one plain line with Retry.
+  bootFailed = $state("");
 
   private seq = 0;
   private ceremonySeq = 0;
@@ -133,6 +186,11 @@ class Store {
 
   get runningOps(): OpView[] {
     return Object.values(this.ops).filter((o) => !o.finished);
+  }
+
+  // sortBy is the sort as Page and Children take it.
+  get sortBy(): string {
+    return sortString(this.sort);
   }
 
   // asksAbout: a finished extract with the `ask` policy that reported
@@ -157,10 +215,57 @@ class Store {
   }
 
   // settleConflicts is the page's answer — re-issued, skipped or dismissed
-  // — after which the op has nothing more to say and goes.
+  // — after which the op has nothing more to say and goes, unless it still
+  // has a refused name to ask about.
   settleConflicts(opId: string): void {
     this.handledConflicts[opId] = true;
+    this.forgetSettled(opId);
+  }
+
+  // asksRefused: a finished extract that reported a name or a path the
+  // destination refused and has not been answered (APP.md §3, ruled
+  // 2026-09-10). Any policy: a refusal is not a collision.
+  private asksRefused(o: OpView): boolean {
+    return o.finished && !this.handledRefusals[o.id] && hasRefusals(o.results);
+  }
+
+  // refusedQuestion is the refused-name question the open archive's page
+  // shows: the oldest unanswered one of that archive, derived from the ops
+  // as conflictQuestion is, so it survives the page's remount and cannot
+  // be lost between Extract's return and the op's end. The page asks it
+  // after the conflict question of the same op, not beside it.
+  get refusedQuestion(): OpView | null {
+    let found: OpView | null = null;
+    for (const o of Object.values(this.ops)) {
+      if (o.archiveId !== this.current || !this.asksRefused(o)) continue;
+      if (!found || o.startedAt < found.startedAt) found = o;
+    }
+    return found;
+  }
+
+  // settleRefusals is the page's answer to the refused names — re-issued
+  // with `names`, or skipped.
+  settleRefusals(opId: string): void {
+    this.handledRefusals[opId] = true;
+    this.forgetSettled(opId);
+  }
+
+  private forgetSettled(opId: string): void {
+    const o = this.ops[opId];
+    if (o && !this.asksAbout(o) && !this.asksRefused(o)) this.forgetOp(opId);
+  }
+
+  // forgetOp drops an op the page has nothing more to say about, and the
+  // names it was issued with.
+  private forgetOp(opId: string): void {
     delete this.ops[opId];
+    delete this.extractNames[opId];
+  }
+
+  // noteExtractNames records the names a re-issue was sent with, against
+  // the op it started; nothing is kept for a call without names.
+  noteExtractNames(opId: string, names: Record<string, string> | null): void {
+    if (names && Object.keys(names).length > 0) this.extractNames[opId] = names;
   }
 
   // boot subscribes first, then asks for everything.
@@ -183,6 +288,10 @@ class Store {
     Events.On("archive.changed", (e) => {
       const d = e.data as { id: string; seq: number };
       if (d.id === this.current && d.seq > (this.archiveSeq[d.id] ?? 0)) {
+        // The revision is recorded here, not only off the Stat reply: a
+        // Stat answered before this change was made must not put an
+        // older tree back (APP.md §2.4, the review's finding 9).
+        this.archiveSeq[d.id] = d.seq;
         void this.refreshArchive();
       }
     });
@@ -207,12 +316,24 @@ class Store {
   }
 
   async refreshAll(): Promise<void> {
+    this.bootFailed = "";
     try {
       const st = await Vault.Status();
       this.applyStatus(st, true);
     } catch (e) {
+      // A failed first status is the line with Retry and nothing else —
+      // never the lock scene, which would say the vault is locked on no
+      // evidence; with a status accepted from an event meanwhile there is
+      // a scene to draw, and the failure is then a toast like any other.
+      if (!this.status) {
+        this.bootFailed = codeText(errorOf(e).code);
+        return;
+      }
       this.toast(codeText(errorOf(e).code), "error");
     }
+    // The gate opens on the call's completion, never on a payload: the
+    // scene drawn is the newest status accepted by then, the reply's or
+    // a later event's (APP.md §2.4).
     this.booted = true;
     await this.refreshArchives();
     await this.refreshSlots();
@@ -229,6 +350,7 @@ class Store {
     const before = this.status?.state;
     this.seq = s.seq;
     this.status = s;
+    this.bootFailed = "";
     if (s.ops) {
       for (const o of s.ops) {
         if (!this.ops[o.id]?.finished) this.ops[o.id] = o;
@@ -239,7 +361,11 @@ class Store {
       this.ceremony = s.ceremony;
       this.noteOutcome(s.ceremony);
     }
-    if (before !== s.state) {
+    // The first status accepted is a scene drawn, not a transition: a
+    // window opened from the tray on an unlocked vault showed the lock
+    // scene for the settle before this guard (APP.md §2.4, ruled
+    // 2026-09-10). What the scene needs read is refreshAll's to fetch.
+    if (before !== undefined && before !== s.state) {
       // The unlock's full stop (APP.md §6, Motion): the lock screen keeps
       // showing the ceremony's last frame for the settle after the state
       // says Unlocked — the Done event lands a few milliseconds after the
@@ -333,8 +459,8 @@ class Store {
     // page has gone is settled with the page (dropArchive).
     setTimeout(() => {
       const kept = this.ops[o.id];
-      if (kept && this.asksAbout(kept) && kept.archiveId === this.current) return;
-      delete this.ops[o.id];
+      if (kept && (this.asksAbout(kept) || this.asksRefused(kept)) && kept.archiveId === this.current) return;
+      this.forgetOp(o.id);
     }, 8000);
   }
 
@@ -423,6 +549,9 @@ class Store {
       this.dirId = ROOT_ID;
       this.page = null;
       this.results = null;
+      this.sort = DEFAULT_SORT; // an archive opens on name (APP.md §3)
+      this.sel = emptySelection();
+      this.focusAfter = null;
       this.setRoute("archive");
       await this.loadPage();
       return true;
@@ -432,16 +561,27 @@ class Store {
     }
   }
 
+  private statToken = 0;
+
+  // refreshArchive re-reads the archive's Stat and then its listing. The
+  // reply is applied by the rule of §2.4: it answers the newest request —
+  // the token — and its Seq is not older than the last accepted revision,
+  // the event's or an earlier Stat's; two refreshes overlapping could
+  // otherwise leave a delayed older Stat standing over a newer one (the
+  // review's finding 9).
   async refreshArchive(): Promise<void> {
     const id = this.current;
     if (!id) return;
+    const t = ++this.statToken;
     try {
       const stat = await Archive.Stat(id);
-      if (this.current !== id) return; // the user moved on meanwhile
+      if (this.current !== id || t !== this.statToken) return; // the user moved on, or asked again
+      if (stat.seq < (this.archiveSeq[id] ?? 0)) return; // older than what was accepted
       this.stat = stat;
       this.archiveSeq[id] = stat.seq;
       await this.loadPage();
     } catch (e) {
+      if (this.current !== id || t !== this.statToken) return;
       const code = errorOf(e).code;
       if (code === "archive.not_open") {
         this.leaveArchive(true); // it is closed already; there is nothing to leave
@@ -456,31 +596,62 @@ class Store {
   // arrives: the crumbs do not name it yet, so this is what a folder that
   // went is called if it went before it was ever listed.
   private entering = "";
+  // The sort the listing held was read under: a listing under another
+  // sort is another order, and a reply for it starts afresh. While it
+  // differs from the sort chosen the listing on screen is stale — kept
+  // until the first page of the new order lands, but never added to.
+  private pageSort = "";
+  // The token of the loadMore in flight, 0 with none: one at a time, and
+  // cleared on every exit — the reply applied or dropped, an error, and
+  // at once by a listing restarted from zero, which supersedes it (the
+  // review's finding 4: a flag left set by a superseded request stopped
+  // every later page).
+  private moreInFlight = 0;
 
-  // loadPage lists the directory the page holds. The page can hold one
-  // that is gone — a Delete took a subtree the page was standing in — and
-  // the core answers file.not_found rather than an empty listing under a
-  // breadcrumb that still names the place (APP.md §3). The crumbs last held are then
+  // loadPage lists the directory the page holds from offset zero, a page
+  // of up to PAGE_LIMIT rows; loadMore fetches the next as the list
+  // scrolls. The page can hold a directory that is gone — a Delete took a
+  // subtree the page was standing in — and the core answers
+  // file.not_found rather than an empty listing under a heading that
+  // still names the place (APP.md §3). The crumbs last held are then
   // walked upwards, retrying until one answers; the root always does.
+  //
+  // A reply is applied by the rule of §2.4: it must answer the newest
+  // request — the token — and be no older than the pages held; a reply
+  // newer than them restarts the listing from zero (lib/paging.ts). The
+  // ids survive it: the selection keeps those that still exist.
   async loadPage(): Promise<void> {
     const id = this.current;
     if (!id) return;
     const t = ++this.pageToken; // a superseded reply is dropped
+    this.moreInFlight = 0; // and a loadMore in flight with it
     const held = this.page?.crumbs ?? [];
     const chain = retryChain(held, this.dirId);
     let target = this.dirId;
     let went = "";
     for (;;) {
       try {
-        const page = await Archive.Page(id, target, this.sortBy, 0, 2000);
+        const reply = await Archive.Page(id, target, this.sortBy, 0, PAGE_LIMIT);
         if (this.current !== id || t !== this.pageToken) return;
-        this.page = page;
+        // The pages held are this folder's under this sort, or they are
+        // another listing altogether, which the reply replaces whole.
+        const same = this.page !== null && shownDir(this.page.crumbs) === target && this.pageSort === this.sortBy;
+        const a = applyReply(same ? this.page : null, reply, 0);
+        if (a.kind === "applied") {
+          this.page = a.listing;
+          this.pageSort = this.sortBy;
+        }
         this.dirId = target;
         this.entering = "";
         if (went) {
-          const now = page.crumbs?.[page.crumbs.length - 1]?.name ?? "";
+          const now = reply.crumbs?.[reply.crumbs.length - 1]?.name ?? "";
           this.toast(`${went} is no longer in the archive.${now ? ` Showing ${now}.` : ""}`);
         }
+        // The row to focus after going up (focusAfter) is not judged here:
+        // it is applied by the page once its row is on screen, which may
+        // be a later page of a long parent, and the next navigation
+        // clears it (APP.md §6, the review's finding 13).
+        await this.reconcileSelection(t);
         return;
       } catch (e) {
         if (this.current !== id || t !== this.pageToken) return;
@@ -496,6 +667,7 @@ class Store {
           // entered (APP.md §3, DESIGN.md trap 31).
           this.dirId = shownDir(this.page?.crumbs);
           this.entering = "";
+          this.focusAfter = null;
           this.toast(codeText(code), "error");
           return;
         }
@@ -508,12 +680,130 @@ class Store {
     }
   }
 
+  // loadMore asks for the next page of the folder shown, when the list has
+  // scrolled near its end and there is one (APP.md §3: a long folder pages
+  // in as the list scrolls). One at a time: a second request while one is
+  // in flight would only be dropped by the token. Nothing is asked while
+  // the listing is stale — read under a sort no longer chosen — since a
+  // page of the new order appended to rows of the old would be no order
+  // at all (the review's finding 3); the first page of the new sort is
+  // on its way and restarts the listing.
+  async loadMore(): Promise<void> {
+    const id = this.current;
+    const l = this.page;
+    if (!id || !l || !hasMore(l) || this.moreInFlight || this.pageSort !== this.sortBy) return;
+    const t = ++this.pageToken;
+    const offset = nextOffset(l);
+    const dir = shownDir(l.crumbs);
+    this.moreInFlight = t;
+    try {
+      const reply = await Archive.Page(id, dir, this.sortBy, offset, PAGE_LIMIT);
+      if (this.current !== id || t !== this.pageToken) return;
+      const a = applyReply(this.page, reply, offset);
+      if (a.kind === "applied") this.page = a.listing;
+      // Newer than the pages held: rows may have moved between offsets,
+      // so the listing starts again from zero (APP.md §2.4).
+      else if (a.kind === "restart") await this.loadPage();
+    } catch (e) {
+      if (this.current !== id || t !== this.pageToken) return;
+      this.toast(codeText(errorOf(e).code), "error");
+    } finally {
+      // This request's own mark and no later one's: a restart has set it
+      // to zero already, and a newer loadMore owns it now.
+      if (this.moreInFlight === t) this.moreInFlight = 0;
+    }
+  }
+
+  // reconcileSelection prunes the selection against the folder after a
+  // listing landed (APP.md §2.4): against the rows held when the whole
+  // folder is on hand, else against Children — the header's tick and
+  // Ctrl+A select ids the list may never have loaded.
+  private async reconcileSelection(t: number): Promise<void> {
+    if (this.sel.ids.size === 0) return;
+    const live = liveIds(this.page);
+    if (live) {
+      this.sel = survive(this.sel, live);
+      return;
+    }
+    const id = this.current;
+    if (!id) return;
+    try {
+      const kids = (await Archive.Children(id, this.dirId, this.sortBy)) ?? [];
+      if (this.current !== id || t !== this.pageToken) return;
+      this.sel = survive(this.sel, new Set(kids.map((k) => k.id)));
+    } catch {
+      /* the next listing prunes it */
+    }
+  }
+
   // enterDir shows one directory of the open archive, by id; the name is
   // what the row said, for the message a folder that went leaves behind.
+  // Entering a folder clears the selection and the anchor (APP.md §6).
   async enterDir(dirId: string, name = ""): Promise<void> {
+    await this.navigate(dirId, name, null);
+  }
+
+  // goUp is the `..` row: one level up, and once the row of the folder
+  // just left is on screen the focus goes to it (APP.md §6).
+  async goUp(): Promise<void> {
+    const crumbs = this.page?.crumbs ?? [];
+    if (crumbs.length < 2) return;
+    const parent = crumbs[crumbs.length - 2];
+    await this.navigate(parent.id, parent.name, this.dirId);
+  }
+
+  // navigate is what both share: the selection and the anchor go, and
+  // focusAfter is the folder just left or nothing — the last navigation's
+  // is cleared, whether or not its row ever appeared.
+  private async navigate(dirId: string, name: string, focusAfter: string | null): Promise<void> {
+    this.sel = emptySelection();
     this.dirId = dirId;
     this.entering = name;
+    this.focusAfter = focusAfter;
     await this.loadPage();
+  }
+
+  // setSort re-reads the folder in the new order; the selection is ids and
+  // stays (a header is a control of the list, not its blank area). The
+  // listing held is stale from this moment — pageSort no longer matches —
+  // so nothing is added to it before the new order's first page lands.
+  async setSort(s: SortState): Promise<void> {
+    this.sort = s;
+    await this.loadPage();
+  }
+
+  // The selection's gestures (lib/selection.ts): order is the rows as
+  // they stand, top to bottom, for Shift's range.
+  selectClick(id: string, m: Modifiers = {}): void {
+    this.sel = clickRow(this.sel, (this.page?.rows ?? []).map((r) => r.id), id, m);
+  }
+
+  selectToggle(id: string): void {
+    this.sel = toggleRow(this.sel, id);
+  }
+
+  clearSelection(): void {
+    this.sel = emptySelection();
+  }
+
+  // selectFolder ticks the whole folder — every id Children answers,
+  // loaded or not (APP.md §6): the header's tick and Ctrl+A.
+  async selectFolder(): Promise<void> {
+    const id = this.current;
+    const dir = this.dirId;
+    const gen = this.selGen;
+    if (!id) return;
+    try {
+      const kids = (await Archive.Children(id, dir, this.sortBy)) ?? [];
+      // The reply ticks the folder only over the selection it was asked
+      // for: one changed meanwhile — a blank click cleared it, a row was
+      // clicked — stands, and a Delete asked in that interval takes what
+      // the user sees (the review's finding 2).
+      if (this.current !== id || this.dirId !== dir || this.selGen !== gen) return; // the user moved on
+      this.sel = selectAll(this.sel, kids.map((k) => k.id));
+    } catch (e) {
+      this.toast(codeText(errorOf(e).code), "error");
+    }
   }
 
   // dropArchive tells the core the page is gone and forgets what the page
@@ -529,13 +819,19 @@ class Store {
     this.stat = null;
     this.currentPath = "";
     this.page = null;
+    this.pageSort = "";
+    this.moreInFlight = 0;
     this.dirId = ROOT_ID;
     this.entering = "";
     this.results = null;
+    this.sel = emptySelection();
+    this.focusAfter = null;
     // A question the page did not answer goes with the page: the archive
     // closes behind it, and nothing could re-issue for it.
     for (const o of Object.values(this.ops)) {
-      if (o.archiveId === id && this.asksAbout(o)) this.settleConflicts(o.id);
+      if (o.archiveId !== id) continue;
+      if (this.asksAbout(o)) this.settleConflicts(o.id);
+      if (this.asksRefused(o)) this.settleRefusals(o.id);
     }
     if (id && !closed) {
       void Archives.Leave(id)

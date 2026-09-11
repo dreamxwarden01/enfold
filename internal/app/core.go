@@ -97,6 +97,12 @@ type Core struct {
 	// can lower it: a test that had to make a 64 MiB archive would prove
 	// nothing more.
 	reclaim reclaimRule
+	// names is the `name` order of every listing (APP.md §3, sort.go): one
+	// collator per core, built once, guarded by its own mutex.
+	names *nameCollator
+	// extractFS is where an extract touches the destination (extract.go);
+	// the zero value is the platform's own, and a test sets a stand-in.
+	extractFS extractFS
 
 	archives map[[16]byte]*openArchive
 	// opening are the archives an openArchiveFor is opening right now, each
@@ -148,6 +154,7 @@ func New(d Deps) (*Core, error) {
 	}
 	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, opening: map[[16]byte]chan struct{}{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
 	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare, budget: reclaimBudget}
+	c.names = newNameCollator()
 	c.vault.state = StateNone
 	c.vault.warnings = map[Code]bool{}
 	return c, nil

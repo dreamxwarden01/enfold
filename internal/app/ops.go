@@ -910,10 +910,17 @@ const (
 
 // extractItem is one record of the plan, resolved before the first byte.
 type extractItem struct {
-	id         [16]byte
-	parentID   [16]byte
-	isDir      bool
-	path       string // the joined archive path
+	id       [16]byte
+	parentID [16]byte
+	isDir    bool
+	path     string // the joined archive path
+	// out is the path written, relative to the destination and joined with
+	// "/": the archive path unless a `names` entry renamed this record or
+	// one of its ancestors for this extract, in which case the new element
+	// stands where the record's own would (APP.md §3). dst is out under
+	// the destination root.
+	out        string
+	renamed    bool // out differs from path: a `names` entry reached it
 	dst        string
 	size       uint64
 	modifiedAt int64
@@ -932,7 +939,22 @@ type extractItem struct {
 // The destination is the page's to decide — it prefills the dialog by the
 // rule of §3, and the core keeps no folder from the last time (ruled
 // 2026-09-10) — and is created here if it does not exist.
-func (c *Core) Extract(id string, recordIDs []string, dir string, policy ExtractPolicy) (string, *Error) {
+//
+// names, usually empty, maps a record id to the one path element to write
+// it under in this extract only — what Shorten and Rename… send after a
+// name_refused (§3, ruled 2026-09-10): the record is untouched, a name that
+// breaks R20 is params (as is an id that is not a record's), a directory's
+// new name carries its subtree under it, a collision under the new name
+// follows policy, and the outcome's Path is the path actually written. An
+// entry for a record the plan does not reach is not used.
+//
+// The destination's refusals are per record, never the batch's (§3): a
+// name the volume would not take — a file's on placement, a directory's on
+// its creation — is the outcome name_refused, a temporary it would not take
+// is path_refused — a refused directory takes its subtree with it, reported
+// once for its top — and the rest is written. The destination root itself
+// failing is the operation's error, before any outcome.
+func (c *Core) Extract(id string, recordIDs []string, dir string, policy ExtractPolicy, names map[string]string) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
 		return "", e
@@ -942,6 +964,14 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 	}
 	if len(recordIDs) == 0 {
 		return "", coded(CodeParams)
+	}
+	renames := make(map[[16]byte]string, len(names))
+	for k, v := range names {
+		rid, ok := parseID(k)
+		if !ok || rid == format.RootID || format.ValidateName(v) != nil {
+			return "", coded(CodeParams)
+		}
+		renames[rid] = v
 	}
 	all := false
 	ids := make([][16]byte, 0, len(recordIDs))
@@ -970,7 +1000,7 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 	describe := func(o *op) { o.policy, o.destination = string(policy), root }
 	return c.startOpWith("extract", id, describe, func(ctx context.Context, o *op) ([]FileOutcome, error) {
 		c.mu.Lock()
-		items, e := extractPlan(oa.merge(), ids, all)
+		items, e := extractPlan(oa.merge(), ids, all, renames)
 		c.mu.Unlock()
 		if e != nil {
 			return nil, e
@@ -983,21 +1013,31 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		// record satisfying R20 and R39 does, so a failure means the index
 		// is not the one the reader validated: the whole operation fails
 		// with file.name, a plan-time invariant and not an item's outcome.
-		used := make(map[string][16]byte, len(items))
+		// A `names` entry that lands two records of the plan on one path
+		// is the caller's, and params — no policy resolves a collision
+		// between two files of one extract. The fold is R39's own, the one
+		// the index checks live siblings with (format.FoldKey, Unicode
+		// simple folding): a lower-casing would let "ſ.txt" past a planned
+		// "s.txt", which strings.EqualFold — and the sibling rule — calls
+		// one name (the outside review's finding 5).
+		used := make(map[string]*extractItem, len(items))
 		var total uint64
 		var files int
 		for i := range items {
 			it := &items[i]
-			it.dst = filepath.Join(root, filepath.FromSlash(it.path))
+			it.dst = filepath.Join(root, filepath.FromSlash(it.out))
 			rel, err := filepath.Rel(root, filepath.Clean(it.dst))
 			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				return nil, coded(CodeFileName)
 			}
-			key := strings.ToLower(it.dst)
-			if other, dup := used[key]; dup && other != it.id {
+			key := format.FoldKey(it.dst)
+			if other, dup := used[key]; dup && other.id != it.id {
+				if it.renamed || other.renamed {
+					return nil, coded(CodeParams)
+				}
 				return nil, coded(CodeFileName)
 			}
-			used[key] = it.id
+			used[key] = it
 			if !it.isDir {
 				// The plan is resolved, so the strip can say how many files
 				// are coming out (APP.md §3, OpView.Items); the folders it
@@ -1012,6 +1052,10 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		results := make([]FileOutcome, 0, len(items))
 		at := make(map[[16]byte]int, len(items))
 		gone := map[[16]byte]bool{}
+		// refused are the directories the destination would not take and
+		// everything beneath them: reported once, for the top, as a skipped
+		// subtree is — nothing beneath is attempted or listed (APP.md §3).
+		refused := map[[16]byte]bool{}
 		var made []extractItem
 		var done uint64
 		o.items.Store(int64(files))
@@ -1027,6 +1071,10 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 			if !it.isDir {
 				res.Size = it.size
 			}
+			if refused[it.parentID] {
+				refused[it.id] = true
+				continue
+			}
 			at[it.id] = len(results)
 			if gone[it.parentID] {
 				// A directory that cannot be created takes its subtree with
@@ -1040,13 +1088,23 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 				// Created into the parent the order has already made; an
 				// existing folder is used as it stands — never renamed,
 				// never pre-Lstat'ed, never emptied.
-				err := os.Mkdir(it.dst, 0o700)
+				err := c.extractFS.makeDir(it.dst)
 				switch {
 				case err == nil:
 					res.Outcome = "created"
 					made = append(made, it)
 				case errors.Is(err, os.ErrExist):
 					res.Outcome = "skipped"
+				case refusedByVolume(err):
+					// The volume would not take the folder's name — a
+					// directory's name_refused, as a file's is, since a
+					// shorter one may do and the page asks (Shorten, Rename…,
+					// Skip); nothing beneath it is attempted or listed until
+					// it has one, so the subtree is reported once, for its
+					// top (APP.md §3, ruled 2026-09-10; the outside review's
+					// finding 6).
+					res.Outcome, res.Code = "name_refused", CodeFileNameRefused
+					refused[it.id] = true
 				default:
 					res.Outcome, res.Code = "failed", CodeIO
 					gone[it.id] = true
@@ -1064,10 +1122,14 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 			c.mu.Unlock()
 			base := done
 			count := func(written uint64) { o.progress(base+written, total, "extracting") }
-			err := extractFile(ctx, oa.a, it.id, it.dst, policy == ExtractReplace, count)
+			err := extractFile(ctx, c.extractFS, oa.a, it.id, it.dst, policy == ExtractReplace, count)
+			// Keep-both numbering is bounded — " (2)" to " (999)" — and
+			// stops at the first refusal that is not "already exists": a
+			// name the volume would not take is that record's outcome, not
+			// a reason to try a longer one (APP.md §3, checked 2026-09-10).
 			for n := 2; err != nil && errors.Is(err, os.ErrExist) && policy == ExtractRename && n < 1000; n++ {
 				res.Path = renamed(it.dst, n)
-				err = extractFile(ctx, oa.a, it.id, res.Path, false, count)
+				err = extractFile(ctx, c.extractFS, oa.a, it.id, res.Path, false, count)
 			}
 			c.mu.Lock()
 			oa.readers--
@@ -1084,10 +1146,23 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 				// a file on a stat's word (APP.md §3). A file that went in
 				// between leaves the outcome with none.
 				res.Outcome, res.Existing = "conflict", existingFile(res.Path)
+			case errors.Is(err, os.ErrExist) && policy == ExtractRename:
+				// Every name to (999) was taken: keep-both was asked for
+				// and nothing was kept, which is a failure and not a skip
+				// (APP.md §3, the outside review's finding 40).
+				res.Outcome, res.Code = "failed", CodeFileExists
 			case errors.Is(err, os.ErrExist):
 				res.Outcome = "skipped"
 			case ctx.Err() != nil:
 				return results, ctx.Err()
+			case errors.Is(err, errNameRefused):
+				// The final name is what the volume refused; a shorter one
+				// may do, and the page asks (Shorten, Rename…, Skip).
+				res.Outcome, res.Code = "name_refused", CodeFileNameRefused
+			case errors.Is(err, errPathRefused):
+				// The temporary — a fixed short name in the same folder —
+				// is what it refused: the path, and no name helps.
+				res.Outcome, res.Code = "path_refused", CodeFilePathRefused
 			default:
 				res.Outcome, res.Code = "failed", classify(err).Code
 			}
@@ -1113,8 +1188,10 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 }
 
 // extractPlan resolves the set and orders it parents-first. A record reached
-// twice is planned once. Caller holds the state mutex.
-func extractPlan(m *merged, ids [][16]byte, all bool) ([]extractItem, *Error) {
+// twice is planned once. renames is `names` parsed: the path element a
+// record is written under in this extract, which its subtree follows.
+// Caller holds the state mutex.
+func extractPlan(m *merged, ids [][16]byte, all bool, renames map[[16]byte]string) ([]extractItem, *Error) {
 	want := map[[16]byte]bool{}
 	for _, rid := range ids {
 		r := m.live(rid)
@@ -1137,22 +1214,31 @@ func extractPlan(m *merged, ids [][16]byte, all bool) ([]extractItem, *Error) {
 		}
 	}
 	var out []extractItem
-	var walk func(parent [16]byte, depth int)
-	walk = func(parent [16]byte, depth int) {
+	var walk func(parent [16]byte, depth int, under string, renamed bool)
+	walk = func(parent [16]byte, depth int, under string, renamed bool) {
 		for _, r := range m.kids[parent] {
 			if !all && !want[r.id] {
 				continue
 			}
+			elem, ok := renames[r.id]
+			if !ok {
+				elem = r.name
+			}
+			rel := elem
+			if under != "" {
+				rel = under + "/" + elem
+			}
 			out = append(out, extractItem{
 				id: r.id, parentID: r.parentID, isDir: r.isDir, path: m.path(r.id),
+				out: rel, renamed: renamed || ok,
 				size: r.size, modifiedAt: r.modifiedAt, depth: depth,
 			})
 			if r.isDir {
-				walk(r.id, depth+1)
+				walk(r.id, depth+1, rel, renamed || ok)
 			}
 		}
 	}
-	walk(format.RootID, 0)
+	walk(format.RootID, 0, "", false)
 	return out, nil
 }
 

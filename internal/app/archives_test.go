@@ -347,7 +347,7 @@ func TestALeftPageWaitsForTheRunningOperation(t *testing.T) {
 			<-release
 		})
 	})
-	opID, e := h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip)
+	opID, e := h.c.Extract(id, []string{rootID}, outDir(t), ExtractSkip, nil)
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,46 @@ import (
 
 	"github.com/dreamxwarden01/enfold/internal/archive"
 )
+
+// The two marks an extract puts on a volume's refusal, so that the outcome
+// can say which step it refused (APP.md §3, ruled 2026-09-10): the final
+// name — the outcome is name_refused and a shorter name may help — or the
+// temporary, a fixed short name in the same folder, in which case the path
+// and not the leaf is what the volume refuses and no name helps. classify
+// maps each to its code; the volume's own error stays in the chain for the
+// log.
+var (
+	errNameRefused = errors.New("app: the destination refused the name")
+	errPathRefused = errors.New("app: the destination refused the path")
+)
+
+// extractFS is where an extract touches the destination's file system: the
+// placement of a temporary onto its final name and the creation of a
+// directory. The zero value is the platform's own; a test sets a function
+// to stand in for a volume the test machine does not have — one that
+// refuses a name — the way reclaimRule stands in for the constants. A field
+// left nil is the real thing.
+type extractFS struct {
+	place func(tmp, path string, replace bool) error
+	mkdir func(path string) error
+}
+
+func (fs extractFS) placeFile(tmp, path string, replace bool) error {
+	if fs.place != nil {
+		return fs.place(tmp, path, replace)
+	}
+	if replace {
+		return placeReplace(tmp, path)
+	}
+	return placeExclusive(tmp, path)
+}
+
+func (fs extractFS) makeDir(path string) error {
+	if fs.mkdir != nil {
+		return fs.mkdir(path)
+	}
+	return os.Mkdir(path, 0o700)
+}
 
 // extractFile writes one record's plaintext to path with the discipline
 // APP.md §3 asks for — all-or-nothing, and `os.ErrExist` rather than an
@@ -36,7 +77,12 @@ import (
 // Everything about the content — the decryption, the chunk seals and the
 // whole-file content hash — is still archive.Extract's, and a mismatch there
 // leaves nothing at path.
-func extractFile(ctx context.Context, a *archive.Archive, id [16]byte, path string, replace bool, on func(written uint64)) error {
+//
+// A refusal of the volume's (refusedByVolume) is marked with the step it
+// refused: the temporary's creation is errPathRefused — its name is short
+// and fixed, so the folder's path is what was refused — and the placement
+// onto the final name is errNameRefused. Every other error goes up as it is.
+func extractFile(ctx context.Context, fs extractFS, a *archive.Archive, id [16]byte, path string, replace bool, on func(written uint64)) error {
 	// The cheap pre-check: it may see the collision first, and it spares
 	// the decryption; the exclusive move below is what places a file, so
 	// nothing here is a check the placement then trusts (DECISIONS:
@@ -54,6 +100,9 @@ func extractFile(ctx context.Context, a *archive.Archive, id [16]byte, path stri
 	}
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		if refusedByVolume(err) {
+			return fmt.Errorf("%w: %w", errPathRefused, err)
+		}
 		return err
 	}
 	ok := false
@@ -72,11 +121,10 @@ func extractFile(ctx context.Context, a *archive.Archive, id [16]byte, path stri
 	if err := f.Close(); err != nil {
 		return err
 	}
-	place := placeExclusive
-	if replace {
-		place = placeReplace
-	}
-	if err := place(tmp, path); err != nil {
+	if err := fs.placeFile(tmp, path, replace); err != nil {
+		if refusedByVolume(err) {
+			return fmt.Errorf("%w: %w", errNameRefused, err)
+		}
 		return err
 	}
 	ok = true

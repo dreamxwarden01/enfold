@@ -79,7 +79,8 @@
   ]);
 </script>
 
-<Dialog title="Details — {d.name}" wide onclose={onclose}>
+<!-- Close is its one action, so the backdrop closes it too (APP.md §7). -->
+<Dialog title="Details — {d.name}" wide onclose={onclose} dismissable>
   {#if d.description}<p class="t-sub desc">{d.description}</p>{/if}
   {#if purge}
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>Forgotten on {date(d.forgottenAt)}. Its key is dropped at the first unlock after {date(purge)}.</span></div>

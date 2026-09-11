@@ -12,6 +12,7 @@ export type {
     ArchiveStat,
     ArchiveSummary,
     CeremonyState,
+    ChildRef,
     Collision,
     Crumb,
     Difference,

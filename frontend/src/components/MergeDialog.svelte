@@ -136,7 +136,10 @@
   const recoveryLines = $derived((info?.recoverySlots ?? []).map((s) => ({ label: s.label, id: keyId(s.recipientId), createdAt: s.createdAt })));
 </script>
 
-<Dialog title="Import records" wide onclose={close}>
+<!-- Esc is the Cancel or the Discard, and nothing while the merge is
+     being written: a discard under a running merge dropped the handle the
+     merge was using (APP.md §7). -->
+<Dialog title="Import records" wide onclose={merging ? undefined : close}>
   {#if listed}
     <p class="t-sub">Ticked records are written into this vault's registry. Nothing of that file is installed, and this vault's own values are kept wherever the two differ.</p>
     <div class="merge-list" role="group" aria-label="Incoming records">

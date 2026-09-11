@@ -37,6 +37,16 @@ export function CheckNames(id: string, parentID: string, names: string[] | null)
 }
 
 /**
+ * Children answers every live child of dirID — its id and its kind — in the
+ * order sortBy names — Page's grammar — and nothing else: what the header's
+ * tick and Ctrl+A select is the folder, loaded or not, and what a Delete's
+ * question counts, files and folders apart, past the rows loaded (APP.md §3).
+ */
+export function Children(id: string, dirID: string, sortBy: string): $CancellablePromise<app$0.ChildRef[] | null> {
+    return $Call.ByID(1305430966, id, dirID, sortBy);
+}
+
+/**
  * CreateFolder commits a directory record and returns its id: a folder is a
  * record, so an empty one is a real thing (FORMAT.md R39).
  */
@@ -59,10 +69,14 @@ export function Delete(id: string, recordIDs: string[] | null): $CancellableProm
  * "replace" (the default when empty), "skip", "rename", or "ask" — which
  * extracts everything that collides with nothing and reports each collision
  * as a conflict outcome carrying the existing file's size and date, for the
- * page to ask about and re-issue (APP.md §3).
+ * page to ask about and re-issue (APP.md §3). names, usually empty, maps a
+ * record id to the one path element to write it under in this extract only
+ * — what Shorten and Rename… send after a name_refused outcome: the record
+ * is untouched, a name that breaks R20 is params, a directory's new name
+ * carries its subtree, and the outcome's path is the one actually written.
  */
-export function Extract(id: string, recordIDs: string[] | null, dir: string, policy: string): $CancellablePromise<string> {
-    return $Call.ByID(585645538, id, recordIDs, dir, policy);
+export function Extract(id: string, recordIDs: string[] | null, dir: string, policy: string, names: { [_ in string]?: string } | null): $CancellablePromise<string> {
+    return $Call.ByID(585645538, id, recordIDs, dir, policy, names);
 }
 
 /**
@@ -80,7 +94,11 @@ export function Op(opID: string): $CancellablePromise<app$0.OpView> {
 /**
  * Page lists the children of one directory of the committed snapshot. dirID
  * is a record id — the all-zero id is the archive's root — never a path, and
- * one that no longer names a live directory is file.not_found.
+ * one that no longer names a live directory is file.not_found. sortBy is one
+ * or two signed keys, comma-separated: the column — name, size, type or
+ * modified, a leading "-" for descending — then optionally name or -name,
+ * the direction the name breaks ties in; "" is name (APP.md §3). limit is
+ * clamped to 1 000; zero or less is 200.
  */
 export function Page(id: string, dirID: string, sortBy: string, offset: number, limit: number): $CancellablePromise<app$0.Page> {
     return $Call.ByID(2601627082, id, dirID, sortBy, offset, limit);

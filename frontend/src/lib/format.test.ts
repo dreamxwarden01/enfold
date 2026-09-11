@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileIcon, hashText, keyId, plural } from "./format";
+import { ext, fileIcon, hashText, keyId, plural } from "./format";
 
 describe("keyId", () => {
   it("groups the first eight hex digits, upper-cased (FORMAT.md §18.4)", () => {
@@ -88,5 +88,20 @@ describe("fileIcon", () => {
   it("is a plain file for everything else, a PDF included", () => {
     expect(fileIcon("itinerary.pdf")).toBe("i-file");
     expect(fileIcon("noext")).toBe("i-file");
+  });
+});
+
+// The extension rule of APP.md §6: the part after the last dot, none when
+// the dot is first or absent.
+describe("ext", () => {
+  it("is the part after the last dot, folded", () => {
+    expect(ext("IMG_7201.HEIC")).toBe("heic");
+    expect(ext("a.tar.gz")).toBe("gz");
+  });
+
+  it("is none when the dot is the first character or there is none", () => {
+    expect(ext(".env")).toBe("");
+    expect(ext("README")).toBe("");
+    expect(ext("")).toBe("");
   });
 });

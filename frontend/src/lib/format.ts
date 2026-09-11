@@ -75,9 +75,13 @@ export function leaf(p: string): string {
   return i < 0 ? p : p.slice(i + 1);
 }
 
+// ext is the extension rule of APP.md §6: the part after the last dot,
+// folded; none when the dot is the first character (`.env` has none) or
+// there is no dot; `gz` for `a.tar.gz`. The Type column, the preview's
+// kind and the row's icon all read it.
 export function ext(name: string): string {
   const i = name.lastIndexOf(".");
-  return i < 0 ? "" : name.slice(i + 1).toLowerCase();
+  return i <= 0 ? "" : name.slice(i + 1).toLowerCase();
 }
 
 export type PreviewKind = "image" | "video" | "audio" | "text" | "none";

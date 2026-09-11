@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FileOutcome } from "./api";
 import {
-  allOf, conflictsOf, hasConflicts, planIsEmpty, reissuePlan, sameDateAndSize,
+  allOf, conflictsOf, hasConflicts, namesFor, planIsEmpty, reissuePlan, sameDateAndSize,
   skipSameLabel, startingDecisions, ticks, toggle, withSkipSame,
 } from "./conflicts";
 import type { ConflictRow } from "./conflicts";
@@ -147,6 +147,24 @@ describe("the re-issue", () => {
 
   it("treats a row nobody decided about as the default, replace", () => {
     expect(reissuePlan([a], {}).replace).toEqual(["a".repeat(32)]);
+  });
+});
+
+// A conflict met under a name a Shorten or Rename… chose is re-issued
+// under that name, not the record's own (APP.md §3; the review's finding
+// 7: the re-issue passed null and met the refusal again).
+describe("the names a re-issue carries", () => {
+  const inForce = { ["a".repeat(32)]: "IMG.HEIC", ["c".repeat(32)]: "n.txt" };
+
+  it("are the ones in force for the ids re-issued, and no other", () => {
+    expect(namesFor(["a".repeat(32), "b".repeat(32)], inForce)).toEqual({ ["a".repeat(32)]: "IMG.HEIC" });
+  });
+
+  it("are null when the extract carried none, or none for these ids", () => {
+    expect(namesFor(["a".repeat(32)], null)).toBeNull();
+    expect(namesFor(["a".repeat(32)], undefined)).toBeNull();
+    expect(namesFor(["b".repeat(32)], inForce)).toBeNull();
+    expect(namesFor([], inForce)).toBeNull();
   });
 });
 

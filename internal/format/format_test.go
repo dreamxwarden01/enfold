@@ -1835,8 +1835,8 @@ func TestFoldKeyMatchesEqualFold(t *testing.T) {
 		"Α", "α", "ς", "σ", "ab", "abc", "世界", "世"}
 	for _, a := range names {
 		for _, b := range names {
-			if got, want := foldKey(a) == foldKey(b), strings.EqualFold(a, b); got != want {
-				t.Errorf("foldKey(%q)==foldKey(%q) is %v, EqualFold is %v", a, b, got, want)
+			if got, want := FoldKey(a) == FoldKey(b), strings.EqualFold(a, b); got != want {
+				t.Errorf("FoldKey(%q)==FoldKey(%q) is %v, EqualFold is %v", a, b, got, want)
 			}
 		}
 	}

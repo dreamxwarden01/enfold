@@ -1,6 +1,7 @@
 <script lang="ts">
   import { CeremonyStep, VaultState } from "./lib/api";
   import { store } from "./lib/state.svelte";
+  import { bootCopy } from "./lib/strings";
   import Icons from "./components/Icons.svelte";
   import Toasts from "./components/Toasts.svelte";
   import Rail from "./components/Rail.svelte";
@@ -62,8 +63,18 @@
 <svelte:window onpointerdown={activity} onkeydown={activity} onwheel={activity} />
 
 <Icons />
+<!-- Nothing is drawn until the first status is accepted (APP.md §2.4):
+     the splash, then the scene that status names — never the lock scene
+     on no evidence. A first status that failed is one plain line and
+     Retry. -->
 {#if !store.booted}
-  <div class="splash"><div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div></div>
+  <div class="splash">
+    {#if store.bootFailed}
+      <div class="boot-failed" role="alert"><p>{store.bootFailed}</p><button type="button" class="btn" onclick={() => void store.refreshAll()}>{bootCopy.retry}</button></div>
+    {:else}
+      <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
+    {/if}
+  </div>
 {:else}
   <div class="stage">
     {#if showLock}
@@ -104,4 +115,6 @@
 
 <style>
   .splash { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ink-3); }
+  .boot-failed { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--ink-2); font-size: 12.5px; }
+  .boot-failed p { margin: 0; }
 </style>

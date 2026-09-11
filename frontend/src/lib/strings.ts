@@ -4,7 +4,7 @@
 
 import { CeremonyStep, Code } from "./api";
 import type { CeremonyState, CodeKey, StepKey } from "./api";
-import { bytes, plural } from "./format";
+import { bytes, ext, plural } from "./format";
 
 export interface StepCopy {
   title: string;
@@ -154,6 +154,12 @@ export const codeCopy: Record<CodeKey, string> = {
   // edit itself is saved, and the next qualifying commit takes the run up
   // again (APP.md §2.3). Never "the edit failed".
   [Code.CodeReclaimIncomplete]: "Saved. Reclaiming space did not finish.",
+  // The two refusals of a destination (APP.md §3, ruled 2026-09-10): the
+  // final name refused on placement, where a shorter one may do, and the
+  // folder's path, where no name helps. The page asks per record in its
+  // own words (refusedCopy); these are the codes' lines for a list.
+  [Code.CodeFileNameRefused]: "The destination cannot take a name this long.",
+  [Code.CodeFilePathRefused]: "The folder's path is too long for this destination.",
   [Code.CodeParams]: "Enfold refused the request.",
   [Code.CodeIO]: "A file could not be read or written.",
 };
@@ -281,3 +287,188 @@ export function warningCopy(code: string, reason?: string): string {
   }
   return codeText(code);
 }
+
+// ---- The file list (APP.md §6, ruled 2026-09-10) -----------------------
+//
+// Four columns — Name, Size, Type, Modified — the `..` row that goes up
+// one level, and what the header's checkbox and the list's empty states
+// say. The column labels are one table so the Name cell can carry a
+// hidden column's key beside its arrow.
+export const columnLabels = {
+  name: "Name",
+  size: "Size",
+  type: "Type",
+  modified: "Modified",
+};
+
+export const listCopy = {
+  up: "..",
+  upLabel: "Up one level",
+  tickAll: "Select everything in this folder",
+  tickRow: (name: string): string => `Select ${name}`,
+  emptyRoot: "Nothing here yet. Add files, or drop them here.",
+  emptyFolder: "This folder is empty.",
+  toRoot: "Back to the top of the archive",
+  // the header cell's tooltip says what the first click will do
+  sortBy: (column: string): string => `Sort by ${column}`,
+  selected: (n: number): string => `${n} selected`,
+  selectOne: "Select a file",
+};
+
+// The boot (APP.md §2.4): a first Status() that failed is one plain line —
+// the code's own words — and this button; the lock scene is never drawn
+// on no evidence.
+export const bootCopy = {
+  retry: "Retry",
+};
+
+// The Archives list (APP.md §6, ruled 2026-09-10): its rows and header
+// carry the file list's checkboxes; the details pane shows one row or,
+// with several ticked and none of them the last clicked, a count.
+export const archivesCopy = {
+  listLabel: "Archives",
+  tickAll: "Select every archive shown",
+  selectOne: "Select an archive.",
+  selectedCount: (n: number): string => `${plural(n, "archive")} selected`,
+  selectedName: (name: string): string => `${name} selected`,
+};
+
+// The Type column (APP.md §6): a folder is *Folder*, a file's type is
+// drawn from its extension — the part after the last dot; none when the
+// dot is the first character or there is none — by this table, "<EXT>
+// file" for an extension without a name of its own, and *File* for none.
+export const folderType = "Folder";
+export const plainFileType = "File";
+
+export const extensionNames: Record<string, string> = {
+  jpg: "JPEG image",
+  jpeg: "JPEG image",
+  png: "PNG image",
+  gif: "GIF image",
+  webp: "WebP image",
+  bmp: "Bitmap image",
+  svg: "SVG image",
+  avif: "AVIF image",
+  ico: "Icon",
+  heic: "HEIC image",
+  heif: "HEIF image",
+  tif: "TIFF image",
+  tiff: "TIFF image",
+  raw: "Raw image",
+  dng: "DNG image",
+  cr2: "Canon raw image",
+  nef: "Nikon raw image",
+  arw: "Sony raw image",
+  psd: "Photoshop document",
+  mp4: "MP4 video",
+  m4v: "MP4 video",
+  mov: "QuickTime video",
+  webm: "WebM video",
+  mkv: "Matroska video",
+  avi: "AVI video",
+  wmv: "Windows Media video",
+  ogv: "Ogg video",
+  mp3: "MP3 audio",
+  wav: "WAV audio",
+  flac: "FLAC audio",
+  aac: "AAC audio",
+  m4a: "MPEG-4 audio",
+  ogg: "Ogg audio",
+  opus: "Opus audio",
+  wma: "Windows Media audio",
+  aiff: "AIFF audio",
+  txt: "Text document",
+  md: "Markdown document",
+  rtf: "Rich text document",
+  log: "Log file",
+  csv: "CSV table",
+  tsv: "TSV table",
+  json: "JSON data",
+  xml: "XML document",
+  yaml: "YAML document",
+  yml: "YAML document",
+  toml: "TOML document",
+  ini: "Settings file",
+  pdf: "PDF document",
+  doc: "Word document",
+  docx: "Word document",
+  odt: "OpenDocument text",
+  xls: "Excel workbook",
+  xlsx: "Excel workbook",
+  ods: "OpenDocument spreadsheet",
+  ppt: "PowerPoint presentation",
+  pptx: "PowerPoint presentation",
+  odp: "OpenDocument presentation",
+  epub: "EPUB book",
+  mobi: "Kindle book",
+  zip: "ZIP archive",
+  "7z": "7-Zip archive",
+  rar: "RAR archive",
+  tar: "Tar archive",
+  gz: "Gzip archive",
+  bz2: "Bzip2 archive",
+  xz: "XZ archive",
+  zst: "Zstandard archive",
+  iso: "Disc image",
+  efd: "Enfold archive",
+  eks: "Enfold vault",
+  exe: "Application",
+  msi: "Windows installer",
+  dll: "Library",
+  bat: "Batch script",
+  cmd: "Batch script",
+  ps1: "PowerShell script",
+  sh: "Shell script",
+  py: "Python source",
+  js: "JavaScript source",
+  ts: "TypeScript source",
+  go: "Go source",
+  rs: "Rust source",
+  c: "C source",
+  h: "C header",
+  cpp: "C++ source",
+  cs: "C# source",
+  java: "Java source",
+  html: "HTML page",
+  htm: "HTML page",
+  css: "Style sheet",
+  sql: "SQL script",
+  ttf: "TrueType font",
+  otf: "OpenType font",
+  woff: "Web font",
+  woff2: "Web font",
+};
+
+export function typeLabel(name: string, isDir: boolean): string {
+  if (isDir) return folderType;
+  const e = ext(name);
+  if (e === "") return plainFileType;
+  return extensionNames[e] ?? `${e.toUpperCase()} file`;
+}
+
+// ---- A name the destination refuses (APP.md §3, ruled 2026-09-10) -----
+//
+// Asked per refused record: the final name refused on placement offers
+// *Shorten*, *Rename…* and *Skip*; a refused path — the temporary or a
+// folder, where no name helps — offers *Skip* and *Skip all like it*. Esc
+// is *Skip*. The count is where the record stands in the list of refused
+// ones, so a long list says how much is left.
+export const refusedCopy = {
+  nameTitle: "The destination cannot take a name this long",
+  pathTitle: "The folder's path is too long for this destination",
+  nameBody: (name: string): string => `${name} was not written. A shorter name may fit: Shorten halves it, keeping the extension, or give it another name for this extract only. The archive keeps the name as it is.`,
+  pathBody: (name: string, isDir: boolean): string =>
+    isDir
+      ? `The folder ${name} and everything in it were not written: the destination cannot take a path this long, and no name would help. Extract it to a shorter path instead.`
+      : `${name} was not written: the folder it goes in has a path the destination cannot take, and no name would help. Extract it to a shorter path instead.`,
+  progress: (at: number, of: number): string => (of > 1 ? `${at} of ${of}` : ""),
+  shorten: "Shorten",
+  shortenTo: (to: string): string => `Shorten to ${to}`,
+  nothingShorter: "The name is down to one character and cannot be shortened further.",
+  rename: "Rename…",
+  renameLabel: "Name for this extract",
+  renameBack: "Back",
+  renameGo: "Extract as this",
+  skip: "Skip",
+  skipAllLike: "Skip all like it",
+};

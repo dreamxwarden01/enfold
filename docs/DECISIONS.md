@@ -3517,3 +3517,179 @@ kept as the necessary exception — an extent larger than the budget cannot be s
 otherwise never move — and written into §2.3. The mock's overlapping reclaims and the
 "Reclaimed …" line outside `strings.ts` were the two low.
 
+## 2026-09-10 — The list: `..`, four columns, checkboxes, sorting; dialogs stay put; names the destination refuses; no lock scene first
+
+The user's fourth pass, from the built app. **The heading is the archive's name alone** and a
+button to the root; the folder is shown by the list itself, whose first row in a folder is `..`
+— up one level, pinned under every sort, no checkbox, never selected, not counted by Ctrl+A.
+**Four columns** — Name, Size, Type, Modified — *Stored as* leaves the list (the details keep
+it); a folder shows no size; the type is drawn from the extension, *File* for none; columns
+give way from the right when the pane is narrow. **Checkboxes** head every row and the header
+row of both lists, the header ticked exactly when every row is and never a third state; ticks
+are the selection, cleared by a blank click, by entering a folder or going up, persisting
+nowhere. Two selection faults: Ctrl+A did nothing, and Shift+click after a blank click still
+ranged from the row that click had deselected — the anchor is the last row clicked without
+Shift, a blank click clears it, and with no anchor Shift selects the clicked row alone. The list
+keeps one row's height free under its last row, scrolled or not. **Sorting**, at last: the
+core's, through `Page`'s `sort`, so paging stays in one order — name ascending by default,
+directories always first, a general collation (the root locale of `x/text/collate` with `Numeric` and `IgnoreCase`,
+checked on the machine: digits by value, accents secondary, case ignored with a code-point
+tie-break, scripts in the Unicode collation's order and Han by code point — since a
+locale-specific order would differ by machine and the user asked for the general way); Modified opens descending and
+breaks ties by name in the name column's direction; Size opens ascending, folders (sizeless)
+first; Type is the extension, folded, none first. **Dialogs stay put**: any dialog with a choice
+ignores a click outside it — "they have a Cancel" — and only a dialog whose one action is
+*Close* dismisses on the backdrop. **A window opened from the tray while the vault is unlocked**
+flashed the lock scene: the page now draws nothing until the first status and then the right
+scene. **Names the destination refuses**: R20 already holds Windows' rules on the way in, so the
+name itself always fits a Windows volume; what cannot be known beforehand is the destination's
+path length and the volume's own limit (SMB, exFAT), so an extract that meets a refusal reports
+that file as `name_refused` with the rest written — never a failed batch, never a hang, and no
+name loop runs unbounded (keep-both numbering stops at the first refusal that is not "already
+exists") — and the page asks per file: *Shorten* (the extension kept, the stem halved until the
+volume takes it), *Rename…*, *Skip*. **A drag out of the window** onto the desktop or Explorer —
+the user's ask, the `ask` policy with no dialog before it — waits on the feasibility answer
+(WebView2, OLE, a cgo-free data object); the ruling stands, the mechanism is the next entry.
+
+**The critique** (Codex Astra over the rulings as written, 21 files): fifteen findings, all
+about the specification and none against the decisions, folded in: the heading superseded two
+older sentences that still drew a breadcrumb and made crumbs drop targets (now the `..` row and
+the heading are); one signed key could not carry the Name column's tie-break direction (`sort`
+is one or two signed keys); the root collation puts the Han extension blocks after the unified
+block, so "by code point" is said per block; the per-archive `Seq` rule read literally rejected
+a second page at the same revision (a request token tells stale from same-revision, and a newer
+`Seq` restarts the listing, ids surviving); *Shorten* and *Rename…* had no way through
+`Extract` (a `names` map for this extract only); a refused folder name and a refused
+destination root had no path (the folder's subtree reported once; the root is the operation's
+error); *Shorten* had no floor and no answer to a refused temporary (one rune; the path is the
+problem then, *Skip all like it*); the header's tick and Ctrl+A meant "every row" over a list
+that pages (`Children` answers the folder's ids); the Archives pane and its ticks could name
+different archives (the pane shows the last-clicked row while ticked, else the sole ticked
+one); `..` needed a focus model apart from selection; Ctrl+A needed a scope; the blank boot
+needed a failure exit; the extension and folder-in-Size rules needed saying; and Esc needed an
+answer in a dialog without *Cancel* (*Skip*, never *Replace*). The keep-both numbering loop was
+checked and already stops — the fear of an unbounded loop was not the code's defect.
+
+**Drag out, researched** (Codex Astra, 40 sources read, the same evening). Feasible, and the
+shape is settled: WebView2 does turn a page's drag into a native OLE drag, but a page cannot
+supply file *contents* — only strings, URLs and existing paths — so the host must own the
+drag: the page cancels `dragstart` and hands the gesture to a bound call, the shell calls
+`DoDragDrop` on the UI thread with its own data object. Wails beta.16 has drop-in only (issue
+4648 asks for drag-out) and never calls `OleInitialize`; pure-Go COM objects with
+`syscall.NewCallback` vtables exist (go-ole's example, zzl/go-com's `IDataObject`,
+`IDropSource`, `IStream`) and are building blocks, not a finished exporter. Two mechanisms:
+`CF_HDROP` over files staged in %TEMP% — what 7-Zip's FAQ describes and its `PanelDrag.cpp`
+does, WinRAR reportedly the same — or **virtual files**, `FileGroupDescriptorW` plus
+`FileContents` streams Explorer pulls at drop time, what Windows' own zip folders hand over;
+Enfold takes the second, since the first writes plaintext where nobody asked. What the user
+asked for — ask about a conflict only when it occurs — is exactly what Explorer does for a
+virtual-file drop, with its own *Replace or Skip Files* dialog; but it is Explorer's dialog and
+Explorer's decision, the source never learns the destination or a per-file receipt, and there
+is no "skip and ask at the end" to be had. Streaming gigabytes works when the stream is real
+(a reader-backed `IStream`, not a buffer filled in `GetData`), the STA must not be stalled by
+a slow read, and `IDataObjectAsyncCapability` lets Explorer copy in the background while the
+archive stays open. Ruled: design written into APP §3; a stand-alone prototype under
+`tools/dragproto` first — a window that drags a synthetic 5 GiB virtual file onto the desktop
+— before a line of it enters the shell.
+
+**The list, implemented, reviewed, fixed.** Three Opus implementers in sequence — the core
+(`sort.go`: one collator per Core behind a mutex, keys computed once per row; `Page` renders
+only the window it was asked for; `Children`; `Extract`'s `names`; the two refusals; keep-both
+exhaustion as `failed`/`file.exists`), the Archive page (`lib/sort`, `lib/selection`,
+`lib/paging`, `lib/refused`, the `..` row, the checkboxes, scroll paging, the refused-name
+dialog), then the dialogs, the boot gate and the Archives list — and the outside reviewer over
+the diff: fifteen findings, two high, ten of the implementers' deviations judged sound. The two
+high were the selection's: unticking the last row (Ctrl+click or its checkbox) emptied the
+selection but kept the anchor, so the next Shift+click ranged from a row the user had just
+deselected — the very fault the user reported, in a second dress; and a select-all's
+`Children` reply arriving late overwrote a selection the user had changed meanwhile, which a
+Delete could then act on. Both fixed (an anchor lives only while something is selected; a
+selection generation guards the reply), with the medium ones: a sort change mid-scroll mixed two
+orders; a superseded load-more left paging dead; the destination de-duplication used
+`ToLower` where R39 folds (now the index's own `FoldKey`); a refused folder name was reported
+as a path refusal, hiding *Shorten*; conflict re-issues dropped the names a *Shorten* had
+chosen; the Delete question counted only loaded rows (`Children` now answers kinds too and
+the deletion acts on exactly what the question named); `Stat` replies had no token or `Seq`;
+the Details modal's Copy menu fought the focus trap; every open dialog answered Esc (a dialog
+stack — the topmost owns Esc, the trap and the backdrop); the ceremony's Esc now cancels it;
+focus after going up survives paging; an event before the first `Status` reply opened the
+boot gate (it no longer does; the gate is the call's completion); and `name,-name` is accepted.
+Recorded so the next reader knows which of the list's rules were the reviewer's.
+
+**The prototype, built** (`tools/dragproto`, the same night): a Windows-only, cgo-free program
+— a small window; `OleInitialize` on its locked thread; on press-and-move, one `DoDragDrop`
+with a data object of its own — `IDataObject` and `IDataObjectAsyncCapability` on one
+refcount, `IDropSource`, `IEnumFORMATETC`, and an `IStream` per file, every vtable a pinned
+block of `syscall.NewCallback` addresses looked up by the bare `this` and never dereferenced.
+The files are synthetic (a 5 GiB one and a 1 KiB one by default; `-n`, `-size`, `-delay`,
+`-folder`), their bytes a pure function of the offset generated by a producer goroutine into
+a bounded buffer, so `Read` only drains and a seek is free. Every struct layout was compiled
+against the Windows SDK (FILEDESCRIPTORW 592 bytes, cFileName at 72) rather than recalled, the
+descriptor the encoder writes was parsed back in C, and the generator was cross-checked in
+Python. An independent read-only ABI audit found the vtables, IIDs and HRESULTs exact and four
+real defects — a four-byte over-read of a caller's HGLOBAL in `SetData`, a latent double
+release of the async self-reference, a goroutine-stack address handed through
+`syscall.SyscallN` (which keeps the value alive but does not move it to the heap — and a
+`make([]uint32, 1)` did not either, the race detector proved; a `//go:uintptrescapes`
+wrapper does), and unlocked reads at teardown — all fixed, with the stream pointer now left
+at the *start* by default (the documentation and Raymond Chen's sample leave it at the end,
+which is now the experiment), `FD_UNICODE` set, and released objects kept as tombstones so a
+call on one is logged rather than misattributed. Two things only a real drop can answer, and
+the user's run is for: whether a relative path in `cFileName` makes Explorer create the folder
+(the documentation says nothing), and Explorer's own dialog and progress on a collision, a
+cancel and a stalled read.
+
+**The first drop** (the user, the same night, Windows 11): a 1 MiB virtual file dragged onto
+the desktop arrived whole with its SHA-256 matching; then the 5 GiB file and the 1 KiB file
+together — both whole, 5 368 709 120 bytes exactly. What the log says Explorer does: it asks
+for `IMarshal` and `IAgileObject` and, refused, marshals every call back to the apartment that
+made the object; it runs the asynchronous protocol (`SetAsyncMode`, `StartOperation`,
+`EndOperation(S_OK, COPY)`); it requests the contents stream once *before* the drop and never
+reads that one, then again after the drop and reads that in 256 KiB chunks — 20 481 reads,
+7.3 s, about 730 MB/s — then `Seek(0)` and release; a second request for the same file is
+therefore the ordinary case, not a corner; peak working set 85.5 MiB, nearly all of it the
+runtime and the window. Every call, the whole copy included, landed on the drag thread — the
+STA — which in Enfold would be the WebView's UI thread pumping reads for the length of the
+copy; so the next experiment is an *agile* data object (the free-threaded marshaler
+aggregated, `IAgileObject` answered) so Explorer's worker calls the streams on its own thread,
+which is also the shape the decryption goroutine wants. `Get-FileHash` over 5 GiB merely took
+its time; it was not a hang. The second drop taught the other rule: dropped again onto the
+desktop, *Replace* chosen, Explorer began the operation and asked for the stream — and never
+read a byte, because that `Get-FileHash` still held the destination open and Explorer's copy
+engine stalled before its first read, its progress dialog unable even to cancel; the user then
+closed the prototype, which destroyed a data object Explorer still referenced. So: a target may
+ask for a stream and then not read for an arbitrary time, and the source must keep the object
+and everything behind it alive until `EndOperation` — never tear down what the target still
+holds; a close while an operation is in flight waits, and a forced one leaves the streams
+answering an error rather than freed memory. The prototype gained both, and an `-agile` mode
+for the next round.
+
+**The second research pass** (Codex Astra, 52 sources, the user's question after the drops:
+is the stream route a marginalised one, and does 7-Zip's temp-file route have its reasons?).
+What held up: the bar-only dialog is the long-standing behaviour of the descriptor/contents
+route — practitioners reported it in 2012 and 2023 — and no descriptor flag upgrades it
+(`FD_FILESIZE` supplies the size, `FD_PROGRESSUI` asks for a dialog, neither chooses its
+style); the modern dialog is reachable only by handing Explorer real shell items — a namespace
+extension with `ITransferSource` — a far larger build. The protocol is documented, undeprecated
+and still implemented by Chromium and Outlook, but nothing shows Microsoft investing in its
+dialog. Cancellation on that route is cooperative — the shell checks between chunked reads, so a
+`Read` that blocks hangs both sides — and errors stop the copy without a *Retry*; the stall
+behind a locked destination could not be attributed to any documented limit (Windows answers a
+sharing violation at once) and needs a diagnosis, not an assumption. The temp route, read in
+7-Zip's own source: an empty temporary directory is made *before* `DoDragDrop`, early
+`CF_HDROP` requests get it, the button's release switches the paths and arms the extraction,
+which then runs inside the next `GetData` — because targets ask for `CF_HDROP` during the hover,
+and 7-Zip's comments name the consumers that broke on it (Sticky Notes, Edge). Its costs, as
+its authors document them: staging space and a second pass of writes (a same-volume move can
+spare the payload copy), plaintext that must outlive the drop — Igor Pavlov acknowledges that
+deleting the staging after `DoDragDrop` breaks consumers that open the paths later, Chromium
+schedules its staged downloads for deletion at reboot, WinRAR scavenges files older than an
+hour at its next start, PeaZip documents residue after a crash — and no ordinary deletion is a
+secure erasure. `CF_HDROP` reaches more targets (Notepad++, plain `WM_DROPFILES` receivers),
+though browsers accept virtual files too (Chromium materialises them itself). Advertising both
+formats does not keep the choice ours — the target picks, and Mozilla fixed a real
+format-selection bug of that kind. The reviewer's position: the virtual route for Explorer and
+the desktop, an explicit *Extract…* as the escape hatch, never `CF_HDROP` silently beside it;
+reconsider only if plaintext staging became acceptable. The decision is the user's and is
+pending.
+

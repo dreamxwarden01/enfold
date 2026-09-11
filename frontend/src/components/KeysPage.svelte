@@ -123,6 +123,23 @@
     const n = store.slots.length;
     store.footNote = `${st?.displayName ?? ""} · ${n} way${n === 1 ? "" : "s"} in`;
   });
+
+  // The ceremony dialog's two ways out. Close, once the ceremony is over,
+  // is the panel's own button; Escape is Cancel while the panel offers
+  // one — the ceremony's, Vault.CancelUnlock, the path its button takes —
+  // and Close after (APP.md §7, "Dialogs stay put": Esc is Cancel where
+  // there is one; the review's finding 12, where Escape did nothing
+  // mid-ceremony).
+  function closeCeremony() {
+    store.dismissCeremony();
+    void store.refreshSlots();
+    void store.refreshEntangled();
+  }
+
+  function escapeCeremony() {
+    if (store.ceremonyIsOver) closeCeremony();
+    else void Vault.CancelUnlock();
+  }
 </script>
 
 <div class="layer-head"><h1 class="t-title">Keystore</h1>{#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>Locked</span>{/if}</div>
@@ -295,8 +312,8 @@
 {#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel}
   <!-- the recovery key is revealed by App, above every route -->
 {:else if c}
-  <Dialog title={c.kind === "enroll" ? "Add a key" : c.kind === "remove" ? "Remove a key" : c.kind === "rotate" ? "Rotate the vault key" : c.kind === "reveal" ? "Show the recovery key" : c.kind === "entangle" ? "The vault's password" : "Export a backup"} onclose={() => { if (store.ceremonyIsOver) store.dismissCeremony(); }}>
-    <CeremonyPanel {c} onclose={() => { store.dismissCeremony(); void store.refreshSlots(); void store.refreshEntangled(); }} />
+  <Dialog title={c.kind === "enroll" ? "Add a key" : c.kind === "remove" ? "Remove a key" : c.kind === "rotate" ? "Rotate the vault key" : c.kind === "reveal" ? "Show the recovery key" : c.kind === "entangle" ? "The vault's password" : "Export a backup"} onclose={escapeCeremony} dismissable={store.ceremonyIsOver}>
+    <CeremonyPanel {c} onclose={closeCeremony} />
   </Dialog>
 {/if}
 

@@ -555,20 +555,21 @@ thead th .caret.on.asc { transform: rotate(180deg); }
 .details-actions { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px; margin-top: auto; border-top: 1px solid var(--stroke); }
 .details-actions .row2 { display: flex; gap: 8px; }
 .details-actions .row2 .btn { flex: 1; justify-content: center; }
-.crumbs { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); min-width: 0; flex-wrap: wrap; }
-.crumbs .c { padding: 3px 6px; border-radius: var(--r-sm); background: none; border: none; }
-.crumbs .c:hover { background: var(--surface-alt); color: var(--ink); }
-.crumbs .c.here { color: var(--ink); font-weight: 600; }
-.crumbs .i { width: 12px; height: 12px; color: var(--ink-3); }
+/* The Archive page's heading (APP.md §6, ruled 2026-09-10): the archive's
+   name alone, a button to the root and a drop target; no folder crumb
+   after it — the list's own `..` row shows where the page stands. */
+.head-name { background: none; border: none; padding: 2px 6px; margin: 0; border-radius: var(--r-sm); font: inherit; color: inherit; letter-spacing: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.head-name:hover { background: var(--surface-alt); }
+.head-name.drop-into { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.layer-head .t-title { min-width: 0; }
 .file-split { display: grid; grid-template-columns: 1fr 264px; gap: 16px; flex: 1; min-height: 0; padding-bottom: 14px; }
 .file-split.dropping .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
-/* A drag of the selection onto a folder row or a crumb is a Move (APP.md
-   §6): the target the drag is over wears the accent wash, and a refusal —
-   the whole move refused, in place — is said against that target, where
-   the drag was aimed. The name cell lets the line wrap under the name; no
-   other cell does. */
+/* A drag of the selection onto a folder row, onto `..` or onto the heading
+   is a Move (APP.md §6): the target the drag is over wears the accent
+   wash, and a refusal — the whole move refused, in place — is said against
+   that target, where the drag was aimed. The name cell lets the line wrap
+   under the name; no other cell does. */
 tbody tr.drop-into td { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); }
-.crumbs .c.drop-into { background: var(--accent-wash); color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent-line); }
 /* The name keeps its own nowrap, whatever the cell does, so it ellipsizes
    in the refused row as in every other. */
 .fname { white-space: nowrap; }
@@ -579,15 +580,34 @@ tbody tr.refused td.sel-mark { white-space: normal; overflow: visible; }
 ul.plain { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
 ul.plain li { overflow-wrap: anywhere; }
 p.dim { color: var(--ink-2); }
-/* The file table's columns (APP.md §6, the Archive page): Size, Stored as
-   and Modified are fixed at what their content asks for — "zstd, 79%
-   smaller", "12,406 files", "2026-09-08 21:14" — and the name column,
-   which is given no width, takes everything they do not need. A longer
-   label ellipsizes rather than widening its column and squeezing the
-   name. */
-.file-split .w-size { width: 104px; }
-.file-split .w-store { width: 136px; }
+/* The file table's columns (APP.md §6, the Archive page, ruled 2026-09-10):
+   the checkbox, then Name, Size, Type and Modified — Size, Type and
+   Modified fixed at what their content asks for ("851 MB", "PowerPoint
+   presentation" ellipsized, "2026-09-08 21:14") — and the name column,
+   which is given no width, takes everything they do not need. */
+.file-split .w-size { width: 96px; }
+.file-split .w-type { width: 132px; }
 .file-split .w-date { width: 134px; }
+/* A checkbox heads every row and the header row: ticks are the selection.
+   The cell is the box's and nothing else's, so a click there is the box's.
+   The Archives list carries the same boxes under the same rules (APP.md §6). */
+.file-split .w-check, .arch-split .w-check { width: 34px; }
+.file-split th.chk, .file-split td.chk, .arch-split th.chk, .arch-split td.chk { padding: 0 0 0 11px; }
+.file-split .chk input, .arch-split .chk input { accent-color: var(--accent); margin: 0; display: block; width: 14px; height: 14px; cursor: default; }
+.file-split td.type { color: var(--ink-2); }
+/* The header cells sort: the sorting column wears its arrow. */
+thead th .sorter { display: inline-flex; align-items: center; gap: 4px; cursor: default; border-radius: var(--r-sm); padding: 2px 4px; margin: 0 -4px; }
+thead th .sorter:hover { background: var(--surface); color: var(--ink); }
+thead th .arrow { color: var(--accent-ink); font-size: 11px; }
+/* A hidden column's sort stays in force, and the Name cell then carries
+   that key's name and arrow (the container queries below show it). */
+thead th .hidden-sort { display: none; margin-left: 6px; font-weight: 500; color: var(--ink-3); }
+/* `..`: up one level, pinned first, no checkbox, never selected. */
+tbody tr.up .fname { color: var(--ink-2); }
+/* One row's height of empty space under the last row, scrolled or not
+   (APP.md §6): a spacer inside the scroller, so it scrolls with the rows. */
+.tablewrap .list-tail { height: 36px; flex: none; }
+.tablewrap .empty + .list-tail { height: 0; }
 .preview { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-card); overflow: hidden; }
 .preview .art { height: 186px; flex: none; border-bottom: 1px solid var(--stroke); background: var(--surface-alt); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .preview .art img, .preview .art video { max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -643,13 +663,15 @@ p.dim { color: var(--ink-2); }
      (APP.md §6, the Archive page): the column goes to nothing and its
      cells with it, rather than standing there empty. */
   .file-split .w-date { width: 0; }
-  .file-split thead th:nth-child(4), .file-split tbody td:nth-child(4) { display: none; }
+  .file-split thead th:nth-child(5), .file-split tbody td:nth-child(5) { display: none; }
+  .file-split thead th .hidden-sort.k-modified { display: inline; }
 }
-/* Then Stored as, at the width where the three fixed columns would leave
-   the name less than a name. */
+/* Then Type, at the width where the three fixed columns would leave the
+   name less than a name; Name and Size always. */
 @container (max-width: 700px) {
-  .file-split .w-store { width: 0; }
-  .file-split thead th:nth-child(3), .file-split tbody td:nth-child(3) { display: none; }
+  .file-split .w-type { width: 0; }
+  .file-split thead th:nth-child(4), .file-split tbody td:nth-child(4) { display: none; }
+  .file-split thead th .hidden-sort.k-type { display: inline; }
 }
 /* The details pane scrolls on its own, and its save bar is in flow at the
    foot of that pane and sticky there: it can never cover the last field

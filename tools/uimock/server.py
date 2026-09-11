@@ -28,7 +28,7 @@ answers 404 the moment the token is gone. Archives.Leave unmounts at once
 and leaves the archive DRAINING while one of its own operations still runs
 (the row keeps open: true until it ends, then archives.changed with open:
 false); Archives.Close is the kill switch and cancels that operation."""
-import json, os, secrets, sys, threading, time
+import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "frontend", "dist")
@@ -155,6 +155,14 @@ state = {
         "itinerary.pdf": {"size": 990_000, "modifiedAt": NOW - 200000},
         "2024/IMG_0001.HEIC": {"size": 1_200_000, "modifiedAt": NOW - 400000},
     },
+    # The destination's limits, the mock's stand-in for a volume that
+    # refuses a name (APP.md 3, ruled 2026-09-10): a leaf longer than
+    # nameOver code units is name_refused on placement - the puffins
+    # photo above is 71 - and a full path longer than pathOver is
+    # path_refused (a file's folder, or a folder itself, reported once
+    # with nothing beneath it). POST /mock/state {"refuse": {...}} moves
+    # them; the core has no such numbers, only the volume's refusal.
+    "refuse": {"nameOver": 64, "pathOver": 200},
     # The operations running now, and the events the page has not drained.
     "ops": {},
     "events": [],
@@ -380,17 +388,102 @@ def live_dir(dir_id):
     return True
 
 
+def parse_sort(sort_by):
+    """Page's sort grammar (APP.md 3, ruled 2026-09-10), the core's rule:
+    one or two signed keys, comma-separated - the column (name, size,
+    type or modified, a leading "-" for descending), then optionally
+    "name" or "-name" for the tie-break's direction; the empty string is
+    name; a second name key must agree with a first. Anything else is
+    None, and the caller answers params."""
+    if sort_by == "":
+        return ("name", False, False)
+    parts = sort_by.split(",")
+    if len(parts) > 2:
+        return None
+    key, desc = (parts[0][1:], True) if parts[0].startswith("-") else (parts[0], False)
+    if key not in ("name", "size", "type", "modified"):
+        return None
+    name_desc = desc if key == "name" else False
+    if len(parts) == 2:
+        tie, tie_desc = (parts[1][1:], True) if parts[1].startswith("-") else (parts[1], False)
+        if tie != "name" or (key == "name" and tie_desc != desc):
+            return None
+        name_desc = tie_desc
+    return (key, desc, name_desc)
+
+
+def name_key(name):
+    """A stand-in for the core's collation: case ignored, runs of digits
+    by value, then the name itself by code point so the order is total."""
+    parts = re.split(r"(\d+)", name.casefold())
+    return (tuple((0, int(x)) if x.isdigit() else (1, x) for x in parts if x != ""), name)
+
+
+def ext_of(name):
+    """The type key: the part after the last dot, folded; none when the
+    dot is first or absent (APP.md 6)."""
+    i = name.rfind(".")
+    return "" if i <= 0 else name[i + 1:].lower()
+
+
+def sorted_children(dir_id, order):
+    """The children of dir_id in Page's order (APP.md 3): directories
+    before files under every key and both directions, then the key, then
+    the name in the tie-break's direction. Under size the directories,
+    which show none, fall straight to the name; under type a file with no
+    extension is first in both directions."""
+    key, desc, name_desc = order
+    dirs = [r for r in children(dir_id) if r["isDir"]]
+    files = [r for r in children(dir_id) if not r["isDir"]]
+    for group in (dirs, files):
+        group.sort(key=lambda r: name_key(r["name"]), reverse=name_desc)
+    if key == "size":
+        files.sort(key=lambda r: r["size"], reverse=desc)
+    elif key == "modified":
+        dirs.sort(key=lambda r: r["modifiedAt"], reverse=desc)
+        files.sort(key=lambda r: r["modifiedAt"], reverse=desc)
+    elif key == "type":
+        none = [r for r in files if ext_of(r["name"]) == ""]
+        typed = [r for r in files if ext_of(r["name"]) != ""]
+        typed.sort(key=lambda r: ext_of(r["name"]), reverse=desc)
+        files = none + typed
+    return dirs + files
+
+
 def page(args):
     """Page(id, dirID, sortBy, offset, limit). A dirID that no longer names
     a live directory is file.not_found, never an empty listing under a
     breadcrumb that still names the place; a live empty directory answers
-    zero rows with total 0."""
-    dir_id = (list(args) + ["", ROOT_ID])[1]
+    zero rows with total 0. The rows come in sortBy's order (parse_sort),
+    a page at a time: limit <= 0 is 200, over 1000 is 1000, and the Seq
+    is the archive's, so the page can tell a listing that moved."""
+    _, dir_id, sort_by, offset, limit = (list(args) + ["", ROOT_ID, "", 0, 0])[:5]
+    order = parse_sort(sort_by or "")
+    if order is None:
+        return Err("params")
     if not live_dir(dir_id):
         return Err("file.not_found")
-    rows = [row(r) for r in children(dir_id)]
-    rows.sort(key=lambda r: (not r["isDir"], r["name"].lower()))
-    return {"seq": 1, "rows": rows, "total": len(rows), "crumbs": crumbs_to(dir_id)}
+    kids = sorted_children(dir_id, order)
+    offset = max(0, min(int(offset or 0), len(kids)))
+    limit = int(limit or 0)
+    limit = 200 if limit <= 0 else min(limit, 1000)
+    rows = [row(r) for r in kids[offset:offset + limit]]
+    return {"seq": state["stat"]["seq"], "rows": rows, "total": len(kids), "crumbs": crumbs_to(dir_id)}
+
+
+def children_ids(args):
+    """Children(id, dirID, sortBy): every live child of dirID in Page's
+    order, its id and its kind and nothing else - what the header's tick
+    and Ctrl+A select, the folder and not the rows loaded so far, and what
+    a Delete's question counts, files and folders apart, past the rows
+    loaded (APP.md 3)."""
+    _, dir_id, sort_by = (list(args) + ["", ROOT_ID, ""])[:3]
+    order = parse_sort(sort_by or "")
+    if order is None:
+        return Err("params")
+    if not live_dir(dir_id):
+        return Err("file.not_found")
+    return [{"id": r["id"], "isDir": r["isDir"]} for r in sorted_children(dir_id, order)]
 
 
 def a_dir(pid):
@@ -699,19 +792,33 @@ EXTRACT_POLICIES = ("replace", "skip", "rename", "ask")
 
 
 def extract_plan(ids):
-    """The files an Extract would write: each selected record and everything
-    live beneath a selected directory, the all-zero id meaning the whole
-    archive. Directories are left out of this list - the mock reports files
-    only - and an empty plan is file.not_found."""
+    """The records an Extract would write, parents first: each selected
+    record, everything live beneath a selected directory and the ancestors
+    of all of them, the all-zero id meaning the whole archive. An empty
+    plan is file.not_found."""
     if ROOT_ID in (ids or []):
         want = {r["id"] for r in state["records"]}
     else:
         want = set()
         for rid in ids or []:
-            if record(rid) is None:
+            r = record(rid)
+            if r is None:
                 continue
             want |= {rid} | set(subtree(rid))
-    return [r for r in state["records"] if r["id"] in want and not r["isDir"]]
+            at = r["parentId"]
+            while at != ROOT_ID and record(at) is not None:
+                want.add(at)
+                at = record(at)["parentId"]
+    out = []
+
+    def walk(pid):
+        for c in children(pid):
+            if c["id"] in want:
+                out.append(c)
+                if c["isDir"]:
+                    walk(c["id"])
+    walk(ROOT_ID)
+    return out
 
 
 def under(dest, p):
@@ -720,47 +827,108 @@ def under(dest, p):
     return dest.rstrip("/\\") + "\\" + p.replace("/", "\\")
 
 
+def valid_name(name):
+    """R20 as far as the mock judges it: one non-empty element, no slash
+    or other forbidden character, no trailing space or dot, at most 255
+    code units."""
+    if not name or name in (".", "..") or len(name.encode("utf-16-le")) // 2 > 255:
+        return False
+    if any(c in '\\/:*?"<>|' or ord(c) < 32 for c in name):
+        return False
+    return name[-1] not in " ."
+
+
 def extract(args):
-    """Extract(id, recordIDs, dir, policy): the all-zero id among the
-    records is the whole archive; an empty list is params, never
+    """Extract(id, recordIDs, dir, policy, names): the all-zero id among
+    the records is the whole archive; an empty list is params, never
     everything. Nothing is recorded about the destination - the dialog is
     prefilled from the archive's own folder, and no folder is kept from the
     last time (ruled 2026-09-10). `ask` extracts everything that collides
     with nothing and reports each collision as a `conflict` outcome
     carrying the existing file's size and date, for the page to ask about
-    and re-issue."""
-    ids, dest, policy = (list(args) + ["", [], "", ""])[1:4]
+    and re-issue. `names` maps a record id to the one path element it is
+    written under in this extract only - what Shorten and Rename... send
+    after a name_refused - a directory's new name carrying its subtree; a
+    name that breaks R20, or an id that is not a record's, is params. The
+    destination's refusals (state["refuse"]) are per record: a leaf too
+    long is name_refused, a path too long path_refused - a folder's once,
+    with nothing beneath it - and the rest is written."""
+    ids, dest, policy, names = (list(args) + ["", [], "", "", None])[1:5]
     if not ids:
         return Err("params")
     policy = policy or "replace"
     if policy not in EXTRACT_POLICIES:
         return Err("params")
-    files = extract_plan(ids)
+    names = dict(names or {})
+    for k, v in names.items():
+        if k == ROOT_ID or record(k) is None or not valid_name(v):
+            return Err("params")
+    plan = extract_plan(ids)
+    files = [r for r in plan if not r["isDir"]]
     if not files:
         return Err("file.not_found")
     total = sum(r["size"] for r in files) or ADDED_SIZE
     here = state["inDestination"]
+    limits = state["refuse"]
+
+    def out_path(r):
+        """The path written under the destination: the archive path with
+        every renamed element - the record's own, or an ancestor's -
+        replaced for this extract."""
+        parts, at = [], r
+        while at is not None and at["id"] != ROOT_ID:
+            parts.append(names.get(at["id"], at["name"]))
+            at = record(at["parentId"])
+        return "/".join(reversed(parts))
 
     def commit():
         out = []
-        for r in files:
+        refused_dirs = set()
+        for r in plan:
             p = path_of(r)
+            rel = out_path(r)
+            full = under(dest, rel)
+            # A folder the destination refused takes its subtree with it:
+            # reported once, for its top (APP.md 3).
+            at = r["parentId"]
+            skip = False
+            while at != ROOT_ID:
+                if at in refused_dirs:
+                    skip = True
+                    break
+                at = record(at)["parentId"] if record(at) else ROOT_ID
+            if skip:
+                continue
             # Every extract outcome carries the record's id and the archive
             # copy's size and date (APP.md 3, ruled 2026-09-10): the page
             # walks nothing for its compare list or its re-issue.
-            res = {"path": under(dest, p), "name": p, "isDir": False, "outcome": "extracted",
-                   "id": r["id"], "size": r["size"], "modifiedAt": r["modifiedAt"]}
-            existing = here.get(p)
-            if existing is not None:
-                if policy == "skip":
-                    res["outcome"] = "skipped"
-                elif policy == "ask":
-                    res["outcome"] = "conflict"
-                    res["existing"] = dict(existing)
-                elif policy == "rename":
-                    res["path"] = under(dest, p) + " (2)"
-                else:
-                    here.pop(p, None)  # replaced: the destination holds ours now
+            res = {"path": full, "name": p, "isDir": r["isDir"], "outcome": "created" if r["isDir"] else "extracted",
+                   "id": r["id"], "size": 0 if r["isDir"] else r["size"], "modifiedAt": r["modifiedAt"]}
+            leaf = rel.split("/")[-1]
+            if r["isDir"]:
+                if len(full) > limits["pathOver"]:
+                    res["outcome"], res["code"] = "path_refused", "file.path_refused"
+                    refused_dirs.add(r["id"])
+                out.append(res)
+                continue
+            if len(full) - len(leaf) > limits["pathOver"]:
+                # The temporary in that folder is what the volume refuses:
+                # the path, and no name helps.
+                res["outcome"], res["code"] = "path_refused", "file.path_refused"
+            elif len(leaf) > limits["nameOver"]:
+                res["outcome"], res["code"] = "name_refused", "file.name_refused"
+            else:
+                existing = here.get(rel)
+                if existing is not None:
+                    if policy == "skip":
+                        res["outcome"] = "skipped"
+                    elif policy == "ask":
+                        res["outcome"] = "conflict"
+                        res["existing"] = dict(existing)
+                    elif policy == "rename":
+                        res["path"] = full + " (2)"
+                    else:
+                        here.pop(rel, None)  # replaced: the destination holds ours now
             out.append(res)
         return out
 
@@ -890,9 +1058,11 @@ def record_op(kind, args, total, seconds=4.0, phase=""):
     return start_op(kind, total, commit, seconds=seconds, phase=phase, archive_id=a["id"])
 
 
-def vault_status():
+def vault_status(args=None):
     """Status carries Ops so a window recreated mid-operation recovers the
-    progress it was showing (APP.md 2.4)."""
+    progress it was showing (APP.md 2.4). Named, not a lambda, so that
+    POST /mock/state {"failNext": {"vault_status": "internal"}} can refuse
+    the first Status once - the boot's one plain line with Retry (2.4)."""
     v = dict(state["vault"])
     v["ops"] = [op_view(o) for o in state["ops"].values() if not o["finished"]]
     v["openArchives"] = state["vault"]["openArchives"]
@@ -939,7 +1109,7 @@ def handle(method_id, args):
     return m(args)
 
 METHODS = {
-    3940765069: lambda a: vault_status(),                       # vault.Status
+    3940765069: vault_status,                                   # vault.Status
     3956196437: lambda a: [{"name": "Yubico YubiKey OTP+FIDO+CCID 0"}],
     1779776360: lambda a: None,                                 # BeginUnlock
     3770426637: lambda a: None, 951839700: lambda a: None, 4094929714: lambda a: None, 2320277474: lambda a: None,
@@ -961,6 +1131,7 @@ METHODS = {
     # Each of these is the mounted page's: an archive that is not mounted
     # - left, closed, draining - answers archive.not_open (APP.md 2.3).
     2601627082: mounted_only(page),                             # archive.Page
+    1305430966: mounted_only(children_ids),                     # archive.Children
     2565212395: mounted_only(lambda a: stat()),                 # archive.Stat
     3241529081: mounted_only(create_folder),                    # archive.CreateFolder
     191579688: mounted_only(move),                              # archive.Move

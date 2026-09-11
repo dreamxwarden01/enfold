@@ -6,7 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"syscall"
 )
+
+// refusedByVolume reports a name or a path the destination would not take:
+// ENAMETOOLONG here, the one answer a POSIX volume gives for either. Enfold
+// ships on Windows (SCOPE.md); this keeps the package buildable and testable
+// elsewhere.
+func refusedByVolume(err error) bool {
+	return errors.Is(err, syscall.ENAMETOOLONG)
+}
 
 // placeExclusive moves tmp onto path without replacing anything there: a
 // link, which fails when the name is taken, and then the temporary's own

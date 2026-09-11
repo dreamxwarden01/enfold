@@ -198,6 +198,18 @@ export enum CeremonyStep {
 };
 
 /**
+ * ChildRef is one child of a directory as Children answers it (APP.md §3):
+ * the record's id and its kind, nothing else — enough for the header's
+ * tick and Ctrl+A to select the folder, and for a Delete's question to
+ * count files and folders apart when the selection reaches past the rows
+ * loaded, without a row rendered for each.
+ */
+export interface ChildRef {
+    "id": string;
+    "isDir": boolean;
+}
+
+/**
  * Code is what the frontend sees of an error: a stable identifier it maps
  * to copy, and nothing else. The original error — with its offsets,
  * generations and file names — goes to the core's log only (APP.md §3).
@@ -441,6 +453,30 @@ export enum Code {
      */
     CodeTreeBounds = "file.tree_bounds",
     CodeSourceChanged = "file.source_changed",
+
+    /**
+     * The two refusals of an extract's destination (APP.md §3, ruled
+     * 2026-09-10). R20 holds Windows' rules on the way in, so the name
+     * itself fits a Windows volume; what cannot be known beforehand is the
+     * path's whole length and the volume's own limit (an SMB share, an
+     * exFAT stick), and only the destination's refusal says so.
+     * CodeFileNameRefused: the final name — a file's on placement, or a
+     * directory's on its creation, whose subtree is then reported once for
+     * its top — was refused: the outcome `name_refused`, and the page
+     * offers Shorten, Rename… and Skip. "The destination cannot take a name
+     * this long."
+     */
+    CodeFileNameRefused = "file.name_refused",
+
+    /**
+     * CodeFilePathRefused: the temporary — a fixed short name in the same
+     * folder — was refused, so the path and not the leaf is the problem
+     * and no name helps — the outcome `path_refused`, Skip and Skip all
+     * like it. "The folder's path is too long for this destination." The
+     * destination root's own refusal is the operation's error under this
+     * code, before any outcome.
+     */
+    CodeFilePathRefused = "file.path_refused",
     CodeContentHash = "file.content_hash",
     CodeNoSpace = "archive.no_space",
     CodeDictInUse = "archive.dictionary_in_use",
@@ -583,7 +619,11 @@ export interface FileInfo {
  * FileOutcome is one record's result inside a batch operation. IsDir tells a
  * directory's outcome from a file's: created (a directory record made) and
  * entered (an existing one descended into) are a directory's, added and
- * replaced a file's (APP.md §3).
+ * replaced a file's (APP.md §3). name_refused and path_refused are an
+ * extract's (ruled 2026-09-10): the destination would not take the final
+ * name — a file's or a directory's, whose subtree is then reported once,
+ * for its top — or the temporary's path, and the rest of the batch was
+ * written; Path is then the name that was refused.
  * 
  * ID, Size and ModifiedAt are the archive copy's — the record's id as every
  * other view spells it (32 lowercase hex digits), its plaintext size and its
@@ -594,12 +634,17 @@ export interface FileInfo {
  * compare list's archive side, without walking the tree (APP.md §3).
  */
 export interface FileOutcome {
+    /**
+     * Path is the file on disk — an add's source, an extract's destination,
+     * the path actually written when a `names` entry renamed the record
+     * for that extract — and Name the record's joined archive path.
+     */
     "path": string;
     "name": string;
     "isDir": boolean;
 
     /**
-     * added | replaced | created | entered | skipped | extracted | conflict | failed
+     * added | replaced | created | entered | skipped | extracted | conflict | name_refused | path_refused | failed
      */
     "outcome": string;
     "code"?: Code;

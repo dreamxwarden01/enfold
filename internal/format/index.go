@@ -172,12 +172,14 @@ func reservedDeviceName(el string) bool {
 	return false
 }
 
-// foldKey is a representative of a name's simple-case-folding class: each
+// FoldKey is a representative of a name's simple-case-folding class: each
 // rune replaced by the smallest of its fold orbit. strings.EqualFold compares
 // two names orbit by orbit, so two names fold onto one another (R39's rule for
 // live siblings) exactly when their keys are equal — which lets a whole
-// directory's children be checked with a map instead of pairwise.
-func foldKey(s string) string {
+// directory's children be checked with a map instead of pairwise. It is
+// exported for the one other place that must agree with R39's rule: an
+// extract's plan-time de-duplication of destinations (app.Extract).
+func FoldKey(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
@@ -446,7 +448,7 @@ func (x *Index) Validate() error {
 	}
 	seen := make(map[sibling]struct{}, len(x.Dirs)+len(x.Files))
 	claim := func(parent [16]byte, name string) error {
-		k := sibling{parent, foldKey(name)}
+		k := sibling{parent, FoldKey(name)}
 		if _, dup := seen[k]; dup {
 			return invalidf("two live children of %x fold onto the name %q", parent, name)
 		}

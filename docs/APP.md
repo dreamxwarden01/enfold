@@ -571,8 +571,23 @@ countdown and the open-archive count; menu Open / Lock now / Close all archives 
 `await`; then `Vault.Status()`. `VaultStatus` and every `vault.*` payload carry one `Seq`
 incremented under the state mutex; the frontend applies a payload only when its `Seq` is
 greater than the last applied. `archive.changed {ID, Seq}` and the per-archive `Page`/`Stat`
-replies carry a per-archive seq the same way. `Status()` includes `Ops []OpView` so a window
+replies carry a per-archive seq that says how fresh the tree is: a reply is applied when its
+`Seq` is not older than the last applied *and* it answers the page's newest request (a request
+token — a later `Page` for another folder, sort or offset at the same `Seq` is not stale; an
+older request's reply is); a `Page` whose `Seq` is newer than the pages the list already holds
+restarts the listing from offset zero, since rows may have moved between offsets — ids
+survive it: the selection keeps the ids that still exist, the anchor its row if it still
+exists, and the header's tick is recomputed against the new `Total` (rows a commit added are
+not selected). `Status()` includes `Ops []OpView` so a window
 recreated mid-operation recovers progress; operation events are deltas over that snapshot.
+Until that first `Status()` call has answered — a reply or a failure; an event that lands
+first is applied but does not open the gate — the page draws **nothing of the vault's**: the
+brand mark alone, not the lock scene, not the list; and then the scene the newest accepted
+status names, with no crossfade out of a scene that was never
+right: a window opened from the tray while the vault is unlocked shows the list at once (ruled 2026-09-10, after the lock scene flashed there). A first
+`Status()` that fails shows one plain line with *Retry*, never the lock scene; an event that
+arrives before the reply is applied by its `Seq` as any other, so the first scene drawn is the
+newest status accepted.
 
 ## 3. Services
 
@@ -648,11 +663,31 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - `Page(id, dirID, sort, offset, limit) Page{Seq, Rows []FileRow{ID, ParentID, IsDir, Name,
   Path, Size, Storage, SavedPercent, ModifiedAt, Pending}, Total, Crumbs []Crumb{ID, Name}}` —
   the live children of `dirID` (the all-zero id is the root, §3's ids) in the merged view,
-  directories and files in one list; `Name` is the record's own, `Path` the joined one (R20, R39,
+  directories and files in one list, in the order `sort` names (ruled 2026-09-10): one or two signed keys, comma-separated — the
+  column, `name`, `size`, `type` or `modified`, with a leading `-` for descending, then `name`
+  or `-name`, the tie-breaker's direction (the Name column's own state, which the page keeps
+  while another column sorts); the empty string means `name`; **directories come before files under every key and both directions**, then the key,
+  then the name as the tie-breaker in the name key's direction. `name` is a general collation — the core's `x/text/collate` on the root locale with `Numeric`
+  and `IgnoreCase` (checked 2026-09-10): runs of digits compared by value so *2* sorts before
+  *10*, accents secondary (*resume* before *résumé*), case ignored and two names equal under it
+  ordered by code point so the order is total, scripts in the Unicode collation's order (Latin,
+  then Hangul, then Han and kana) and Han ideographs in the collation's implicit order — the unified block first, the
+  extension blocks after it, by code point within each — not a locale's pinyin or
+  stroke order, which would differ by machine — so every page of a long directory comes in one
+  order; `size` is the file's plaintext size (directories, which show none, stay first in both
+  directions, ordered by name among themselves); `type` is the extension, case-folded, files with
+  none first; `modified` is the record's `ModifiedAt`. The sort is the core's so that paging
+  stays consistent; the page keeps the choice while the archive is open and opens on `name`. `Children(id, dirID, sort) []ChildRef{ID, IsDir}` answers every live child of `dirID` in the
+  same order, cheaply — ids and kinds only — what the header's tick and Ctrl+A select, the
+  folder and not the rows loaded so far (a long folder pages in as the list scrolls), and what
+  a Delete's question counts, files and folders apart, when the selection reaches past the
+  rows loaded; `Name` is the record's own, `Path` the joined one (R20, R39,
   bounded as R39 bounds it), and `Total` counts that directory's children, not its subtree.
   `Crumbs` is the chain from the root down to `dirID` **inclusive** and is never empty: its first
   entry is the root, `{ID: <the all-zero id>, Name: <the archive's name, the same string as
-  ArchiveStat.Name>}`, its last is `dirID` itself, — so the page draws the whole breadcrumb from `Crumbs` alone and takes no name from `Stat`. A directory row's `Size` is the sum beneath it and its `ModifiedAt` the record's own.
+  ArchiveStat.Name>}`, its last is `dirID` itself, — so the page draws its heading — the archive's name, `Crumbs[0]` — from `Crumbs` alone, takes no
+  name from `Stat`, and walks `Crumbs` upwards when the folder it stood in went (below); since
+  2026-09-10 no folder crumb is drawn (§6). A directory row's `Size` is the sum beneath it and its `ModifiedAt` the record's own.
   The page holds a `dirID` across events and can hold one that is gone — a `Delete` took a subtree the page was standing in — so an id that no longer names a live directory of the merged view answers `file.not_found`, never an
   empty listing under a breadcrumb that still names the place: the page walks the `Crumbs` it
   last held upwards, retrying until one answers (the root always does), and says which folder
@@ -718,7 +753,12 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `parent_id`, both advance `revision` and `last_writer`, and neither writes `modified_at` — a
   folder's time is the folder's own (FORMAT §11). `file.kind_mismatch`, `file.move_into_self` and
   `file.tree_bounds` are per-item codes in the `file.*` namespace, declared here where they are
-  used. `Extract(id, recordIDs, dir, policy) opID` — the plan is a **set** of records live in the
+  used. `Extract(id, recordIDs, dir, policy, names) opID` — `names`, usually empty, maps a record id
+  to the one path element to write it under *in this extract only* (what *Shorten* and
+  *Rename…* send after a `name_refused`, below): the record is untouched, a name that breaks
+  R20 is `params`, a directory's new name carries its subtree under it, a collision under the
+  new name follows `policy`, and the outcome carries the path actually written — the plan is a
+  **set** of records live in the
   merged view: each selected record, every live record beneath a selected directory, and the
   ancestor directories of all of them up to the root (the all-zero id among `recordIDs` is the
   root and extracts everything — the page's *Extract all* — which makes any other id in the call
@@ -763,9 +803,56 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `replace` or `rename`. *Compare* and *Let me decide* are one dialog after Windows Explorer's:
   a row per file with the type's icon, *Files from the archive* on the left and *Files already
   in the destination* on the right, each side's date and size, a tick on either or both (both =
-  keep both), and "Skip N files with the same date and size" at the foot. A drag out of the
-  archive into Explorer, when it exists, is an extract with the `ask` policy and no dialog
-  before it. `Extract` with the all-zero id extracts everything from the root straight into the
+  keep both), and "Skip N files with the same date and size" at the foot. **A name the
+  destination refuses** (ruled 2026-09-10) is the same shape: a name is checked on the way *in*
+  against R20 — Windows' own rules, 255 code units, no reserved name, no forbidden character —
+  so what went in can come out on any Windows volume as far as the name itself goes, but the
+  path's whole length and the volume's own limits (an SMB share, an exFAT stick) are the
+  destination's to know and only its refusal says so; so an extract that meets `ERROR_FILENAME_EXCED_RANGE`, `ERROR_INVALID_NAME` or
+  `ENAMETOOLONG` on a name it is placing reports that record as a `name_refused` outcome
+  (`file.name_refused`) — a file, or a directory, whose subtree is then not attempted and is
+  reported once, for its top, as a skipped subtree is — with the rest of the batch written,
+  never a failed batch, never a hang; the destination itself refusing (the root the call was
+  given) is the operation's error, before any outcome, as today. The page then asks per refused
+  record — "The destination cannot take a name this long" — with *Shorten*, *Rename…* and
+  *Skip*, and re-issues `Extract` for the chosen ids with `names`: *Shorten* keeps the
+  extension whole (the part after the last dot; none when the dot is the first character or
+  there is none) and halves the stem at rune boundaries — never inside a surrogate pair — down
+  to one rune, trying until the volume accepts one, a name that then collides following
+  `policy`; when what was refused is the temporary the extract writes through (a fixed short
+  name in the same folder), the path and not the leaf is what the volume refuses and no name helps — the outcome is then
+  `path_refused` (`file.path_refused`) — so *Shorten* is not offered and the dialog says so — "The folder's path is too long
+  for this destination" — with *Skip* and *Skip all like it*; a name refused again after
+  *Shorten* or *Rename…* asks again, *Skip* always there. No loop over names runs unbounded anywhere: keep-both numbering already stops at a bounded
+  count — and when every name to `(999)` is taken the outcome is `failed` with `file.exists`,
+  not `skipped` — and at the first refusal that is not "already exists" (checked 2026-09-10),
+  and *Shorten* stops at one rune. **A drag out of the window** onto the desktop or an Explorer folder (designed 2026-09-10 after
+  an outside research pass; a prototype, `tools/dragproto`, came first and worked — **the
+  mechanism below is provisional**: the first real drops showed Explorer's legacy
+  "copying from a device" progress dialog for a stream source and a copy that stalled, uncancellable,
+  behind a locked destination, so a second research pass weighs this route against the
+  temp-file route of 7-Zip and WinRAR before anything enters the shell; DECISIONS has both
+  drops): the page cancels its
+  own `dragstart` and, on a press-and-move over selected rows, calls `Shell.DragOut(archiveID,
+  recordIDs)`; the shell, on the UI thread — which has called `OleInitialize` itself, Wails
+  never does — starts one native OLE drag (`DoDragDrop`, `DROPEFFECT_COPY` only) with a
+  pure-Go, cgo-free data object offering **virtual files**: `FileGroupDescriptorW` (names,
+  sizes, dates; a folder as its files under relative paths) and `FileContents` as one `IStream`
+  per file that decrypts as Explorer reads it, never a byte staged on disk (7-Zip and WinRAR
+  extract to %TEMP% first and hand Explorer `CF_HDROP`; Enfold does not write plaintext where
+  it was not asked to), with `IDataObjectAsyncCapability` so Explorer copies in the background,
+  the drag holding the archive open like a reader (a Leave drains behind it, a Close kills it,
+  the streams' reads then fail). **The destination and its conflicts are Explorer's**: a
+  standard drag source never learns where the drop landed nor which files were written, and
+  Explorer shows its own *Replace or Skip Files* dialog when a name is taken — the very dialog
+  ours is modelled on, asked when the conflict occurs and not before — so a drag out is not an
+  `Extract` of the core's, no policy applies, nothing is recorded, and a drop Explorer cancels
+  or fails half-way is Explorer's to report. The reads must never stall the STA: decryption
+  runs on a goroutine of its own into a bounded buffer the stream's `Read` drains, and `Stat`,
+  `Seek` (to the start, and forward) and a second request for the same file are answered
+  honestly. What the prototype decides: a stand-alone window dragging a synthetic 5 GiB virtual
+  file onto the desktop, watched for memory, Explorer's dialog on a collision, a cancel, and a
+  stalled read. `Extract` with the all-zero id extracts everything from the root straight into the
   destination and is greyed while `ArchiveStat.Records` is zero (live files and folders
   together; the file count alone cannot say whether the tree holds anything). `PreviewURL(id,
   fileID)`, `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
@@ -1000,7 +1087,12 @@ waiting for the touch that was cancelled — unlock again to pick it up, or touc
 out to end it; that line is the lock screen's only: on the Keys page the pending touch left by a
 cancelled slot change or reveal is said by the next ceremony's own `token.pending` note while it
 waits, and on the first-run card a create or an import begun while a cancelled create's touch
-stands is answered with `token.pending`, a toast). Archives (list with details
+stands is answered with `token.pending`, a toast). Archives (list with details — its rows and its header carry the same checkboxes as the file
+list, with the same rules (a blank click clears; the header ticks all, ticked exactly when all
+are); the header ticks the rows the filter shows; the details pane shows the row last clicked while
+it is ticked, else the sole ticked row, else nothing but a count ("3 archives selected"); an
+action that takes one archive works on the pane's row and is greyed unless exactly one is
+ticked —
 pane, commands Open / New archive / Compact / Rotate key / Verify / Hide and the inspector's of
 §13 — *New archive* asks the name and the compression method, a five-segment control (Store ·
 Fast · Normal · Better · Best, Normal preselected; *Store* keeps every file as is, and at every
@@ -1008,9 +1100,35 @@ other level already-compressed media is detected by sampling and stored raw by i
 §9), and on *Create* opens the native Save dialog with `<name>.efd` prefilled in the folder last
 used (`settings.json`, `lastArchiveFolder`); a chosen path where a file already exists is refused
 in place — "A file is already there. Enfold never overwrites; choose another name." — whatever
-the dialog's own replace prompt said; a cancelled dialog creates nothing — the Tampered state, the status strip with the countdown and Lock). Archive (the breadcrumb drawn from `Page`'s `Crumbs` alone — ids, never a path — its first crumb
-the archive's name and its last the folder being shown, paged table with pending markers, preview pane — image, video, audio through the
-loopback URL, text through `PreviewText`, everything else "Extract…" — the operation strip (the running operation's name with its count — *Adding 3 files*, *Adding 1
+the dialog's own replace prompt said; a cancelled dialog creates nothing — the Tampered state, the status strip with the countdown and Lock). Archive (**the heading is the archive's name alone**, a button to the root (ruled 2026-09-10:
+no folder crumbs after it; `Crumbs` stays in `Page` for the walk upwards when a folder went);
+**the list**: in a folder its first row is `..`, up one level, pinned at the top under every
+sort, with no checkbox, never selected — it takes keyboard focus like any row: Tab and the arrows
+reach it, Enter or Space goes up, and after going up focus lands on the row of the folder just
+left; in an empty folder it is the only row — not counted by Ctrl+A, absent at the root; then the
+rows in `sort`'s order (§3), directories first; **four columns — Name, Size, Type, Modified**
+(*Stored as* is gone from the list; the details keep it): a folder shows no size and the type
+*Folder*, a file its plaintext size and a type drawn from its extension — the part after the last dot;
+none when the dot is the first character (`.env`) or there is no dot; `gz` for `a.tar.gz` — in
+`strings.ts` —
+*JPEG image*, *MP4 video*, *Text document*, *ZIP archive*, … — "*PDF file*" for an extension
+without a name of its own and *File* for none; when the pane is narrow the columns give way
+from the right, Modified first and then Type, Name and Size always — a hidden column's sort stays in force and
+the Name cell then carries that key's arrow and name; a header cell sorts by its
+column — Name and Type ascending on the first click, Modified descending (newest first), Size
+ascending, the second click the other way, an arrow in the cell — and the choice stays while the
+archive is open; **a checkbox heads every row** and the header row; a click on a row's checkbox toggles that
+row alone and makes it the anchor (the row click's own rules do not run); the header's ticks
+the whole folder — every id `Children` answers, loaded or not — and shows ticked exactly when
+the selection holds every one of the folder's `Total` ids, never a third state and never for an
+empty folder; ticks are the selection and the selection is the ticks — a click on the list's blank area, entering a
+folder or going up clears both, nothing persists; **Ctrl+A** selects the whole folder but `..` (through `Children`) when the focus is in the list
+or on the page's body — an input keeps its own select-all, and while a dialog is up the page
+behind it is inert and takes no shortcut; **Shift+click** extends from the anchor — the last row clicked without Shift — and with
+nothing selected there is no anchor, so it selects the clicked row alone; the list always keeps
+one row's height of empty space under its last row, also when it scrolls, so the last row can be
+brought clear of the pane's edge; preview pane — image, video, audio through the loopback URL,
+text through `PreviewText`, everything else "Extract…" — the operation strip (the running operation's name with its count — *Adding 3 files*, *Adding 1
 file*, *Extracting 12 files*, *Reclaiming space* — a bar that moves by bytes, *Cancel* for an add,
 a replace or a reclaim; no pending
 bar, no Save, no Discard: every operation commits at its end, §2.3), the toolbar:
@@ -1021,16 +1139,16 @@ folder takes everything beneath it. This cannot be undone." — whose *Delete* i
 button, the danger colour as ground and white ink, never the accent's green under red text —
 then the operation), the pane's
 *Extract…* and the toolbar's *Extract all* through the extract dialog (§3); a drag of the
-selection onto a folder row or a crumb is `Move`,
+selection onto a folder row, onto the `..` row (up one level) or onto the heading (to the
+root) is `Move`,
 refused in place with the reason (§3) and never a half-moved selection — the reason sits under
 the target row until the next click; an op of the open archive that reports a failed or skipped
 item opens a *What happened* dialog listing each with its code's copy, beside the summary line
 ("2 files added · 1 folder created · 1 skipped"), and an op of another archive gets the summary
 as a toast; a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
-is said by a toast naming it, the page having walked its crumbs upwards; a click on the list's blank area clears the
-selection; the name column takes the width the others do not need, so a name is never squeezed
-while *Stored as* stands empty — Size, Stored as and Modified are fixed and Modified goes first
-when the pane is narrow; drag-and-drop; the extract dialog and the conflict dialogs of §3; the
+is said by a toast naming it, the page having walked its crumbs upwards; the name column takes the width the others do not need — Size, Type and Modified are fixed;
+drag-and-drop in (§3's drop) and, when it exists, out (§3's drag out: virtual files, Explorer's
+own conflict dialog); the extract dialog and the conflict dialogs of §3; the
 locked banner, one line — "The vault is locked. This archive stays open while you are here." — and
 no timeout of the archive's own (§2.3)). Keys & backups (slots, Add a key,
 Remove — greyed while the invariant would refuse — Rotate now (its dialog says every way in is
@@ -1186,9 +1304,16 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   layer's body is narrower than 840 px, and a settings row stacks — the title, its line, then
   the control on a line of its own — when its card is narrower than 470 px; both are container
   queries, not viewport ones, so a narrow column stacks its rows while a wide one keeps them
-  side by side. The save bar wraps its chips onto their own line at the same width. The Archive
-  page's file table is the same kind of rule: it drops *Modified* at 840 px and *Stored as* at
-  700 px, so the name column always keeps room.
+  side by side. The save bar wraps its chips onto their own line at the same width. The Archive page's file table is the same kind of rule: it drops *Modified* first and *Type*
+  next as the pane narrows (at the widths the four columns need), Name and Size always, so the
+  name column always keeps room.
+- *Dialogs stay put.* A dialog that offers a choice — a *Cancel*, a *Skip*, a *Replace* —
+  does not close on a click outside it: the click is nothing (ruled 2026-09-10, "they have a
+  Cancel"); Esc is *Cancel* where there is one, *Close* where the one action is *Close*, and
+  *Skip* (or *Skip all*) in the conflict and refused-name dialogs — never *Replace*; while a
+  dialog is up the page behind it is inert (`inert` on the shell), so no list shortcut fires. Only a dialog whose one action is *Close* —
+  the details modal, a *What happened* list, a toast's expansion — closes on the backdrop as
+  well. A popover (a menu) closes on any click outside, as menus do.
 - *Controls.* Every dialog and popover enters over 140 ms (the box also scales from 97%) and
   leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
   steps, the lock screen's three cards — fades the new content in over 140 ms and the cards

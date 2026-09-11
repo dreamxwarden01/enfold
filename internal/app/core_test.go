@@ -564,7 +564,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(out)
-	opID, e = h.c.Extract(id, []string{rootID}, out, ExtractSkip)
+	opID, e = h.c.Extract(id, []string{rootID}, out, ExtractSkip, nil)
 	if e != nil {
 		t.Fatalf("extract: %v", e)
 	}

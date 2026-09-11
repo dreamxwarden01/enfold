@@ -36,6 +36,8 @@
   }
 </script>
 
+<!-- Esc is Cancel, which re-issues nothing — every conflict skipped, never
+     replaced (APP.md §7); the backdrop is nothing. -->
 <Dialog title={compareCopy.title} onclose={oncancel} wide>
   <div class="cmp-head">
     <span class="ch">{compareCopy.fromArchive}</span>

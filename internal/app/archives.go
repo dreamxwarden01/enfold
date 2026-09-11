@@ -1089,6 +1089,15 @@ func (oa *openArchive) currentFile(fid [16]byte) (archive.FileInfo, bool) {
 // longer names a live directory answers file.not_found rather than an empty
 // listing under a breadcrumb that still names the place: the page walks the
 // Crumbs it last held upwards until one answers.
+//
+// sortBy is one or two signed keys, comma-separated (APP.md §3, ruled
+// 2026-09-10): the column — `name`, `size`, `type` or `modified`, a leading
+// `-` for descending — then optionally `name` or `-name`, the direction the
+// name breaks ties in; the empty string is `name`. Directories come before
+// files under every key and both directions, then the key, then the name.
+// The order is the core's so that every page of a long directory comes in
+// one order (sort.go); a string the grammar does not read is params. limit
+// is clamped to 1 000 rows; one of zero or less is 200.
 func (c *Core) Page(id, dirID, sortBy string, offset, limit int) (Page, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
@@ -1098,8 +1107,15 @@ func (c *Core) Page(id, dirID, sortBy string, offset, limit int) (Page, *Error) 
 	if !ok {
 		return Page{}, coded(CodeParams)
 	}
-	if limit <= 0 || limit > 1000 {
+	order, ok := parseSortOrder(sortBy)
+	if !ok {
+		return Page{}, coded(CodeParams)
+	}
+	if limit <= 0 {
 		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1107,12 +1123,8 @@ func (c *Core) Page(id, dirID, sortBy string, offset, limit int) (Page, *Error) 
 	if !m.dirUsable(did) {
 		return Page{}, coded(CodeFileNotFound)
 	}
-	rows := make([]FileRow, 0, len(m.kids[did]))
-	for _, r := range m.kids[did] {
-		rows = append(rows, fileRow(m, r))
-	}
-	sortRows(rows, sortBy)
-	total := len(rows)
+	kids := c.names.sortedKids(m.kids[did], order)
+	total := len(kids)
 	if offset < 0 {
 		offset = 0
 	}
@@ -1123,11 +1135,50 @@ func (c *Core) Page(id, dirID, sortBy string, offset, limit int) (Page, *Error) 
 	if end > total {
 		end = total
 	}
-	page := Page{Seq: oa.seq, Rows: rows[offset:end], Total: total, Crumbs: m.crumbs(did, oa.name)}
-	if page.Rows == nil {
-		page.Rows = []FileRow{}
+	// Only the window is rendered: a row's joined path and a folder's size
+	// beneath are walks of the tree, and a page asks for at most a thousand
+	// of them, however long the directory.
+	rows := make([]FileRow, 0, end-offset)
+	for _, r := range kids[offset:end] {
+		rows = append(rows, fileRow(m, r))
 	}
-	return page, nil
+	return Page{Seq: oa.seq, Rows: rows, Total: total, Crumbs: m.crumbs(did, oa.name)}, nil
+}
+
+// Children answers every live child of dirID — its id and its kind — in the
+// order sortBy names — the same grammar as Page's, so the page asks for the
+// folder's ids in the order its rows come — and nothing else: what the
+// header's tick and Ctrl+A select is the folder, loaded or not, and a long
+// folder pages in as the list scrolls; the kind is what a Delete's question
+// counts, files and folders apart, when the selection reaches past the rows
+// loaded (APP.md §3). It is cheap for that reason: ids and kinds only, no
+// path joined, no size summed. An id that no longer names a live directory
+// is file.not_found, as for Page; an unreadable sortBy is params.
+func (c *Core) Children(id, dirID, sortBy string) ([]ChildRef, *Error) {
+	oa, e := c.findArchive(id)
+	if e != nil {
+		return nil, e
+	}
+	did, ok := parseID(dirID)
+	if !ok {
+		return nil, coded(CodeParams)
+	}
+	order, ok := parseSortOrder(sortBy)
+	if !ok {
+		return nil, coded(CodeParams)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := oa.merge()
+	if !m.dirUsable(did) {
+		return nil, coded(CodeFileNotFound)
+	}
+	kids := c.names.sortedKids(m.kids[did], order)
+	out := make([]ChildRef, len(kids))
+	for i, r := range kids {
+		out[i] = ChildRef{ID: hexID(r.id), IsDir: r.isDir}
+	}
+	return out, nil
 }
 
 // fileRow renders one record. A directory's Size is the sum beneath it and
@@ -1154,29 +1205,6 @@ func fileRow(m *merged, r *mergedRec) FileRow {
 		row.SavedPercent = int((r.size - r.storedSize) * 100 / r.size)
 	}
 	return row
-}
-
-func sortRows(rows []FileRow, by string) {
-	less := func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if a.IsDir != b.IsDir {
-			return a.IsDir
-		}
-		switch by {
-		case "size", "-size":
-			if a.Size != b.Size {
-				return (a.Size < b.Size) != (by == "-size")
-			}
-		case "modified", "-modified":
-			if a.ModifiedAt != b.ModifiedAt {
-				return (a.ModifiedAt < b.ModifiedAt) != (by == "-modified")
-			}
-		case "-name":
-			return strings.ToLower(a.Name) > strings.ToLower(b.Name)
-		}
-		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
-	}
-	sort.SliceStable(rows, less)
 }
 
 // CheckNames reports which of the offered names collide with a live child of

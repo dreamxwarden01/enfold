@@ -227,7 +227,7 @@ func TestTheRootIsNamedButNeverActedOn(t *testing.T) {
 		t.Fatalf("replace the root: %v", e)
 	}
 	// Empty recordIDs is params, never everything.
-	if _, e := h.c.Extract(id, nil, outDir(t), ExtractSkip); !isCode(e, CodeParams) {
+	if _, e := h.c.Extract(id, nil, outDir(t), ExtractSkip, nil); !isCode(e, CodeParams) {
 		t.Fatalf("extract nothing: %v", e)
 	}
 	// A file's id where a directory is wanted is file.not_found.
@@ -511,7 +511,7 @@ func TestDeleteOfADirectoryCommitsTheSubtree(t *testing.T) {
 	if _, e := h.c.PreviewURL(id, gid); !isCode(e, CodeFileNotFound) {
 		t.Fatalf("a record beneath a deleted folder is previewable: %v", e)
 	}
-	opID, e := h.c.Extract(id, []string{gid}, outDir(t), ExtractSkip)
+	opID, e := h.c.Extract(id, []string{gid}, outDir(t), ExtractSkip, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -742,7 +742,7 @@ func TestExtractAllWithFoldersAndTimes(t *testing.T) {
 	emptyAt := h.row(t, id, rootID, "empty").ModifiedAt
 
 	out := outDir(t)
-	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip)
+	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip, nil)
 	if e != nil {
 		t.Fatalf("extract: %v", e)
 	}
@@ -804,7 +804,7 @@ func TestExtractAllWithFoldersAndTimes(t *testing.T) {
 	if err := os.WriteFile(marker, []byte("mine"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	opID, _ = h.c.Extract(id, []string{rootID}, out, ExtractSkip)
+	opID, _ = h.c.Extract(id, []string{rootID}, out, ExtractSkip, nil)
 	o = h.rec.waitOp(t, opID)
 	for _, r := range o.Results {
 		if r.Outcome != "skipped" {
@@ -819,7 +819,7 @@ func TestExtractAllWithFoldersAndTimes(t *testing.T) {
 	}
 	// A file already there is not overwritten, and rename takes the next
 	// free name beside it rather than replacing anything.
-	opID, _ = h.c.Extract(id, []string{rootID}, out, ExtractRename)
+	opID, _ = h.c.Extract(id, []string{rootID}, out, ExtractRename, nil)
 	o = h.rec.waitOp(t, opID)
 	if b, _ := os.ReadFile(filepath.Join(out, "g (2).txt")); string(b) != "g" {
 		t.Fatalf("rename did not take the next name: %q (%+v)", b, o.Results)
@@ -843,7 +843,7 @@ func TestExtractReplacePlacesOverTheOldFile(t *testing.T) {
 		h.src(t, "a.txt", "the new content"),
 		h.src(t, "big.bin", strings.Repeat("payload ", 1<<17))) // 1 MiB: several chunks
 
-	if _, e := h.c.Extract(id, []string{rootID}, outDir(t), "clobber"); !isCode(e, CodeParams) {
+	if _, e := h.c.Extract(id, []string{rootID}, outDir(t), "clobber", nil); !isCode(e, CodeParams) {
 		t.Fatalf("an unknown policy: %v", e)
 	}
 
@@ -852,7 +852,7 @@ func TestExtractReplacePlacesOverTheOldFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	aid := h.row(t, id, rootID, "a.txt").ID
-	opID, e := h.c.Extract(id, []string{aid}, out, "") // empty: replace
+	opID, e := h.c.Extract(id, []string{aid}, out, "", nil) // empty: replace
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -882,7 +882,7 @@ func TestExtractReplacePlacesOverTheOldFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	chunks := 0
-	err := extractFile(ctx, oa.a, fid, dst, true, func(uint64) { chunks++; cancel() })
+	err := extractFile(ctx, extractFS{}, oa.a, fid, dst, true, func(uint64) { chunks++; cancel() })
 	if err == nil {
 		t.Fatal("the cancelled extraction reported success")
 	}
@@ -934,7 +934,7 @@ func TestExtractAskReportsTheConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractAsk)
+	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractAsk, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -966,18 +966,18 @@ func TestExtractAskReportsTheConflicts(t *testing.T) {
 	// The page asks, and re-issues for the chosen id. Skip leaves it, rename
 	// takes the next free name beside it, replace takes its place.
 	only := []string{h.row(t, id, rootID, "a.txt").ID}
-	opID, _ = h.c.Extract(id, only, out, ExtractSkip)
+	opID, _ = h.c.Extract(id, only, out, ExtractSkip, nil)
 	if o := h.rec.waitOp(t, opID); o.Results[0].Outcome != "skipped" {
 		t.Fatalf("skip: %+v", o.Results)
 	}
-	opID, _ = h.c.Extract(id, only, out, ExtractRename)
+	opID, _ = h.c.Extract(id, only, out, ExtractRename, nil)
 	if o := h.rec.waitOp(t, opID); o.Results[0].Outcome != "extracted" {
 		t.Fatalf("rename: %+v", o.Results)
 	}
 	if b, _ := os.ReadFile(filepath.Join(out, "a (2).txt")); string(b) != "archived a" {
 		t.Fatalf("rename did not take the next name: %q", b)
 	}
-	opID, _ = h.c.Extract(id, only, out, ExtractReplace)
+	opID, _ = h.c.Extract(id, only, out, ExtractReplace, nil)
 	if o := h.rec.waitOp(t, opID); o.Results[0].Outcome != "extracted" {
 		t.Fatalf("replace: %+v", o.Results)
 	}
@@ -1008,7 +1008,7 @@ func TestExtractContainmentMissFailsWhole(t *testing.T) {
 	h.c.mu.Unlock()
 
 	out := filepath.Join(outDir(t), "never")
-	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip)
+	opID, e := h.c.Extract(id, []string{rootID}, out, ExtractSkip, nil)
 	if e != nil {
 		t.Fatalf("extract: %v", e)
 	}

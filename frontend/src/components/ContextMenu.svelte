@@ -7,7 +7,10 @@
   // arrows walk it, Enter and Space take the item under the focus, Escape
   // and Tab close it, a press anywhere else closes it, and the box is
   // placed at the pointer and pulled back inside the window when it would
-  // hang off an edge.
+  // hang off an edge. It is rendered as the dialog's sibling, so it marks
+  // itself a popover (data-popover, lib/dialogs.ts) and the dialog's trap
+  // leaves the focus in it; Escape closes the menu alone — prevented
+  // here, so the dialog reads it as taken.
   import { untrack } from "svelte";
   import { fade, fly } from "svelte/transition";
   import { FAST, LEAVE, motion } from "../lib/motion";
@@ -76,6 +79,7 @@
 
 <div
   class="ctxmenu" role="menu" tabindex="-1" bind:this={box}
+  data-popover=""
   style="left: {at.x}px; top: {at.y}px"
   onkeydown={key}
   oncontextmenu={(e) => e.preventDefault()}

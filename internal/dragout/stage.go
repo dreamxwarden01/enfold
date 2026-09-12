@@ -247,28 +247,6 @@ func encodeDropEffect(effect uint32) []byte {
 // ---------------------------------------------------------------------------
 // The staging folder, and the state machine over it.
 
-// stagedFile is one item's half of the observation. Nothing here comes from
-// the target: an exclusive open says whether somebody has the file open, and
-// the item's presence says whether a move has already taken it away. Between
-// them they are everything a source learns about a consumer that never
-// calls EndOperation — which, for a CF_HDROP source, Explorer is (measured
-// 2026-09-11: it negotiates the protocol and never ends it). A folder is
-// watched for its presence alone: a consumer never opens one the way it
-// opens a file, and a selection that is only folders — an empty one, a tree
-// of empty ones — has nothing else to be seen leaving by.
-type stagedFile struct {
-	path     string
-	isDir    bool
-	exists   bool
-	seen     bool // it existed at least once, so a later absence is a removal
-	inUse    bool
-	everUsed bool
-	gone     bool
-	// since is when the current state began, for the "in use for 3.2s" half
-	// of the transition lines.
-	since time.Time
-}
-
 // stage is one drag's folder and everything the drag learns about it.
 type stage struct {
 	id   string
@@ -288,14 +266,11 @@ type stage struct {
 	log     func(string, ...any)
 	ctx     context.Context
 	cancel  context.CancelFunc
-	// maxAge is the scavenge rule inside the process: a folder handed out
-	// and older than this is taken by the watch itself.
-	maxAge time.Duration
 
 	// extractMu serialises the extraction itself, and is deliberately not
 	// mu: the extraction runs for as long as the files take, and everything
-	// else about the stage — the counters, the watch, the cleanup decision,
-	// the close guard — has to stay answerable while it does.
+	// else about the stage — the counters, the cleanup decision, the close
+	// guard — has to stay answerable while it does.
 	extractMu sync.Mutex
 
 	mu         sync.Mutex
@@ -306,53 +281,43 @@ type stage struct {
 	armed      bool
 	releasedAt time.Time
 	selfDrop   bool
-	extracted  bool
-	failed     bool
-	failErr    error
+	// targetClass is the class name of the top-level window under the
+	// cursor when the button came up — the one moment a source is given to
+	// look. It is what says whether the folder can go the instant
+	// DoDragDrop returns: Explorer and the desktop finish the drop inside
+	// Drop, so when the call returns they are done with the paths (APP.md
+	// §3, ruled 2026-09-11). Empty when there was no window there, or when
+	// the class could not be read.
+	targetClass string
+	extracted   bool
+	failed      bool
+	failErr     error
 	// written says the extraction was begun, so anything at all may be on
 	// disk: half a file is plaintext somebody has to delete.
 	written   bool
 	handedOut bool
-	asyncOp   bool // StartOperation was called: the target negotiated the protocol
-	endOp     bool
 	dragOver  bool
 	// dragEnd is what DoDragDrop's own return said when it said anything
-	// final: Cancelled, Refused or Failed, and zero for a drop the target
-	// may still be working on.
+	// final: Cancelled for DRAGDROP_S_CANCEL, Failed for a call that could
+	// not run, and zero for the drop itself (DRAGDROP_S_DROP), whose
+	// outcome the effect says.
 	dragEnd Reason
-	// released: the target let go of the data object, so no request can
-	// arrive any more. It is what turns "nothing was written" into a
-	// decision rather than a wait.
-	released bool
-	deleted  bool
-	watching bool
-	watch    []stagedFile
-	looked   bool
-	lastWhy  string
+	deleted bool
 	// phaseDone: Done has been reported, once.
-	phaseDone bool
-	// lastTouch is the last moment anything happened to the staged files —
-	// the extraction ended, a file was opened or let go of, the target
-	// released the object — which is what "left alone for five seconds"
-	// counts from.
-	lastTouch  time.Time
+	phaseDone  bool
 	extractDur time.Duration
 
 	// removed is the folder actually being gone from disk, and it is
 	// deliberately not the same fact as deleted: deleted means the stage is
-	// resolved and its watch stopped, which a delete that FAILED also is.
-	// Only removed says there is nothing left, and removeErr is why there
-	// is.
+	// resolved, which a delete that FAILED also is. Only removed says there
+	// is nothing left, and removeErr is why there is.
 	removed   bool
 	removeErr error
-
-	stopOnce sync.Once
-	stop     chan struct{}
 }
 
-// liveStages is every stage this process still watches, by folder. The
-// scavenge consults it so that the ten-minute sweep never races the watch of
-// a folder this run is still looking after, and the close at exit walks it
+// liveStages is every stage this process has not yet decided about, by
+// folder. The scavenge consults it so that the ten-minute sweep never takes
+// the folder of a drag that is still running, and the close at exit walks it
 // so that a drag left behind by an earlier gesture is decided about rather
 // than forgotten. A stage leaves this set the moment its fate is decided, so
 // that a folder whose delete failed is the sweep's to take from then on.
@@ -361,18 +326,13 @@ var liveStages = struct {
 	m  map[string]*stage
 }{m: make(map[string]*stage)}
 
-// idleAfter is how long the staged files have to be left alone, once read
-// or once the target let the object go, before the awaiting phase ends as
-// Idle (APP.md §3: "read and then left alone for five seconds").
-const idleAfter = 5 * time.Second
-
 // newStage makes the folder, writes the manifest and works out the paths,
 // all BEFORE DoDragDrop — which is the whole point of the early half of the
 // protocol, and the reason a hover-time request can be answered with the
 // final names. Root is a parameter so that a test can point the whole
 // mechanism at t.TempDir(): nothing in the test suite may write under
 // %LOCALAPPDATA%.
-func newStage(opts Options, maxAge time.Duration) (*stage, error) {
+func newStage(opts Options) (*stage, error) {
 	if opts.Root == "" || len(opts.Items) == 0 || opts.Extract == nil {
 		return nil, errors.New("dragout: a root, at least one item and an extractor are required")
 	}
@@ -414,8 +374,8 @@ func newStage(opts Options, maxAge time.Duration) (*stage, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &stage{
 		id: id, root: root, itemsDir: itemsDir, items: opts.Items, extract: opts.Extract, onPhase: opts.OnPhase,
-		log: log, ctx: ctx, cancel: cancel, maxAge: maxAge,
-		created: time.Now(), state: StateLive, stop: make(chan struct{}),
+		log: log, ctx: ctx, cancel: cancel,
+		created: time.Now(), state: StateLive,
 	}
 	if s.onPhase == nil {
 		s.onPhase = func(Phase) {}
@@ -493,13 +453,20 @@ func (s *stage) pathList() []string {
 // here on the next CF_HDROP request is the drop's own and runs the
 // extraction — unless the button came up over the caller's own window, in
 // which case nothing is ever extracted (APP.md §3, the self-drop).
-func (s *stage) arm(selfDrop bool) {
+//
+// class is the class name of the top-level window under the cursor at that
+// moment, kept for the cleanup: the release is the one instant a source is
+// given to see where the drop is going, and what is there decides whether
+// the folder can go the moment DoDragDrop returns (APP.md §3, ruled
+// 2026-09-11).
+func (s *stage) arm(selfDrop bool, class string) {
 	s.mu.Lock()
 	already := s.armed
 	s.armed = true
 	if !already {
 		s.releasedAt = time.Now()
 		s.selfDrop = selfDrop
+		s.targetClass = class
 	}
 	early := s.early
 	s.mu.Unlock()
@@ -510,7 +477,9 @@ func (s *stage) arm(selfDrop bool) {
 		s.log("drag %s: the button was released over Enfold's own window: a self-drop, nothing will be extracted (%d early request(s))", s.id, early)
 		return
 	}
-	s.log("drag %s: the button was released; the extraction is armed (%d early request(s))", s.id, early)
+	// The class name, never a title: a window's title is a document name and
+	// a document name is a file name (APP.md §3).
+	s.log("drag %s: the button was released over a window of class %q; the extraction is armed (%d early request(s))", s.id, class, early)
 }
 
 // timing is how a format request is placed against the button's release,
@@ -615,7 +584,6 @@ func (s *stage) runExtraction() error {
 	s.mu.Lock()
 	s.extracted = true
 	s.extractDur = took
-	s.lastTouch = time.Now()
 	if err != nil {
 		s.failed = true
 		s.failErr = err
@@ -690,360 +658,178 @@ func (s *stage) reportDone(r Reason) {
 }
 
 // ---------------------------------------------------------------------------
-// The events the drag feeds in.
+// The end of the drag.
+//
+// The data object does not offer IDataObjectAsyncCapability, and that one
+// omission is what makes this half short (APP.md §3, ruled 2026-09-11):
+// Windows then requires the target to finish the drop inside IDropTarget::
+// Drop — Explorer's conflict dialog, the user's Replace, Skip or cancel,
+// and the copy itself all happen before DoDragDrop returns, and the return
+// carries the real effect. So there is nothing to watch and nothing to
+// guess: the drag ends when DoDragDrop returns, the effect says how, and
+// the class of the window the button came up over says whether the folder
+// can go at once.
 
-// noteAsyncStarted is StartOperation: the target negotiated the
-// asynchronous protocol.
-func (s *stage) noteAsyncStarted() {
-	s.mu.Lock()
-	s.asyncOp = true
-	s.mu.Unlock()
-	s.log("drag %s: the target negotiated the asynchronous protocol", s.id)
-}
-
-// noteEndOperation is EndOperation, arriving on whatever thread the target
-// calls it on. Nothing is deleted here: the watch takes the decision on its
-// own goroutine, within 250 ms, so that a delete never runs inside a call
-// the target is waiting to return from.
-func (s *stage) noteEndOperation() {
-	s.mu.Lock()
-	s.endOp = true
-	s.lastTouch = time.Now()
-	s.mu.Unlock()
-	s.log("drag %s: EndOperation -- it ends the target's transfer, not every later use of the paths", s.id)
-}
-
-// noteReleased is the data object dying: the target has let go of it, so
-// no request can arrive from here on.
-func (s *stage) noteReleased() {
-	s.mu.Lock()
-	s.released = true
-	s.lastTouch = time.Now()
-	s.mu.Unlock()
-}
-
-// noteDragEnded is DoDragDrop returning. A self-drop deletes the folder now
-// and says so; a cancel and a failure are final too; a drop is the target's
-// to go on with, and the watch says how it ends.
-func (s *stage) noteDragEnded(end Reason) {
+// dragEnded is DoDragDrop returning: the whole end of the drag, reason and
+// cleanup, decided here and now. end is what the call itself reported —
+// Cancelled for DRAGDROP_S_CANCEL, Failed for a call that could not run,
+// zero for the drop — and effect its out-parameter.
+func (s *stage) dragEnded(end Reason, effect uint32) {
 	s.mu.Lock()
 	s.dragOver = true
 	s.dragEnd = end
-	selfDrop := s.selfDrop
 	req, early := s.requests, s.early
 	s.mu.Unlock()
 	s.log("drag %s: DoDragDrop returned after %d CF_HDROP request(s), %d of them during the hover", s.id, req, early)
-	switch {
-	case selfDrop:
+	f := s.dropFactsNow(end, effect)
+	s.reportDone(dropReason(f))
+	d := dropCleanup(f)
+	s.log("drag %s: cleanup: %s -- %s", s.id, d.action, d.why)
+	if d.action == stageDelete {
 		s.remove()
-		s.reportDone(SelfDrop)
-		return
-	case end == Cancelled, end == Failed:
-		s.reportDone(end)
-	}
-	s.startWatch()
-}
-
-// ---------------------------------------------------------------------------
-// Watching the consumer, without being told anything by it.
-//
-// EndOperation is the only thing a source is ever told, and Explorer never
-// sends it for a CF_HDROP source (measured 2026-09-11). So the files are
-// watched directly: an exclusive open fails while somebody else has the
-// file open, and a file that has disappeared has been moved away by a
-// target that took the drag as a move. Neither needs the target's
-// cooperation.
-
-// startWatch begins the 250 ms poll over the staged items. It also drives
-// the cleanup decision, on its own goroutine, so that a decision taken while
-// the target is inside EndOperation is never carried out on the target's
-// thread — deleting 5 GiB inside a call the target is waiting to return from
-// would be a stall this program caused.
-func (s *stage) startWatch() {
-	if !s.armWatch() {
 		return
 	}
-	go s.watchLoop()
+	s.finish()
 }
 
-// armWatch is startWatch without the goroutine: it sets the watch up and
-// says whether there is one to run. Separated so that a test can drive poll
-// by hand at the moment of its choosing — the first tick above all, which is
-// where the interesting transition turned out to be. Every item is watched,
-// folders included: "every staged item gone" is what a move looks like, and
-// a selection of empty folders has no file to be seen leaving by.
-func (s *stage) armWatch() bool {
+// dropFactsNow is the snapshot the two decisions are taken over. Everything
+// in it was recorded as it happened, save the one look at the disk that
+// says whether the items are still there — which is what a move looks like
+// from the source's side, and the only thing a target never tells anybody.
+func (s *stage) dropFactsNow(end Reason, effect uint32) dropFacts {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.watching || s.deleted {
-		return false
-	}
-	s.watching = true
-	now := time.Now()
-	s.watch = make([]stagedFile, 0, len(s.paths))
-	for i, p := range s.paths {
-		s.watch = append(s.watch, stagedFile{path: p, isDir: s.items[i].IsDir, since: now})
-	}
-	return true
-}
-
-func (s *stage) watchLoop() {
-	t := time.NewTicker(250 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-s.stop:
-			return
-		case <-t.C:
-			if s.poll(time.Now()) {
-				return
-			}
-		}
-	}
-}
-
-// fileProbe is one exclusive open's answer about a staged file. It is a
-// value rather than a call inside the transition logic so that the whole
-// table — including the first observation — can be tested without a file
-// system and without a drag.
-type fileProbe struct {
-	exists bool
-	inUse  bool
-}
-
-// observe folds one probe into a watched file's state and returns the line
-// the transition is worth, or "". It mutates w and nothing else; i is the
-// file's index, which is how the log names it (never by its name).
-//
-// staged says the extraction had written every staged file, and it is what
-// makes the FIRST observation a transition like any other. A same-volume
-// drop is a rename, and Explorer can finish it inside the 250 ms before the
-// first tick — in the round that found this, the desktop copy's mtime was
-// the staged file's to the millisecond. A shape with no case for "missing
-// the first time it was looked at" said nothing, the file never counted as
-// gone, and the stage sat in "handed-out" over an empty folder until the
-// scavenge took it an hour later. A completed move is the cleanest end a
-// drag has, and it has to be recognised as one.
-func (w *stagedFile) observe(p fileProbe, staged bool, now time.Time, i int) string {
-	kind := w.kind()
-	if !w.seen {
-		switch {
-		case p.exists:
-			w.seen, w.exists, w.since = true, true, now
-			w.inUse = p.inUse
-			if p.inUse {
-				w.everUsed = true
-			}
-			return ""
-		case staged:
-			w.seen, w.gone, w.exists, w.since = true, true, false, now
-			return fmt.Sprintf("%s %d gone before the first look: the target took it within the first 250 ms", kind, i)
-		default:
-			// Nothing was ever written here: the drag ended before the
-			// extraction ran, or it failed short of this item. An absence is
-			// not a removal, and there is nothing to conclude from it.
-			return ""
-		}
-	}
-	switch {
-	case p.exists && w.gone:
-		w.gone, w.exists, w.since = false, true, now
-		return fmt.Sprintf("%s %d is back", kind, i)
-	case !p.exists && !w.gone:
-		// An item that was there and is not any more was taken, not closed:
-		// this is what a same-volume move looks like from the source's side,
-		// and it is the one outcome that leaves nothing to clean up.
-		line := fmt.Sprintf("%s %d gone (moved away by the target) after %s", kind, i, now.Sub(w.since).Round(time.Millisecond))
-		w.gone, w.exists, w.inUse, w.since = true, false, false, now
-		return line
-	case !p.exists:
-		return ""
-	}
-	if p.inUse != w.inUse {
-		var line string
-		if p.inUse {
-			line = fmt.Sprintf("%s %d in use by another process (free for %s before this)", kind, i, now.Sub(w.since).Round(time.Millisecond))
-			w.everUsed = true
-		} else {
-			line = fmt.Sprintf("%s %d free (in use for %s)", kind, i, now.Sub(w.since).Round(time.Millisecond))
-		}
-		w.inUse = p.inUse
-		w.since = now
-		return line
-	}
-	return ""
-}
-
-// kind is the word a transition line names the item by — never its name.
-func (w *stagedFile) kind() string {
-	if w.isDir {
-		return "staged folder"
-	}
-	return "staged file"
-}
-
-// probe is one look at a staged item. A file is asked the exclusive-open
-// question; a folder is asked only whether it is still there, since an
-// exclusive open is not a question a directory answers and a consumer never
-// holds one the way it holds a file — its going is what the watch learns
-// from it, folders being moved whole.
-func (w *stagedFile) probe() (fileProbe, error) {
-	if !w.isDir {
-		inUse, exists, err := stagedFileInUse(w.path)
-		return fileProbe{exists: exists, inUse: inUse}, err
-	}
-	if _, err := os.Lstat(w.path); err != nil {
-		if os.IsNotExist(err) {
-			return fileProbe{}, nil
-		}
-		return fileProbe{}, sansPath(err)
-	}
-	return fileProbe{exists: true}, nil
-}
-
-// poll probes every staged item, logs the transitions, ends the awaiting
-// phase when the items say it is over, and then asks the policy what to do
-// with the folder. It returns true when the stage is finished with and the
-// loop should end.
-func (s *stage) poll(now time.Time) bool {
-	var lines []string
-	s.mu.Lock()
-	first := !s.looked
-	s.looked = true
-	staged := s.extracted && !s.failed && s.written
-	touched := false
-	for i := range s.watch {
-		w := &s.watch[i]
-		p, err := w.probe()
-		if err != nil {
-			if first {
-				lines = append(lines, fmt.Sprintf("%s %d could not be probed: %v", w.kind(), i, err))
-			}
-			continue
-		}
-		before := w.inUse
-		if l := w.observe(p, staged, now, i); l != "" {
-			lines = append(lines, l)
-		}
-		if w.inUse != before {
-			touched = true
-		}
-	}
-	if touched {
-		s.lastTouch = now
-	}
-	ev := s.eventsLocked(now)
-	s.mu.Unlock()
-	for _, l := range lines {
-		s.log("drag %s: %s", s.id, l)
-	}
-	if r := awaitingEnd(ev); r != 0 {
-		// The decision below sees the end it just reported: an idle drag is
-		// left for the scavenge in this tick, not the next.
-		s.reportDone(r)
-		ev.phaseDone = true
-	}
-	return s.applyDecision(decideCleanup(ev), now)
-}
-
-// eventsLocked is the snapshot the policy decides over. Everything in it is
-// a fact that was recorded, which is what makes the policy a pure function
-// of them and a test of the decision table possible without a drag.
-func (s *stage) eventsLocked(now time.Time) stageEvents {
-	ev := stageEvents{
+	f := dropFacts{
 		selfDrop:      s.selfDrop,
+		end:           end,
+		effect:        effect,
 		written:       s.written,
-		handedOut:     s.handedOut,
 		extractFailed: s.failed,
-		extracted:     s.extracted,
-		endOperation:  s.endOp,
-		asyncOp:       s.asyncOp,
-		dragOver:      s.dragOver,
-		dragEnd:       s.dragEnd,
-		released:      s.released,
-		phaseDone:     s.phaseDone,
-		age:           now.Sub(s.created),
-		maxAge:        s.maxAge,
+		targetClass:   s.targetClass,
 	}
-	// anyLeft has to be pessimistic where it does not know: it is what the
-	// "everything was moved away" arm of the policy turns on, and deciding
-	// that nothing is left because nothing has been looked at yet would
-	// delete a folder that is full. Every item counts, folders too: a
-	// selection of empty folders is moved away like anything else.
-	ev.anyLeft = s.written
-	if len(s.watch) > 0 && s.written && s.looked {
-		ev.anyLeft = false
-		for i := range s.watch {
-			if s.watch[i].inUse {
-				ev.anyInUse = true
-			}
-			if s.watch[i].everUsed {
-				ev.anyEverUsed = true
-			}
-			if !s.watch[i].gone {
-				ev.anyLeft = true
-			}
+	s.mu.Unlock()
+	if f.written {
+		f.anyLeft = s.anyStagedLeft()
+	}
+	return f
+}
+
+// anyStagedLeft says whether any item CF_HDROP named is still in the
+// staging folder. The top-level names are the whole question: a folder
+// taken away takes its subtree with it, and a same-volume move is a rename
+// of exactly these paths.
+func (s *stage) anyStagedLeft() bool {
+	for _, p := range s.drop {
+		if _, err := os.Lstat(p); err == nil {
+			return true
 		}
 	}
-	if !s.lastTouch.IsZero() {
-		ev.untouchedFor = now.Sub(s.lastTouch)
-	}
-	return ev
+	return false
 }
 
 // ---------------------------------------------------------------------------
-// The cleanup policy.
+// The end of the drop: the reason and the cleanup.
+//
+// Both are pure functions over facts that were recorded as they happened,
+// on purpose: a table that can only be exercised by dragging a file onto
+// the desktop cannot be defended.
 //
 // Staged plaintext has to go, and the only question is when. The third
-// research pass settled it against the obvious answer: deleting when the
-// drop looks over is what took files from under FileZilla, VMware and a
+// research pass settled it against the obvious answer: deleting whenever
+// the drop LOOKS over is what took files from under FileZilla, VMware and a
 // configuration dialog that kept 7-Zip's paths for minutes, and Igor
 // Pavlov's own note on it is "another program can't open input files in
-// that case". A currently unlocked file says nothing about whether a
-// consumer reopens it later. So the folder outlives the drop on purpose,
-// and the sweep is what takes it.
-//
-// It is a pure function over recorded events on purpose: a table that can
-// only be exercised by dragging a file onto the desktop cannot be defended.
+// that case". What makes the answer safe here is that the drop is
+// synchronous: with no IDataObjectAsyncCapability on the object the target
+// must finish inside Drop, so when DoDragDrop returns an Explorer or a
+// desktop target IS finished — the class name recorded at the button's
+// release is what says it was one — and its folder goes at once. For
+// anything else the folder outlives the drop, because a consumer may open
+// the paths late, and the sweep is what takes it (APP.md §3).
 
-type stageEvents struct {
+// dropFacts is everything the end of a drag is decided over.
+type dropFacts struct {
 	selfDrop bool
-	// written says the extraction was begun: anything at all may have
-	// reached the disk. An empty staging folder is nobody's plaintext, so
-	// it goes the moment nobody can ask for it any more.
-	written bool
-	// handedOut is the fact the whole policy turns on: a target has been
-	// given these paths and may open them at any time from now on.
-	handedOut     bool
+	// end is what DoDragDrop itself said: Cancelled for DRAGDROP_S_CANCEL,
+	// Failed for a call that could not run, zero for the drop.
+	end Reason
+	// effect is DoDragDrop's out-parameter, and under the synchronous
+	// contract it is the truth about what the target did: NONE, COPY or
+	// MOVE.
+	effect uint32
+	// written says the drop's own request came and the extraction was begun:
+	// the target asked for the files, and anything at all may have reached
+	// the disk. It is not "the paths were handed out" — a request during the
+	// hover hands those out and writes nothing — but "this drop asked", and
+	// an empty staging folder is nobody's plaintext, so it goes the moment
+	// the drag is over.
+	written       bool
 	extractFailed bool
-	extracted     bool
-	endOperation  bool
-	asyncOp       bool
-	dragOver      bool
-	dragEnd       Reason
-	// released: the target let go of the data object, so no request can
-	// come. Without it "nothing was written" is a wait — a target that
-	// negotiated the asynchronous protocol asks on a thread of its own,
-	// after DoDragDrop has returned.
-	released  bool
-	phaseDone bool
-	anyInUse  bool
-	// anyLeft is false once every staged file has gone — moved away by
-	// the target, which is what a same-volume move does.
-	anyLeft      bool
-	anyEverUsed  bool
-	untouchedFor time.Duration
-	age          time.Duration
-	maxAge       time.Duration
+	// anyLeft: an item CF_HDROP named is still in the staging folder. False
+	// after a same-volume move, which renames every one of them away.
+	anyLeft bool
+	// targetClass is the class of the top-level window the button came up
+	// over (stage.targetClass).
+	targetClass string
+}
+
+// explorerTargets are the window classes that finish a drop inside Drop and
+// are done with the staged paths when DoDragDrop returns: a folder window
+// (CabinetWClass), the old single-pane explorer (ExploreWClass), and the
+// desktop, which is Progman with the icons' WorkerW beside it when Active
+// Desktop is on. Classes are compared the way Windows compares them, which
+// is without case.
+var explorerTargets = []string{"CabinetWClass", "ExploreWClass", "Progman", "WorkerW"}
+
+func explorerClass(name string) bool {
+	for _, c := range explorerTargets {
+		if strings.EqualFold(name, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropReason is how the drag ended, in the words APP.md §3 names (ruled
+// 2026-09-11): self-drop, failed, cancelled, refused, moved, copied. It is
+// read off DoDragDrop's return and its effect, which the synchronous
+// contract makes final — the target had to finish inside Drop.
+func dropReason(f dropFacts) Reason {
+	switch {
+	case f.selfDrop:
+		return SelfDrop
+	case f.end == Failed || f.extractFailed:
+		// A cancel that stopped the extraction has already reported itself
+		// as Cancelled when it happened; reportDone keeps the first word.
+		return Failed
+	case f.end == Cancelled:
+		// Escape, or a release over something that would take nothing.
+		return Cancelled
+	case !f.written:
+		// The drop happened and the target never asked for the files. A
+		// request during the hover is not one: it handed out names over an
+		// empty folder, and nothing was ever transferred.
+		return Refused
+	case f.effect == dropEffectNone:
+		// The drop happened and the target did nothing with it: Explorer's
+		// Skip, its dialog cancelled, a target that refused half-way. The
+		// drop is over either way, which is the whole point of asking
+		// DoDragDrop rather than the files (APP.md §3).
+		return Cancelled
+	case f.effect == dropEffectMove && !f.anyLeft:
+		// A same-volume move: the target renamed every staged item away.
+		return Moved
+	}
+	// The effect was copy, or a move that left the staged items where they
+	// were — the bytes went either way, and ours are still here.
+	return Copied
 }
 
 type stageAction int
 
 const (
-	stageWait stageAction = iota
-	stageDelete
-	// stageLeave: stop watching and leave the folder, manifested handed-out,
-	// for the scavenge — the paths are a consumer's now.
+	stageDelete stageAction = iota + 1
+	// stageLeave: leave the folder, manifested handed-out, for the
+	// scavenge — the paths are a consumer's now.
 	stageLeave
 )
 
@@ -1054,8 +840,6 @@ type stageDecision struct {
 
 func (a stageAction) String() string {
 	switch a {
-	case stageWait:
-		return "wait"
 	case stageDelete:
 		return "delete"
 	case stageLeave:
@@ -1064,137 +848,36 @@ func (a stageAction) String() string {
 	return fmt.Sprintf("action %d", int(a))
 }
 
-// awaitingEnd is what ends the awaiting phase for the strip, the four ways
-// APP.md §3 names: Moved when every staged item is gone, Ended when the
-// target said its transfer was over, Idle when the files were read and then
-// left alone for five seconds, and Idle again when the target let the data
-// object go and five seconds passed with no read — a consumer that keeps
-// the paths for a later read (a browser's upload box) would otherwise hold
-// the strip for ever, and the folder stays for it. Refused when the target
-// let the object go without ever asking for the files. Zero while there is
-// nothing to say.
-func awaitingEnd(e stageEvents) Reason {
-	if e.phaseDone || !e.dragOver {
-		return 0
-	}
-	if !e.written {
-		if e.released && e.dragEnd == 0 {
-			return Refused
-		}
-		return 0
-	}
-	if !e.extracted || e.extractFailed {
-		return 0
-	}
+// dropCleanup is what becomes of the staging folder, decided once, when
+// DoDragDrop returns.
+func dropCleanup(f dropFacts) stageDecision {
 	switch {
-	case !e.anyLeft:
-		return Moved
-	case e.endOperation && e.asyncOp && !e.anyInUse:
-		return Ended
-	case e.anyInUse:
-		return 0
-	case e.anyEverUsed && e.untouchedFor >= idleAfter:
-		// Read, then left alone: untouchedFor counts from the last file
-		// being let go of.
-		return Idle
-	case e.released && e.untouchedFor >= idleAfter:
-		// The target let the object go and nothing has read the files
-		// since: untouchedFor counts from the release itself, and a read
-		// that began after it is the case above.
-		return Idle
-	}
-	return 0
-}
-
-// decideCleanup is the whole policy over the folder.
-func decideCleanup(e stageEvents) stageDecision {
-	switch {
-	case e.selfDrop && e.dragOver:
+	case f.selfDrop:
 		return stageDecision{stageDelete, "a self-drop: nothing was extracted and the page has what it needs"}
 
-	case e.dragOver && e.extractFailed:
+	case f.extractFailed:
 		// Half-written files, and a GetData that failed rather than naming
 		// them. Nothing valid was handed out, so nothing is waiting for them.
 		return stageDecision{stageDelete, "the extraction failed, so nothing usable was ever handed out"}
 
-	case e.dragOver && !e.written && (e.dragEnd == Cancelled || e.dragEnd == Failed):
-		// Escape, a release over nothing, a DoDragDrop that could not run:
-		// no drop happened, so no target is going to ask on a thread of its
-		// own, and the empty folder goes now — not when whatever the cursor
-		// hovered over gets round to letting the data object go (APP.md
-		// §3: at once when the drag ends with nothing handed out).
-		return stageDecision{stageDelete, "the drag ended without a drop and nothing was written"}
+	case !f.written:
+		// Escape, a release over nothing, a target that never asked: the
+		// folder is empty whatever was asked for during the hover.
+		return stageDecision{stageDelete, "the drag ended with nothing written"}
 
-	case e.dragOver && !e.written && e.released:
-		// A drop the target took and then let go of without ever asking
-		// for the files: the folder is empty whatever was asked for during
-		// the hover, and nobody can ask any more.
-		return stageDecision{stageDelete, "the drag ended, nothing was written and the target let the data object go"}
+	case f.effect == dropEffectMove && !f.anyLeft:
+		return stageDecision{stageDelete, "every staged item was moved away by the target; only the empty folder is left"}
 
-	case e.dragOver && !e.written:
-		// An accepted drop, and the target still holds the data object: one
-		// that negotiated the asynchronous protocol asks on a thread of its
-		// own, after DoDragDrop has returned, and the folder has to be
-		// there for it.
-		return stageDecision{stageWait, "nothing written yet, and the target still holds the data object"}
-
-	case e.dragOver && e.handedOut && e.extracted && !e.anyLeft:
-		// A same-volume move: the target renamed every staged file away, so
-		// the folder is empty of everything but the manifest.
-		return stageDecision{stageDelete, "every staged file was moved away by the target; only the empty folder is left"}
-
-	case e.endOperation && e.asyncOp && !e.anyInUse:
-		// The documented end of an asynchronous transfer — and it ends that
-		// transfer, not every later use of the paths by whatever the target
-		// was. It is still the strongest signal a source is given, and
-		// APP.md §3 takes it as one.
-		return stageDecision{stageDelete, "EndOperation on a negotiated asynchronous transfer: the target's transfer is over"}
-
-	case e.anyInUse:
-		return stageDecision{stageWait, "a staged file is in use by another process"}
-
-	case e.handedOut && e.age > e.maxAge:
-		return stageDecision{stageDelete, fmt.Sprintf("the scavenge rule: handed out, %s old, past the %s limit", e.age.Round(time.Second), e.maxAge)}
-
-	case e.handedOut && e.phaseDone:
-		// The awaiting phase is over and the paths are a consumer's: the
-		// folder outlives the drop until the scavenge takes it, because
-		// consumers open dropped paths late, and there is nothing left for
-		// a poll four times a second to learn.
-		return stageDecision{stageLeave, "the paths were handed out; the folder is left manifested for the scavenge"}
-
-	case e.handedOut:
-		return stageDecision{stageWait, "the paths were handed out; watching the staged files"}
+	case explorerClass(f.targetClass):
+		// The whole gain of the synchronous drop: Explorer copies inside
+		// Drop, dialog and all, so its return is the end of its interest in
+		// the paths — including the Skip that used to hang the strip.
+		return stageDecision{stageDelete, fmt.Sprintf("the drop was over a window of class %q: it finished inside Drop and is done with the paths", f.targetClass)}
 	}
-	return stageDecision{stageWait, "waiting for the target to ask for the files"}
-}
-
-// applyDecision logs every decision that is not the one already in force,
-// and carries out the ones that are not "wait". It returns true when there
-// is nothing left to watch.
-func (s *stage) applyDecision(d stageDecision, now time.Time) bool {
-	s.mu.Lock()
-	if s.deleted {
-		s.mu.Unlock()
-		return true
-	}
-	changed := d.why != s.lastWhy
-	s.lastWhy = d.why
-	s.mu.Unlock()
-	if changed {
-		s.log("drag %s: cleanup: %s -- %s", s.id, d.action, d.why)
-	}
-	switch d.action {
-	case stageWait:
-		return false
-	case stageLeave:
-		s.finish()
-		return true
-	case stageDelete:
-		s.remove()
-		return true
-	}
-	return false
+	// Somebody else's window, and consumers open dropped paths late — a
+	// browser reads a dropped file when the upload starts, a configuration
+	// dialog kept 7-Zip's paths for minutes.
+	return stageDecision{stageLeave, fmt.Sprintf("the paths were handed out to a window of class %q; the folder is left manifested for the scavenge", f.targetClass)}
 }
 
 // remove deletes the staging folder and resolves the stage. The manifest is
@@ -1239,7 +922,8 @@ func (s *stage) remove() {
 	s.finish()
 }
 
-// finish takes the stage out of the live set and stops its watch.
+// finish resolves the stage: it leaves the live set, so the scavenge may
+// take the folder from here if one was left behind.
 func (s *stage) finish() {
 	s.mu.Lock()
 	s.deleted = true
@@ -1247,7 +931,6 @@ func (s *stage) finish() {
 	liveStages.mu.Lock()
 	delete(liveStages.m, s.root)
 	liveStages.mu.Unlock()
-	s.stopOnce.Do(func() { close(s.stop) })
 }
 
 // closeQuietly is the process ending with this stage unresolved. It does

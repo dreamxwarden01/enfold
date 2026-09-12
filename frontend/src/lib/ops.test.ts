@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cancellable, hasBar, opErrorLine, opLabel, opPhase, reclaimedLine, stripShows } from "./ops";
+import { cancellable, hasBar, opErrorLine, opLabel, opPhase, reclaimedLine, stripCount } from "./ops";
 import { dragOutCopy, reclaimedText } from "./strings";
 
 // The operation strip (APP.md §2.3, §6). Since 2026-09-09 the strip says
@@ -51,20 +51,56 @@ describe("the running operation's name", () => {
   });
 });
 
-// The drag out's two phases on the strip (APP.md §3, ruled 2026-09-11
-// after the measured 5 GiB drop): *Preparing N files* with the bar and
-// *Cancel* while the drop's own request runs the extraction, then
-// *Awaiting Windows Explorer* with neither once Explorer has the paths;
-// nothing at all during the hover.
+// The drag out on the strip (APP.md §3, ruled 2026-09-11 after the first
+// real drag, whose staging was over before the strip appeared): one label,
+// *Extracting N items*, from the moment the drag starts and through all
+// three of its phases — the hover (the label alone), the staging (the byte
+// bar with *Cancel*) and the wait on Explorer (that same bar, standing
+// full, with nothing to cancel and no words of its own). The operation ends
+// when DoDragDrop returns, and the strip goes with it.
 describe("the drag out on the strip", () => {
-  it("counts the files it is preparing, singular at one", () => {
-    expect(opLabel("dragout", 2, "preparing")).toBe("Preparing 2 files");
-    expect(opLabel("dragout", 1, "preparing")).toBe("Preparing 1 file");
+  it("counts what the gesture named, folders included, singular at one", () => {
+    expect(opLabel("dragout", 2, "dragging")).toBe("Extracting 2 items");
+    expect(opLabel("dragout", 2, "preparing")).toBe("Extracting 2 items");
+    expect(opLabel("dragout", 2, "awaiting")).toBe("Extracting 2 items");
+    expect(opLabel("dragout", 1, "dragging")).toBe("Extracting 1 item");
+    expect(opLabel("dragout", 1, "awaiting")).toBe("Extracting 1 item");
+    expect(dragOutCopy.extracting).toBe("Extracting");
   });
 
-  it("then awaits Explorer, with no count", () => {
-    expect(opLabel("dragout", 2, "awaiting")).toBe(dragOutCopy.awaiting);
-    expect(opLabel("dragout", 2, "awaiting")).toBe("Awaiting Windows Explorer");
+  it("counts the records the drag named, not the files beneath them", () => {
+    // A folder of forty files dragged out is one item on the strip, and
+    // forty files under the bar (OpView.DragItems against OpView.Items).
+    expect(stripCount({ kind: "dragout", items: 40, dragItems: 1 })).toBe(1);
+    expect(stripCount({ kind: "extract", items: 40, dragItems: 1 })).toBe(40);
+    expect(stripCount({ kind: "add", items: 3 })).toBe(3);
+    // Before the core has said — an older event, a mock that says nothing —
+    // the bare verb stands rather than a wrong number.
+    expect(stripCount({ kind: "dragout", items: 40 })).toBe(0);
+    expect(opLabel("dragout", 0, "dragging")).toBe("Extracting");
+  });
+
+  it("is the label alone during the hover: no bar, nothing to cancel", () => {
+    expect(hasBar("dragout", "dragging")).toBe(false);
+    expect(cancellable("dragout", "dragging")).toBe(false);
+  });
+
+  it("shows the byte bar with Cancel while it stages", () => {
+    expect(hasBar("dragout", "preparing")).toBe(true);
+    expect(cancellable("dragout", "preparing")).toBe(true);
+  });
+
+  it("keeps that bar, full and uncancellable, while Explorer copies", () => {
+    // No second phase and no words of their own: Explorer's own window is
+    // in front by then, and it is the only control there is.
+    expect(hasBar("dragout", "awaiting")).toBe(true);
+    expect(cancellable("dragout", "awaiting")).toBe(false);
+    expect(opLabel("dragout", 3, "awaiting")).toBe("Extracting 3 items");
+  });
+
+  it("says nothing about Explorer anywhere in its copy", () => {
+    expect(JSON.stringify(dragOutCopy)).not.toContain("Awaiting");
+    expect(JSON.stringify(dragOutCopy)).not.toContain("Explorer");
   });
 
   it("is named for what it was once it has ended, as its toast counts it", () => {
@@ -72,33 +108,15 @@ describe("the drag out on the strip", () => {
     expect(opErrorLine("dragout", 1, "file.name_refused", "The destination cannot take a name this long.")).toBe("Dragging out 1 file: The destination cannot take a name this long.");
   });
 
-  it("never says its phase beside its name: the phase is the name", () => {
+  it("never says its phase beside its name: the phase is not the user's word", () => {
     expect(opPhase("dragging")).toBe("");
     expect(opPhase("preparing")).toBe("");
     expect(opPhase("awaiting")).toBe("");
   });
 
-  it("is on the strip while preparing and awaiting, and not during the hover", () => {
-    expect(stripShows("dragout", "dragging")).toBe(false);
-    expect(stripShows("dragout", "")).toBe(false);
-    expect(stripShows("dragout", "preparing")).toBe(true);
-    expect(stripShows("dragout", "awaiting")).toBe(true);
-    // every other kind is shown from the moment it begins
-    expect(stripShows("add", "starting")).toBe(true);
-    expect(stripShows("reclaim", "moving")).toBe(true);
-  });
-
-  it("has a bar while preparing and none while awaiting", () => {
-    expect(hasBar("dragout", "preparing")).toBe(true);
-    expect(hasBar("dragout", "awaiting")).toBe(false);
+  it("leaves every other kind's bar alone", () => {
     expect(hasBar("add", "")).toBe(true);
     expect(hasBar("extract", "extracting")).toBe(true);
-  });
-
-  it("offers Cancel while preparing only", () => {
-    expect(cancellable("dragout", "preparing")).toBe(true);
-    expect(cancellable("dragout", "awaiting")).toBe(false);
-    expect(cancellable("dragout", "dragging")).toBe(false);
     expect(cancellable("dragout")).toBe(false);
   });
 });

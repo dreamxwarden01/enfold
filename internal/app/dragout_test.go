@@ -222,7 +222,10 @@ func TestDragOutRunsAsAnOperation(t *testing.T) {
 	// The operation exists before the drag runs, in its hover phase, with
 	// the plan's count already on it.
 	o, e := h.c.Op(d.OpID())
-	if e != nil || o.Kind != "dragout" || o.Phase != "dragging" || o.Items != 3 || o.Finished {
+	// Items is the files the extraction will write and the bar's measure;
+	// DragItems is what the gesture named, folders included, which is what
+	// the strip counts — "Extracting 2 items" (APP.md §3).
+	if e != nil || o.Kind != "dragout" || o.Phase != "dragging" || o.Items != 3 || o.DragItems != 2 || o.Finished {
 		t.Fatalf("the operation before the drag: %+v %v", o, e)
 	}
 
@@ -238,15 +241,17 @@ func TestDragOutRunsAsAnOperation(t *testing.T) {
 		o, ok := p.(OpView)
 		return ok && o.ID == d.OpID() && o.Phase == "preparing"
 	}).(OpView)
-	if p.Items != 3 || p.Total != 6 {
+	if p.Items != 3 || p.DragItems != 2 || p.Total != 6 {
 		t.Fatalf("preparing: %+v", p)
 	}
-	// Then awaiting: no total, nothing to cancel.
+	// Then awaiting: the bar stands full — the staging is done, and what
+	// the target does inside its own Drop is not measured here (APP.md §3,
+	// ruled 2026-09-11) — and there is nothing to cancel.
 	a := h.rec.waitFor(t, EventOpProgress, func(p any) bool {
 		o, ok := p.(OpView)
 		return ok && o.ID == d.OpID() && o.Phase == "awaiting"
 	}).(OpView)
-	if a.Total != 0 || a.Done != 0 || a.Finished {
+	if a.Total != 6 || a.Done != 6 || a.Finished {
 		t.Fatalf("awaiting: %+v", a)
 	}
 	// The files are in the staging folder under the plan's names.
@@ -543,9 +548,9 @@ func TestCloseDuringAwaitingFinishesAtOnce(t *testing.T) {
 	if h.isHeld(id) {
 		t.Fatal("the archive is still held after the kill switch")
 	}
-	// The drag goes on to its own end on the watch's word, which the
+	// The drag reports its own end when DoDragDrop returns, which the
 	// finished operation takes no notice of.
-	drags.begun[0].opts.OnPhase(dragout.Phase{Step: dragout.Done, Reason: dragout.Idle})
+	drags.begun[0].opts.OnPhase(dragout.Phase{Step: dragout.Done, Reason: dragout.Copied})
 	if o, e := h.c.Op(d.OpID()); e != nil || o.DragResult != "cancelled" {
 		t.Fatalf("a late Done changed the finished operation: %+v %v", o, e)
 	}

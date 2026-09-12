@@ -203,17 +203,18 @@ export function reclaimedText(returned: number): string {
 }
 
 // The drag out of the window on the operation strip (APP.md §3, ruled
-// 2026-09-11 after the measured 5 GiB drop): the files are written by the
-// drop's own request, after the button's release, and Explorer shows
-// nothing until that request returns — a user who sees nothing move
-// thinks the program is dead. So the strip says *Preparing 2 files* with
-// the bar and *Cancel* while the request runs, then *Awaiting Windows
-// Explorer* — no bar, no Cancel — once Explorer has the paths; nothing at
-// all during the hover, and a finished drag out that failed is named
-// by the verb its toast counts with (ops.ts opLabel).
+// 2026-09-11 after the first real drag): one label, *Extracting 2 items*,
+// from the moment the drag starts and through all three of its phases, so
+// that a staging over in an instant is a change inside a strip already on
+// the screen and never a strip that flashes. The hover shows the label
+// alone; the staging adds the bar, which moves by bytes and offers
+// *Cancel*; and when the bytes are written the bar simply stays full, with
+// no *Cancel* and no words of its own — from then on Explorer's own window
+// is in front and the only control there is — until DoDragDrop returns and
+// the strip goes. A finished drag out that failed is named by the verb its
+// toast counts with (ops.ts opLabel).
 export const dragOutCopy = {
-  preparing: "Preparing",
-  awaiting: "Awaiting Windows Explorer",
+  extracting: "Extracting",
   name: "Dragging out",
 };
 

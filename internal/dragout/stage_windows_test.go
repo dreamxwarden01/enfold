@@ -65,7 +65,7 @@ func noBackoff(t *testing.T) *[]time.Duration {
 func agedStage(t *testing.T, items []Item) (*stage, *testLog) {
 	t.Helper()
 	s, _, lg := newTestStage(t, items, nil)
-	s.arm(false)
+	s.arm(false, "CabinetWClass")
 	if _, ok := s.requestPaths(); !ok {
 		t.Fatal("the extraction was refused")
 	}
@@ -91,7 +91,7 @@ func TestFailedDeleteNamesNoFileAndLeavesTheManifest(t *testing.T) {
 	isolateStages(t)
 	const name = "secret-report.bin"
 	s, _, lg := newTestStage(t, []Item{{Name: name, Size: 8}}, nil)
-	s.arm(false)
+	s.arm(false, "CabinetWClass")
 	if _, ok := s.requestPaths(); !ok {
 		t.Fatal("the extraction was refused")
 	}

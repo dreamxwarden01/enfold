@@ -14,9 +14,10 @@ import (
 )
 
 // The data object is the drag: everything the target learns about the
-// files comes through here. It exposes IDataObject and
-// IDataObjectAsyncCapability on one object (two cells, one reference
-// count), offers CF_HDROP by delayed rendering over the staging folder and
+// files comes through here. It exposes IDataObject and nothing else —
+// IDataObjectAsyncCapability is deliberately absent, which is what obliges
+// the target to finish the drop inside Drop (APP.md §3, ruled 2026-09-11) —
+// offers CF_HDROP by delayed rendering over the staging folder with
 // CFSTR_PREFERREDDROPEFFECT beside it, and enumerates its formats through a
 // separate IEnumFORMATETC object as the interface requires.
 
@@ -87,11 +88,8 @@ type dataObject struct {
 	calls   atomic.Int32
 	queries atomic.Int32
 
-	mu        sync.Mutex
-	self      *comObject // the object these interfaces belong to; set by setCOMObject
-	asyncMode bool
-	inOp      bool
-	selfRef   bool // an AddRef taken by SetAsyncMode, owed back
+	mu   sync.Mutex
+	self *comObject // the object these interfaces belong to; set by setCOMObject
 
 	// revoked is the forced teardown: the process is going while the target
 	// still holds this object. From then on GetData answers E_UNEXPECTED
@@ -108,42 +106,16 @@ func (d *dataObject) setCOMObject(o *comObject) {
 	d.mu.Unlock()
 }
 
-// comDestroy is the target letting go — our own reference went at the end
-// of Run — which the stage needs to know: nothing can ask any more.
+// comDestroy is the last reference going. Nothing depends on it any more:
+// the drop is synchronous, so the drag was already over when DoDragDrop
+// returned, and whether the target has let the object go by then says
+// nothing the return value did not (APP.md §3, ruled 2026-09-11). It is
+// logged, because a target that holds the object past the drop is worth
+// seeing in a trace.
 func (d *dataObject) comDestroy() {
 	if d.stage != nil {
-		d.stage.noteReleased()
+		d.log("drag %s: the data object was let go", d.stage.id)
 	}
-}
-
-// comOnlySelfLeft is every outside reference being gone while the
-// SetAsyncMode reference is still held: the target let the object go
-// without ever calling EndOperation — which for a CF_HDROP source Explorer
-// never does (measured 2026-09-11) — or, before any drop, our own reference
-// went at the end of Run with nothing else holding on. Either way nobody
-// can call EndOperation any more, so the reference it would have given back
-// is given back here, and the object's destruction tells the stage the
-// target has gone. A concurrent EndOperation finds the ledger already
-// cleared and gives nothing back twice.
-func (d *dataObject) comOnlySelfLeft() {
-	d.mu.Lock()
-	self := d.self
-	give := d.selfRef
-	d.selfRef = false
-	inOp := d.inOp
-	d.mu.Unlock()
-	if !give || self == nil {
-		return
-	}
-	if d.stage != nil {
-		if inOp {
-			d.log("drag %s: the target let the data object go without EndOperation; the asynchronous reference is given back", d.stage.id)
-		} else {
-			d.log("drag %s: the last outside reference to the data object went; the asynchronous reference is given back", d.stage.id)
-		}
-	}
-	// The last reference, so nothing may touch d afterwards.
-	self.releaseSelfRef()
 }
 
 // newHDropDataObject is the drag's data object: CF_HDROP by delayed
@@ -156,10 +128,16 @@ func (d *dataObject) comOnlySelfLeft() {
 // TYMED_HGLOBAL") and what "The structure's hGlobal member points to a DWORD
 // value" says for the drop effect.
 //
-// IDataObjectAsyncCapability stays on the object: Explorer negotiates the
-// protocol for a CF_HDROP source (measured 2026-09-11), even though it never
-// calls EndOperation, and the self-reference the negotiation takes is what
-// keeps the object alive for a target that asks after DoDragDrop returned.
+// IDataObjectAsyncCapability is deliberately NOT on the object (ruled
+// 2026-09-11, after the first real drag hung on Explorer's Skip): a source
+// that offers it lets the target copy in the background after Drop returns,
+// and Explorer, having taken the offer, never called EndOperation and after
+// a Skip neither read the staged file, nor moved it, nor let the object go.
+// Without the offer Windows obliges the target to finish inside Drop, so
+// DoDragDrop returns with the real effect and the drag is over when it
+// does — WinRAR's model, and the whole of APP.md §3's end-of-drag rule. A
+// QueryInterface for it is answered E_NOINTERFACE like any other interface
+// this object does not have.
 func newHDropDataObject(s *stage, log func(string, ...any)) *comObject {
 	registerFormats()
 	if log == nil {
@@ -174,7 +152,6 @@ func newHDropDataObject(s *stage, log func(string, ...any)) *comObject {
 	// the object knows itself from the first instant COM can reach it.
 	return newCOMObject("IDataObject", d, true, log,
 		comIface{name: "IDataObject", vtbl: vtblIDataObject, iids: []windows.GUID{iidIDataObject}},
-		comIface{name: "IDataObjectAsyncCapability", vtbl: vtblIDataObjectAsyncCapability, iids: []windows.GUID{iidIDataObjectAsyncCapability}},
 	)
 }
 
@@ -521,165 +498,6 @@ var vtblIDataObject = pinVtbl(iDataObjectVtbl{
 })
 
 // ---------------------------------------------------------------------------
-// IDataObjectAsyncCapability.
-//
-// The documented handshake: the source calls SetAsyncMode(VARIANT_TRUE)
-// before the drag; the target, in its Drop, calls GetAsyncMode, and if it
-// agrees calls StartOperation, returns from Drop, extracts on a thread of
-// its own, and calls EndOperation when it is done. The source calls
-// InOperation after DoDragDrop returns to find out which of the two
-// happened.
-//
-// The reference count is the whole point on this side: "If fDoOpAsync is
-// set to VARIANT_TRUE, SetAsyncMode must call AddRef, and store the
-// interface pointer for use by EndOperation" — that reference is what keeps
-// the object alive after the drag loop has gone, and EndOperation is what
-// gives it back.
-
-func dataSetAsyncMode(this uintptr, fDoOpAsync uintptr) uintptr {
-	d, ok := dataObjectOf(this)
-	if !ok {
-		return eUnexpected
-	}
-	on := uint32(fDoOpAsync) != 0
-	d.mu.Lock()
-	d.asyncMode = on
-	// selfRef is the ledger EndOperation, finishSync and comOnlySelfLeft
-	// release against, so it must not be possible for it to say a reference
-	// was taken when none was. Deciding and taking under the one lock is
-	// what makes them agree.
-	if on && !d.selfRef && d.self != nil {
-		d.selfRef = true
-		d.self.addSelfRef()
-	}
-	d.mu.Unlock()
-	return sOK
-}
-
-func dataGetAsyncMode(this uintptr, pfIsOpAsync *uint32) uintptr {
-	d, ok := dataObjectOf(this)
-	if !ok {
-		return eUnexpected
-	}
-	if pfIsOpAsync == nil {
-		return ePointer
-	}
-	d.mu.Lock()
-	on := d.asyncMode
-	d.mu.Unlock()
-	if on {
-		*pfIsOpAsync = variantTrue
-	} else {
-		*pfIsOpAsync = variantFalse
-	}
-	return sOK
-}
-
-func dataStartOperation(this uintptr, pbcReserved uintptr) uintptr {
-	d, ok := dataObjectOf(this)
-	if !ok {
-		return eUnexpected
-	}
-	d.mu.Lock()
-	d.inOp = true
-	d.mu.Unlock()
-	if d.stage != nil {
-		d.stage.noteAsyncStarted()
-	}
-	return sOK
-}
-
-func dataInOperation(this uintptr, pfInAsyncOp *uint32) uintptr {
-	d, ok := dataObjectOf(this)
-	if !ok {
-		return eUnexpected
-	}
-	if pfInAsyncOp == nil {
-		return ePointer
-	}
-	d.mu.Lock()
-	in := d.inOp
-	d.mu.Unlock()
-	if in {
-		*pfInAsyncOp = variantTrue
-	} else {
-		*pfInAsyncOp = variantFalse
-	}
-	return sOK
-}
-
-func dataEndOperation(this uintptr, hResult uintptr, pbcReserved uintptr, dwEffects uintptr) uintptr {
-	d, ok := dataObjectOf(this)
-	if !ok {
-		return eUnexpected
-	}
-	d.mu.Lock()
-	d.inOp = false
-	self := d.self
-	give := d.selfRef
-	d.selfRef = false
-	d.mu.Unlock()
-	if d.stage != nil {
-		d.log("drag %s: EndOperation(%s, %s)", d.stage.id, hrName(hResult), effectName(uint32(dwEffects)))
-		// Recorded here, acted on by the stage's own goroutine: deleting the
-		// staged files inside the call the target is waiting to return from
-		// would make this program the reason its copy looked slow.
-		d.stage.noteEndOperation()
-	}
-	if give && self != nil {
-		// Give back the reference SetAsyncMode took. This may well be the
-		// last one, so nothing may touch d afterwards.
-		self.releaseSelfRef()
-	}
-	return sOK
-}
-
-// inOperation reports whether the target has called StartOperation and not
-// yet EndOperation.
-func (d *dataObject) inOperation() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.inOp
-}
-
-// finishSync gives back the SetAsyncMode reference when no asynchronous
-// operation ever started, which is the source's own cleanup step: "If
-// InOperation fails or returns VARIANT_FALSE, a normal synchronous data
-// transfer has taken place ... The source should do any cleanup that is
-// required." Without it the object would sit on that reference forever.
-func (d *dataObject) finishSync() {
-	d.mu.Lock()
-	self := d.self
-	give := d.selfRef && !d.inOp
-	if give {
-		d.selfRef = false
-	}
-	d.mu.Unlock()
-	if give && self != nil {
-		self.releaseSelfRef()
-	}
-}
-
-// The struct is kept as well as the pinned copy, because the source side of
-// the handshake — SetAsyncMode before the drag, InOperation after it — is
-// made as a real indirect call through these same function pointers. Going
-// the long way round is deliberate: it exercises the vtable in the direction
-// COM uses it, so a slot in the wrong place shows up here rather than only
-// in Explorer.
-var asyncVtbl = iDataObjectAsyncCapabilityVtbl{
-	QueryInterface: cbQueryInterface,
-	AddRef:         cbAddRef,
-	Release:        cbRelease,
-	SetAsyncMode:   syscall.NewCallback(dataSetAsyncMode),
-	GetAsyncMode:   syscall.NewCallback(dataGetAsyncMode),
-	StartOperation: syscall.NewCallback(dataStartOperation),
-	InOperation:    syscall.NewCallback(dataInOperation),
-	EndOperation:   syscall.NewCallback(dataEndOperation),
-}
-
-var vtblIDataObjectAsyncCapability = pinVtbl(asyncVtbl)
-
-// ---------------------------------------------------------------------------
 // IEnumFORMATETC.
 
 type enumFormatEtc struct {
@@ -877,8 +695,15 @@ func dropSourceQueryContinueDrag(this uintptr, fEscapePressed uintptr, grfKeySta
 		// started the drag-and-drop operation has been released." So this
 		// is the moment, and the extraction is armed before DRAGDROP_S_DROP
 		// is returned — the target's GetData can follow immediately.
-		self := s.window != 0 && cursorRootWindow() == s.window
-		s.stage.arm(self)
+		//
+		// It is also the only moment a source is given to see where the
+		// drop is going: the window under the cursor. Its class is what the
+		// cleanup turns on — Explorer and the desktop finish the drop
+		// inside Drop, so their folder goes the instant DoDragDrop returns
+		// (APP.md §3, ruled 2026-09-11).
+		root := cursorRootWindow()
+		self := s.window != 0 && root == s.window
+		s.stage.arm(self, windowClassName(root))
 		return dragDropSDrop
 	}
 	return sOK

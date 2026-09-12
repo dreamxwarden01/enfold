@@ -127,7 +127,7 @@ func Begin(opts Options) (*Drag, error) {
 	if !running.CompareAndSwap(false, true) {
 		return nil, ErrBusy
 	}
-	s, err := newStage(opts, ScavengeAge)
+	s, err := newStage(opts)
 	if err != nil {
 		running.Store(false)
 		return nil, err
@@ -139,11 +139,12 @@ func Begin(opts Options) (*Drag, error) {
 
 // Run is DoDragDrop on the calling thread — the one that called InitOLE,
 // which runs the window's message loop; DoDragDrop pumps messages itself,
-// so the window stays alive for as long as the button is down. It returns
-// when DoDragDrop returns, which for a target that negotiated the
-// asynchronous protocol is before the extraction: the data object stays
-// alive on the reference the negotiation took, and Options.OnPhase says how
-// the drag ends. A self-drop's folder is gone by the time Run returns.
+// so the window stays alive for as long as the drag lasts. The object
+// offers no IDataObjectAsyncCapability, so the target has to finish the
+// drop inside IDropTarget::Drop: this call lasts as long as Explorer's copy
+// and its conflict dialog do, and when it returns the drag is over —
+// Options.OnPhase has reported Done with the reason, and the staging folder
+// has been deleted or left for the scavenge (APP.md §3, ruled 2026-09-11).
 func (d *Drag) Run() (Result, error) {
 	if !d.ran.CompareAndSwap(false, true) {
 		return Result{}, fmt.Errorf("dragout: Run called twice")
@@ -160,41 +161,20 @@ func (d *Drag) Run() (Result, error) {
 	}
 
 	dataObj := newHDropDataObject(s, d.log)
-	dobj := dataObj.impl.(*dataObject)
 	srcObj := newDropSourceObject(s, d.opts.Window, d.log)
-	asyncPtr := dataObj.ifaceAddr("IDataObjectAsyncCapability")
-
-	// Step 2 of the documented source procedure: "Call SetAsyncMode with
-	// fDoOpAsync set to VARIANT_TRUE to indicate that an asynchronous
-	// operation is supported."
-	syscallPinned(asyncVtbl.SetAsyncMode, asyncPtr, variantTrue)
 
 	var effect uint32 = dropEffectNone
 	start := time.Now()
 	hr, _, _ := procDoDragDrop.Call(dataObj.unknown(), srcObj.unknown(),
 		uintptr(allowedEffects), uintptr(unsafe.Pointer(&effect)))
 	took := time.Since(start)
-
-	// Step 3: "After DoDragDrop returns, call InOperation." Through
-	// syscallPinned: pfInAsyncOp is an out-parameter, and syscall.SyscallN
-	// would leave it wherever escape analysis put it.
-	var inOp uint32
-	syscallPinned(asyncVtbl.InOperation, asyncPtr, uintptr(unsafe.Pointer(&inOp)))
-
-	note := ""
-	if inOp != 0 {
-		// For an asynchronous drop the effect out-parameter is
-		// DROPEFFECT_NONE whatever the target goes on to do: a drop that
-		// moved a 5 GiB file to the desktop reported NONE (measured
-		// 2026-09-11). What the target did is learnt from the files.
-		note = " (asynchronous: the effect is not reported here)"
-	}
-	d.log("drag %s: DoDragDrop returned %s after %s, effect %s%s", s.id, hrName(hr), took.Round(time.Millisecond), effectName(effect), note)
+	d.log("drag %s: DoDragDrop returned %s after %s, effect %s", s.id, hrName(hr), took.Round(time.Millisecond), effectName(effect))
 
 	// "If the return value is DRAGDROP_S_DROP, DoDragDrop calls
 	// IDropTarget::Drop ... The DoDragDrop function returns the last effect
 	// code to the source"; DRAGDROP_S_CANCEL is the cancel, and anything
-	// failed is a drag that could not be run at all.
+	// failed is a drag that could not be run at all. The effect is the
+	// truth about what the target did, the transfer being synchronous.
 	var end Reason
 	var err error
 	switch {
@@ -204,14 +184,13 @@ func (d *Drag) Run() (Result, error) {
 		end = Failed
 		err = fmt.Errorf("dragout: DoDragDrop: %s", hrName(hr))
 	}
-	s.noteDragEnded(end)
+	// The end of the drag: the reason for the strip and the folder's fate,
+	// both decided here, because there is nothing left to wait for.
+	s.dragEnded(end, effect)
 
-	if inOp == 0 {
-		dobj.finishSync()
-	}
-	// Step 4: "Release the data object." Ours, not the target's: if the
-	// target is still extracting it holds references of its own, and the
-	// object lives on.
+	// "Release the data object." Ours; a target that holds one of its own
+	// past the drop keeps the object alive, and it answers nothing out of a
+	// drag that is over (revoked at the process's end).
 	srcObj.release()
 	dataObj.release()
 

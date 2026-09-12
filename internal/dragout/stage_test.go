@@ -105,7 +105,7 @@ func newTestStage(t *testing.T, items []Item, extract func(ctx context.Context, 
 	}
 	ph := &phaseLog{}
 	lg := &testLog{}
-	s, err := newStage(Options{Root: t.TempDir(), Items: items, Extract: extract, OnPhase: ph.on, Log: lg.printf}, time.Hour)
+	s, err := newStage(Options{Root: t.TempDir(), Items: items, Extract: extract, OnPhase: ph.on, Log: lg.printf})
 	if err != nil {
 		t.Fatalf("newStage: %v", err)
 	}
@@ -113,13 +113,22 @@ func newTestStage(t *testing.T, items []Item, extract func(ctx context.Context, 
 	return s, ph, lg
 }
 
-// endDrag is DoDragDrop returning, with the watch's goroutine stepped
-// aside so that the test drives poll by hand at the moments of its
-// choosing.
-func endDrag(s *stage, end Reason) {
-	s.noteDragEnded(end)
-	s.stopOnce.Do(func() { close(s.stop) })
+// dropOnto is the whole end of a drag over a target of the given window
+// class: DoDragDrop returning with its effect, which under the synchronous
+// contract is where the reason and the cleanup are both decided.
+func dropOnto(s *stage, class string, end Reason, effect uint32) {
+	s.mu.Lock()
+	s.targetClass = class
+	s.mu.Unlock()
+	s.dragEnded(end, effect)
 }
+
+// The window classes the tests drop onto: Explorer's own, which finishes
+// inside Drop, and somebody else's, which may read the paths later.
+const (
+	explorerWindow = "CabinetWClass"
+	otherWindow    = "Chrome_WidgetWin_1"
+)
 
 // ---------------------------------------------------------------------------
 // DROPFILES.
@@ -297,16 +306,6 @@ func TestStagePathsNameTheTopLevelItems(t *testing.T) {
 	if len(s.drop) != 2 || s.drop[0] != filepath.Join(s.itemsDir, "photo.jpg") || s.drop[1] != filepath.Join(s.itemsDir, "Docs") {
 		t.Fatalf("CF_HDROP names %q, want the two top-level items", s.drop)
 	}
-	// The watch covers every item, the folders told apart: a folder is
-	// asked whether it is there, never whether it is open.
-	if !s.armWatch() || len(s.watch) != 5 {
-		t.Fatalf("the watch covers %d items, want all 5", len(s.watch))
-	}
-	for i, w := range s.watch {
-		if w.isDir != items[i].IsDir {
-			t.Errorf("watch entry %d isDir=%v, want %v", i, w.isDir, items[i].IsDir)
-		}
-	}
 	if filepath.Base(filepath.Dir(s.root)) == "" || len(filepath.Base(s.root)) != 8 {
 		t.Fatalf("the staging folder is %q, want <root>\\<8 hex>", s.root)
 	}
@@ -319,7 +318,7 @@ func TestStagePathsNameTheTopLevelItems(t *testing.T) {
 		{},
 	} {
 		root := t.TempDir()
-		if _, err := newStage(Options{Root: root, Items: bad, Extract: writeItems(bad)}, time.Hour); err == nil {
+		if _, err := newStage(Options{Root: root, Items: bad, Extract: writeItems(bad)}); err == nil {
 			t.Errorf("items %v were accepted", bad)
 		}
 		if entries, _ := os.ReadDir(root); len(entries) != 0 {
@@ -361,7 +360,7 @@ func TestStageArmStateMachine(t *testing.T) {
 	}
 
 	// The button comes up, not over our own window.
-	s.arm(false)
+	s.arm(false, otherWindow)
 	s.mu.Lock()
 	armed = s.armed
 	s.mu.Unlock()
@@ -429,7 +428,7 @@ func TestStageFailedExtractionFailsGetData(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "half.bin"), []byte("half"), 0o600)
 		return boom
 	})
-	s.arm(false)
+	s.arm(false, otherWindow)
 
 	paths, ok := s.requestPaths()
 	if ok || paths != nil {
@@ -460,10 +459,7 @@ func TestStageFailedExtractionFailsGetData(t *testing.T) {
 	}
 	// Once the drag is over, the half-written files go at once: nothing
 	// valid was handed out, so nothing is waiting for them.
-	endDrag(s, 0)
-	if !s.poll(time.Now()) {
-		t.Fatal("the poll did not resolve a failed drag")
-	}
+	dropOnto(s, otherWindow, 0, dropEffectNone)
 	if _, err := os.Stat(s.root); !os.IsNotExist(err) {
 		t.Errorf("the folder of a failed extraction survived: %v", err)
 	}
@@ -478,7 +474,7 @@ func TestStageCancelledExtractionIsCancelled(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	})
-	s.arm(false)
+	s.arm(false, otherWindow)
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		s.cancel()
@@ -504,7 +500,7 @@ func TestStageSelfDropExtractsNothing(t *testing.T) {
 	if _, ok := s.requestPaths(); !ok {
 		t.Fatal("the hover request was refused")
 	}
-	s.arm(true)
+	s.arm(true, "")
 	paths, ok := s.requestPaths()
 	if !ok || len(paths) != 1 {
 		t.Fatalf("the self-drop's request answered %q %v", paths, ok)
@@ -512,7 +508,7 @@ func TestStageSelfDropExtractsNothing(t *testing.T) {
 	if calls != 0 {
 		t.Fatal("a self-drop ran the extraction")
 	}
-	s.noteDragEnded(0)
+	s.dragEnded(0, dropEffectNone)
 	if got := ph.list(); len(got) != 1 || got[0].Step != Done || got[0].Reason != SelfDrop {
 		t.Fatalf("phases %v, want Done/SelfDrop alone", got)
 	}
@@ -525,33 +521,28 @@ func TestStageSelfDropExtractsNothing(t *testing.T) {
 }
 
 // Escape, and a DoDragDrop that could not run, are Done at DoDragDrop's
-// return and the empty folder goes at the watch's first tick — not when
-// whatever the cursor hovered over lets the data object go (APP.md §3: at
-// once when the drag ends with nothing handed out). Only an accepted drop
-// waits for the release, since a target that negotiated the asynchronous
-// protocol asks after DoDragDrop has returned; TestStageRefusedDrop is that
-// one. A request that would extract after the folder went is refused
-// rather than write into a folder nothing manifests any more.
+// return and the empty folder goes with it — whatever was asked for during
+// the hover, nothing was written, so there is no plaintext for anybody to
+// read late (APP.md §3: at once when the drag ends with nothing written). A
+// request that would extract after the folder went is refused rather than
+// write into a folder nothing manifests any more.
 func TestStageCancelledDragGoesAtOnce(t *testing.T) {
 	for _, end := range []Reason{Cancelled, Failed} {
 		t.Run(end.String(), func(t *testing.T) {
 			isolateStages(t)
 			s, ph, lg := newTestStage(t, []Item{{Name: "e.bin"}}, nil)
 			s.requestPaths() // a hover request: the paths were handed out
-			endDrag(s, end)
+			dropOnto(s, otherWindow, end, dropEffectNone)
 			if got := ph.list(); len(got) != 1 || got[0].Step != Done || got[0].Reason != end {
 				t.Fatalf("phases %v, want Done/%s", got, end)
-			}
-			if !s.poll(time.Now()) {
-				t.Fatal("the first poll left the folder for the target to let go of")
 			}
 			if _, err := os.Stat(s.root); !os.IsNotExist(err) {
 				t.Errorf("the folder of a drag that ended %s survived: %v", end, err)
 			}
-			if !strings.Contains(lg.text(), "ended without a drop") {
+			if !strings.Contains(lg.text(), "the drag ended with nothing written") {
 				t.Errorf("the log does not say why the folder went:\n%s", lg.text())
 			}
-			s.arm(false)
+			s.arm(false, otherWindow)
 			if paths, ok := s.requestPaths(); ok {
 				t.Fatalf("a request after the folder went was honoured with %q", paths)
 			}
@@ -573,7 +564,7 @@ func TestStageLayoutKeepsTheManifestClearOfTheItems(t *testing.T) {
 	if _, ok := s.requestPaths(); !ok {
 		t.Fatal("the hover request was refused")
 	}
-	s.arm(false)
+	s.arm(false, otherWindow)
 	paths, ok := s.requestPaths()
 	if !ok {
 		t.Fatal("the extraction was refused")
@@ -599,10 +590,7 @@ func TestStageLayoutKeepsTheManifestClearOfTheItems(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	endDrag(s, 0)
-	if !s.poll(time.Now()) {
-		t.Fatal("the poll did not finish a completed move")
-	}
+	dropOnto(s, otherWindow, 0, dropEffectMove)
 	if got := ph.list(); len(got) != 3 || got[2].Reason != Moved {
 		t.Fatalf("phases %v, want Done/Moved last", got)
 	}
@@ -612,38 +600,30 @@ func TestStageLayoutKeepsTheManifestClearOfTheItems(t *testing.T) {
 }
 
 // TestDirectoryOnlyMoveEndsTheDrag: a selection that is only folders — an
-// empty one, a tree of empty ones — has no file for the watch to see
-// leaving, so the folders themselves are watched, and their going is the
-// move (APP.md §3: the staged items, files and folders alike, gone).
+// empty one, a tree of empty ones — has no file to be seen leaving, so the
+// items CF_HDROP named are what "everything is gone" is asked of (APP.md
+// §3: the staged items, files and folders alike, gone).
 func TestDirectoryOnlyMoveEndsTheDrag(t *testing.T) {
 	isolateStages(t)
 	items := []Item{{Name: "Empty", IsDir: true}, {Name: "Tree", IsDir: true}, {Name: `Tree\inner`, IsDir: true}}
 	s, ph, lg := newTestStage(t, items, nil)
-	s.arm(false)
+	s.arm(false, otherWindow)
 	if _, ok := s.requestPaths(); !ok {
 		t.Fatal("the extraction was refused")
-	}
-	endDrag(s, 0)
-	if s.poll(time.Now()) {
-		t.Fatal("the poll resolved a drag whose folders are all still there")
 	}
 	if got := ph.list(); len(got) != 2 || got[1].Step != Awaiting {
 		t.Fatalf("phases %v, want Preparing then Awaiting", got)
 	}
-	// The target renames the two top-level folders away.
+	// The target renames the two top-level folders away, inside its Drop,
+	// and DoDragDrop comes back with DROPEFFECT_MOVE.
 	for _, p := range s.drop {
 		if err := os.Rename(p, filepath.Join(t.TempDir(), filepath.Base(p))); err != nil {
 			t.Fatalf("simulating the target's move: %v", err)
 		}
 	}
-	if !s.poll(time.Now()) {
-		t.Fatal("the poll did not finish the drag once every folder was gone")
-	}
+	dropOnto(s, otherWindow, 0, dropEffectMove)
 	if got := ph.list(); len(got) != 3 || got[2].Step != Done || got[2].Reason != Moved {
 		t.Fatalf("phases %v, want Done/Moved last", got)
-	}
-	if !strings.Contains(lg.text(), "staged folder 0 gone (moved away by the target)") {
-		t.Errorf("the log never said the folder was moved:\n%s", lg.text())
 	}
 	if strings.Contains(lg.text(), "Empty") || strings.Contains(lg.text(), "Tree") {
 		t.Errorf("the log names a folder:\n%s", lg.text())
@@ -653,39 +633,20 @@ func TestDirectoryOnlyMoveEndsTheDrag(t *testing.T) {
 	}
 }
 
-// TestReleasedWithoutAReadEndsAsIdle is the fourth way the awaiting phase
-// ends (APP.md §3): the target let the data object go and five seconds
-// passed with no read. The folder stays for a consumer that keeps the paths
-// for a later read; the strip does not.
-func TestReleasedWithoutAReadEndsAsIdle(t *testing.T) {
+// TestAnotherTargetLeavesTheFolderForTheScavenge: a window that is not
+// Explorer's took the copy, and a consumer may open the paths late (a
+// browser's upload box) — so the folder stays manifested handed-out and the
+// sweep is what takes it, an hour on (APP.md §3, ruled 2026-09-11).
+func TestAnotherTargetLeavesTheFolderForTheScavenge(t *testing.T) {
 	isolateStages(t)
-	s, ph, _ := newTestStage(t, []Item{{Name: "kept.bin", Size: 16}}, nil)
-	s.arm(false)
+	s, ph, lg := newTestStage(t, []Item{{Name: "kept.bin", Size: 16}}, nil)
+	s.arm(false, otherWindow)
 	if _, ok := s.requestPaths(); !ok {
 		t.Fatal("the extraction was refused")
 	}
-	endDrag(s, 0)
-	now := time.Now()
-	if s.poll(now) {
-		t.Fatal("the poll resolved the stage while the target still held the object")
-	}
-	// Explorer lets go — its own references reach zero without an
-	// EndOperation — and nothing reads the file.
-	s.noteReleased()
-	s.mu.Lock()
-	s.lastTouch = now
-	s.mu.Unlock()
-	if s.poll(now.Add(idleAfter - time.Second)) {
-		t.Fatal("the poll resolved the stage four seconds after the release")
-	}
-	if len(ph.list()) != 2 {
-		t.Fatalf("phases %v before the five seconds", ph.list())
-	}
-	if !s.poll(now.Add(idleAfter)) {
-		t.Fatal("the poll did not end the awaiting phase five seconds after the release")
-	}
-	if got := ph.list(); len(got) != 3 || got[2].Reason != Idle {
-		t.Fatalf("phases %v, want Done/Idle last", got)
+	dropOnto(s, otherWindow, 0, dropEffectCopy)
+	if got := ph.list(); len(got) != 3 || got[2].Step != Done || got[2].Reason != Copied {
+		t.Fatalf("phases %v, want Preparing, Awaiting, Done/Copied", got)
 	}
 	if _, err := os.Stat(s.paths[0]); err != nil {
 		t.Fatalf("the file was deleted under a consumer that may still read it: %v", err)
@@ -693,24 +654,63 @@ func TestReleasedWithoutAReadEndsAsIdle(t *testing.T) {
 	if m, ok := ReadManifest(s.root); !ok || m.State != StateHandedOut {
 		t.Fatalf("the folder is manifested %q %v, want %q for the scavenge", m.State, ok, StateHandedOut)
 	}
+	if stageIsActive(s.root) {
+		t.Error("the stage is still registered, so the scavenge would never take it")
+	}
+	if !strings.Contains(lg.text(), "left manifested for the scavenge") {
+		t.Errorf("the log does not say the folder was left:\n%s", lg.text())
+	}
 }
 
-// A drop the target took and then let go of without ever asking for the
-// files is Refused, and the empty folder goes.
+// TestExplorerTargetTakesItsFolderAtOnce is the whole gain of the
+// synchronous drop (APP.md §3, ruled 2026-09-11 after the hung Skip):
+// Explorer finishes the drop inside Drop — its conflict dialog and all — so
+// when DoDragDrop returns it is done with the paths, whatever the user
+// answered. The plaintext goes there and then, and a Skip (DROPEFFECT_NONE
+// with the files still staged) is a drop that is over, not a drag that
+// hangs.
+func TestExplorerTargetTakesItsFolderAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		class  string
+		effect uint32
+		want   Reason
+	}{
+		{"a copy into a folder window", "CabinetWClass", dropEffectCopy, Copied},
+		{"Skip in Explorer's conflict dialog", "CabinetWClass", dropEffectNone, Cancelled},
+		{"a drop on the desktop", "Progman", dropEffectCopy, Copied},
+		{"a drop on the desktop with Active Desktop on", "workerw", dropEffectCopy, Copied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateStages(t)
+			s, ph, _ := newTestStage(t, []Item{{Name: "e.bin", Size: 16}}, nil)
+			s.arm(false, tc.class)
+			if _, ok := s.requestPaths(); !ok {
+				t.Fatal("the extraction was refused")
+			}
+			s.dragEnded(0, tc.effect)
+			if got := ph.list(); len(got) != 3 || got[2].Step != Done || got[2].Reason != tc.want {
+				t.Fatalf("phases %v, want Done/%s last", got, tc.want)
+			}
+			if _, err := os.Stat(s.root); !os.IsNotExist(err) {
+				t.Errorf("Explorer's staging folder survived the drop: %v", err)
+			}
+			if stageIsActive(s.root) {
+				t.Error("the stage is still registered")
+			}
+		})
+	}
+}
+
+// A drop the target took without ever asking for the files is Refused, and
+// the empty folder goes: nothing was written, so there is no plaintext and
+// nothing for a late reader to open.
 func TestStageRefusedDrop(t *testing.T) {
 	isolateStages(t)
 	s, ph, _ := newTestStage(t, []Item{{Name: "r.bin"}}, nil)
-	s.requestPaths()
-	s.arm(false)
-	endDrag(s, 0)
-	s.poll(time.Now())
-	if len(ph.list()) != 0 {
-		t.Fatalf("phases %v before the target let go", ph.list())
-	}
-	s.noteReleased()
-	if !s.poll(time.Now()) {
-		t.Fatal("the poll did not resolve the refused drop")
-	}
+	s.requestPaths() // a hover request: the names, over an empty folder
+	s.arm(false, otherWindow)
+	dropOnto(s, otherWindow, 0, dropEffectNone)
 	if got := ph.list(); len(got) != 1 || got[0].Step != Done || got[0].Reason != Refused {
 		t.Fatalf("phases %v, want Done/Refused", got)
 	}
@@ -770,51 +770,89 @@ func TestManifestLifecycle(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The decision tables.
+// The decision tables. Both are pure functions over what DoDragDrop's
+// return said, which is everything there is to know: the drop being
+// synchronous, the target had to finish inside Drop (APP.md §3, ruled
+// 2026-09-11).
 
-func TestCleanupDecisionTable(t *testing.T) {
-	const hour = time.Hour
+// TestDropReasonTable is how a drag ends, in the six words APP.md §3 names.
+func TestDropReasonTable(t *testing.T) {
+	// A drop that ran the extraction and left the staged items where they
+	// are — a copy, or a target that did nothing.
+	copied := dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: explorerWindow}
+	with := func(f func(e *dropFacts)) dropFacts {
+		e := copied
+		f(&e)
+		return e
+	}
 	cases := []struct {
 		name string
-		ev   stageEvents
-		want stageAction
+		f    dropFacts
+		want Reason
 	}{
-		{"a self-drop goes the moment the drag is over",
-			stageEvents{selfDrop: true, dragOver: true, handedOut: true, maxAge: hour}, stageDelete},
-		{"a failed extraction goes at once, half-written files and all",
-			stageEvents{dragOver: true, written: true, extractFailed: true, handedOut: true, anyLeft: true, maxAge: hour}, stageDelete},
-		{"Escape: no drop happened, and the empty folder goes at once",
-			stageEvents{dragOver: true, dragEnd: Cancelled, maxAge: hour}, stageDelete},
-		{"... whatever the hover target still holds",
-			stageEvents{dragOver: true, dragEnd: Cancelled, handedOut: true, maxAge: hour}, stageDelete},
-		{"a DoDragDrop that could not run: the same",
-			stageEvents{dragOver: true, dragEnd: Failed, handedOut: true, maxAge: hour}, stageDelete},
-		{"a drop taken, nothing written and the target let go: the folder goes",
-			stageEvents{dragOver: true, released: true, maxAge: hour}, stageDelete},
-		{"... including one where a hover request took the paths",
-			stageEvents{dragOver: true, handedOut: true, released: true, maxAge: hour}, stageDelete},
-		{"a drop taken, nothing written and the target still holds the object: it may ask on a thread of its own",
-			stageEvents{dragOver: true, handedOut: true, maxAge: hour}, stageWait},
-		{"a same-volume move took every file: nothing is left to keep",
-			stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: false, maxAge: hour}, stageDelete},
-		{"EndOperation on a negotiated transfer ends it",
-			stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: true, asyncOp: true, endOperation: true, maxAge: hour}, stageDelete},
-		{"EndOperation without a negotiated operation is not a signal at all",
-			stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: true, endOperation: true, maxAge: hour}, stageWait},
-		{"a file still open holds everything up",
-			stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: true, anyInUse: true, endOperation: true, asyncOp: true, maxAge: hour}, stageWait},
-		{"paths handed out and no EndOperation: the folder outlives the drop",
-			stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: true, age: 5 * time.Minute, maxAge: hour}, stageWait},
-		{"... until it is past the scavenge age",
-			stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: true, age: 2 * hour, maxAge: hour}, stageDelete},
-		{"... or the awaiting phase is over: left for the scavenge, and the watch stops",
-			stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: true, phaseDone: true, maxAge: hour}, stageLeave},
-		{"during the hover, nothing is decided",
-			stageEvents{maxAge: hour}, stageWait},
+		{"a release over our own window", with(func(e *dropFacts) { e.selfDrop = true }), SelfDrop},
+		{"... whatever else was true of it", with(func(e *dropFacts) {
+			e.selfDrop, e.written, e.effect = true, false, dropEffectMove
+		}), SelfDrop},
+		{"a DoDragDrop that could not run", with(func(e *dropFacts) { e.end = Failed }), Failed},
+		{"an extraction that failed", with(func(e *dropFacts) { e.extractFailed = true }), Failed},
+		{"Escape", with(func(e *dropFacts) { e.end, e.written, e.anyLeft = Cancelled, false, false }), Cancelled},
+		{"a drop the target never asked for the files of", with(func(e *dropFacts) {
+			e.written, e.anyLeft, e.effect = false, false, dropEffectNone
+		}), Refused},
+		// The Skip that hung the first real drag: Explorer asked, showed its
+		// conflict dialog, and came back with no effect. The drop is over.
+		{"Skip in Explorer's conflict dialog", with(func(e *dropFacts) { e.effect = dropEffectNone }), Cancelled},
+		{"a copy", copied, Copied},
+		{"a move that took everything", with(func(e *dropFacts) {
+			e.effect, e.anyLeft = dropEffectMove, false
+		}), Moved},
+		{"a move that left the items where they were", with(func(e *dropFacts) { e.effect = dropEffectMove }), Copied},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := decideCleanup(tc.ev)
+			if got := dropReason(tc.f); got != tc.want {
+				t.Fatalf("dropReason = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDropCleanupTable is what becomes of the staging folder: deleted the
+// moment DoDragDrop returns when nobody can still want it, and left
+// manifested for the scavenge when a consumer may open the paths late.
+func TestDropCleanupTable(t *testing.T) {
+	cases := []struct {
+		name string
+		f    dropFacts
+		want stageAction
+	}{
+		{"a self-drop goes the moment the drag is over",
+			dropFacts{selfDrop: true, targetClass: otherWindow}, stageDelete},
+		{"a failed extraction goes at once, half-written files and all",
+			dropFacts{written: true, extractFailed: true, anyLeft: true, targetClass: otherWindow}, stageDelete},
+		{"Escape: nothing was written, and the empty folder goes",
+			dropFacts{end: Cancelled, targetClass: otherWindow}, stageDelete},
+		{"a DoDragDrop that could not run: the same",
+			dropFacts{end: Failed, targetClass: otherWindow}, stageDelete},
+		{"a drop the target never asked for the files of",
+			dropFacts{targetClass: otherWindow}, stageDelete},
+		{"a move that took every item leaves an empty folder, which goes",
+			dropFacts{written: true, effect: dropEffectMove, targetClass: otherWindow}, stageDelete},
+		{"an Explorer window finished inside Drop: the folder goes with the return",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: "CabinetWClass"}, stageDelete},
+		{"... and so did the desktop",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: "Progman"}, stageDelete},
+		{"... and Skip in Explorer's dialog is the same: the drop is over",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectNone, targetClass: "CabinetWClass"}, stageDelete},
+		{"another program's window may read the paths late: left for the scavenge",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: otherWindow}, stageLeave},
+		{"a window whose class could not be read is nobody we know: left",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy}, stageLeave},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := dropCleanup(tc.f)
 			if d.action != tc.want {
 				t.Fatalf("decided %q (%s), want %q", d.action, d.why, tc.want)
 			}
@@ -825,49 +863,19 @@ func TestCleanupDecisionTable(t *testing.T) {
 	}
 }
 
-// TestAwaitingEndTable is what clears the strip's second phase, the four
-// ways APP.md §3 names: the items gone, the target's EndOperation, the files
-// read and then left alone for five seconds, or the target gone and five
-// seconds passed with no read.
-func TestAwaitingEndTable(t *testing.T) {
-	staged := stageEvents{dragOver: true, written: true, extracted: true, handedOut: true, anyLeft: true}
-	with := func(f func(e *stageEvents)) stageEvents {
-		e := staged
-		f(&e)
-		return e
+// TestExplorerClassTable: the classes that mean "the drop is finished when
+// Drop returns" (APP.md §3), compared without case as Windows compares
+// window classes, and nothing else.
+func TestExplorerClassTable(t *testing.T) {
+	for _, name := range []string{"CabinetWClass", "ExploreWClass", "Progman", "WorkerW", "cabinetwclass", "WORKERW"} {
+		if !explorerClass(name) {
+			t.Errorf("%q is not recognised as Explorer's or the desktop's", name)
+		}
 	}
-	cases := []struct {
-		name string
-		ev   stageEvents
-		want Reason
-	}{
-		{"nothing before the drag is over", with(func(e *stageEvents) { e.dragOver = false }), 0},
-		{"nothing twice", with(func(e *stageEvents) { e.phaseDone = true }), 0},
-		{"a refused drop: nothing written and the target let go", stageEvents{dragOver: true, released: true}, Refused},
-		{"nothing written and the target still there", stageEvents{dragOver: true}, 0},
-		{"a cancel already said so", stageEvents{dragOver: true, released: true, dragEnd: Cancelled}, 0},
-		{"the extraction still running", with(func(e *stageEvents) { e.extracted = false }), 0},
-		{"a failed extraction was reported when it failed", with(func(e *stageEvents) { e.extractFailed = true }), 0},
-		{"every file gone is a move", with(func(e *stageEvents) { e.anyLeft = false }), Moved},
-		{"EndOperation on a negotiated transfer", with(func(e *stageEvents) { e.asyncOp, e.endOperation = true, true }), Ended},
-		{"EndOperation with a file still open waits", with(func(e *stageEvents) { e.asyncOp, e.endOperation, e.anyInUse = true, true, true }), 0},
-		{"a file in use: not yet", with(func(e *stageEvents) { e.anyInUse, e.anyEverUsed, e.untouchedFor = true, true, time.Minute }), 0},
-		{"read and left alone for five seconds", with(func(e *stageEvents) { e.anyEverUsed, e.untouchedFor = true, idleAfter }), Idle},
-		{"read and left alone for four", with(func(e *stageEvents) { e.anyEverUsed, e.untouchedFor = true, idleAfter-time.Second }), 0},
-		{"never read, the target still holding on: wait", with(func(e *stageEvents) { e.untouchedFor = time.Minute }), 0},
-		{"never read, the target gone five seconds ago: idle", with(func(e *stageEvents) { e.released, e.untouchedFor = true, idleAfter }), Idle},
-		{"never read, the target gone four seconds ago: not yet", with(func(e *stageEvents) { e.released, e.untouchedFor = true, idleAfter-time.Second }), 0},
-		{"the target gone, and a read still going: wait", with(func(e *stageEvents) {
-			e.released, e.anyInUse, e.anyEverUsed, e.untouchedFor = true, true, true, time.Minute
-		}), 0},
-		{"the target gone, a read since it ended five seconds ago: idle", with(func(e *stageEvents) { e.released, e.anyEverUsed, e.untouchedFor = true, true, idleAfter }), Idle},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := awaitingEnd(tc.ev); got != tc.want {
-				t.Fatalf("awaitingEnd = %v, want %v", got, tc.want)
-			}
-		})
+	for _, name := range []string{"", "Chrome_WidgetWin_1", "CabinetWClass2", "Progman ", "Notepad", "WorkerW2"} {
+		if explorerClass(name) {
+			t.Errorf("%q was taken for Explorer's", name)
+		}
 	}
 }
 
@@ -992,7 +1000,7 @@ func TestScavengeTouchesOnlyOurFolders(t *testing.T) {
 func TestScavengeLeavesALiveStageAlone(t *testing.T) {
 	isolateStages(t)
 	parent := t.TempDir()
-	s, err := newStage(Options{Root: parent, Items: []Item{{Name: "x.bin"}}, Extract: writeItems(nil)}, time.Hour)
+	s, err := newStage(Options{Root: parent, Items: []Item{{Name: "x.bin"}}, Extract: writeItems(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1082,155 +1090,6 @@ func TestRemoveTreeDoesNotFollowALink(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Watching the staged files: the transitions, the first tick included.
-
-func TestWatchedFileTransitions(t *testing.T) {
-	now := time.Now()
-	was := now.Add(-2 * time.Second)
-	cases := []struct {
-		name   string
-		start  stagedFile
-		probe  fileProbe
-		staged bool
-		// the four facts the cleanup policy reads back out
-		seen, gone, inUse, everUsed bool
-		line                        string // a substring the transition must log; "" means silence
-	}{
-		{name: "missing at the first tick, and the extraction had written it: a move that beat the watch",
-			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{}, staged: true,
-			seen: true, gone: true, line: "gone before the first look"},
-		{name: "missing at the first tick with nothing ever written: not a removal",
-			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{}, staged: false, line: ""},
-		{name: "present at the first tick: the ordinary start",
-			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{exists: true}, staged: true, seen: true, line: ""},
-		{name: "present and already being read at the first tick",
-			start: stagedFile{path: `C:\stage\a.bin`, since: was}, probe: fileProbe{exists: true, inUse: true}, staged: true,
-			seen: true, inUse: true, everUsed: true, line: ""},
-		{name: "a file that was there and is not any more was moved",
-			start: stagedFile{path: `C:\stage\a.bin`, seen: true, exists: true, since: was}, probe: fileProbe{}, staged: true,
-			seen: true, gone: true, line: "gone (moved away by the target)"},
-		{name: "a target opened it",
-			start: stagedFile{path: `C:\stage\a.bin`, seen: true, exists: true, since: was}, probe: fileProbe{exists: true, inUse: true}, staged: true,
-			seen: true, inUse: true, everUsed: true, line: "in use by another process"},
-		{name: "and let go of it again",
-			start: stagedFile{path: `C:\stage\a.bin`, seen: true, exists: true, inUse: true, everUsed: true, since: was}, probe: fileProbe{exists: true}, staged: true,
-			seen: true, everUsed: true, line: "free"},
-		{name: "gone and still gone is not said twice",
-			start: stagedFile{path: `C:\stage\a.bin`, seen: true, gone: true, since: was}, probe: fileProbe{}, staged: true,
-			seen: true, gone: true, line: ""},
-		{name: "a file that comes back is said out loud",
-			start: stagedFile{path: `C:\stage\a.bin`, seen: true, gone: true, since: was}, probe: fileProbe{exists: true}, staged: true,
-			seen: true, line: "is back"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			w := tc.start
-			line := w.observe(tc.probe, tc.staged, now, 0)
-			if w.seen != tc.seen || w.gone != tc.gone || w.inUse != tc.inUse || w.everUsed != tc.everUsed {
-				t.Fatalf("seen=%v gone=%v inUse=%v everUsed=%v; want %v/%v/%v/%v",
-					w.seen, w.gone, w.inUse, w.everUsed, tc.seen, tc.gone, tc.inUse, tc.everUsed)
-			}
-			if tc.line == "" {
-				if line != "" {
-					t.Fatalf("the transition logged %q; this one has nothing to say", line)
-				}
-				return
-			}
-			if !strings.Contains(line, tc.line) {
-				t.Fatalf("the transition logged %q, want it to contain %q", line, tc.line)
-			}
-			// Never a file name: the log names files by their index.
-			if strings.Contains(line, "a.bin") {
-				t.Fatalf("the transition line names the file: %q", line)
-			}
-		})
-	}
-}
-
-// TestMoveBeforeTheFirstTickEndsTheDrag: the target renames the staged file
-// away before the watch's first tick, and the stage has to recognise the
-// completed move — the cleanest end a drag has — rather than sit in
-// "handed-out" over an empty folder until the scavenge.
-func TestMoveBeforeTheFirstTickEndsTheDrag(t *testing.T) {
-	isolateStages(t)
-	s, ph, lg := newTestStage(t, []Item{{Name: "moved.bin", Size: 4096}}, nil)
-	s.arm(false)
-	if _, ok := s.requestPaths(); !ok {
-		t.Fatal("the extraction was refused")
-	}
-	// The drop: a same-volume move, which from here is a rename away. It
-	// happens before the watch has looked even once.
-	if err := os.Rename(s.paths[0], filepath.Join(t.TempDir(), "moved.bin")); err != nil {
-		t.Fatalf("simulating the target's move: %v", err)
-	}
-	endDrag(s, 0)
-	s.mu.Lock()
-	watching := s.watching
-	s.mu.Unlock()
-	if !watching {
-		t.Fatal("DoDragDrop's return did not start the watch")
-	}
-	if !s.poll(time.Now()) {
-		t.Fatal("the first poll did not finish the stage; a completed move is the end of a drag")
-	}
-	if !strings.Contains(lg.text(), "gone before the first look") || !strings.Contains(lg.text(), "moved away by the target") {
-		t.Errorf("the log never said the move beat the first tick:\n%s", lg.text())
-	}
-	if got := ph.list(); len(got) != 3 || got[2].Step != Done || got[2].Reason != Moved {
-		t.Fatalf("phases %v, want Preparing, Awaiting, Done/Moved", got)
-	}
-	s.mu.Lock()
-	state, removed := s.state, s.removed
-	s.mu.Unlock()
-	if state != StateDone || !removed {
-		t.Errorf("state %q removed %v after a completed move", state, removed)
-	}
-	if _, err := os.Stat(s.root); !os.IsNotExist(err) {
-		t.Errorf("the staging folder survived a completed move: %v", err)
-	}
-}
-
-// TestIdleLeavesTheFolderForTheScavenge: files read and then left alone end
-// the awaiting phase as Idle, the folder stays manifested handed-out, and
-// the watch stops — the paths are a consumer's now.
-func TestIdleLeavesTheFolderForTheScavenge(t *testing.T) {
-	isolateStages(t)
-	s, ph, _ := newTestStage(t, []Item{{Name: "idle.bin", Size: 16}}, nil)
-	s.arm(false)
-	if _, ok := s.requestPaths(); !ok {
-		t.Fatal("the extraction was refused")
-	}
-	endDrag(s, 0)
-	// Somebody read it: the watch saw it in use, then free.
-	s.mu.Lock()
-	s.watch[0].seen, s.watch[0].exists, s.watch[0].inUse, s.watch[0].everUsed = true, true, true, true
-	s.looked = true
-	s.mu.Unlock()
-	now := time.Now()
-	if s.poll(now) {
-		t.Fatal("the poll resolved the stage while the file had only just been let go of")
-	}
-	if len(ph.list()) != 2 {
-		t.Fatalf("phases %v before the five seconds", ph.list())
-	}
-	if !s.poll(now.Add(idleAfter + time.Second)) {
-		t.Fatal("the poll did not stop the watch once the files were idle")
-	}
-	if got := ph.list(); len(got) != 3 || got[2].Reason != Idle {
-		t.Fatalf("phases %v, want Done/Idle last", got)
-	}
-	if _, err := os.Stat(s.paths[0]); err != nil {
-		t.Fatalf("an idle drag's file was deleted: %v", err)
-	}
-	if m, ok := ReadManifest(s.root); !ok || m.State != StateHandedOut {
-		t.Fatalf("an idle drag's folder is manifested %q %v, want %q for the scavenge", m.State, ok, StateHandedOut)
-	}
-	if stageIsActive(s.root) {
-		t.Error("an idle drag's stage is still registered, so the scavenge would never take it")
-	}
-}
-
 // TestCloseQuietlyVisitsEveryStage is the close at exit: an earlier drag's
 // folder is no less this run's to decide about than the last one's. The
 // two decisions differ, and both have to be taken.
@@ -1240,13 +1099,13 @@ func TestCloseQuietlyVisitsEveryStage(t *testing.T) {
 	mk := func(name string, handOut bool) *stage {
 		t.Helper()
 		items := []Item{{Name: name, Size: 8}}
-		s, err := newStage(Options{Root: parent, Items: items, Extract: writeItems(items)}, time.Hour)
+		s, err := newStage(Options{Root: parent, Items: items, Extract: writeItems(items)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(s.finish)
 		if handOut {
-			s.arm(false)
+			s.arm(false, otherWindow)
 			if _, ok := s.requestPaths(); !ok {
 				t.Fatal("the extraction was refused")
 			}

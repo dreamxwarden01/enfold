@@ -843,8 +843,17 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `OleInitialize` itself, Wails never does — starts one native OLE drag (`DoDragDrop`) with a
   pure-Go, cgo-free data object, agile (the free-threaded marshaler aggregated, `IAgileObject`
   answered) so that what runs inside the drop's `GetData` runs on Explorer's worker thread and
-  never the WebView's. It offers `CF_HDROP` by **delayed rendering** and, beside it,
-  `CFSTR_PREFERREDDROPEFFECT` = *move* with both *copy* and *move* allowed: the staged copy is
+  never the WebView's. It offers `CF_HDROP` by **delayed rendering** and, beside it, `CFSTR_PREFERREDDROPEFFECT` =
+  *move* with both *copy* and *move* allowed — and **not** `IDataObjectAsyncCapability` (ruled
+  2026-09-11 after the first real drag, WinRAR's model): without it Windows requires the
+  target to finish the drop *inside* `Drop` — Explorer's conflict dialog, its *Replace*, *Skip*
+  or cancel, and the copy itself all happen before `DoDragDrop` returns, and the return carries
+  the real effect; with it Explorer had copied in the background, never called `EndOperation`,
+  and after a *Skip* neither read, nor moved, nor let the object go, so nothing could say the
+  drop was over. While `DoDragDrop` runs, Enfold's main thread sits in its modal loop: the
+  WebView keeps painting and the strip keeps moving, Explorer's own dialog stays in front, and
+  a bound call that needs the main thread waits — the held window WinRAR shows, and the price
+  of knowing: the staged copy is
   disposable, so a drop on the same volume — the desktop, from `%LOCALAPPDATA%` — is one rename,
   no second pass over the bytes and nothing left to clean, and a drop on another volume is
   Explorer's copy followed by Explorer's own deletion of the staging; **a move never touches the
@@ -862,24 +871,36 @@ sentinel of every package with a catch-all `internal` — and services are regis
   core's `Extract` with `replace` into the folder — **and that phase is visible** (ruled
   2026-09-11 after the measured 5 GiB drop: Explorer shows nothing until the request returns,
   and a user who sees nothing move thinks the program is dead — the reason WinRAR and 7-Zip
-  put a progress window on the screen at that moment): the page's operation strip says *Preparing 2 files*, moves by bytes, and offers *Cancel*; the
-  window never freezes, since the request runs on Explorer's thread (the object being agile)
+  put a progress window on the screen at that moment): the page's operation strip is there from the moment the drag starts (ruled 2026-09-11, after
+  a first real drag whose staging was over before the strip appeared): its label is **Extracting N items** throughout — the hover shows the label alone, the staging
+  shows a bar that moves by bytes with *Cancel*, and when the staging is done the bar simply
+  stays full, with no *Cancel* and no new words: from then on Explorer's own window is in front
+  and the only control there is — so a fast staging is a change inside a strip already on the
+  screen, never a strip that flashes; the window never freezes, since the request runs on Explorer's thread (the object being agile)
   and the WebView's stays free; a cancel fails the request and Explorer abandons the drop.
-  When the request has returned and Explorer has the paths, the strip changes to a second
-  phase with no bar and no *Cancel* — **Awaiting Windows Explorer** — which clears when the staged items — files and folders alike — are gone (a same-volume move),
-  when Explorer says it has finished (`EndOperation`, should it call it), when the files have
-  been read and then left alone for five seconds, or when the target has let the data object
-  go and five seconds pass with no read (a consumer that keeps the paths for a later read —
-  a browser's upload box — would otherwise hold the strip for ever; the folder stays for it);
-  whatever happens to the folder after that is the scavenge's business, not the strip's — and a request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
+  When the request has returned and Explorer has the paths, the strip stays at its full bar
+  exactly as long as `DoDragDrop` has not returned, and is taken down when it does (ruled
+  2026-09-11: "the bar is ours — the staging — then it holds at 100 % while Explorer copies;
+  whatever the user does, they do in Explorer's window; when Explorer is done we release the
+  window and destroy the banner"): the drop is then over, whatever the
+  user answered Explorer — *Replace*, *Skip*, a cancel half-way — and the result says which:
+  *moved* (the effect was *move* and the items are gone), *copied* (*copy*), *cancelled* (no
+  effect: Escape, a release over nothing, *Skip*, Explorer's cancel), *refused* (the target
+  never asked for the paths), *self-drop*, or *failed* (the extraction). The folder's fate
+  follows: the button's release recorded the class of the top-level window under the cursor,
+  and when it was Explorer's or the desktop's (`CabinetWClass`, `ExploreWClass`, `Progman`,
+  `WorkerW`) the folder is deleted the moment `DoDragDrop` returns — Explorer has finished
+  with the paths — as it is when a *move* took every item; for any other target the folder
+  stays manifested for the scavenge, since a consumer may read the paths late (a browser's
+  upload box); a drag that wrote nothing deletes at once. No watch, no idle clock: what the
+  asynchronous protocol had made a guess is a return value — and a request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
   rather than hand out half-written files, which 7-Zip's does not. A target that needs the
   files to exist at hover time (Sticky Notes refuses a path that is not there) is the
   measurement the prototype makes before the rule is final; if such targets matter, a small
-  selection may be written at the first request. **When the folder goes**: at once when the
-  drag ends with nothing handed out (Escape, a refused drop); at `EndOperation` when the target
-  negotiated the asynchronous protocol (that ends *its* transfer — not every later use of the
-  paths by whatever the target was); otherwise the folder outlives the drop and even the
-  process, because consumers open the paths late (a browser reads a dropped file when the
+  selection may be written at the first request. **When the folder goes**: at once when the drag ends with nothing written (Escape, a
+  refused drop, a failed extraction), at `DoDragDrop`'s return when the release was over an
+  Explorer window or the desktop or a move took every item (above); otherwise the folder
+  outlives the drop and even the process, because consumers open the paths late (a browser reads a dropped file when the
   upload starts, a configuration dialog kept 7-Zip's paths for minutes, FileZilla and VMware
   broke on early deletion) — and the **scavenge** removes what is ours: at launch and every ten
   minutes while running, every manifested folder whose state is not live and whose age is
@@ -890,9 +911,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
   on: it needs an administrator, and Chromium's use of it is an attempt, not a guarantee. The
   explicit *Extract…* stays for what staging serves badly — a large transfer to a network
   share, the whole archive (*Extract all*). Everything is logged per drag: the formats asked
-  for and when, the extraction's start, end, result and bytes, `DoDragDrop`'s result and
-  effect, the asynchronous negotiation and its end, every deletion attempt with the Windows
-  error, never a file name. `Extract` with the all-zero id extracts everything from the root straight into the
+  for and when, the extraction's start, end, result and bytes, `DoDragDrop`'s result and effect, the class of the window under the release, every deletion
+  attempt with the Windows error, never a file name. `Extract` with the all-zero id extracts everything from the root straight into the
   destination and is greyed while `ArchiveStat.Records` is zero (live files and folders
   together; the file count alone cannot say whether the tree holds anything). `PreviewURL(id,
   fileID)`, `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over

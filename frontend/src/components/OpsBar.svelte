@@ -7,13 +7,16 @@
   // aborts its transaction and publishes nothing. The phase stands beside
   // the name only where it says something the name does not (lib/ops.ts).
   // There is no pending bar, no Save and no Discard: every operation
-  // commits at its end. A drag out of the window is here in two phases
-  // (APP.md §3): *Preparing 2 files* by bytes with *Cancel* while the
-  // drop's request runs the extraction, then *Awaiting Windows Explorer*
-  // with no bar and no Cancel; nothing during the hover.
+  // commits at its end. A drag out of the window is on the strip from the
+  // moment the drag starts, under one label — *Extracting 2 items* (APP.md
+  // §3, ruled 2026-09-11): the label alone during the hover, the byte bar
+  // with *Cancel* while the drop's request runs the extraction, and then
+  // that same bar standing full, with nothing to cancel, for as long as
+  // Explorer is inside its own Drop — its window is in front by then — until
+  // DoDragDrop returns, the operation ends and the strip goes.
   import { Archive, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { cancellable, hasBar, opLabel, opPhase, stripShows } from "../lib/ops";
+  import { cancellable, hasBar, opLabel, opPhase, stripCount } from "../lib/ops";
   import { codeText } from "../lib/strings";
   import { bytes } from "../lib/format";
 
@@ -25,14 +28,16 @@
     }
   }
 
-  const shown = $derived(store.runningOps.filter((o) => stripShows(o.kind, o.phase)));
+  // Every running operation is on the strip, from the moment it begins:
+  // nothing is held back any more, the drag out's hover included.
+  const shown = $derived(store.runningOps);
 </script>
 
 {#if shown.length > 0}
   <div class="ops">
     {#each shown as o (o.id)}
       <div class="op">
-        <span class="opname">{opLabel(o.kind, o.items, o.phase)}</span>
+        <span class="opname">{opLabel(o.kind, stripCount(o), o.phase)}</span>
         {#if opPhase(o.phase)}<span class="opphase">{opPhase(o.phase)}</span>{/if}
         {#if hasBar(o.kind, o.phase)}
           <progress value={o.total > 0 ? o.done : undefined} max={o.total > 0 ? o.total : undefined}></progress>

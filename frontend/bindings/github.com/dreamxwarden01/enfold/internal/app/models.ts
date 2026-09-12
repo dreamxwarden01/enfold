@@ -770,6 +770,17 @@ export interface OpView {
      * a count of one is singular wherever the page counts (APP.md §3).
      */
     "items": number;
+
+    /**
+     * DragItems is what a drag out carries: the records the gesture names,
+     * files and folders alike, which is what the strip counts for it —
+     * "Extracting 3 items" through all three of its phases (APP.md §3,
+     * ruled 2026-09-11 after the first real drag). It is not Items: a
+     * folder dragged out is one item and however many files the extraction
+     * writes beneath it, and the strip's bar is still those files' bytes.
+     * Zero for every other kind.
+     */
+    "dragItems": number;
     "phase": string;
     "startedAt": number;
     "finished": boolean;
@@ -798,13 +809,19 @@ export interface OpView {
 
     /**
      * DragResult is how a drag out ended, on a finished dragout and nothing
-     * else (APP.md §3, dragout.go): self_drop — the button came up over
-     * Enfold's own window, nothing was extracted and the page performs the
-     * Move of the ids it kept in flight; cancelled, refused, moved, ended,
-     * idle or failed for the drag out proper. A dragout's Phase is dragging
+     * else (APP.md §3, dragout.go). The drop is synchronous — the data
+     * object offers no IDataObjectAsyncCapability, so the target must finish
+     * inside Drop — and DoDragDrop's return says which of six it was:
+     * self_drop, the button came up over Enfold's own window, nothing was
+     * extracted and the page performs the Move of the ids it kept in flight;
+     * moved, the effect was move and the staged items are gone; copied, the
+     * effect was copy; cancelled, no effect at all — Escape, a release over
+     * nothing, Explorer's Skip or its dialog cancelled, all of them a drop
+     * that is over; refused, the target never asked for the paths; failed,
+     * the extraction or the drag itself. A dragout's Phase is dragging
      * during the hover, preparing while the drop's request runs the
-     * extraction — Items and Total say what — and awaiting, with no Total,
-     * once Explorer has the paths.
+     * extraction — Items and Total say what it writes — and awaiting, with
+     * Done at Total, from the extraction's end until DoDragDrop returns.
      */
     "dragResult"?: string;
 }

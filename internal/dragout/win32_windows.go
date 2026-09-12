@@ -62,6 +62,7 @@ var (
 	procGetCursorPos           = moduser32.NewProc("GetCursorPos")
 	procWindowFromPoint        = moduser32.NewProc("WindowFromPoint")
 	procGetAncestor            = moduser32.NewProc("GetAncestor")
+	procGetClassName           = moduser32.NewProc("GetClassNameW")
 
 	procGlobalAlloc   = modkernel32.NewProc("GlobalAlloc")
 	procGlobalFree    = modkernel32.NewProc("GlobalFree")
@@ -243,6 +244,24 @@ var cursorRootWindow = func() uintptr {
 		return h
 	}
 	return root
+}
+
+// windowClassName is GetClassNameW over a window handle: the class, never
+// the title — a window's title is a document's name, and no file name is
+// ever logged (APP.md §3). "The maximum length for lpszClassName is 256"
+// (RegisterClass), so 257 units hold any class name and its terminator.
+// Empty for a handle that is gone or was never one; a variable, so that a
+// test of the drop source can put a class there.
+var windowClassName = func(hwnd uintptr) string {
+	if hwnd == 0 {
+		return ""
+	}
+	var buf [257]uint16
+	n, _, _ := procGetClassName.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return windows.UTF16ToString(buf[:n])
 }
 
 // hrName renders an HRESULT the way the SDK names it, so that a log line

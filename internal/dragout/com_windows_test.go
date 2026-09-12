@@ -238,7 +238,7 @@ func TestAddRefReleaseCallbacksReportCounts(t *testing.T) {
 // process-local and asks nothing of the shell; no window, no OLE, no drag.
 // The marshaler is the fake's, so that the object is agile without an
 // apartment.
-func newTestDataObject(t *testing.T, items []Item) (*comObject, *dataObject, *stage, uintptr) {
+func newTestDataObject(t *testing.T, items []Item) (*comObject, *dataObject, *stage) {
 	t.Helper()
 	installFakeMarshaler(t)
 	s, _, _ := newTestStage(t, items, nil)
@@ -250,11 +250,13 @@ func newTestDataObject(t *testing.T, items []Item) (*comObject, *dataObject, *st
 	if d.self != o {
 		t.Fatalf("the data object does not know its own comObject")
 	}
-	async := o.ifaceAddr("IDataObjectAsyncCapability")
-	if async == 0 {
-		t.Fatalf("the data object has no IDataObjectAsyncCapability cell")
+	// IDataObject alone: the asynchronous capability is deliberately not
+	// offered, which is what obliges the target to finish inside Drop
+	// (APP.md §3, TestAsyncCapabilityIsNotOffered).
+	if addr := o.ifaceAddr("IDataObjectAsyncCapability"); addr != 0 {
+		t.Fatalf("the data object still has an IDataObjectAsyncCapability cell at 0x%X", addr)
 	}
-	return o, d, s, async
+	return o, d, s
 }
 
 // readHGlobal copies a rendered medium out and frees it, as the receiver
@@ -281,7 +283,7 @@ func readHGlobal(t *testing.T, medium stgMedium) []byte {
 
 func TestHDropDataObjectFormats(t *testing.T) {
 	isolateStages(t)
-	o, d, s, _ := newTestDataObject(t, []Item{{Name: "f.bin", Size: 128}})
+	o, d, s := newTestDataObject(t, []Item{{Name: "f.bin", Size: 128}})
 	defer o.release()
 
 	if len(d.formats) != 2 {
@@ -392,218 +394,35 @@ func TestHDropDataObjectFormats(t *testing.T) {
 	}
 }
 
-// TestAsyncSelfReferenceLedger walks every path through the
-// IDataObjectAsyncCapability handshake and checks the one thing all of them
-// share: the reference SetAsyncMode is documented to take is given back
-// exactly once. Both ways of getting it wrong are silent: taken and never
-// given back leaves the object alive forever, given back without having
-// been taken frees it while Explorer is still reading from it.
-func TestAsyncSelfReferenceLedger(t *testing.T) {
+// TestAsyncCapabilityIsNotOffered is the omission the whole end-of-drag
+// rule rests on (APP.md §3, ruled 2026-09-11): the object does not offer
+// IDataObjectAsyncCapability, so Windows obliges the target to finish the
+// drop inside Drop and DoDragDrop's return is the end of the drag. Explorer
+// asks for this interface by IID, and the answer has to be a plain
+// E_NOINTERFACE — not a cell, not a stub.
+func TestAsyncCapabilityIsNotOffered(t *testing.T) {
 	isolateStages(t)
-	setAsync := func(t *testing.T, async uintptr, v uintptr) {
-		t.Helper()
-		if hr := dataSetAsyncMode(async, v); hr != sOK {
-			t.Fatalf("SetAsyncMode(0x%X) -> %s", v, hrName(hr))
-		}
+	o, _, _ := newTestDataObject(t, []Item{{Name: "sync.bin", Size: 8}})
+	defer o.release()
+
+	ppv := uintptr(0xDEAD)
+	before := o.refs.Load()
+	if hr := comQueryInterface(o.unknown(), &iidIDataObjectAsyncCapability, &ppv); hr != eNoInterface {
+		t.Fatalf("QI(IDataObjectAsyncCapability) -> %s, want E_NOINTERFACE", hrName(hr))
 	}
-	inOperation := func(t *testing.T, async uintptr) bool {
-		t.Helper()
-		var v uint32
-		if hr := dataInOperation(async, &v); hr != sOK {
-			t.Fatalf("InOperation -> %s", hrName(hr))
-		}
-		return v != 0
+	if ppv != 0 {
+		t.Fatalf("a refused QueryInterface left *ppv = 0x%X", ppv)
 	}
-	endOperation := func(t *testing.T, async uintptr) {
-		t.Helper()
-		if hr := dataEndOperation(async, sOK, 0, dropEffectCopy); hr != sOK {
-			t.Fatalf("EndOperation -> %s", hrName(hr))
-		}
+	if o.refs.Load() != before {
+		t.Fatalf("a refused QueryInterface changed the count: %d, was %d", o.refs.Load(), before)
 	}
-	refs := func(t *testing.T, o *comObject, want int32, when string) {
-		t.Helper()
-		if got := o.refs.Load(); got != want {
-			t.Fatalf("%s: refcount %d, want %d", when, got, want)
-		}
+	// The old IAsyncOperation is the same IID, so there is nothing else to
+	// ask for; and the object keeps the interfaces it does have.
+	var ok uintptr
+	if hr := comQueryInterface(o.unknown(), &iidIDataObject, &ok); hr != sOK || ok == 0 {
+		t.Fatalf("QI(IDataObject) -> %s", hrName(hr))
 	}
-	for _, tc := range []struct {
-		name string
-		run  func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr)
-	}{
-		{"cancelled drag", func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr) {
-			setAsync(t, async, variantTrue)
-			refs(t, o, 2, "after SetAsyncMode(TRUE)")
-			if inOperation(t, async) {
-				t.Fatal("InOperation is true with no StartOperation")
-			}
-			d.finishSync()
-			refs(t, o, 1, "after finishSync")
-			d.finishSync()
-			refs(t, o, 1, "after a second finishSync")
-		}},
-		{"asynchronous drop", func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr) {
-			setAsync(t, async, variantTrue)
-			var v uint32
-			if hr := dataGetAsyncMode(async, &v); hr != sOK || v == 0 {
-				t.Fatalf("GetAsyncMode -> %s, %d", hrName(hr), v)
-			}
-			// The target takes a reference of its own in Drop, as it must
-			// to have anything to call EndOperation on later.
-			comAddRef(async)
-			if hr := dataStartOperation(async, 0); hr != sOK {
-				t.Fatalf("StartOperation -> %s", hrName(hr))
-			}
-			if !inOperation(t, async) || !d.inOperation() {
-				t.Fatal("InOperation is false after StartOperation")
-			}
-			s.mu.Lock()
-			asyncOp := s.asyncOp
-			s.mu.Unlock()
-			if !asyncOp {
-				t.Fatal("the stage was not told the protocol was negotiated")
-			}
-			// Step 4 of the source procedure: release the data object. The
-			// object must survive it on the target's and the negotiation's
-			// references.
-			if n := o.release(); n != 2 {
-				t.Fatalf("the source's release left %d references, want 2", n)
-			}
-			if _, ok := dataObjectOf(async); !ok {
-				t.Fatal("the object died while the target was still extracting")
-			}
-			endOperation(t, async)
-			refs(t, o, 1, "after EndOperation: the target's own reference is left")
-			if _, ok := dataObjectOf(async); !ok {
-				t.Fatal("the object died under the target's own reference")
-			}
-			comRelease(async)
-			refs(t, o, 0, "after the target's release")
-			if _, ok := dataObjectOf(async); ok {
-				t.Fatal("the object outlived the target's release")
-			}
-			s.mu.Lock()
-			endOp, released := s.endOp, s.released
-			s.mu.Unlock()
-			if !endOp || !released {
-				t.Fatalf("the stage heard endOp=%v released=%v", endOp, released)
-			}
-		}},
-		{"the target lets go without EndOperation", func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr) {
-			// Explorer's sequence for a CF_HDROP source (measured
-			// 2026-09-11): it negotiates the protocol, takes its references,
-			// asks after DoDragDrop has returned, and never calls
-			// EndOperation. The reference SetAsyncMode took would keep the
-			// object — and the stage's Awaiting phase — alive for ever
-			// unless the target's own references reaching zero gives it
-			// back.
-			setAsync(t, async, variantTrue)
-			comAddRef(async)
-			comAddRef(async)
-			dataStartOperation(async, 0)
-			refs(t, o, 4, "ours, the negotiation's and the target's two")
-			if n := o.release(); n != 3 {
-				t.Fatalf("the source's release left %d references, want 3", n)
-			}
-			if n := comRelease(async); n != 2 {
-				t.Fatalf("the target's first release -> %d, want 2", n)
-			}
-			if _, ok := dataObjectOf(async); !ok {
-				t.Fatal("the object died while the target still held it")
-			}
-			s.mu.Lock()
-			released := s.released
-			s.mu.Unlock()
-			if released {
-				t.Fatal("the stage heard a release while the target still held the object")
-			}
-			if n := comRelease(async); n != 1 {
-				// The count the target is told is what was left when its
-				// release landed; the self-reference goes in the same call.
-				t.Fatalf("the target's last release -> %d, want 1", n)
-			}
-			refs(t, o, 0, "after the target's last release")
-			if _, ok := dataObjectOf(async); ok {
-				t.Fatal("the object outlived the target: the self-reference was never given back")
-			}
-			d.mu.Lock()
-			selfRef := d.selfRef
-			d.mu.Unlock()
-			if selfRef {
-				t.Fatal("the ledger still says the self-reference is held")
-			}
-			s.mu.Lock()
-			endOp, released := s.endOp, s.released
-			s.mu.Unlock()
-			if endOp || !released {
-				t.Fatalf("the stage heard endOp=%v released=%v, want false/true", endOp, released)
-			}
-			// A late EndOperation on the pointer the target released is a
-			// call on a tombstone: refused, and nothing given back twice.
-			if hr := dataEndOperation(async, sOK, 0, dropEffectCopy); hr != eUnexpected {
-				t.Fatalf("EndOperation after the release -> %s, want E_UNEXPECTED", hrName(hr))
-			}
-			refs(t, o, 0, "after a late EndOperation")
-		}},
-		{"the source's own release with nothing else holding on", func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr) {
-			// A drag that never reached a drop, with no finishSync: the
-			// self-reference alone must not keep the object alive once the
-			// last reference from outside — ours — has gone.
-			setAsync(t, async, variantTrue)
-			refs(t, o, 2, "after SetAsyncMode(TRUE)")
-			if n := o.release(); n != 1 {
-				t.Fatalf("the source's release -> %d, want 1 (the self-reference, given back in the same call)", n)
-			}
-			refs(t, o, 0, "after the source's release")
-			if _, ok := dataObjectOf(async); ok {
-				t.Fatal("the object outlived its last outside reference")
-			}
-			s.mu.Lock()
-			released := s.released
-			s.mu.Unlock()
-			if !released {
-				t.Fatal("the stage was not told the object had gone")
-			}
-		}},
-		{"EndOperation before InOperation", func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr) {
-			setAsync(t, async, variantTrue)
-			dataStartOperation(async, 0)
-			refs(t, o, 2, "after StartOperation")
-			endOperation(t, async)
-			refs(t, o, 1, "after EndOperation")
-			d.finishSync()
-			refs(t, o, 1, "after finishSync following EndOperation")
-			endOperation(t, async)
-			refs(t, o, 1, "after a second EndOperation")
-		}},
-		{"SetAsyncMode(TRUE) twice, then off", func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr) {
-			setAsync(t, async, variantTrue)
-			setAsync(t, async, variantTrue)
-			refs(t, o, 2, "after two SetAsyncMode(TRUE) calls")
-			setAsync(t, async, variantFalse)
-			refs(t, o, 2, "after SetAsyncMode(FALSE): nothing is given back there")
-			d.finishSync()
-			refs(t, o, 1, "after finishSync")
-		}},
-		{"no async mode", func(t *testing.T, o *comObject, d *dataObject, s *stage, async uintptr) {
-			d.finishSync()
-			refs(t, o, 1, "after finishSync with no SetAsyncMode")
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			before := comRegistrySize()
-			o, d, s, async := newTestDataObject(t, []Item{{Name: "async.bin", Size: 8}})
-			refs(t, o, 1, "a new object")
-			tc.run(t, o, d, s, async)
-			if n := o.refs.Load(); n > 0 {
-				if r := o.release(); r != 0 {
-					t.Fatalf("the final release left %d references", r)
-				}
-			}
-			if got := comRegistrySize(); got != before {
-				t.Fatalf("%d live cells after the drag, want %d", got, before)
-			}
-		})
-	}
+	o.release()
 }
 
 // TestFormatRequestsAreTraced is APP.md §3's last sentence: every GetData
@@ -617,7 +436,7 @@ func TestFormatRequestsAreTraced(t *testing.T) {
 	const name = "secret-plans.bin"
 	items := []Item{{Name: name, Size: 8}}
 	// One log for the stage and the object: the trace is one drag's.
-	s, err := newStage(Options{Root: t.TempDir(), Items: items, Extract: writeItems(items), Log: lg.printf}, time.Hour)
+	s, err := newStage(Options{Root: t.TempDir(), Items: items, Extract: writeItems(items), Log: lg.printf})
 	if err != nil {
 		t.Fatalf("newStage: %v", err)
 	}
@@ -639,7 +458,7 @@ func TestFormatRequestsAreTraced(t *testing.T) {
 		t.Fatalf("GetData(CF_HDROP) during the hover -> %s", hrName(hr))
 	}
 	readHGlobal(t, medium)
-	s.arm(false)
+	s.arm(false, "CabinetWClass")
 	medium = stgMedium{}
 	if hr := dataGetData(this, &hdrop, &medium); hr != sOK {
 		t.Fatalf("GetData(CF_HDROP) after the release -> %s", hrName(hr))
@@ -730,8 +549,8 @@ func TestSetDataReadsOnlyFeedbackMedia(t *testing.T) {
 // IUnknown still works, and has to: the target has to be able to let go.
 func TestRevokedDataObjectFailsGetData(t *testing.T) {
 	isolateStages(t)
-	o, _, s, _ := newTestDataObject(t, []Item{{Name: "held.bin", Size: 8}})
-	s.arm(false)
+	o, _, s := newTestDataObject(t, []Item{{Name: "held.bin", Size: 8}})
+	s.arm(false, "CabinetWClass")
 	fe := formatEtc{cfFormat: cfHDrop, dwAspect: dvAspectContent, lindex: -1, tymed: tymedHGlobal}
 	var medium stgMedium
 	if hr := dataGetData(o.unknown(), &fe, &medium); hr != sOK {
@@ -769,18 +588,28 @@ func TestRevokedDataObjectFailsGetData(t *testing.T) {
 
 // TestDropSourceTellsASelfDropApart: the drop source arms the stage when the
 // button comes up, as a self-drop when the window under the cursor is the
-// caller's own, and answers Escape and Cancel with DRAGDROP_S_CANCEL.
+// caller's own, and answers Escape and Cancel with DRAGDROP_S_CANCEL. The
+// release is also where the target's window class is recorded, which is
+// what the cleanup turns on (APP.md §3, ruled 2026-09-11).
 func TestDropSourceTellsASelfDropApart(t *testing.T) {
 	isolateStages(t)
 	prev := cursorRootWindow
-	t.Cleanup(func() { cursorRootWindow = prev })
+	prevClass := windowClassName
+	t.Cleanup(func() { cursorRootWindow, windowClassName = prev, prevClass })
 	const ours, theirs = uintptr(0x1000), uintptr(0x2000)
+	windowClassName = func(hwnd uintptr) string {
+		if hwnd == theirs {
+			return "CabinetWClass"
+		}
+		return ""
+	}
 
 	for _, tc := range []struct {
 		name  string
 		under uintptr
 		self  bool
-	}{{"over the desktop", theirs, false}, {"over our own window", ours, true}} {
+		class string
+	}{{"over an Explorer window", theirs, false, "CabinetWClass"}, {"over our own window", ours, true, ""}} {
 		t.Run(tc.name, func(t *testing.T) {
 			cursorRootWindow = func() uintptr { return tc.under }
 			s, _, _ := newTestStage(t, []Item{{Name: "d.bin"}}, nil)
@@ -796,10 +625,13 @@ func TestDropSourceTellsASelfDropApart(t *testing.T) {
 				t.Fatalf("with the button up -> %s, want DRAGDROP_S_DROP", hrName(hr))
 			}
 			s.mu.Lock()
-			armed, self := s.armed, s.selfDrop
+			armed, self, class := s.armed, s.selfDrop, s.targetClass
 			s.mu.Unlock()
 			if !armed || self != tc.self {
 				t.Fatalf("armed=%v selfDrop=%v, want true/%v", armed, self, tc.self)
+			}
+			if class != tc.class {
+				t.Fatalf("the release recorded the class %q, want %q", class, tc.class)
 			}
 		})
 	}
@@ -1170,10 +1002,6 @@ var sdkVtableOrder = map[string][]string{
 		"GetData", "GetDataHere", "QueryGetData", "GetCanonicalFormatEtc",
 		"SetData", "EnumFormatEtc", "DAdvise", "DUnadvise", "EnumDAdvise",
 	},
-	"iDataObjectAsyncCapabilityVtbl": {
-		"QueryInterface", "AddRef", "Release",
-		"SetAsyncMode", "GetAsyncMode", "StartOperation", "InOperation", "EndOperation",
-	},
 	"iEnumFORMATETCVtbl": {
 		"QueryInterface", "AddRef", "Release",
 		"Next", "Skip", "Reset", "Clone",
@@ -1193,7 +1021,6 @@ func TestVtableMethodOrder(t *testing.T) {
 	types := []reflect.Type{
 		reflect.TypeOf(iUnknownVtbl{}),
 		reflect.TypeOf(iDataObjectVtbl{}),
-		reflect.TypeOf(iDataObjectAsyncCapabilityVtbl{}),
 		reflect.TypeOf(iEnumFORMATETCVtbl{}),
 		reflect.TypeOf(iDropSourceVtbl{}),
 	}
@@ -1230,7 +1057,7 @@ func TestVtableMethodOrder(t *testing.T) {
 	}
 	// Every installed vtable holds a real callback in every slot, and the
 	// guard that makes that so refuses a nil one.
-	for _, v := range []uintptr{vtblIDataObject, vtblIDataObjectAsyncCapability, vtblIDropSource, vtblIEnumFORMATETC()} {
+	for _, v := range []uintptr{vtblIDataObject, vtblIDropSource, vtblIEnumFORMATETC()} {
 		if v == 0 {
 			t.Error("a vtable was never built")
 		}

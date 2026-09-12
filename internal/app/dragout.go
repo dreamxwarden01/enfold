@@ -153,6 +153,9 @@ type DragOut struct {
 	drag  DragHandle
 	total uint64
 	files int
+	// records is what the gesture named — the selected records themselves,
+	// folders included — which is what the strip counts (OpView.DragItems).
+	records int
 
 	mu      sync.Mutex
 	results []FileOutcome
@@ -196,10 +199,16 @@ func (c *Core) BeginDragOut(archiveID string, recordIDs []string, window uintptr
 	}
 	d := &DragOut{c: c, oa: oa, items: items, done: make(chan struct{}), runOver: make(chan struct{})}
 	for _, it := range items {
+		if it.depth == 0 {
+			// What the gesture named, folders included: the strip says
+			// "Extracting 2 items" from the moment the drag starts and
+			// through all three phases (APP.md §3, OpView.DragItems).
+			d.records++
+		}
 		if !it.isDir {
-			// The plan is known before the drag begins, so the strip can
-			// say "Preparing 2 files" the moment the drop's request runs
-			// (APP.md §3, OpView.Items); the folders are not files.
+			// The files the extraction writes and their bytes: the bar's
+			// measure while preparing (OpView.Items, OpView.Total); the
+			// folders are not files.
 			d.files++
 			d.total += it.size
 		}
@@ -225,6 +234,7 @@ func (c *Core) BeginDragOut(archiveID string, recordIDs []string, window uintptr
 	d.opID = c.startOpWith("dragout", archiveID, func(o *op) {
 		o.phase.Store("dragging")
 		o.items.Store(int64(d.files))
+		o.dragItems.Store(int64(d.records))
 		d.o = o
 	}, d.wait)
 	return d, nil
@@ -320,9 +330,11 @@ func (d *DragOut) extract(dragCtx context.Context, dir string) error {
 }
 
 // onPhase is Options.OnPhase, from whichever thread the drag reports on:
-// preparing puts the bar on the strip with the plan's bytes, awaiting takes
-// it off — no Total, no Cancel — and Done ends the operation with the
-// reason as its DragResult.
+// preparing puts the bar on the strip with the plan's bytes, awaiting
+// leaves that bar standing full — the staging is done and what Explorer
+// does inside its own Drop is not ours to measure, and there is no Cancel
+// from here (APP.md §3, ruled 2026-09-11) — and Done ends the operation
+// with the reason as its DragResult.
 func (d *DragOut) onPhase(p dragout.Phase) {
 	switch p.Step {
 	case dragout.Preparing:
@@ -331,7 +343,7 @@ func (d *DragOut) onPhase(p dragout.Phase) {
 		d.mu.Lock()
 		d.awaiting = true
 		d.mu.Unlock()
-		d.o.progress(0, 0, "awaiting")
+		d.o.progress(d.total, d.total, "awaiting")
 	case dragout.Done:
 		d.mu.Lock()
 		d.reason = p.Reason

@@ -471,6 +471,15 @@ func (s *shell) beginDrag(o dragout.Options) (app.DragHandle, error) {
 // on its own goroutine, blocks until DoDragDrop returns. The window's HWND
 // is what the drop source compares with the window under the cursor at the
 // button's release to tell a self-drop apart.
+//
+// The drop is synchronous (ruled 2026-09-11, WinRAR's model): the data
+// object offers no IDataObjectAsyncCapability, so the target has to finish
+// inside its Drop, and the main thread sits in DoDragDrop's modal loop for
+// as long as Explorer's copy and its conflict dialog take. That is the
+// held window WinRAR shows, and the price of knowing the drop is over: the
+// WebView goes on painting and the strip goes on moving, since neither is
+// the main thread's, Explorer's own window stays in front, and a bound
+// call that needs the main thread waits until the drag ends.
 func (s *shell) dragOut(archiveID string, recordIDs []string) (app.DragOutResult, *app.Error) {
 	var hwnd uintptr
 	if w := s.window(); w != nil {

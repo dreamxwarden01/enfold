@@ -3837,3 +3837,39 @@ concluded the opposite; the module says otherwise. The main goroutine is the mai
 (Wails locks it at package init), so `InitOLE` is called directly. Recorded as the kind of
 claim to check by running, not by reading, when the run is allowed.
 
+**The first real drag** (2026-09-11, the user, a video from an archive onto the desktop): the
+file arrived, but the *Preparing* bar was never seen — the staging was over before the strip
+had appeared — and, having answered *Skip* to Explorer's conflict dialog on a second drop, the
+user found the operation hung at *Awaiting Windows Explorer*: Explorer neither read nor moved
+the staged file, never ended the asynchronous operation and never let the data object go, so
+none of the four ways to clear could fire. Two rules (APP §3): the strip is on the screen from
+the drag's start, labelled *Extracting N items* throughout — label alone during the hover, the
+byte bar with *Cancel* during the staging, the bar replaced by *Awaiting Windows Explorer* at
+its end (the user's shape: "first the label, then the bar, then swap the bar for Awaiting");
+and a fifth way to clear: thirty seconds after the drop with the files never opened and the
+object still held is *idle*, the folder left to the scavenge.
+
+**The synchronous drop** (2026-09-11, the user's question after the hung *Skip*: "so we
+cannot know whether Explorer finished? Skip should count as finished. WinRAR holds its own
+window while Explorer copies, keeps Explorer's dialog in front, and treats the extraction as
+done whichever the user chose — replace, skip, or a cancel half-way — then releases the
+window"). That is Windows' own rule, and the asynchronous protocol was the mistake: a source
+that offers `IDataObjectAsyncCapability` lets the target copy in the background after `Drop`
+returns, and Explorer, having taken that offer, never called `EndOperation` and after a *Skip*
+neither read, moved nor let the object go — hence four heuristics and then a fifth to guess
+when a drop was over. A source that does not offer it obliges the target to finish inside
+`Drop`: `DoDragDrop` returns when Explorer has copied, or the user has answered its dialog, or
+cancelled, with the real effect. So the capability goes; *Awaiting Windows Explorer* is the
+time inside `DoDragDrop` and ends when it returns; the result is *moved*, *copied*,
+*cancelled*, *refused*, *self-drop* or *failed*; the staging folder is deleted at the return
+when the release was over an Explorer window or the desktop (the window class recorded at the
+release) or a move took everything, and kept for the scavenge otherwise; the watch, the idle
+clocks and the release-tracking are gone. The main thread sits in the modal loop meanwhile —
+the WebView paints, the strip moves, Explorer's dialog is in front, a main-thread call waits —
+WinRAR's held window, which the user named the acceptable price. 7-Zip is on the same path:
+its extraction runs inside the outstanding `DoDragDrop`.
+And simpler still, the user's next thought: no *Awaiting Windows Explorer* at all — the bar is
+ours (the staging), it holds at 100 % while Explorer copies, the only control meanwhile is
+Explorer's own window, and when Explorer is done, for whatever reason, the window is released
+and the strip destroyed. APP §3 says so; the words are gone.
+

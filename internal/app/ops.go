@@ -37,14 +37,19 @@ type op struct {
 	// replace or an extract — set once, when the plan is made, and zero
 	// until then and for the kinds that count nothing (APP.md §3).
 	items atomic.Int64
+	// dragItems is what a drag out carries — the records the gesture names,
+	// folders included — which is the count its strip says and not the
+	// files the extraction writes (OpView.DragItems, dragout.go). Zero for
+	// every other kind.
+	dragItems atomic.Int64
 	// returned is what a reclaim gave the file system back — the file's
 	// size before the run less its size after — set as the run ends and
 	// zero for every other kind (OpView.Returned).
 	returned atomic.Uint64
 	phase    atomic.Value // string
 	// dragResult is a drag out's end — self_drop | cancelled | refused |
-	// moved | ended | idle | failed — set as the drag reports it and empty
-	// for every other kind (OpView.DragResult, dragout.go).
+	// moved | copied | failed — set as the drag reports it and empty for
+	// every other kind (OpView.DragResult, dragout.go).
 	dragResult atomic.Value // string
 	// ctx is the operation's own context, cancelled by CancelOp and by the
 	// archive's kill switch; the drag out's extraction runs under it from a
@@ -72,6 +77,7 @@ func (o *op) view() OpView {
 	v := OpView{
 		ID: o.id, Kind: o.kind, ArchiveID: o.archiveID,
 		Done: o.done.Load(), Total: o.total.Load(), Items: int(o.items.Load()),
+		DragItems: int(o.dragItems.Load()),
 		StartedAt: o.startedAt.Unix(), Finished: o.finished, Results: o.results,
 		Policy: o.policy, Destination: o.destination, Returned: o.returned.Load(),
 	}

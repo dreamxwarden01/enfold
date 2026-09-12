@@ -31,8 +31,14 @@ false); Archives.Close is the kill switch and cancels that operation.
 
 The drag out of the window (APP.md 3, ruled 2026-09-10/11) is played as
 far as a browser can play it: Shell.DragOut answers a fake dragout
-operation that hovers, then runs *Preparing N files* by bytes (Cancel
-works), then *Awaiting Windows Explorer*, and ends moved. POST /mock/state
+operation labelled *Extracting N items* throughout - the label alone while
+it hovers, then the byte bar with Cancel while it stages, then that bar
+standing full while the target copies inside its own Drop - and ends moved
+when the fake DoDragDrop returns, which is when the call answers.
+POST /mock/state {"drag": {"skip": true}} is the target answering Skip to
+its own conflict dialog: no effect, and the operation ends cancelled with
+the strip going at once (the drag that hung before the drop was made
+synchronous). POST /mock/state
 {"drag": {"selfDrop": true}} makes the next drag a self-drop - the call
 answers selfDrop with nothing extracted, and the page performs the Move of
 the ids it kept in flight when the WebView's drop lands on a folder row
@@ -186,9 +192,10 @@ state = {
     # the URL is 404 whatever it says (APP.md 2.3, 4).
     "mounted": None,
     "token": "",
-    # The drag out's switches (drag_out): a self-drop, or an extraction
-    # that fails while preparing. Both are read at the next DragOut.
-    "drag": {"selfDrop": False, "fail": ""},
+    # The drag out's switches (drag_out): a self-drop, an extraction that
+    # fails while preparing, or a target that answers Skip. All three are
+    # read at the next DragOut.
+    "drag": {"selfDrop": False, "fail": "", "skip": False},
 }
 
 # Scenes the lock screen cannot reach on its own here (the mock dispatches
@@ -957,21 +964,24 @@ def extract(args):
 #
 # The staged route: one native drag per gesture, the staging folder under
 # %LOCALAPPDATA%\Enfold\drag, the files written by the drop's own request
-# after the button's release - the strip's *Preparing N files* - and then
-# *Awaiting Windows Explorer* until the staged files are gone. The mock has
-# no OLE and no Explorer, so the phases run on a clock.
+# after the button's release - the strip's byte bar - and then that same bar
+# standing full while the target finishes the drop. The drop is synchronous
+# (APP.md 3, ruled 2026-09-11: the data object offers no
+# IDataObjectAsyncCapability, so the target has to finish inside Drop),
+# which here means Shell.DragOut does not answer until the whole thing is
+# over, and the operation ends when it does. The mock has no OLE and no
+# Explorer, so the phases run on a clock.
 
 DRAG_ROOT = "C:\\Users\\me\\AppData\\Local\\Enfold\\drag\\"
 DRAG_HOVER = 1.0       # the hover, before the fake release
 DRAG_PREPARING = 3.0   # the drop's request running the extraction
-DRAG_AWAITING = 2.5    # until the staged files are gone
+DRAG_AWAITING = 2.5    # the target's own copy, inside its Drop
 DRAG_TICK = 0.1        # how often a waiting phase looks for a cancel
 
 # One native drag at a time (APP.md 3 "One gesture"): a second DragOut is
-# drag.busy only while DoDragDrop would still be running - until the first
-# call has returned - and not for as long as its operation awaits Explorer,
-# which is the Go core's Begin/Run contract (the outside review's finding
-# 11 on the mock).
+# drag.busy while DoDragDrop would still be running, which the synchronous
+# drop makes the whole of the drag - the call returns when the target has
+# finished (the Go core's Begin/Run contract).
 drag_running = threading.Lock()
 
 
@@ -1005,14 +1015,18 @@ def drag_plan(ids):
 
 def drag_out(args):
     """Shell.DragOut(archiveID, recordIDs): blocks until DoDragDrop would
-    return - after the preparing phase for a drop Explorer takes, at once
-    for a self-drop - and answers the DragOutResult. The dragout operation
-    it registers is the strip's: "dragging" during the hover (not shown),
-    "preparing" by bytes with Items = the files, "awaiting" with no Total,
-    and op.done with dragResult saying how it ended. An empty selection or
-    the root is params, an id that is not live file.not_found, two
-    records that would take one name at the top file.exists, and a second
-    drag while the first has not returned drag.busy."""
+    return, which under the synchronous drop is when the target has
+    finished - at once for a self-drop - and answers the DragOutResult. The
+    dragout operation it registers is the strip's: "dragging" during the
+    hover, "preparing" by bytes, "awaiting" with the bar full while the
+    target copies, and op.done with dragResult saying how it ended -
+    moved, copied, cancelled, refused, self_drop or failed. DragItems is
+    what the gesture named, folders included, which is what the strip
+    counts ("Extracting 2 items"); Items is the files the extraction
+    writes, which is what the bar measures. An empty selection or the root
+    is params, an id that is not live file.not_found, two records that
+    would take one name at the top file.exists, and a second drag while the
+    first has not returned drag.busy."""
     archive_id, ids = (list(args) + ["", []])[:2]
     if state.get("mounted") != archive_id:
         return Err("archive.not_open")
@@ -1043,11 +1057,13 @@ def run_drag(archive_id, ids):
     folder = DRAG_ROOT + secrets.token_hex(4)
     self_drop = bool(state["drag"].get("selfDrop"))
     fail = state["drag"].get("fail") or ""
+    skip = bool(state["drag"].get("skip"))
 
     state["nextOp"] = state.get("nextOp", 0) + 1
     op_id = "op%d" % state["nextOp"]
     op = {"id": op_id, "kind": "dragout", "archiveId": archive_id, "done": 0, "total": 0,
-          "items": len(files), "phase": "dragging", "startedAt": int(time.time()), "finished": False,
+          "items": len(files), "dragItems": len(ids), "phase": "dragging",
+          "startedAt": int(time.time()), "finished": False,
           "results": [], "returned": 0}
     state["ops"][op_id] = op
     emit("op.progress", op_view(op))
@@ -1105,12 +1121,13 @@ def run_drag(archive_id, ids):
                 return end("failed", fail, out)
             op["done"] = total * i // steps
             emit("op.progress", op_view(op))
-        # Explorer has the paths: DoDragDrop returns and the strip waits.
-        op["phase"], op["total"], op["done"] = "awaiting", 0, 0
+        # The staging is done and the target has the paths: the bar stays
+        # where it is, full, with nothing to cancel, while the target
+        # finishes the drop inside its own Drop (APP.md 3). DoDragDrop has
+        # not returned yet, so neither has the call.
+        op["phase"], op["done"] = "awaiting", total
         emit("op.progress", op_view(op))
         result["extracted"] = True
-        result["effect"] = 2  # DROPEFFECT_MOVE: a same-volume drop is one rename
-        returned.set()
         # A cancel or a Close while awaiting ends the operation there and
         # then as cancelled, like the core: nothing of the drag is left to
         # end - the files are Explorer's - and the strip must not linger
@@ -1121,6 +1138,13 @@ def run_drag(archive_id, ids):
             waited += DRAG_TICK
             if op.get("cancelled"):
                 return end("cancelled", "op.cancelled")
+        if skip:
+            # The user answered Skip to the target's conflict dialog, or
+            # cancelled it: DoDragDrop comes back with DROPEFFECT_NONE and
+            # the drop is over - cancelled, and the strip goes (APP.md 3,
+            # ruled 2026-09-11 after the drag that hung on exactly this).
+            return end("cancelled")
+        result["effect"] = 2  # DROPEFFECT_MOVE: a same-volume drop is one rename
         end("moved", results=[outcome(pl) for pl in plan])
 
     threading.Thread(target=run, daemon=True).start()

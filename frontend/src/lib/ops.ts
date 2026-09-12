@@ -7,21 +7,26 @@ import { dragOutCopy, reclaimedText } from "./strings";
 
 // opLabel is the running operation's name, as the strip says it: the verb
 // and what it is working on — *Adding 3 files*, *Adding 1 file*,
-// *Extracting 12 files* — from OpView's Kind and Items (ruled 2026-09-09:
-// "Adding — adding" said the same word twice). Items is the count the
-// operation planned; it is zero until the plan is made and for every kind
-// that counts nothing, and the bare verb stands until it arrives. There is
-// no "save": nothing is staged between operations any more.
+// *Extracting 12 files* — from OpView's Kind and its count (ruled
+// 2026-09-09: "Adding — adding" said the same word twice). The count is
+// what the operation planned (stripCount); it is zero until the plan is
+// made and for every kind that counts nothing, and the bare verb stands
+// until it arrives. There is no "save": nothing is staged between
+// operations any more.
 //
-// A drag out is named by where it has got to (APP.md §3, ruled
-// 2026-09-11): *Preparing 2 files* while the drop's own request runs the
-// extraction, *Awaiting Windows Explorer* once Explorer has the paths —
-// and, with no phase given, as its toast names it once it has ended.
+// A drag out is named by what it carries and not by where it has got to
+// (APP.md §3, ruled 2026-09-11 after the first real drag, whose staging was
+// over before the strip appeared): *Extracting 2 items* from the moment the
+// drag starts and through all three of its phases — the hover, the staging
+// and the wait on Explorer — so that a fast staging is a change inside a
+// strip already on the screen and never a strip that flashes. Its count is
+// the records the gesture named, folders included (OpView.DragItems,
+// stripCount), not the files the extraction writes. With no phase given it
+// is the finished operation's name, as its toast counts it.
 export function opLabel(kind: string, items = 0, phase = ""): string {
   switch (kind) {
     case "dragout":
-      if (phase === "preparing") return counted(dragOutCopy.preparing, items);
-      if (phase === "awaiting") return dragOutCopy.awaiting;
+      if (phase !== "") return counted(dragOutCopy.extracting, items, "item");
       return counted(dragOutCopy.name, items);
     case "add":
       return counted("Adding", items);
@@ -46,8 +51,18 @@ export function opLabel(kind: string, items = 0, phase = ""): string {
   return kind;
 }
 
-function counted(verb: string, items: number): string {
-  return items > 0 ? `${verb} ${plural(items, "file")}` : verb;
+function counted(verb: string, items: number, unit = "file"): string {
+  return items > 0 ? `${verb} ${plural(items, unit)}` : verb;
+}
+
+// stripCount is the number the strip says for an operation. Every kind
+// counts the files it will write (OpView.Items) — *Adding 3 files* — but a
+// drag out counts the records the gesture named, folders included
+// (OpView.DragItems): a folder dragged out is one item and however many
+// files beneath it, and the strip says what the user picked up, while the
+// bar goes on measuring the bytes those files take (APP.md §3).
+export function stripCount(o: { kind: string; items: number; dragItems?: number }): number {
+  return o.kind === "dragout" ? (o.dragItems ?? 0) : o.items;
 }
 
 // opPhase is the strip's second line: the phase, but only where it says
@@ -87,29 +102,26 @@ export function opPhase(phase: string | undefined): string {
 // it is theirs to stop; the archive is untouched until it finishes. A
 // compaction they did ask for, a rotation and a verify are not the user's
 // to abort halfway, and an extract has already written files on disk. A
-// drag out is cancellable while it is *Preparing* — the cancel fails the
-// drop's request and Explorer abandons the drop — and not once Explorer
-// has the paths: nothing of it is left to end (APP.md §3).
+// drag out is cancellable while it is staging — the cancel fails the drop's
+// request and Explorer abandons the drop — and at no other moment: during
+// the hover the gesture itself is the way out, and once the bytes are
+// written the drop is Explorer's, whose own window is then in front and the
+// only control there is (APP.md §3, ruled 2026-09-11).
 export function cancellable(kind: string, phase = ""): boolean {
   if (kind === "dragout") return phase === "preparing";
   return kind === "add" || kind === "replace" || kind === "reclaim";
 }
 
-// stripShows: whether the strip has anything to say about a running
-// operation. Every operation is shown from the moment it begins but the
-// drag out during its hover — the drag itself is on the screen under the
-// cursor, and the strip's two phases begin when the button is released
-// (APP.md §3).
-export function stripShows(kind: string, phase = ""): boolean {
-  return !(kind === "dragout" && phase !== "preparing" && phase !== "awaiting");
-}
-
 // hasBar: whether the strip draws a bar for the operation — indeterminate
-// until Total is known, and moving by bytes once it is. *Awaiting Windows
-// Explorer* is the one phase without: the bytes are written, and what
-// Explorer does with them is not measured here.
+// until Total is known, and moving by bytes once it is. A drag out's hover
+// is the one phase without one: nothing is being written yet, and the label
+// stands alone. The bar that appears when the staging begins is ours, and
+// it stays — full, once the bytes are written, for as long as Explorer is
+// inside its own Drop, with no second phase and no words of its own — until
+// DoDragDrop returns and the whole strip goes (APP.md §3, ruled
+// 2026-09-11).
 export function hasBar(kind: string, phase = ""): boolean {
-  return !(kind === "dragout" && phase === "awaiting");
+  return !(kind === "dragout" && phase === "dragging");
 }
 
 // reclaimedLine is when a finished reclaim says what the file system got

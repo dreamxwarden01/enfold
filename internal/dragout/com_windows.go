@@ -47,25 +47,13 @@ type comImpl interface {
 	comDestroy()
 }
 
-// comSelfAware is implemented by an object that has to hold a reference to
-// itself — the data object does, because SetAsyncMode is documented to
-// AddRef the object and give the reference back in EndOperation.
+// comSelfAware is implemented by an object that has to know the comObject
+// it lives in — the data object does, to answer what its own identity is.
 // newCOMObject hands the object over before the interface cells are
 // published, so that a callback arriving on the first instant a cell is
 // visible already finds it set.
 type comSelfAware interface {
 	setCOMObject(o *comObject)
-}
-
-// comSelfReleasing is the other half of holding a reference to oneself: the
-// object is told when the references it holds on itself are the only ones
-// left, everybody outside having let go. The data object needs it because
-// the reference SetAsyncMode takes is documented to come back in
-// EndOperation, and Explorer never calls EndOperation for a CF_HDROP source
-// (measured 2026-09-11): without this the object would outlive the target
-// for ever, and the stage would never learn the target had gone.
-type comSelfReleasing interface {
-	comOnlySelfLeft()
 }
 
 // comIface is one interface an object exposes: the vtable COM will see and
@@ -83,12 +71,8 @@ type comObject struct {
 	base   uintptr
 	ifaces []comIface
 	refs   atomic.Int32
-	// selfRefs is how many of refs the object holds on itself (addSelfRef),
-	// counted apart so that release can tell "the last outside reference
-	// has gone" from "the count is not zero yet".
-	selfRefs atomic.Int32
-	impl     comImpl
-	log      func(string, ...any)
+	impl   comImpl
+	log    func(string, ...any)
 
 	// The agility half, all of it described in agile_windows.go. Both
 	// fields are written before the object's address has left the thread
@@ -235,33 +219,14 @@ func (o *comObject) addRef() int32 {
 	return o.refs.Add(1)
 }
 
-// addSelfRef is an AddRef the object takes on itself, and releaseSelfRef the
-// Release that gives it back. The total goes up before the self count and
-// the self count comes down before the total, so that a release racing in
-// from another thread never sees more references held by the object than
-// there are references at all.
-func (o *comObject) addSelfRef() {
-	o.refs.Add(1)
-	o.selfRefs.Add(1)
-}
-
-func (o *comObject) releaseSelfRef() int32 {
-	o.selfRefs.Add(-1)
-	return o.release()
-}
-
+// release gives one reference back. No object of this package holds a
+// reference on itself any more: the one that did was the data object, for
+// the reference SetAsyncMode took, and the asynchronous capability is gone
+// (APP.md §3, ruled 2026-09-11) — so the count is the plain sum of what the
+// target and we hold, and zero is the end.
 func (o *comObject) release() int32 {
 	n := o.refs.Add(-1)
 	if n > 0 {
-		if n == o.selfRefs.Load() {
-			// What is left is what the object holds on itself: the last
-			// reference from outside — the target's, or ours at the end of
-			// Run — has just gone. The implementation decides whether its
-			// own reference still has a reason to exist.
-			if sr, ok := o.impl.(comSelfReleasing); ok {
-				sr.comOnlySelfLeft()
-			}
-		}
 		return n
 	}
 	if n < 0 {
@@ -455,19 +420,6 @@ type iDataObjectVtbl struct {
 	EnumDAdvise           uintptr
 }
 
-// iDataObjectAsyncCapabilityVtbl is IDataObjectAsyncCapabilityVtbl from
-// ShlDisp.h, in declaration order.
-type iDataObjectAsyncCapabilityVtbl struct {
-	QueryInterface uintptr
-	AddRef         uintptr
-	Release        uintptr
-	SetAsyncMode   uintptr
-	GetAsyncMode   uintptr
-	StartOperation uintptr
-	InOperation    uintptr
-	EndOperation   uintptr
-}
-
 // iEnumFORMATETCVtbl is IEnumFORMATETCVtbl from objidl.h, in declaration
 // order.
 type iEnumFORMATETCVtbl struct {
@@ -500,10 +452,13 @@ var (
 	iidIMarshal       = windows.GUID{Data1: 0x00000003, Data2: 0x0000, Data3: 0x0000, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
 	iidIAgileObject   = windows.GUID{Data1: 0x94EA2B94, Data2: 0xE9CC, Data3: 0x49E0, Data4: [8]byte{0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90}}
 
-	// IDataObjectAsyncCapability and the old IAsyncOperation are the same
-	// IID: shldisp.idl says the interface "used to be named IAsyncOperation
-	// ... It remains binary compatible with the old definition", and the
-	// uuid on the interface is unchanged. So answering this one GUID answers
-	// both names, and a target compiled against either header finds us.
+	// IDataObjectAsyncCapability is the interface this data object
+	// deliberately does NOT implement (APP.md §3, ruled 2026-09-11): without
+	// it the target must finish the drop inside Drop, and DoDragDrop's
+	// return is the end of the drag. The IID is kept because it is the one
+	// a QueryInterface has to be refused for — and it answers to the old
+	// name too: shldisp.idl says the interface "used to be named
+	// IAsyncOperation ... It remains binary compatible with the old
+	// definition", with the uuid unchanged.
 	iidIDataObjectAsyncCapability = windows.GUID{Data1: 0x3D8B0590, Data2: 0xF691, Data3: 0x11D2, Data4: [8]byte{0x8E, 0xA9, 0x00, 0x60, 0x97, 0xDF, 0x5B, 0xD4}}
 )

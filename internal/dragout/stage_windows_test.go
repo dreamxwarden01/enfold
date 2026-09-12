@@ -123,9 +123,9 @@ func TestFailedDeleteNamesNoFileAndLeavesTheManifest(t *testing.T) {
 
 	release()
 	sweep := &testLog{}
-	removedN, left := scavenge(filepath.Dir(s.root), time.Hour, time.Now().Add(2*time.Hour), sweep.printf)
-	if removedN != 1 || left != 0 {
-		t.Fatalf("the sweep removed %d and left %d, want 1/0:\n%s", removedN, left, sweep.text())
+	rep := scavenge(filepath.Dir(s.root), time.Hour, time.Now().Add(2*time.Hour), sweepMode{retry: true}, sweep.printf)
+	if rep.Removed != 1 || rep.Left != 0 {
+		t.Fatalf("the sweep removed %d and left %d, want 1/0:\n%s", rep.Removed, rep.Left, sweep.text())
 	}
 	if _, err := os.Stat(s.root); !os.IsNotExist(err) {
 		t.Fatalf("the folder survived the sweep: %v", err)
@@ -151,9 +151,9 @@ func TestSweepAsksBeforeItDeletes(t *testing.T) {
 	waits := noBackoff(t)
 
 	sweep := &testLog{}
-	removed, left := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweep.printf)
-	if removed != 0 || left != 1 {
-		t.Fatalf("the sweep removed %d and left %d, want 0/1:\n%s", removed, left, sweep.text())
+	rep := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweepMode{retry: true}, sweep.printf)
+	if rep.Removed != 0 || rep.Left != 1 {
+		t.Fatalf("the sweep removed %d and left %d, want 0/1:\n%s", rep.Removed, rep.Left, sweep.text())
 	}
 	for i, p := range s.paths {
 		if _, err := os.Stat(p); err != nil {
@@ -175,8 +175,8 @@ func TestSweepAsksBeforeItDeletes(t *testing.T) {
 
 	release()
 	sweep = &testLog{}
-	if removed, left := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweep.printf); removed != 1 || left != 0 {
-		t.Fatalf("the next sweep removed %d and left %d, want 1/0:\n%s", removed, left, sweep.text())
+	if rep := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweepMode{retry: true}, sweep.printf); rep.Removed != 1 || rep.Left != 0 {
+		t.Fatalf("the next sweep removed %d and left %d, want 1/0:\n%s", rep.Removed, rep.Left, sweep.text())
 	}
 	if _, err := os.Stat(s.root); !os.IsNotExist(err) {
 		t.Fatalf("the folder survived the next sweep: %v", err)
@@ -199,8 +199,8 @@ func TestSweepKeepsTheManifestWhenADeleteFailsHalfWay(t *testing.T) {
 	noBackoff(t)
 
 	sweep := &testLog{}
-	if removed, left := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweep.printf); removed != 0 || left != 1 {
-		t.Fatalf("the sweep removed %d and left %d, want 0/1:\n%s", removed, left, sweep.text())
+	if rep := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweepMode{retry: true}, sweep.printf); rep.Removed != 0 || rep.Left != 1 {
+		t.Fatalf("the sweep removed %d and left %d, want 0/1:\n%s", rep.Removed, rep.Left, sweep.text())
 	}
 	if _, err := os.Stat(s.paths[0]); err != nil {
 		t.Fatalf("the held folder went: %v", err)
@@ -224,10 +224,71 @@ func TestSweepKeepsTheManifestWhenADeleteFailsHalfWay(t *testing.T) {
 
 	release()
 	sweep = &testLog{}
-	if removed, left := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweep.printf); removed != 1 || left != 0 {
-		t.Fatalf("the next sweep removed %d and left %d, want 1/0:\n%s", removed, left, sweep.text())
+	if rep := scavenge(filepath.Dir(s.root), time.Hour, time.Now(), sweepMode{retry: true}, sweep.printf); rep.Removed != 1 || rep.Left != 0 {
+		t.Fatalf("the next sweep removed %d and left %d, want 1/0:\n%s", rep.Removed, rep.Left, sweep.text())
 	}
 	if _, err := os.Stat(s.root); !os.IsNotExist(err) {
 		t.Fatalf("the folder survived the next sweep: %v", err)
+	}
+}
+
+// TestTheSweepAtExitWaitsForNothing is the pass a normal exit makes (APP.md
+// §3, ruled 2026-09-11): one attempt at each folder and not a second of the
+// backoff — a shutdown has a budget, and a folder a consumer still holds is
+// the next launch's sweep to take, not this one's to sit and wait for —
+// while the free folder beside it, past the hour, still goes. The counts
+// say which was which, because a sweep that removes nothing for that reason
+// is working exactly as intended.
+func TestTheSweepAtExitWaitsForNothing(t *testing.T) {
+	isolateStages(t)
+	const name = "still-reading.bin"
+	s, _ := agedStage(t, []Item{{Name: name, Size: 8}})
+	root := filepath.Dir(s.root)
+	free := filepath.Join(root, "ffffffff")
+	if err := os.MkdirAll(free, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(free, "payload.bin"), []byte("plaintext"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteManifest(free, Manifest{Tool: manifestTool, Version: manifestVersion, State: StateDone, Created: time.Now().Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	release := holdOpen(t, s.paths[0])
+	defer release()
+	waits := noBackoff(t)
+
+	sweep := &testLog{}
+	rep := ScavengeAtExit(root, time.Hour, 10*time.Second, sweep.printf)
+	if len(*waits) != 0 {
+		t.Fatalf("the sweep at exit slept %v; the pass at exit waits for nothing", *waits)
+	}
+	if rep.Removed != 1 || rep.Left != 1 || rep.InUse != 1 || rep.Unreached != 0 {
+		t.Fatalf("the pass came to %+v, want 1 removed, 1 left, 1 of them in use, 0 not reached:\n%s", rep, sweep.text())
+	}
+	if _, err := os.Stat(s.paths[0]); err != nil {
+		t.Errorf("the staged file was deleted under a consumer still reading it: %v", err)
+	}
+	if _, err := os.Stat(free); !os.IsNotExist(err) {
+		t.Errorf("the free folder past the hour survived the pass: %v", err)
+	}
+	if m, ok := ReadManifest(s.root); !ok || m.State != StateHandedOut {
+		t.Fatalf("the folder in use is manifested %+v %v: the next launch's sweep must still recognise it", m, ok)
+	}
+	if text := sweep.text(); !strings.Contains(text, "in use by another process") || !strings.Contains(text, "the next launch") {
+		t.Fatalf("the log does not say the folder was in use and left for the next launch:\n%s", text)
+	}
+	if strings.Contains(sweep.text(), name) {
+		t.Fatalf("the sweep's log names a file:\n%s", sweep.text())
+	}
+
+	// The handle gone, the next launch's sweep takes it.
+	release()
+	sweep = &testLog{}
+	if rep := ScavengeAtExit(root, time.Hour, 10*time.Second, sweep.printf); rep.Removed != 1 || rep.Left != 0 {
+		t.Fatalf("the next pass came to %+v, want 1 removed and 0 left:\n%s", rep, sweep.text())
+	}
+	if _, err := os.Stat(s.root); !os.IsNotExist(err) {
+		t.Fatalf("the folder survived the next pass: %v", err)
 	}
 }

@@ -197,7 +197,7 @@ const (
 // hour, for WinRAR's stated reason ("external applications may still need
 // them") and against a longer one because what lingers is plaintext — and
 // ScavengeInterval how often the caller sweeps while running, after the
-// sweep at launch (APP.md §3).
+// sweep at launch and before the one at a normal exit (APP.md §3).
 const (
 	ScavengeAge      = time.Hour
 	ScavengeInterval = 10 * time.Minute
@@ -1134,34 +1134,98 @@ func scavengeBackoff(attempt int) (time.Duration, bool) {
 	return 0, false
 }
 
+// ScavengeReport is what one sweep came to. InUse is counted in Left as
+// well: those are the folders the next sweep — this run's or the next
+// launch's — is expected to take, and they are worth a number of their own
+// because a sweep that removes nothing for that reason is working exactly
+// as intended. Unreached is what a capped pass never looked at, and is
+// counted nowhere else.
+type ScavengeReport struct {
+	Removed   int
+	Left      int
+	InUse     int
+	Unreached int
+}
+
+// sweepMode is what one pass may do beyond a first attempt at a folder.
+// The sweep while running has all the time in the world and retries a
+// folder in use with the bounded backoff; the sweep at a normal exit is a
+// guest in the shutdown's budget and does neither — it makes one pass, with
+// no wait anywhere in it, and leaves the rest to the next launch.
+type sweepMode struct {
+	retry    bool      // the bounded backoff between attempts
+	deadline time.Time // when the pass must stop; zero: no cap
+}
+
+// sweepNow is the clock the cap watches, a variable so that a test of the
+// cap need not race a real one. The ages are judged by the caller's own
+// now, which is a parameter.
+var sweepNow = time.Now
+
 // Scavenge is one sweep of root: every manifested folder of ours whose
 // state is not live, that this process is not watching, and that is older
 // than olderThan is removed, a folder something still has open retried with
 // the bounded backoff and left for the next sweep. It can sit in that
 // backoff for over a minute, so the caller runs it on a goroutine of its
-// own. It returns what it removed and what it left, the failures among the
-// latter; every decision is logged, never with a file name.
-func Scavenge(root string, olderThan time.Duration, log func(format string, args ...any)) (removed, left int) {
+// own. Every decision is logged, never with a file name.
+func Scavenge(root string, olderThan time.Duration, log func(format string, args ...any)) ScavengeReport {
 	if log == nil {
 		log = discard
 	}
-	return scavenge(root, olderThan, time.Now(), log)
+	rep := scavenge(root, olderThan, sweepNow(), sweepMode{retry: true}, log)
+	log("drag scavenge: %d removed, %d left (%d in use by another process)", rep.Removed, rep.Left, rep.InUse)
+	return rep
 }
 
-func scavenge(root string, maxAge time.Duration, now time.Time, log func(string, ...any)) (removed, left int) {
+// ScavengeAtExit is the sweep a normal exit makes (APP.md §3, ruled
+// 2026-09-11: Windows cleans up for nobody — %TEMP% is not emptied at a
+// boot, a delete-at-reboot needs an administrator and under Fast Startup a
+// shutdown is a hibernation that never processes one — so this program is
+// the only cleaner its leavings have). It is ONE pass with no backoff
+// anywhere in it: a folder in use is left where it stands for the next
+// launch rather than waited on. It is bounded to budget of wall time as
+// well, since the shutdown's budget is not the sweep's to spend, and what
+// the cap stopped it from reaching is logged and left; a budget of zero or
+// less is no cap at all. It returns what the pass came to.
+func ScavengeAtExit(root string, olderThan, budget time.Duration, log func(format string, args ...any)) ScavengeReport {
+	if log == nil {
+		log = discard
+	}
+	now := sweepNow()
+	var mode sweepMode
+	if budget > 0 {
+		mode.deadline = now.Add(budget)
+	}
+	rep := scavenge(root, olderThan, now, mode, log)
+	log("drag scavenge at exit: %d removed, %d left (%d in use, the next launch's), %d not reached within %s",
+		rep.Removed, rep.Left, rep.InUse, rep.Unreached, budget)
+	return rep
+}
+
+func scavenge(root string, maxAge time.Duration, now time.Time, mode sweepMode, log func(string, ...any)) ScavengeReport {
+	var rep ScavengeReport
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log("drag scavenge: cannot read the drag root: %v", sansPath(err))
 		}
-		return 0, 0
+		return rep
 	}
-	for _, e := range entries {
+	for i, e := range entries {
+		if !mode.deadline.IsZero() && !sweepNow().Before(mode.deadline) {
+			// Between folders, never inside one: a folder half deleted is
+			// still manifested and still the next sweep's (removeStageFolder
+			// keeps the manifest for last), but a pass that stopped in the
+			// middle of one would have paid for the cap twice over.
+			rep.Unreached = len(entries) - i
+			log("drag scavenge: the pass stopped at its cap with %d of %d entries not reached; they are the next sweep's", rep.Unreached, len(entries))
+			break
+		}
 		path := filepath.Join(root, e.Name())
 		if !e.IsDir() {
 			// A stray file under the drag root is not a staging folder and
 			// is not ours to remove either.
-			left++
+			rep.Left++
 			continue
 		}
 		facts := scavengeFacts{reparse: isReparsePoint(path), maxAge: maxAge, active: stageIsActive(path)}
@@ -1173,26 +1237,41 @@ func scavenge(root string, maxAge time.Duration, now time.Time, log func(string,
 		remove, why := scavengeVerdict(facts)
 		if !remove {
 			log("drag scavenge: leaving %s: %s", e.Name(), why)
-			left++
+			rep.Left++
 			continue
 		}
 		var m Manifest
 		if facts.haveManifest {
 			m, _ = ReadManifest(path)
 		}
-		if sweepOne(path, e.Name(), why, m, log) {
-			removed++
-		} else {
-			left++
+		switch sweepOne(path, e.Name(), why, m, mode, log) {
+		case sweptRemoved:
+			rep.Removed++
+		case sweptInUse:
+			rep.InUse++
+			rep.Left++
+		default:
+			rep.Left++
 		}
 	}
-	log("drag scavenge: %d removed, %d left", removed, left)
-	return removed, left
+	return rep
 }
 
 // sleepBackoff is the wait between a sweep's attempts, a variable so that a
 // test of the bounded backoff need not sit through 71 seconds of it.
 var sleepBackoff = time.Sleep
+
+// sweepResult is what one folder's attempt came to: gone, held open by
+// somebody, or a delete that failed for another reason. The last two are
+// both "left", and the sweep counts them apart because only one of them
+// says the folder is somebody's to give back.
+type sweepResult int
+
+const (
+	sweptRemoved sweepResult = iota
+	sweptInUse
+	sweptFailed
+)
 
 // sweepOne removes one folder. The exclusive-open check comes first, over
 // every staged file, BEFORE anything is deleted (APP.md §3): a sharing
@@ -1200,13 +1279,15 @@ var sleepBackoff = time.Sleep
 // and a consumer that opened its file with FILE_SHARE_DELETE would not stop
 // a delete — the file would go from under it, which is the very thing the
 // hour was for. A folder in use is retried with the bounded backoff and
-// left for the next sweep. The delete itself takes the items first and the
-// manifest last, and a delete that fails anywhere puts the manifest back in
-// "done" — as stage.remove does — so that the next sweep may still act;
-// every attempt's error is logged as Windows gave it, never a name.
-func sweepOne(path, name, why string, m Manifest, log func(string, ...any)) bool {
+// left for the next sweep — or, in a pass that does not retry, left at once.
+// The delete itself takes the items first and the manifest last, and a
+// delete that fails anywhere puts the manifest back in "done" — as
+// stage.remove does — so that the next sweep may still act; every attempt's
+// error is logged as Windows gave it, never a name.
+func sweepOne(path, name, why string, m Manifest, mode sweepMode, log func(string, ...any)) sweepResult {
 	log("drag scavenge: removing %s: %s", name, why)
 	for attempt := 0; ; attempt++ {
+		outcome := sweptFailed
 		busy, probeErr := stagedFilesInUse(path)
 		if probeErr != nil {
 			// Not a sharing answer (ERROR_ACCESS_DENIED and the like): it
@@ -1215,20 +1296,25 @@ func sweepOne(path, name, why string, m Manifest, log func(string, ...any)) bool
 			log("drag scavenge: %s: a staged file could not be probed: %v", name, probeErr)
 		}
 		if busy > 0 {
+			outcome = sweptInUse
 			log("drag scavenge: %s: %d staged file(s) in use by another process (a sharing violation on an exclusive open); nothing deleted", name, busy)
 		} else {
 			err := removeStageFolder(path)
 			if err == nil {
 				log("drag scavenge: removed %s", name)
-				return true
+				return sweptRemoved
 			}
 			log("drag scavenge: could not remove %s: %v", name, sansPath(err))
 			restoreManifest(path, name, m, log)
 		}
+		if !mode.retry {
+			log("drag scavenge: leaving %s for the next launch (this pass waits for nothing)", name)
+			return outcome
+		}
 		wait, more := scavengeBackoff(attempt)
 		if !more {
 			log("drag scavenge: leaving %s for the next sweep (the backoff is bounded: 1 s, 10 s, 60 s)", name)
-			return false
+			return outcome
 		}
 		sleepBackoff(wait)
 	}

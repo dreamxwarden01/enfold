@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -604,6 +606,64 @@ func TestDragScavengeAtStart(t *testing.T) {
 		if _, err := os.Stat(stays); err != nil {
 			t.Fatalf("the sweep removed %s: %v", filepath.Base(stays), err)
 		}
+	}
+}
+
+// The sweep at a normal exit, which the shell calls on its way out
+// (main_windows.go, endDragOut): the staging root Deps.DragRoot names is
+// swept once, on the caller's own goroutine and within its budget, and the
+// pass is logged. The core is not started here on purpose — the sweep at
+// launch and the ten-minute one would be racing this for the same folders,
+// and what is under test is the exit's own pass.
+func TestDragSweepAtExit(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "drag")
+	mk := func(name string, m *dragout.Manifest) string {
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "payload.bin"), []byte("plaintext"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if m != nil {
+			if err := dragout.WriteManifest(p, *m); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return p
+	}
+	now := time.Now()
+	old := mk("aaaaaaaa", &dragout.Manifest{Tool: "enfold", Version: 1, State: dragout.StateHandedOut, Created: now.Add(-2 * time.Hour)})
+	young := mk("bbbbbbbb", &dragout.Manifest{Tool: "enfold", Version: 1, State: dragout.StateHandedOut, Created: now.Add(-5 * time.Minute)})
+	foreign := mk("cccccccc", nil)
+
+	var mu sync.Mutex
+	var lines []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	c, err := New(Deps{Events: &recorder{}, Clock: newFakeClock(), DataDir: filepath.Join(dir, "data"), DragRoot: root, Log: logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SweepDragAtExit(time.Second)
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("the folder past the hour survived the sweep at exit: %v", err)
+	}
+	for _, stays := range []string{young, foreign} {
+		if _, err := os.Stat(stays); err != nil {
+			t.Errorf("the sweep at exit removed %s: %v", filepath.Base(stays), err)
+		}
+	}
+	mu.Lock()
+	text := strings.Join(lines, "\n")
+	mu.Unlock()
+	if !strings.Contains(text, "drag scavenge at exit: 1 removed, 2 left") {
+		t.Errorf("the pass at exit was not logged:\n%s", text)
 	}
 }
 

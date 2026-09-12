@@ -42,6 +42,11 @@ const (
 	appOrigin = "http://wails.localhost"
 
 	shutdownBudget = 3 * time.Second
+	// dragSweepBudget is the sweep at exit's slice of that budget (APP.md
+	// §3): housekeeping that must never be what keeps the process standing,
+	// so a second of wall time and then whatever is left is the next
+	// launch's.
+	dragSweepBudget = time.Second
 )
 
 // Warnings the shell raises.
@@ -87,7 +92,7 @@ func main() {
 		Log:      logger.printf,
 		DataDir:  dataDir,
 		Drag:     s.beginDrag,
-		DragRoot: filepath.Join(dataDir, "drag"),
+		DragRoot: dragStagingRoot(),
 	})
 	if err != nil {
 		fatal(err)
@@ -201,6 +206,37 @@ func dataDirectory() string {
 		}
 	}
 	return filepath.Join(base, appName)
+}
+
+// dragStagingRoot is %TEMP%\Enfold\drag, where every drag out stages
+// (APP.md §3, ruled 2026-09-11, moved there from %LOCALAPPDATA%\Enfold\drag)
+// — the conventional home of an application's transient files, WinRAR's own
+// Rar$DIa… among them — for three reasons:
+//
+//   - Storage Sense and Disk Cleanup sweep %TEMP% eventually. That is an
+//     incidental backstop and never a thing relied on: nothing empties
+//     %TEMP% at a boot, a delete-at-reboot needs an administrator, and under
+//     Fast Startup a shutdown is a hibernation that would never process one
+//     — the cleaners that matter are this program's own, at launch, every
+//     ten minutes, and at a normal exit (endDragOut). It is where users and
+//     cleaning tools look for a program's leavings, which is worth
+//     something by itself.
+//   - A user's own redirection is honoured. os.TempDir is GetTempPath,
+//     documented to read TMP, then TEMP, then USERPROFILE, then the Windows
+//     directory (Go 1.26 prefers GetTempPath2 where Windows has it, which
+//     differs only for a process running as SYSTEM — this one never is). A
+//     RAM disk therefore keeps the staged plaintext off persistent storage
+//     for free, and another volume costs only that a drop on the desktop
+//     becomes a copy instead of a rename.
+//   - The later "open a file in an outside program, repack what changed"
+//     workflow belongs beside it, under the same manifest and the same
+//     sweep.
+//
+// %LOCALAPPDATA%\Enfold\drag is neither migrated nor touched: the sweep
+// only ever looks under the root it is given, so a folder an older build
+// left there is simply no longer ours to take.
+func dragStagingRoot() string {
+	return filepath.Join(os.TempDir(), appName, "drag")
 }
 
 // sweepProfile empties the WebView2 user-data folder before the first
@@ -567,12 +603,33 @@ func (s *shell) onShutdown() {
 	if s.profile != "" {
 		os.RemoveAll(s.profile)
 	}
-	// The drag out last, after everything else: a staging folder nothing
-	// was handed out of goes, one a target has is left for the next
-	// launch's scavenge, and a data object Explorer still holds is revoked
-	// rather than pulled from under it (APP.md §3). There is no apartment
-	// to close here — each drag's was its own thread's.
-	dragout.Shutdown()
+	// The drag out last, after everything else: the staging root is swept
+	// once more and then a staging folder nothing was handed out of goes,
+	// one a target has is left for the next launch's scavenge, and a data
+	// object Explorer still holds is revoked rather than pulled from under
+	// it (APP.md §3). There is no apartment to close here — each drag's was
+	// its own thread's.
+	endDragOut(s.core.SweepDragAtExit, dragSweepBudget, dragout.Shutdown)
+}
+
+// endDragOut is the drag out's half of the ordered end, in the one order
+// that is safe: the sweep of the staging root FIRST, while every folder
+// this run made is still registered live and still manifested "live" — two
+// rules, either of which is enough to keep the sweep off a folder whose
+// files a target may be reading at this very moment — and dragout.Shutdown
+// after it, which is precisely what lets those two go (it deletes the
+// folders nothing was handed out of, leaves the rest manifested for the
+// next launch, and takes every stage off the live set on the way). The
+// other order would put the sweep after the only two rules that know which
+// folder is live, with nothing between it and this run's own drag but the
+// hour's age limit.
+//
+// The sweep is bounded twice over — one pass, no backoff, and a wall-time
+// cap — because this runs inside the shutdown's own budget, which belongs
+// to the archives and the lock before it belongs to housekeeping.
+func endDragOut(sweep func(budget time.Duration), budget time.Duration, shutdown func()) {
+	sweep(budget)
+	shutdown()
 }
 
 // securityHeaders is the asset middleware (§4): the CSP names the preview

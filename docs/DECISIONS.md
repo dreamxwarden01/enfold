@@ -3925,3 +3925,16 @@ the per-file `fsync` a real extract pays — so the staged copy is written witho
 disposable; Explorer's copy is what lands); and *Cancel* vanishing at the second phase reflowed
 the strip thinner, so it stays, greyed, and the strip keeps its shape.
 
+**The staging under `%TEMP%`, and a sweep at exit** (2026-09-11, the user's question: does
+Windows clean up for us at a reboot?). It does not: `%LOCALAPPDATA%\Enfold\drag` is nobody's
+temporary folder; `%TEMP%` is not emptied at boot either; delete-at-reboot needs an
+administrator and, under Fast Startup, a shutdown is a hibernation that never processes it.
+The only cleaner is Enfold. So: a sweep at a normal exit too (one pass within the shutdown
+budget, a folder in use left for the next launch); and the staging moves to `%TEMP%\Enfold\drag`
+— WinRAR's neighbourhood — for three reasons the user weighed: Storage Sense and Disk Cleanup
+sweep `%TEMP%` eventually (weak, incidental, never relied on, but where users and cleaners look
+for an application's leavings); a user's `TEMP` redirection is honoured — a RAM disk keeps the
+plaintext off persistent storage for free, another volume only turns a desktop drop from a
+rename into a copy; and the later "open a file in an outside program, repack what changed"
+workflow belongs in the same place, under the same manifest and sweep. The hour stays.
+

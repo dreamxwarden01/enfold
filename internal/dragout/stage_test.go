@@ -973,12 +973,12 @@ func TestScavengeTouchesOnlyOurFolders(t *testing.T) {
 	}
 
 	lg := &testLog{}
-	removed, left := scavenge(root, time.Hour, now, lg.printf)
-	if removed != 2 {
-		t.Fatalf("the sweep removed %d, want 2", removed)
+	rep := scavenge(root, time.Hour, now, sweepMode{retry: true}, lg.printf)
+	if rep.Removed != 2 {
+		t.Fatalf("the sweep removed %d, want 2", rep.Removed)
 	}
-	if left != 5 {
-		t.Errorf("the sweep left %d entries, want 5", left)
+	if rep.Left != 5 {
+		t.Errorf("the sweep left %d entries, want 5", rep.Left)
 	}
 	for _, gone := range []string{old, done} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
@@ -991,8 +991,8 @@ func TestScavengeTouchesOnlyOurFolders(t *testing.T) {
 		}
 	}
 	// A root that is not there is nothing to sweep, and not an error.
-	if r, l := scavenge(filepath.Join(root, "missing"), time.Hour, now, lg.printf); r != 0 || l != 0 {
-		t.Fatalf("a missing root swept %d/%d", r, l)
+	if r := scavenge(filepath.Join(root, "missing"), time.Hour, now, sweepMode{retry: true}, lg.printf); r.Removed != 0 || r.Left != 0 {
+		t.Fatalf("a missing root swept %d/%d", r.Removed, r.Left)
 	}
 	// The log names folders by their id and never a file.
 	if strings.Contains(lg.text(), "payload.bin") {
@@ -1018,16 +1018,72 @@ func TestScavengeLeavesALiveStageAlone(t *testing.T) {
 	if err := WriteManifest(s.root, m); err != nil {
 		t.Fatal(err)
 	}
-	if removed, _ := Scavenge(parent, time.Hour, nil); removed != 0 {
-		t.Fatalf("the sweep removed %d folder(s) this process is still watching", removed)
+	if rep := Scavenge(parent, time.Hour, nil); rep.Removed != 0 {
+		t.Fatalf("the sweep removed %d folder(s) this process is still watching", rep.Removed)
 	}
 	if _, err := os.Stat(s.root); err != nil {
 		t.Fatalf("the live stage's folder is gone: %v", err)
 	}
 	// Resolved, it is the sweep's.
 	s.finish()
-	if removed, _ := Scavenge(parent, time.Hour, nil); removed != 1 {
-		t.Fatalf("the sweep removed %d folder(s) after the stage let go, want 1", removed)
+	if rep := Scavenge(parent, time.Hour, nil); rep.Removed != 1 {
+		t.Fatalf("the sweep removed %d folder(s) after the stage let go, want 1", rep.Removed)
+	}
+}
+
+// TestTheSweepAtExitStopsAtItsCap: the pass a normal exit makes is bounded
+// in wall time as well as in attempts — a shutdown's budget belongs to the
+// archives and the lock before it belongs to housekeeping — and it stops
+// between folders, not inside one, saying how many it never reached. They
+// are the next launch's: nothing here is retried, and nothing is left
+// half-deleted.
+func TestTheSweepAtExitStopsAtItsCap(t *testing.T) {
+	isolateStages(t)
+	root := t.TempDir()
+	now := time.Now()
+	var dirs []string
+	for _, name := range []string{"aaaaaaaa", "bbbbbbbb", "cccccccc"} {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "payload.bin"), []byte("plaintext"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		m := Manifest{Tool: manifestTool, Version: manifestVersion, State: StateDone, Created: now.Add(-2 * time.Hour)}
+		if err := WriteManifest(dir, m); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, dir)
+	}
+	// The clock the cap watches: the first folder falls inside the budget
+	// and everything after it does not.
+	prev := sweepNow
+	calls := 0
+	sweepNow = func() time.Time {
+		calls++
+		if calls == 1 {
+			return now
+		}
+		return now.Add(time.Minute)
+	}
+	t.Cleanup(func() { sweepNow = prev })
+
+	lg := &testLog{}
+	rep := scavenge(root, time.Hour, now, sweepMode{deadline: now.Add(time.Second)}, lg.printf)
+	if rep.Removed != 1 || rep.Unreached != 2 || rep.Left != 0 {
+		t.Fatalf("the capped pass came to %+v, want 1 removed, 2 not reached, 0 left", rep)
+	}
+	if _, err := os.Stat(dirs[0]); !os.IsNotExist(err) {
+		t.Errorf("the folder the pass did reach survived it: %v", err)
+	}
+	for _, stays := range dirs[1:] {
+		if _, err := os.Stat(stays); err != nil {
+			t.Errorf("the pass removed %s after its cap: %v", filepath.Base(stays), err)
+		}
+	}
+	if !strings.Contains(lg.text(), "not reached") {
+		t.Errorf("the log does not say what the cap stopped the pass from reaching:\n%s", lg.text())
 	}
 }
 

@@ -76,9 +76,10 @@ type Deps struct {
 	// Drag starts the native drag out of the window (dragout.go): the
 	// shell's dragout.Begin on Windows, a test's fake. nil: drag.unsupported.
 	Drag DragStarter
-	// DragRoot is where every drag stages, %LOCALAPPDATA%\Enfold\drag in
-	// the application (APP.md §3); empty is DataDir\drag. Tests inject a
-	// temporary directory: the scavenge deletes folders under it.
+	// DragRoot is where every drag stages, %TEMP%\Enfold\drag in the
+	// application (APP.md §3, ruled 2026-09-11); empty is DataDir\drag.
+	// Tests inject a temporary directory: the scavenge deletes folders
+	// under it.
 	DragRoot string
 }
 

@@ -869,8 +869,14 @@ sentinel of every package with a catch-all `internal` — and services are regis
   no second pass over the bytes and nothing left to clean, and a drop on another volume is
   Explorer's copy followed by Explorer's own deletion of the staging; **a move never touches the
   record** (7-Zip's ruling, for the same reasons: deleting a member is a rewrite and a risk).
-  **The staging folder** is one per drag, `%LOCALAPPDATA%\Enfold\drag\<id>` (never `%TEMP%`:
-  ours to scavenge, outside what OneDrive backs up, on the volume most drops land on), made atomically before the drag, its small manifest — created-at, state, the owning process —
+  **The staging folder** is one per drag, `%TEMP%\Enfold\drag\<id>` (ruled 2026-09-11, moving
+  it from `%LOCALAPPDATA%\Enfold\drag`: the conventional home of an application's transient
+  files — WinRAR's `Rar$DIa…` lives there — where Storage Sense and Disk Cleanup will sweep
+  what is left, an incidental backstop never relied on; where a user's own `TEMP`
+  redirection is honoured, a RAM disk keeping the plaintext off persistent storage for free
+  and another volume costing only that a desktop drop becomes a copy; and where the later
+  open-and-edit workflow's `%TEMP%\Enfold\open\<id>` will sit beside it under the same manifest
+  and the same scavenge), made atomically before the drag, its small manifest — created-at, state, the owning process —
   at the folder's top and the files themselves under an `items` folder beneath it, so that no
   dragged name can collide with the manifest (a record may be called `manifest.json`) and a
   scavenge can tell an abandoned folder from a live one; a delete that fails half-way leaves
@@ -911,9 +917,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   refused drop, a failed extraction), at `DoDragDrop`'s return when it was a self-drop or a
   move took every item (above); otherwise the folder outlives the drop and even the process, because consumers open the paths late (a browser reads a dropped file when the
   upload starts, a configuration dialog kept 7-Zip's paths for minutes, FileZilla and VMware
-  broke on early deletion) — and the **scavenge** removes what is ours: at launch and every ten
-  minutes while running, every manifested folder whose state is not live and whose age is
-  past **one hour** (WinRAR's threshold; a longer one lingers plaintext for nothing), a folder
+  broke on early deletion) — and the **scavenge** removes what is ours: at launch, every ten minutes while running, and
+  once more at a normal exit (one pass, no backoff waits — the shutdown budget is three
+  seconds; a folder still in use is left for the next launch), every manifested folder whose
+  state is not live and whose age is past **one hour** (WinRAR's threshold; a longer one lingers plaintext for nothing), a folder
   still in use (a sharing violation on an exclusive open) retried with bounded backoff — 1 s,
   10 s, 60 s — and left for the next sweep, never traversing a reparse point, never touching a
   folder without our manifest. Delete-at-reboot (`MOVEFILE_DELAY_UNTIL_REBOOT`) is not relied

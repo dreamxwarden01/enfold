@@ -112,9 +112,14 @@ type Phase struct {
 // Options is one drag.
 type Options struct {
 	// Root is the folder every staging folder is made under —
-	// %LOCALAPPDATA%\Enfold\drag in the application, never %TEMP%: ours to
-	// scavenge, outside what OneDrive backs up, on the volume most drops
-	// land on, which is what makes a move a rename.
+	// %TEMP%\Enfold\drag in the application (APP.md §3, ruled 2026-09-11,
+	// moved there from %LOCALAPPDATA%\Enfold\drag): the conventional home
+	// of a program's transient files, where a user's own TMP or TEMP
+	// redirection is honoured, and where Storage Sense and Disk Cleanup are
+	// an incidental backstop. It stays ours to scavenge either way —
+	// Windows empties %TEMP% for nobody — and a drop onto another volume
+	// than the staging's is a copy rather than a rename, which is the one
+	// thing the move costs.
 	Root string
 	// Window is the caller's top-level window: a release over it is a
 	// self-drop, and its own thread is the one the drag thread attaches its

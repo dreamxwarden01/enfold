@@ -32,9 +32,9 @@ type DragHandle interface {
 // Windows, a test's fake.
 type DragStarter func(dragout.Options) (DragHandle, error)
 
-// dragRoot is where every drag stages: Deps.DragRoot, or the drag folder
-// under the data folder — %LOCALAPPDATA%\Enfold\drag in the application
-// (APP.md §3).
+// dragRoot is where every drag stages: Deps.DragRoot — %TEMP%\Enfold\drag
+// in the application (APP.md §3) — or, for a caller that names none, the
+// drag folder under the data folder.
 func (c *Core) dragRoot() string {
 	if c.deps.DragRoot != "" {
 		return c.deps.DragRoot
@@ -422,6 +422,22 @@ func (c *Core) startDragScavenge() {
 	root := c.dragRoot()
 	go dragout.Scavenge(root, dragout.ScavengeAge, c.log)
 	c.scheduleDragScavenge(root)
+}
+
+// SweepDragAtExit is the sweep of the staging root a normal exit makes
+// (APP.md §3, ruled 2026-09-11): Windows empties %TEMP% for nobody — not at
+// a boot, and not under Fast Startup, where a shutdown is a hibernation —
+// so the only cleaner the staging has is this program, and an exit is the
+// one moment a run can still act on what it left. One pass, no backoff — a
+// folder a target still holds is left where it stands for the next launch's
+// sweep — and bounded to budget, which is the shell's shutdown budget's to
+// give; what the cap stopped the pass from reaching is logged and left. The
+// shell calls this before dragout.Shutdown, while this run's own folders
+// are still registered live and still manifested "live" (main_windows.go,
+// endDragOut). It runs on the caller's goroutine: with nothing to wait for,
+// the pass is as long as the file system makes it and no longer.
+func (c *Core) SweepDragAtExit(budget time.Duration) {
+	dragout.ScavengeAtExit(c.dragRoot(), dragout.ScavengeAge, budget, c.log)
 }
 
 func (c *Core) scheduleDragScavenge(root string) {

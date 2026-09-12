@@ -85,3 +85,50 @@ func (c *Core) AwaitPendingTouch() {
 // pendingExitWait bounds the exit's wait for a pending touch: the key's
 // own timeout, and its release.
 const pendingExitWait = 20 * time.Second
+
+// awaitLocks waits for the unbounded halves of the locks already made
+// (afterLock), which is what closes the vault's file: at most
+// lockCloseBudget and never past deadline, the end's own. It is a step
+// inside that budget rather than another one after it (APP.md §5), so a
+// resolution that used all three seconds leaves it none — afterLock waits
+// first for a cancelled ceremony and then for a pending touch, and neither
+// is the shutdown's to wait for.
+func (c *Core) awaitLocks(deadline time.Time) {
+	done := make(chan struct{})
+	go func() {
+		c.lockWG.Wait()
+		close(done)
+	}()
+	budget := c.lockWait
+	if left := deadline.Sub(c.now()); left < budget {
+		budget = left
+	}
+	if budget > 0 {
+		t := time.NewTimer(budget)
+		defer t.Stop()
+		select {
+		case <-done:
+			return
+		case <-t.C:
+		}
+	} else {
+		select {
+		case <-done:
+			return
+		default:
+		}
+	}
+	c.log("shutdown: the lock did not close the vault's file within %v", budget)
+}
+
+// closeBudget is the whole of Close: the resolution of APP.md §5 and then
+// what is left of it for the handle the lock closes.
+const closeBudget = 3 * time.Second
+
+// lockCloseBudget bounds Close's share of it for that handle. Closing the
+// handle is a CloseHandle — microseconds — so the budget is only for what
+// afterLock waits for first, and a second is already far more than a handle
+// needs: it is the slice the exit's own housekeeping gets of the ~3 s
+// shutdown (APP.md §5, main_windows.go), and the process is ending either
+// way.
+const lockCloseBudget = time.Second

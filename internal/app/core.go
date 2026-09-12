@@ -131,6 +131,15 @@ type Core struct {
 	// lockWG counts the unbounded halves of locks still running, so that
 	// an open of the vault file waits for the handle they close.
 	lockWG sync.WaitGroup
+	// lockWait bounds Close's wait for those halves (shutdown.go). It is
+	// held here rather than read from the constant so that a test can lower
+	// it: a test that had to wait out the real budget would prove nothing
+	// more.
+	lockWait time.Duration
+	// closeKS closes the handle a lock hands to afterLock (session.go). The
+	// zero value is the keystore's own Close; a test replaces it to hold the
+	// close open, since the keystore is concrete and has no seam of its own.
+	closeKS func(ks *keystore.Keystore)
 
 	// presencePass: a file-presence pass is running. One at a time, which
 	// is what bounds the probes it abandons (APP.md §13).
@@ -162,6 +171,7 @@ func New(d Deps) (*Core, error) {
 	}
 	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, opening: map[[16]byte]chan struct{}{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
 	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare, budget: reclaimBudget}
+	c.lockWait = lockCloseBudget
 	c.names = newNameCollator()
 	c.vault.state = StateNone
 	c.vault.warnings = map[Code]bool{}
@@ -235,10 +245,18 @@ func samePath(a, b string) bool {
 }
 
 // Close ends the process's use of the core: locks, closes archives after
-// resolving them, stops the preview server. See ResolveForShutdown for the
-// bounded, ordered version the shutdown hook uses.
+// resolving them, waits for the lock's own handle to be closed, stops the
+// preview server. See ResolveForShutdown for the bounded, ordered version
+// the shutdown hook uses.
 func (c *Core) Close() {
-	c.ResolveForShutdown(3 * time.Second)
+	// One deadline for the whole end (APP.md §5), the wait below included.
+	deadline := c.now().Add(closeBudget)
+	c.ResolveForShutdown(closeBudget)
+	// The lock ResolveForShutdown just made closes the vault's file on a
+	// goroutine of its own (afterLock): wait for it, so that Close means the
+	// file is shut and a caller free to remove the vault's folder the moment
+	// it returns — every test's t.TempDir — does not race an open handle.
+	c.awaitLocks(deadline)
 	c.mu.Lock()
 	c.closed = true
 	p := c.preview

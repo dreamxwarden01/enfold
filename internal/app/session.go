@@ -600,11 +600,22 @@ func (c *Core) afterLock(ks *keystore.Keystore, cer *ceremony, reason LockReason
 		c.mu.Lock()
 		c.cacheFactsLocked(ks)
 		c.mu.Unlock()
-		ks.Close()
+		c.closeKeystore(ks)
 	}
 	c.log("locked: %s", reason)
 	c.emitState()
 	c.emitArchivesChanged()
+}
+
+// closeKeystore closes a handle through the core's seam, so that a test can
+// hold the close open and prove what waits for it; the zero value is the
+// keystore's own Close.
+func (c *Core) closeKeystore(ks *keystore.Keystore) {
+	if c.closeKS != nil {
+		c.closeKS(ks)
+		return
+	}
+	ks.Close()
 }
 
 // stopTimersLocked stops both session timers and retires their callbacks,

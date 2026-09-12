@@ -4019,3 +4019,22 @@ header's cross-fade ran on CSS transitions beside the frame clock - its opacitie
 glide's now, a function of the card's height, so a reversal or a snap cannot leave them
 behind.
 
+**Close waits for the lock's handle** (2026-09-12). The test suite's random "TempDir RemoveAll
+cleanup: The directory is not empty" had been put down to the antivirus. Half of it was ours:
+a lock hands the keystore to a goroutine (`afterLock`, which first waits for a cancelled
+ceremony's end and a pending touch, then closes the file), and `Core.Close` returned without
+waiting for it, so whoever removed the vault's directory right after Close — every test's
+cleanup — could race the open handle. Close now waits for that goroutine — for at most one second, and never past what is left
+of §5's three after `ResolveForShutdown` has had its share (closing the handle is
+microseconds; the bound is for what afterLock waits for first, the card's own fifteen
+seconds, which is not the shutdown's to wait for; an outside review caught the first cut
+adding its second outside the three) — before the preview server stops: §5's order and its
+~3 s stand, and §2.3's Close, the
+archive's, is not this one. Three deterministic tests, one of which reproduces the flake
+exactly when the wait is taken out. The other half is the machine's: in ~1 % of removals a
+filter driver holds a delete-pending child (an upper-cased `VAULT.EKS.tmp` nothing in this
+repository writes) for a few hundred milliseconds, and Go's cleanup retries sharing
+violations but not `ERROR_DIR_NOT_EMPTY`; a retry 300 ms later always succeeds. That is the
+scanner in the Go temp folder despite its exclusion — a setting, not code — and is left to
+the machine.
+

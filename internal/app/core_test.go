@@ -6,8 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/dreamxwarden01/enfold/internal/keystore"
 )
 
 func TestPasswordUnlockAndLock(t *testing.T) {
@@ -802,6 +806,108 @@ func TestShutdownCancelsARunningOperation(t *testing.T) {
 	}
 	if r := h.row(t, id, rootID, "done.txt"); r.Size != uint64(len("committed before the exit")) {
 		t.Fatalf("the committed add did not survive: %+v", r)
+	}
+}
+
+// Close does not return until the lock it makes has closed the vault's file
+// (APP.md §5). The close happens on afterLock's goroutine, so a caller free
+// to remove the vault's folder the moment Close returns — every test's
+// t.TempDir — used to race the handle, which on Windows is a cleanup that
+// fails with "the directory is not empty".
+func TestCloseWaitsForTheLocksHandle(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	h.c.lockWait = time.Minute // only the held handle holds Close here
+	// The close is held where the lock does it, on its own goroutine.
+	closing, release := make(chan struct{}), make(chan struct{})
+	var announced, freed sync.Once
+	var closedKS atomic.Bool
+	h.c.closeKS = func(ks *keystore.Keystore) {
+		announced.Do(func() { close(closing) })
+		<-release
+		ks.Close()
+		closedKS.Store(true)
+	}
+	returned := make(chan struct{})
+	// However this test ends, the held close is let go and Close is waited
+	// for: a Fatal that left the seam blocked would keep the vault's file
+	// open past the test and fail its folder's own cleanup — the very
+	// failure this is about.
+	t.Cleanup(func() {
+		freed.Do(func() { close(release) })
+		<-returned
+	})
+	go func() { h.c.Close(); close(returned) }()
+
+	<-closing
+	// The window catches a regression rather than proving the wait: a Close
+	// that does not wait returns in microseconds, long inside it.
+	select {
+	case <-returned:
+		t.Fatal("Close returned while the vault's file was still open")
+	case <-time.After(50 * time.Millisecond):
+	}
+	freed.Do(func() { close(release) })
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return once the handle had been closed")
+	}
+	// And the proof the seam gives: the close ran to its end first.
+	if !closedKS.Load() {
+		t.Fatal("Close returned before the keystore's own Close had finished")
+	}
+}
+
+// The wait is bounded: a handle that does not close — afterLock waits for a
+// cancelled ceremony and for a pending touch first, which is the card's own
+// time — never keeps the process standing (APP.md §5).
+func TestCloseDoesNotWaitForeverForTheLocksHandle(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	h.c.lockWait = 20 * time.Millisecond // the real budget, in miniature
+	release := make(chan struct{})
+	var freed sync.Once
+	h.c.closeKS = func(ks *keystore.Keystore) {
+		<-release
+		ks.Close()
+	}
+	returned := make(chan struct{})
+	// However this test ends, the held close is let go and both goroutines
+	// are waited for: a seam left blocked would hold the vault's file open
+	// past the test.
+	t.Cleanup(func() {
+		freed.Do(func() { close(release) })
+		<-returned
+		h.c.lockWG.Wait()
+	})
+	go func() { h.c.Close(); close(returned) }()
+
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close waited past its bound for a handle that would not close")
+	}
+	if !h.logged("did not close the vault's file within") {
+		t.Fatal("the core did not say that the lock's handle outlived the budget")
+	}
+}
+
+// The ordinary path: the lock's handle is closed long before Close is
+// called, and Close does not linger for the budget it never needs.
+func TestCloseAfterAnOrdinaryLockReturnsPromptly(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	h.c.lockWait = time.Minute // a wait of the budget would be seen
+
+	returned := make(chan struct{})
+	go func() { h.c.Close(); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close lingered after an ordinary lock")
 	}
 }
 

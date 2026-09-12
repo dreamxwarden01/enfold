@@ -229,6 +229,77 @@ type fakeInput struct {
 func (f *fakeInput) set(t time.Time)              { f.t, f.ok = t, true }
 func (f *fakeInput) LastInput() (time.Time, bool) { return f.t, f.ok }
 
+// An expired idle callback can be waiting for the state mutex while an
+// accepted Activity renews the deadline behind it. It must not lock the
+// session the grant just extended, and the timer the grant armed must still
+// lock at its own deadline (APP.md §2).
+func TestStaleIdleCallbackAfterActivity(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	src := &fakeInput{}
+	h.c.deps.Input = src
+	h.unlockWithPassword()
+	stale := h.idleCallback()
+	h.clk.Advance(3 * time.Second)
+	src.set(h.clk.Now())
+	h.c.Activity()
+	granted := h.status()
+	if granted.LocksAt != h.clk.Now().Add(defaultIdle).Unix() {
+		t.Fatalf("the grant did not extend: %+v", granted)
+	}
+	stale() // the old callback, held at the mutex while the grant renewed
+	if st := h.status(); st.State != StateUnlocked {
+		t.Fatalf("the stale callback locked: %s", st.State)
+	}
+	if st := h.status(); st.LocksAt != granted.LocksAt {
+		t.Fatalf("the deadline moved: %+v", st)
+	}
+	h.clk.Advance(defaultIdle)
+	h.rec.waitState(t, StateLocked)
+}
+
+// A callback from a session that has ended does not lock the next one.
+func TestStaleIdleCallbackFromAnEndedSession(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	stale := h.idleCallback()
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	h.unlockWithPassword()
+	stale()
+	if st := h.status(); st.State != StateUnlocked {
+		t.Fatalf("a previous session's callback locked: %s", st.State)
+	}
+}
+
+// The absolute cap applies regardless: an Activity grant re-arms the idle
+// timer and does not touch it.
+func TestAbsoluteLocksAfterAnActivityGrant(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	start := h.clk.Now()
+	for h.clk.Now().Sub(start) < defaultAbsolute-5*time.Minute {
+		h.clk.Advance(5 * time.Minute)
+		h.c.Activity()
+		if st := h.status(); st.State != StateUnlocked {
+			t.Fatalf("locked before the cap at +%v", h.clk.Now().Sub(start))
+		}
+	}
+	h.clk.Advance(5 * time.Minute)
+	h.rec.waitState(t, StateLocked)
+}
+
+// The ordinary idle expiry still locks.
+func TestIdleExpiryStillLocks(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	h.clk.Advance(defaultIdle - time.Second)
+	if st := h.status(); st.State != StateUnlocked {
+		t.Fatalf("locked early: %s", st.State)
+	}
+	h.clk.Advance(time.Second)
+	h.rec.waitState(t, StateLocked)
+}
+
 func TestTokenUnlock(t *testing.T) {
 	card := newFakeCard("123456")
 	pub := card.addKey(0x9d, true)

@@ -50,7 +50,15 @@ type vaultState struct {
 	absoluteAt     time.Time
 	idleTimer      Timer
 	absTimer       Timer
-	lastGrant      time.Time // last accepted activity reset
+	// idleGen and absGen retire the timers' callbacks. Every arm bumps its
+	// own generation and the callback carries the value it was armed with: a
+	// callback that has already fired and waits for the mutex — while
+	// Activity renews the idle deadline, or while a lock ends the session —
+	// finds its generation gone and does nothing. The two are separate
+	// because Activity re-arms only the idle timer.
+	idleGen   uint64
+	absGen    uint64
+	lastGrant time.Time // last accepted activity reset
 
 	// note is the one quiet line the lock screen carries from a ceremony
 	// that has already ended — today token.password_deadline, beside the
@@ -519,6 +527,18 @@ func (c *Core) Lock() { c.LockNow(ReasonManual) }
 // call from any thread, including a Win32 message loop.
 func (c *Core) LockNow(reason LockReason) {
 	c.mu.Lock()
+	after := c.lockLocked(reason)
+	c.mu.Unlock()
+	after()
+}
+
+// lockLocked is the whole of a lock that happens under the state mutex; it
+// returns the rest — the preview's secrets and the unbounded half — for the
+// caller to run once it releases the mutex. A caller that must decide and
+// lock under one hold keeps it across both: a timer checks its deadline and
+// locks without letting an Activity grant in between (APP.md §2). Caller
+// holds the state mutex.
+func (c *Core) lockLocked(reason LockReason) func() {
 	v := &c.vault
 	// A ceremony in any state is latched and cancelled: its VMK, its card
 	// and its prompts must not outlive the lock (DESIGN §10).
@@ -539,11 +559,11 @@ func (c *Core) LockNow(reason LockReason) {
 	// state: nothing decrypted outlives a trigger.
 	preview := c.preview
 	if v.state != StateUnlocked {
-		c.mu.Unlock()
-		if preview != nil {
-			preview.dropAllSecrets()
+		return func() {
+			if preview != nil {
+				preview.dropAllSecrets()
+			}
 		}
-		return
 	}
 	c.stopTimersLocked()
 	if v.sess != nil {
@@ -555,11 +575,12 @@ func (c *Core) LockNow(reason LockReason) {
 	v.state = StateLocked
 	c.bump()
 	c.lockWG.Add(1)
-	c.mu.Unlock()
-	if preview != nil {
-		preview.dropAllSecrets()
+	return func() {
+		if preview != nil {
+			preview.dropAllSecrets()
+		}
+		go c.afterLock(ks, cer, reason)
 	}
-	go c.afterLock(ks, cer, reason)
 }
 
 // afterLock is the unbounded half of a lock: it waits for a cancelled
@@ -586,8 +607,11 @@ func (c *Core) afterLock(ks *keystore.Keystore, cer *ceremony, reason LockReason
 	c.emitArchivesChanged()
 }
 
-// stopTimersLocked stops both session timers.
+// stopTimersLocked stops both session timers and retires their callbacks,
+// so that one already past its Stop cannot lock a later session.
 func (c *Core) stopTimersLocked() {
+	c.vault.idleGen++
+	c.vault.absGen++
 	if c.vault.idleTimer != nil {
 		c.vault.idleTimer.Stop()
 		c.vault.idleTimer = nil
@@ -623,14 +647,52 @@ func (c *Core) armTimersLocked() {
 	if v.locksAt.IsZero() || !v.locksAt.After(now) || next.Before(v.locksAt) {
 		v.locksAt = next
 	}
-	v.idleTimer = c.deps.Clock.AfterFunc(v.locksAt.Sub(now), func() { c.LockNow(ReasonIdle) })
+	v.idleGen++
+	idleGen := v.idleGen
+	v.idleTimer = c.deps.Clock.AfterFunc(v.locksAt.Sub(now), func() { c.idleExpired(idleGen) })
 	// The absolute deadline follows the current setting from the unlock.
 	v.absoluteAt = v.lastUnlockedAt.Add(abs)
 	remaining := v.absoluteAt.Sub(now)
 	if remaining <= 0 {
 		remaining = time.Millisecond
 	}
-	v.absTimer = c.deps.Clock.AfterFunc(remaining, func() { c.LockNow(ReasonAbsolute) })
+	v.absGen++
+	absGen := v.absGen
+	v.absTimer = c.deps.Clock.AfterFunc(remaining, func() { c.absoluteExpired(absGen) })
+}
+
+// idleExpired is the idle timer's callback. It locks only while the vault
+// is Unlocked, this timer is still the session's own, and the deadline has
+// really passed: a callback that fired while Activity held the mutex finds
+// the deadline renewed and returns, and the timer Activity armed locks in
+// its place. The check and the lock are one hold of the mutex, so no grant
+// lands between them (APP.md §2).
+func (c *Core) idleExpired(gen uint64) {
+	c.mu.Lock()
+	v := &c.vault
+	if v.state != StateUnlocked || v.idleGen != gen || c.now().Before(v.locksAt) {
+		c.mu.Unlock()
+		return
+	}
+	after := c.lockLocked(ReasonIdle)
+	c.mu.Unlock()
+	after()
+}
+
+// absoluteExpired is the absolute timer's callback. The cap applies
+// whatever the input did, so nothing but this session's own deadline
+// answers for it; the check and the lock are one hold, as the idle timer's
+// are.
+func (c *Core) absoluteExpired(gen uint64) {
+	c.mu.Lock()
+	v := &c.vault
+	if v.state != StateUnlocked || v.absGen != gen || c.now().Before(v.absoluteAt) {
+		c.mu.Unlock()
+		return
+	}
+	after := c.lockLocked(ReasonAbsolute)
+	c.mu.Unlock()
+	after()
 }
 
 // Activity is the frontend's heartbeat: a request to reset the idle timer,
@@ -660,10 +722,12 @@ func (c *Core) Activity() {
 		v.idleTimer.Stop()
 	}
 	v.locksAt = now.Add(v.idle)
-	v.idleTimer = c.deps.Clock.AfterFunc(v.idle, func() { c.LockNow(ReasonIdle) })
-	changed := now.Sub(v.lastGrant) > 0 // always; the emit is rate-limited below
-	_ = changed
+	v.idleGen++
+	gen := v.idleGen
+	v.idleTimer = c.deps.Clock.AfterFunc(v.idle, func() { c.idleExpired(gen) })
 	c.mu.Unlock()
+	// Every accepted grant emits the state once; the grant itself is what is
+	// rate-limited, to one every two seconds.
 	c.emitState()
 }
 

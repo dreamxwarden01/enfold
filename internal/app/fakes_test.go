@@ -794,6 +794,20 @@ func (h *harness) answerTokenUnlock(pin string) {
 
 func (h *harness) status() VaultStatus { return h.c.Status() }
 
+// idleCallback is what the session's idle timer runs when it expires. A
+// test holds one and calls it out of turn, the way a callback that has
+// already fired runs late because it waited for the state mutex.
+func (h *harness) idleCallback() func() {
+	h.t.Helper()
+	h.c.mu.Lock()
+	defer h.c.mu.Unlock()
+	t, ok := h.c.vault.idleTimer.(*fakeTimer)
+	if !ok {
+		h.t.Fatal("no idle timer is armed")
+	}
+	return t.f
+}
+
 // attempt is the agreement the running ceremony waits on, or the pending
 // touch when none does: the handle a test reads the kept touch through.
 func (h *harness) attempt() *attempt {

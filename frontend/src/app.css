@@ -48,6 +48,11 @@
   --touch-ring-2: rgba(255, 255, 255, 0.14);
   --focus-outer: #141416;
   --focus-inner: #ffffff;
+  /* The ring on a selectable row (APP.md §7, ruled 2026-09-11): a green a
+     step past the accent — darker here, brighter in the dark theme, where
+     contrast goes the other way — so it reads as a ring inside the
+     selected row's own wash and not as the black outer ring of a button. */
+  --focus-row: #0b5a50;
   --shadow-card: 0 1px 2px rgba(16, 17, 20, 0.06), 0 2px 8px rgba(16, 17, 20, 0.05);
   --shadow-pop: 0 8px 24px rgba(16, 17, 20, 0.13);
   --shadow-window: 0 12px 40px rgba(16, 17, 20, 0.16), 0 2px 6px rgba(16, 17, 20, 0.1);
@@ -116,6 +121,7 @@
     --touch-ring-2: rgba(84, 210, 185, 0.14);
     --focus-outer: #ffffff;
     --focus-inner: #1c1c20;
+    --focus-row: #6adcc5;
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
     --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
     --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
@@ -164,6 +170,7 @@
   --touch-ring-2: rgba(84, 210, 185, 0.14);
   --focus-outer: #ffffff;
   --focus-inner: #1c1c20;
+  --focus-row: #6adcc5;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
   --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
   --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
@@ -345,6 +352,13 @@ select.input { border-bottom-color: var(--ctl-bottom); border-bottom-width: 1px;
 .bar.danger .i { color: var(--danger); }
 .bar strong { font-weight: 600; color: var(--ink); }
 .bar .grow { flex: 1; }
+/* The locked banner (APP.md §7, ruled 2026-09-11): one line of 40 px with
+   everything on it centred — the icon, the sentence and the small button
+   (28 px) — 6 px of air above and below that button, the border's pixel
+   included, which is the 40. It is a minimum, not a cap: a window narrow
+   enough to wrap the sentence grows the line rather than cutting it. */
+.bar.line { align-items: center; min-height: 40px; padding: 5px 12px; }
+.bar.line .i { margin-top: 0; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 11px;
   background: var(--surface-alt); border: 1px solid var(--stroke); font-size: 11.5px; color: var(--ink-2);
@@ -413,7 +427,21 @@ thead th button { background: none; border: none; padding: 0; font: inherit; col
 tbody td { padding: 0 12px; height: 36px; border-bottom: 1px solid var(--stroke); color: var(--ink-2); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: var(--surface-alt); }
-tbody tr:focus-visible { outline: 2px solid var(--focus-outer); outline-offset: -2px; box-shadow: none; border-radius: 0; }
+/* The focus ring on a selectable row (APP.md §7, ruled 2026-09-11) is
+   drawn inside the row's cells, never as an `outline` on the <tr>:
+   Chromium draws that one per cell, unevenly, and lets the row's own
+   bottom border thicken under it. Each cell carries the top and bottom
+   edges, the first and last carry the sides, and the row's border is
+   turned transparent for the moment it is focused so the 2 px never
+   becomes 3 (the last row has no border to double with — its ring is the
+   same). */
+tbody tr:focus-visible { outline: none; box-shadow: none; border-radius: 0; }
+tbody tr:focus-visible > td {
+  border-bottom-color: transparent;
+  box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row);
+}
+tbody tr:focus-visible > td:first-child { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset 2px 0 0 var(--focus-row); }
+tbody tr:focus-visible > td:last-child { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
 tbody tr[aria-selected="true"] td, tbody tr[aria-selected="true"]:hover td { background: var(--accent-wash); }
 tbody tr[aria-selected="true"] .fname { color: var(--ink); font-weight: 600; }
 .fname { color: var(--ink); display: flex; align-items: center; gap: 9px; min-width: 0; }
@@ -654,20 +682,21 @@ tbody tr.up .fname { color: var(--ink-2); }
 .input:disabled { background: var(--surface-alt); color: var(--ink-3); border-bottom-color: var(--ctl-bottom); }
 /* Responsive (APP.md §6): the two columns merge when the body is narrow, and a row stacks —
    the title, its line, then the control on a line of its own — when its card is. The window
-   itself never goes below 880 × 560. */
-.layer-body { container-type: inline-size; }
+   itself never goes below 880 × 560. The queries are the body's own width, not the window's;
+   the body is also the box the Archives page's panel is positioned against (below). */
+.layer-body { container-type: inline-size; position: relative; }
 @container (max-width: 840px) {
   .ks-cols { grid-template-columns: 1fr; }
-  /* The inspector's pane goes under the list rather than beside it, and
-     keeps its own scroll so its save bar stays where the edits are. */
-  .arch-split { grid-template-columns: 1fr; flex: 1 0 auto; }
-  .arch-split .details { max-height: 60vh; }
   /* The file table gives up Modified first, so the name always keeps room
      (APP.md §6, the Archive page): the column goes to nothing and its
      cells with it, rather than standing there empty. */
   .file-split .w-date { width: 0; }
   .file-split thead th:nth-child(5), .file-split tbody td:nth-child(5) { display: none; }
   .file-split thead th .hidden-sort.k-modified { display: inline; }
+  /* The focus ring keeps its right edge where the column went (APP.md §7,
+     ruled 2026-09-12): the edge is the last cell still shown, not the
+     last child, which is now a cell nobody draws. */
+  .file-split tbody tr:focus-visible > td:nth-child(4) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
 }
 /* Then Type, at the width where the three fixed columns would leave the
    name less than a name; Name and Size always. */
@@ -675,11 +704,112 @@ tbody tr.up .fname { color: var(--ink-2); }
   .file-split .w-type { width: 0; }
   .file-split thead th:nth-child(4), .file-split tbody td:nth-child(4) { display: none; }
   .file-split thead th .hidden-sort.k-type { display: inline; }
+  /* And again, Size being the last cell shown from here down. */
+  .file-split tbody tr:focus-visible > td:nth-child(3) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
 }
 /* The details pane scrolls on its own, and its save bar is in flow at the
    foot of that pane and sticky there: it can never cover the last field
    for good (APP.md §6, the save bar). */
 .arch-split .details .savebar-wrap { position: sticky; bottom: 12px; margin: auto 12px 12px; z-index: 3; }
+
+/* ---------- the Archives page's bottom panel (APP.md §6, refined 2026-09-12) ----------
+   Below a fixed 1120 px of body — the width at which the 300 px pane
+   begins to squeeze the Name column shorter than *Last saved*, so a
+   threshold and not a proportion — the details are one element at the
+   foot of the body instead of a column beside the list: its header is
+   the whole of it when collapsed (a line of 44 px) and stays fixed at
+   its top when it is open, with the body scrolling under it. The list is
+   never resized by any of it — the room the collapsed panel needs is the
+   split's own padding — and the panel grows upwards over the list,
+   pushing the selected row ahead of its top edge (the script measures
+   that; the two numbers it needs are these). Nothing here runs above the
+   threshold: the header is a heading, the panel is the side pane. */
+.arch-split { --panel-line: 44px; --panel-head: 64px; --panel-foot: 14px; }
+.details-head .chev, .details-head .head-line { display: none; }
+/* With no row the side pane is the count alone, as it was; the panel
+   below the threshold always has its header, named or not. */
+.details.no-row .details-head { display: none; }
+/* The inner and the body are boxes the bottom panel needs and the side
+   pane does not: above the threshold they are no boxes at all, so the
+   pane lays its heading, facts and actions out exactly as it always did. */
+.details-inner, .details-body { display: contents; }
+/* The room the push needs past the list's own end (the script sets it,
+   lib/archbar.ts's overScroll): an element after the table, so the sticky
+   header and every row's place in the list are untouched by it. It is
+   hidden until the panel rises and hidden again the moment the collapse's
+   motion ends. */
+.over-spacer { height: 0; }
+/* The stylesheet owns the threshold and this is how the script reads its
+   answer: no box at all above it, one pixel below it. */
+.arch-probe { position: absolute; width: 0; height: 0; pointer-events: none; }
+@container (max-width: 1119.98px) {
+  /* The room the collapsed panel takes, and 12 px of air over it, so the
+     list's card and the panel's do not touch. */
+  .arch-split { grid-template-columns: 1fr; padding-bottom: calc(var(--panel-line) + var(--panel-foot) + 12px); }
+  .arch-probe { width: 1px; }
+  /* The card is the only thing a frame of the motion touches, and only
+     its height: the script writes that to this element's own style, never
+     through an inherited custom property, which restyles the whole subtree
+     (DECISIONS, "The panel's frame cost, measured"). A layer of its own,
+     below the threshold and only here, so the height is a surface moving
+     rather than a shadow and a rounded clip repainted. */
+  .details {
+    position: absolute; left: 24px; right: 24px; bottom: var(--panel-foot); z-index: 4;
+    display: block; height: var(--panel-line); overflow: hidden;
+    box-shadow: var(--shadow-pop); will-change: transform;
+  }
+  /* The inner is laid out once, at the panel's open height (the script
+     sets it), and pinned to the card's top: the card growing over it
+     uncovers more of the same boxes and measures none of them again. */
+  .details-inner {
+    position: absolute; left: 0; right: 0; top: 0; height: var(--panel-head);
+    display: flex; flex-direction: column; will-change: transform;
+  }
+  .details.no-row .details-head { display: block; }
+  /* The header is a fixed 64 px whose top 44 px are the collapsed line, so
+     the card at 44 px shows exactly that line and nothing else. Its two
+     shapes — the line, and the eyebrow over the name that is the wide
+     pane's heading — cross-fade as the card grows; neither ever moves,
+     and the header's own height never changes. */
+  .details-head {
+    position: relative; display: block; flex: none;
+    height: var(--panel-head); padding: 0; border-bottom: 1px solid var(--stroke);
+  }
+  /* The control's ring is drawn inside it: the panel clips its own box. */
+  .details-head:focus-visible { outline-offset: -2px; box-shadow: none; }
+  /* The cross-fade is the script's, not a transition of its own: the two
+     opacities are a function of the card's height, written from the same
+     frame as the height and the scroll (APP.md §6, one frame clock), so a
+     reversal part-way or a resettle that snaps the card cannot leave the
+     header fading on another clock. The values below are the collapsed
+     card's, which is what the panel starts and ends at. */
+  .details-head .head-stack { position: absolute; left: 14px; right: 42px; top: 11px; opacity: 0; will-change: opacity; }
+  .details-head .head-stack h3 { margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .details-head .head-line {
+    position: absolute; left: 14px; right: 38px; top: 0; height: var(--panel-line);
+    display: flex; align-items: center; gap: 10px; min-width: 0; will-change: opacity;
+  }
+  .details-head .head-line .eyebrow { flex: none; }
+  .details-head .head-line .hname { font-size: 13px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The chevron is a sign, not a button: it turns with the panel and is
+     dim while there is nothing to open. It keeps the collapsed line's own
+     middle in both shapes, so the growth never moves it. Its turn stays a
+     transition — a transform the compositor runs, which reverses on
+     itself and lands where the class says whatever the motion did. */
+  .details-head .chev { display: block; position: absolute; right: 12px; top: 15px; color: var(--ink-3); transition: transform var(--dur-move) var(--ease-enter); }
+  .details-head .chev.up { transform: rotate(180deg); }
+  .details.no-row .head-line .eyebrow, .details.no-row .chev { opacity: 0.5; }
+  /* The body scrolls under the header, which is outside its scroller, and
+     takes the rest of the inner's fixed height. A collapsed panel clips
+     it, and clipped is not gone: it is `inert` from the first frame of a
+     collapse and hidden outright once the card is down, so no Tab and no
+     click can reach a field nobody can see. */
+  .details-body {
+    display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: auto;
+    will-change: transform; visibility: hidden; transition: visibility 0s linear var(--dur-move);
+  }
+  .details.up .details-body { visibility: visible; transition: visibility 0s; }
+}
 @container (max-width: 470px) {
   .setrow { flex-direction: column; align-items: stretch; gap: 8px; }
   .setrow .lab { flex: none; }
@@ -699,7 +829,10 @@ tbody tr.up .fname { color: var(--ink-2); }
   position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 10px 8px 12px;
   border: 1px solid var(--stroke-strong); border-radius: var(--r-card); color: var(--ink);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
-  backdrop-filter: blur(18px) saturate(1.6); -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  /* The standard property alone (APP.md §6, ruled 2026-09-12): the
+     minifier kept only the -webkit- twin, which the engine does not
+     honour, so the frost never rendered in a build. */
+  backdrop-filter: blur(18px) saturate(1.6);
   box-shadow: var(--shadow-pop), inset 0 1px 0 color-mix(in srgb, var(--surface) 80%, transparent);
   transition: border-color var(--dur-hover) var(--ease-enter), box-shadow var(--dur-hover) var(--ease-enter);
 }

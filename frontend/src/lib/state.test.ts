@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ArchiveStat, DragOutResult, FileRow, Page, VaultStatus } from "./api";
+import type { ArchiveStat, DragOutResult, FileRow, OpView, Page, VaultStatus } from "./api";
 
 // The store's ordering rules (APP.md §2.4, §6, ruled 2026-09-10): which
 // reply is applied and which is dropped, what a navigation clears, and
@@ -309,6 +309,65 @@ describe("the boot gate (booted)", () => {
     expect(store.booted).toBe(true);
     expect(store.bootFailed).toBe("");
     expect(store.status?.seq).toBe(5);
+  });
+});
+
+// The operations a status carries (APP.md §2.4, ruled 2026-09-12): the
+// snapshot is taken under the core's lock and emitted after it, so a
+// newer op.progress may already have landed — a status carried by an
+// event fills in what the page does not know and never overwrites what it
+// tracks, and only a status the page asked for replaces them.
+describe("the operations a status carries", () => {
+  const op = (id: string, done: number, finished = false) =>
+    ({ id, kind: "add", done, total: 100, items: 0, dragItems: 0, phase: "", startedAt: 1, finished, returned: 0 }) as unknown as OpView;
+  const withOps = (seq: number, ops: OpView[]) => ({ seq, state: "unlocked", openArchives: 0, ops }) as unknown as VaultStatus;
+
+  // The store booted on an empty status, ready to be told about ops.
+  async function booted() {
+    vi.useFakeTimers();
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  // A Status the page asks for, applied.
+  async function asked(s: VaultStatus) {
+    m.Status.mockResolvedValueOnce(s);
+    void store.refreshAll();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("fills in an operation the page has never seen", async () => {
+    await booted();
+    m.handlers["vault.state"]({ data: withOps(2, [op("o1", 10)]) });
+    expect(store.ops["o1"]?.done).toBe(10);
+  });
+
+  it("leaves the progress the page already tracks alone", async () => {
+    await booted();
+    m.handlers["op.progress"]({ data: op("o1", 50) });
+    m.handlers["vault.state"]({ data: withOps(2, [op("o1", 10), op("o2", 5)]) });
+    expect(store.ops["o1"].done).toBe(50); // the event's older figure is not written back
+    expect(store.ops["o2"].done).toBe(5); // and the one it did not know is filled in
+  });
+
+  it("replaces them from a status the page asked for", async () => {
+    await booted();
+    m.handlers["op.progress"]({ data: op("o1", 50) });
+    await asked(withOps(3, [op("o1", 70)]));
+    expect(store.ops["o1"].done).toBe(70);
+  });
+
+  it("never un-finishes an operation that has ended, asked for or not", async () => {
+    await booted();
+    m.handlers["op.progress"]({ data: op("o1", 100, true) });
+    m.handlers["vault.state"]({ data: withOps(2, [op("o1", 60)]) });
+    expect(store.ops["o1"].finished).toBe(true);
+    await asked(withOps(3, [op("o1", 60)]));
+    expect(store.ops["o1"].finished).toBe(true);
+    expect(store.ops["o1"].done).toBe(100);
   });
 });
 

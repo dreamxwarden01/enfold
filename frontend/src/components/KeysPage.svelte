@@ -149,7 +149,7 @@
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy("vault.tampered", st?.tamperedReason)}</span></div>
   {/if}
   {#if !unlocked}
-    <div class="bar"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">Changing the ways in needs the vault unlocked.</span><button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button></div>
+    <div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">Changing the ways in needs the vault unlocked.</span><button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button></div>
   {:else if st?.setupNeeded}
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">This vault has only its recovery key. Add a key — a YubiKey or a password — to finish setting it up; the recovery key is asked for first.</span></div>
   {/if}

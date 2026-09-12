@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { ext, fileIcon, hashText, keyId, plural } from "./format";
+import { ext, fileIcon, hashText, keyId, nearerDeadline, plural } from "./format";
+
+// The foot's countdown (APP.md §6, ruled 2026-09-12 after a review found
+// the foot reading the idle deadline alone): the absolute cap locks the
+// vault regardless of activity, so the nearer of the two is what it says.
+describe("nearerDeadline", () => {
+  it("is the nearer of the two, whichever that is", () => {
+    expect(nearerDeadline(1000, 1200)).toBe(1000);
+    expect(nearerDeadline(1200, 1000)).toBe(1000);
+    expect(nearerDeadline(1000, 1000)).toBe(1000);
+  });
+
+  it("takes the other one when a deadline is none at all — a zero is not 1970", () => {
+    expect(nearerDeadline(0, 1200)).toBe(1200);
+    expect(nearerDeadline(1200, 0)).toBe(1200);
+  });
+
+  it("is none when neither is set, which is what a locked vault reports", () => {
+    expect(nearerDeadline(0, 0)).toBe(0);
+  });
+});
 
 describe("keyId", () => {
   it("groups the first eight hex digits, upper-cased (FORMAT.md §18.4)", () => {

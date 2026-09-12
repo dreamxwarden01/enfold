@@ -3938,3 +3938,84 @@ plaintext off persistent storage for free, another volume only turns a desktop d
 rename into a copy; and the later "open a file in an outside program, repack what changed"
 workflow belongs in the same place, under the same manifest and sweep. The hour stays.
 
+## 2026-09-11 — The Archives page's bottom bar, the banner's line, the row's focus ring
+
+The user's pass over the pages after the drag-out: the locked banner's text sat below the
+middle of its button — one line of 40 px now, the small button, the text centred; the
+Archives page's details pane, stacked under the list in a narrower window, was a tall block
+that pushed the list away — it becomes a bottom bar: 44 px collapsed with *SELECTED* and the
+name and a greyed chevron, the list above it and never under it, the name appearing on a
+click without the bar growing, the expand sliding the panel up over the list with the selected
+row brought to the first line, the collapse sliding it back, everything animated, the
+threshold a fixed 1120 px of body width rather than a proportion, and the wide window's side
+pane untouched; and the focus ring on a selected row, drawn by `outline` on the `<tr>`, came
+out black, square and uneven (thicker under the name where the row's border met it) — it is
+an inset ring of a green a step darker than the selected row's ground, even on every side,
+on every selectable row of both lists.
+Refined on the first build (2026-09-12): not a bar plus a drawer but **one panel** — its
+header is the collapsed line and stays fixed at its top when expanded, one line becoming
+two; the list is never resized, only covered, the panel stopping where the list still shows
+its header and the selected row, scrolled to the top; the whole header is the control, the
+chevron a sign; the body scrolls under the header.
+And the motion, as the user pictured it: the rising panel *pushes* the selected row up ahead
+of its top edge, the list scrolling in step, at most to the first slot; the collapse is a spring let go — the list scrolls back down while blank space opens beneath
+it and rows are still pushed out above, and stops when either runs out. The second build
+read the push as bounded by the list's end, which left the last row of a list already at
+its end with a panel no taller than its clipped header: the spring sentence only means
+something if the push can carry the list past its end, so it does — a spacer under the
+panel gives the room, every row reaches the first slot, the panel always opens to the same
+height, and the collapse takes the spacer back with the scroll.
+
+**The panel's frame cost, measured** (2026-09-12). The first build of the bottom panel on the
+user's 240 Hz monitor: one or two frames badly late at an expand or a collapse, and the body's
+scroll choppy; the user also saw the foot's countdown refresh as they scrolled and asked
+whether every pixel raised an activity event. Measured in the browser pane at 238 Hz with a
+post-render probe (the long-animation-frame API is blind below 16 ms): every glide frame cost
+2.0–2.4 ms of main-thread time against 4.17 ms — the card had no compositor layer, so each
+frame's height write re-laid-out and repainted the panel, its rounded clip and its shadow, and
+re-scrolled a 40-row table painted on the main thread — with three discrete spikes: the
+click's own task (4.5 ms, a whole frame), a forced layout in the handler when the spacer was
+set (`void scrollHeight` after a padding write through an inherited custom property: the
+first painted frame at 11.6–12.8 ms, the panel frozen for three frames), and the spacer's
+removal on the collapse's last frame (5.0 ms). The idle countdown and the `vault.state` flush
+on an accepted Activity were bystanders (≤ 0.5 ms end to end); Activity is one call per five
+seconds while the user scrolls, never per pixel, and the countdown's refresh is the design —
+a wheel is input. A/B in the same rig: writing the height to the element's own style instead of the inherited
+`--panel-h` was the single biggest win — the median frame 2.3 → 1.7 ms, no dropped frames in
+either direction, the over-scroll expand's first paint 11.6–12.8 → 4.7 ms, the collapse's end
+spike gone — while a layer on the list's scroller gained nothing (its scroll already cost
+0.9 ms a step) and a layer on the card added little once the variable was gone; the body's
+scroller halved its step cost with one. Ruled (APP §6): the card's inner is laid out once at
+the open height and the card's height alone animates over it; card, inner and the body's
+scroller are compositor layers below the threshold; per-frame values go to the element's own style, never an
+inherited custom property; the handler reads everything, then writes, with no forced layout;
+the spacer is an element after the table and the list's viewport is held while the panel is
+up (a padding spacer grew a short list instead of scrolling it — a review's finding); the row
+is pushed from contact rather than eased in step; the body is inert on collapse; sort,
+filter, resize and the breakpoint reconcile. From the same review (Codex Astra, 13 findings,
+all anchors spot-checked): the foot's countdown shows the nearer of the two deadlines; the
+file list's focus ring keeps its right edge where columns are dropped; an event's status
+never overwrites an operation the page tracks; the idle timer carries a generation and checks
+its deadline before locking, since a callback already fired cannot be stopped; the banner's 40 px is a minimum; a remnant in `Activity()` is gone. And a find on the side: the
+save bar's frost never rendered in a build — the minifier kept only the `-webkit-` declaration
+and the engine honours only the standard one — so the prefix goes.
+
+**The rebuilt panel, reviewed** (2026-09-12). The pass built to the ruling above measured as
+intended (the handler's forced layout gone, 0.1-0.4 ms; the first painted frame 5.0-5.5 ms
+from 11.6-12.8; the median frame 1.6-2.0 ms; the short list scrolling) and a second outside
+review (Codex Astra, eight findings, every one on the panel and every one real; nothing on
+the countdown, the status merge or the timer generations) closed the sequences the first
+build had not thought through: a selection the filter took out could not open (the card
+stayed a line with the open header's shape) - it opens to its height with nothing to push;
+a row sorted far down the list while the panel was up could not ride the edge home and the
+collapse ended displaced - a ride that cannot end at home eases there instead (APP §6); a
+banner or an operation strip appearing above a short, held list moved it without a size
+change the observer saw - the split itself is observed; a sort or a second selection during
+the opening glide froze the card at its intermediate height - the shift always drives it to
+the open height; the resize path read after it wrote - it writes, then measures a frame
+later; a filter that removed the row mid-glide left the loop running - it is cancelled; the
+breakpoint crossing left a hidden field focused - the header takes the focus; and the
+header's cross-fade ran on CSS transitions beside the frame clock - its opacities are the
+glide's now, a function of the card's height, so a reversal or a snap cannot leave them
+behind.
+

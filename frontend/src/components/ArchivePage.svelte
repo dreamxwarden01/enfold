@@ -800,7 +800,9 @@
   </div>
 
   {#if !store.unlocked}
-    <div class="bar">
+    <!-- One line of 40 px, everything on it centred (APP.md §7, ruled
+         2026-09-11): .bar.line. -->
+    <div class="bar line">
       <svg class="i i-14"><use href="#i-lock" /></svg>
       <!-- One plain line (APP.md §2.3, §6, ruled 2026-09-10): the archive
            has no timeout of its own, and what it owes the vault is

@@ -98,9 +98,11 @@ reaching a service is an internal invariant violation that forces Locked.
 **Timers.** Idle (default 10 min) and absolute (default 60 min from unlock). **The idle timer
 is reset only by corroborated user input:** `Activity()` from the frontend is a *request*,
 granted only when `GetLastInputInfo` reports session input newer than the last granted reset
-(32-bit tick arithmetic, a backwards step counts as no input); core operations do **not** reset
-it — background work keeps its archive alive, never the session. The absolute cap applies
-regardless of activity. Both values come from the registry (§3 Settings) and are clamped in the
+(32-bit tick arithmetic, a backwards step counts as no input); core operations do **not** reset it — background work keeps its archive alive, never the session.
+A timer that fires checks, under the lock, that its generation is still the armed one and that
+its deadline has come before it locks: a callback that lost the race to an accepted reset, or
+one left over from a session since locked, does nothing (ruled 2026-09-12 — `Stop` on a timer
+that has already fired is no stop). The absolute cap applies regardless of activity. Both values come from the registry (§3 Settings) and are clamped in the
 core before the timers are armed (idle ≤ 30 min, absolute ≤ 8 h; absent, zero, unparsable or
 out of range → the default, never "off"), with a warning code when a stored value was replaced.
 
@@ -579,7 +581,12 @@ restarts the listing from offset zero, since rows may have moved between offsets
 survive it: the selection keeps the ids that still exist, the anchor its row if it still
 exists, and the header's tick is recomputed against the new `Total` (rows a commit added are
 not selected). `Status()` includes `Ops []OpView` so a window
-recreated mid-operation recovers progress; operation events are deltas over that snapshot.
+recreated mid-operation recovers progress; operation events are deltas over that snapshot —
+and a status carried by an event (`vault.state`, emitted for every accepted `Activity` among
+other things) only fills in operations the page does not know: it never overwrites one the
+page tracks, since the snapshot is taken under the core's lock and emitted after it, and a
+newer `op.progress` may already have landed (a status the page asked for — its own `Status()`
+— replaces them; ruled 2026-09-12).
 Until that first `Status()` call has answered — a reply or a failure; an event that lands
 first is applied but does not open the gate — the page draws **nothing of the vault's**: the
 brand mark alone, not the lock scene, not the list; and then the scene the newest accepted
@@ -1163,8 +1170,57 @@ waiting for the touch that was cancelled — unlock again to pick it up, or touc
 out to end it; that line is the lock screen's only: on the Keys page the pending touch left by a
 cancelled slot change or reveal is said by the next ceremony's own `token.pending` note while it
 waits, and on the first-run card a create or an import begun while a cancelled create's touch
-stands is answered with `token.pending`, a toast). Archives (list with details — its rows and its header carry the same checkboxes as the file
-list, with the same rules (a blank click clears; the header ticks all, ticked exactly when all
+stands is answered with `token.pending`, a toast). Archives (list with details — **the details pane is a side pane of 300 px while the page's
+body is at least 1120 px wide, a fixed threshold rather than a proportion (ruled 2026-09-11:
+the width below which the side pane would squeeze the Name column shorter than *Last
+saved*); below it the details become a bottom panel** (refined 2026-09-12 after the first
+build, and again after the first measured drags of it — the frame budget at 240 Hz is
+4.17 ms): one element at the foot of the page, a **card** whose **header** is the whole of it
+when collapsed — a single line of 44 px, the eyebrow *SELECTED* and the archive's name on the
+left, a chevron on the right that is a sign and not a button — and stays fixed at its top
+when expanded, two lines then (the eyebrow over the name, as the wide pane's heading). What
+the card holds never changes size: its inner — the header at a fixed 64 px whose top 44 px are
+the collapsed line, its two shapes cross-fading by opacity, and under it the body, name,
+description, facts and actions scrolling under the header — is laid out once at the panel's
+open height, and the collapse is the card's height alone going down to 44 px over that
+inner, clipping it; the card and its inner are each their own compositor layer, so a frame of
+the motion is one height on a flat surface and one scroll offset, never a layout of the
+body's fields nor a repaint of its text. The list sits above the collapsed card and is never
+resized by it: the expansion grows the card upwards **over** the list and **pushes the
+selected row up ahead of its top edge** — the row stays where it is until the rising edge
+reaches its foot, then rides it, the list scrolling exactly as far as the edge has come, at
+most to the list's first slot under the header row, where the card stops at the row's foot;
+the open height runs from the first slot's foot to the card's own. The
+push is not stopped by the list's own end: a row the list could not scroll that far (the
+last rows of any list, every row of a short one) is carried there past the end — a spacer
+after the table gives the room, and the list's viewport is held at its height while the
+panel is up so that a short list scrolls rather than grows — and the spacer never shrinks
+while the panel is up (a resize, which measures everything anew, is the one exception). The collapse is a spring let go: the edge goes down and the row rides
+it back until the list stands where it stood before the opening (a list scrolled by hand while the panel was up, or a row the ride could not carry all the
+way home — one sorted far down the list while the panel was up, whose foot would still be
+below the collapsed card's edge with the list at home — eases from where it is to there
+instead), never past the list's natural end, the spacer and the held viewport taken away when the motion ends. Nothing about
+the motion is guessed: the arithmetic (`lib/archbar.ts`) works on numbers read from the
+page, read all together before anything is written, and every per-frame value is written to
+the element's own style — never through an inherited custom property, which restyles the
+whole subtree each frame, and never beside a read that forces a layout inside the handler.
+**The whole header is the control**: a click anywhere on the collapsed line expands, a click
+anywhere on the expanded header collapses, Enter and Space on it do the same, Esc collapses,
+and a different row clicked while expanded keeps the panel up and brings that row to the
+first slot; nothing is selected → the name is empty, the chevron dim, and a click does
+nothing. The body is `inert` from the first frame of a collapse, and a focus inside it goes to
+the header. The list is reconciled, not left behind: a sort, a filter or a refresh that moves
+the selected row while the panel is up brings it to the first slot again (a row the filter
+took out of the list leaves the panel open at its height, nothing to push); a resize
+measures the open height again, holds the viewport at its new height and places the row
+without a second push, a running motion cancelled and placed at its targets; the layout going
+wide cancels the motion and clears the card's height, the spacer, the held viewport and the
+panel's state, and coming back narrow starts collapsed. The card, its inner and the body's scroller carry `will-change: transform` below the
+threshold and only there (measured: the list's own scroller gains nothing from a layer and
+keeps none; the write to the element's own style was the win). The header's cross-fade, the
+card's growth and the list's scroll all animate over the motion tokens' duration on one frame
+clock, and none of it changes the wide window's side pane — its rows and its header carry the same checkboxes as
+the file list, with the same rules (a blank click clears; the header ticks all, ticked exactly when all
 are); the header ticks the rows the filter shows; the details pane shows the row last clicked while
 it is ticked, else the sole ticked row, else nothing but a count ("3 archives selected"); an
 action that takes one archive works on the pane's row and is greyed unless exactly one is
@@ -1342,8 +1398,10 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   nothing jumps. The layer's foot is not part of the page and does not travel with it: one bar
   below the pages (`LayerFoot`), the page's note on the left — set by the page
   (`store.footNote`), faded in when the page changes and updated in place otherwise — and the
-  lock state on the right, always: the open padlock, *Locks in m:ss* and *Lock now* while
-  unlocked; the closed padlock and *Unlock* while locked with archives still open.
+  lock state on the right, always: the open padlock, *Locks in m:ss* — the nearer of the idle
+  and the absolute deadline, since the absolute cap locks regardless of activity (ruled
+  2026-09-12 after a review found the foot reading the idle deadline alone) — and *Lock now*
+  while unlocked; the closed padlock and *Unlock* while locked with archives still open.
 - *Rail.* Hover tints in over 120 ms and out over 160 ms; a press is instant (`--ctl-press`,
   the text to `--ink-2`); the current item's accent bar grows from its middle (180 ms) and the
   previous one's shrinks.
@@ -1356,7 +1414,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   as it is). Edits are staged, never saved on change: the page shows saved ⊕ draft and *derives*
   what is pending by diffing the two — dirty is never stored, so an edit put back by hand
   un-dirties itself; only what the user may change counts (a timeout while locked does not).
-  While nothing is pending there is no bar. While something is, a frosted bar (the surface at
+  While nothing is pending there is no bar. While something is, a frosted bar (`backdrop-filter`, the standard property alone — the
+  `-webkit-` twin was found to be the only one the minifier kept, and the engine does not
+  honour it, so the frost never rendered in a build; ruled 2026-09-12) (the surface at
   88% over a blur — enough to read through, not enough to read the content behind it — with an
   inset hairline so its edge reads) rises 8 px and fades in (fast) at the
   foot of the scroll pane — in flow after the content and sticky 12 px above the pane's bottom,
@@ -1383,6 +1443,18 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   side by side. The save bar wraps its chips onto their own line at the same width. The Archive page's file table is the same kind of rule: it drops *Modified* first and *Type*
   next as the pane narrows (at the widths the four columns need), Name and Size always, so the
   name column always keeps room.
+- *The locked banner* is one line of 40 px: its text vertically centred, its *Unlock* the
+  small button (28 px), the padding 6 px above and below (ruled 2026-09-11 after the text sat below the button's
+  middle) — 40 px is the line's minimum, not its cap: a window too narrow for the sentence
+  wraps it, and the line grows rather than cutting it.
+- *The focus ring on a selectable row* — a row of the file list or of the Archives list — is
+  an even 2 px ring drawn inside the row (an inset box shadow on its cells, never an `outline`
+  on the `<tr>`, which Chromium draws per cell, unevenly, and lets the row's bottom border
+  thicken), in a green a step darker than the selected row's own ground (`--focus-row`, one
+  token per theme), never the black outer ring of buttons and inputs (ruled 2026-09-11); and
+  the ring keeps its right edge at every width — the file list gives up its Modified and Type
+  columns below two widths, and the edge moves to the last cell still shown (ruled 2026-09-12
+  after a review found it open there).
 - *Dialogs stay put.* A dialog that offers a choice — a *Cancel*, a *Skip*, a *Replace* —
   does not close on a click outside it: the click is nothing (ruled 2026-09-10, "they have a
   Cancel"); Esc is *Cancel* where there is one, *Close* where the one action is *Close*, and

@@ -351,6 +351,15 @@ export const archivesCopy = {
   selectOne: "Select an archive.",
   selectedCount: (n: number): string => `${plural(n, "archive")} selected`,
   selectedName: (name: string): string => `${name} selected`,
+  // The bottom panel the details become in a narrow body (APP.md §6,
+  // refined 2026-09-12): the same eyebrow the side pane carries, and a
+  // header that is the control — so its name is what a click will do,
+  // and which archive it will do it for.
+  panelLabel: "Selected archive",
+  panelEyebrow: "Selected",
+  panelShow: (name: string): string => `${name} — show the details`,
+  panelHide: (name: string): string => `${name} — hide the details`,
+  panelNone: "No archive selected",
 };
 
 // The Type column (APP.md §6): a folder is *Folder*, a file's type is

@@ -383,7 +383,15 @@ class Store {
     this.bootFailed = "";
     if (s.ops) {
       for (const o of s.ops) {
-        if (!this.ops[o.id]?.finished) this.ops[o.id] = o;
+        // A status carried by an event is a snapshot taken under the core's
+        // lock and emitted after it, so a newer op.progress may already have
+        // landed: it fills in the operations the page does not know and never
+        // overwrites one it tracks. A status the page asked for — its own
+        // Status() — replaces them (APP.md §2.4, ruled 2026-09-12). Neither
+        // ever un-finishes an operation that has ended.
+        const known = this.ops[o.id];
+        if (known && (!snapshot || known.finished)) continue;
+        this.ops[o.id] = o;
       }
     }
     if (s.ceremony && s.ceremony.seq > this.ceremonySeq) {

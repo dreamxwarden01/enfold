@@ -8,7 +8,7 @@
   import { fade } from "svelte/transition";
   import { Vault } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { countdown } from "../lib/format";
+  import { countdown, nearerDeadline } from "../lib/format";
   import { motion } from "../lib/motion";
 
   interface Props {
@@ -21,7 +21,10 @@
 <div class="layer-foot">
   {#key pageKey}<span class="note ellipsis" in:fade={motion()}>{store.footNote}</span>{/key}
   {#if store.unlocked && st}
-    <span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(st.locksAt, store.now)}<button type="button" class="btn link" onclick={() => void Vault.Lock()}>Lock now</button></span>
+    <!-- The nearer of the idle deadline and the absolute one (APP.md §6,
+         ruled 2026-09-12): the absolute cap locks regardless of activity,
+         so the idle one alone would promise time the vault does not have. -->
+    <span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(nearerDeadline(st.locksAt, st.absoluteAt), store.now)}<button type="button" class="btn link" onclick={() => void Vault.Lock()}>Lock now</button></span>
   {:else}
     <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>Keystore locked<button type="button" class="btn link" onclick={() => store.go("lock")}>Unlock</button></span>
   {/if}

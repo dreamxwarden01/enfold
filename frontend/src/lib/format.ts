@@ -51,6 +51,17 @@ export function countdown(untilUnix: number, nowMs: number = Date.now()): string
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+// nearerDeadline picks the deadline the foot counts down to (APP.md §6,
+// ruled 2026-09-12): the idle one and the absolute one, both Unix
+// seconds, and the absolute cap locks whatever the user is doing — so the
+// nearer of the two is the truth. A zero is no deadline at all, never a
+// deadline in 1970; none of them is zero.
+export function nearerDeadline(a: number, b: number): number {
+  if (a <= 0) return Math.max(0, b);
+  if (b <= 0) return a;
+  return Math.min(a, b);
+}
+
 // minutesLabel renders a timeout in minutes as the settings show it.
 export function minutesLabel(min: number): string {
   if (min === 0) return "default";

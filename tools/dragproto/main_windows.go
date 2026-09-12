@@ -17,7 +17,14 @@
 //     thread, and on which thread do they then arrive;
 //   - it does not, as the first real 5 GiB drop showed -- so does making the
 //     objects agile (-agile) move them, and what does that cost;
-//   - what does a slow producer (-delay) do to the window's responsiveness.
+//   - what does a slow producer (-delay) do to the window's responsiveness;
+//   - and then the questions the real application raised, which are not about
+//     the transfer at all but about the source's own window: does a message
+//     POSTED to it reach its loop while DoDragDrop runs (-postprobe), can the
+//     drag run on a thread of its own so the window's thread stays free
+//     (-thread), can the window be held rather than frozen (-disable), and is
+//     the target still reading the staged files after DoDragDrop has returned
+//     (-poll-after).
 //
 // Every COM call is logged to stderr with its thread id. That log is the
 // result; the window is only the handle.
@@ -68,11 +75,18 @@ type appState struct {
 	// The gesture. Only the window thread touches these: WM_LBUTTONDOWN arms
 	// the drag, the first WM_MOUSEMOVE past the system threshold starts it, and
 	// DoDragDrop runs its own modal loop until the button comes up.
-	armed    bool
-	dragging bool
-	start    point
-	drags    int
+	//
+	// Whether a drag is running is NOT here: under -thread it is cleared by the
+	// OLE thread, so it is an atomic of its own (dragRunning) rather than a
+	// field one thread writes and another reads.
+	armed bool
+	start point
+	drags int
 }
+
+// dragRunning is the one-drag-at-a-time guard. It is taken by the gesture on the
+// window thread and given back by whichever thread the drag finished on.
+var dragRunning atomic.Bool
 
 var app appState
 
@@ -128,6 +142,20 @@ func main() {
 			"with -hdrop: allow DROPEFFECT_COPY only and prefer copy, instead of allowing copy and move and preferring move")
 		scavenge = flag.Duration("scavenge", time.Hour,
 			"with -hdrop: at launch and every ten minutes, delete manifested staging folders older than this")
+
+		// The three flags of experiments 18-21. They exist because the real
+		// application -- a Wails v3 WebView2 window whose main thread runs
+		// DoDragDrop -- shows no progress at all during a drag, and none of the
+		// three explanations for that can be told apart by reading the code.
+		// See probe_windows.go and dragthread_windows.go.
+		postprobe = flag.Bool("postprobe", false,
+			"post a registered window message to the drag window every 250 ms for the whole of the drag, and once per 64 MiB from the extraction, to measure whether posted messages are dispatched while DoDragDrop runs")
+		thread = flag.Bool("thread", false,
+			"run DoDragDrop on a dedicated OLE thread with its own apartment and message-only window, instead of on the window's thread")
+		disable = flag.Bool("disable", false,
+			"EnableWindow(FALSE) on the main window from the moment the post-release GetData has handed the paths back until DoDragDrop returns, and TRUE again afterwards")
+		pollAfter = flag.Duration("poll-after", 20*time.Second,
+			"with -hdrop: after DoDragDrop returns, keep sampling the staged files for this long and report whether the target was still reading them; 0 turns it off")
 	)
 	flag.Var(&size, "size", "size of the first file, e.g. 5GiB, 256MiB, 1048576")
 	flag.Var(&source, "file",
@@ -138,6 +166,20 @@ func main() {
 	// every call asks dragThreadID which thread it arrived on.
 	agileMode.Store(*agile)
 	dragThreadID.Store(windows.GetCurrentThreadId())
+
+	// The experiment flags, likewise set before a window, a thread or a COM
+	// object exists, because all three read them.
+	threadMode = *thread
+	disableMode = *disable
+	pollAfterFor = *pollAfter
+	probeOn.Store(*postprobe)
+	if *postprobe {
+		probeMsg = registerWindowMessage(probeMessageName)
+		if probeMsg == 0 {
+			fmt.Fprintf(os.Stderr, "dragproto: RegisterWindowMessageW(%s) failed; -postprobe cannot run\n", probeMessageName)
+			os.Exit(1)
+		}
+	}
 
 	switch *streamAt {
 	case "end", "start":
@@ -229,6 +271,18 @@ func main() {
 	if *delay > 0 {
 		fmt.Printf("  producer delay: %d ms/MiB (a 5 GiB file would take about %s)\n",
 			*delay, time.Duration(*delay)*time.Millisecond*time.Duration(int64(size)>>20))
+	}
+	if *postprobe {
+		fmt.Printf("  -postprobe: a %s probe to the drag window for the whole of the drag, and one per 64 MiB from the extraction\n", probeInterval)
+	}
+	if *thread {
+		fmt.Printf("  -thread: DoDragDrop runs on a dedicated OLE thread; this window's thread keeps its own message loop\n")
+	}
+	if *disable {
+		fmt.Printf("  -disable: the window is disabled once the extraction has handed the paths back, and enabled again when DoDragDrop returns\n")
+	}
+	if *hdrop && *pollAfter > 0 {
+		fmt.Printf("  -poll-after: the staged files are sampled for %s after DoDragDrop returns, to see whether the target is still reading them\n", *pollAfter)
 	}
 	printHashes(app.files, *hash)
 	fmt.Println("\nDrag from the window's client area. The COM log is on stderr.")
@@ -419,6 +473,9 @@ func createWindow() windows.Handle {
 	procShowWindow.Call(h, swShowNormal)
 	procUpdateWindow.Call(h)
 	mainHWND.Store(h)
+	// -postprobe posts here: this is the window whose thread's loop the real
+	// application's frontend callbacks depend on.
+	registerProbeWindow(h, destMain)
 	logf("window 0x%X created on this thread", h)
 	return windows.Handle(h)
 }
@@ -442,6 +499,15 @@ func lParamPoint(lParam uintptr) point {
 }
 
 func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
+	// The probe's message is registered rather than constant -- its value is
+	// somewhere in 0xC000..0xFFFF and is only known at run time -- so it cannot
+	// be a case of the switch below and is tested first. Without -postprobe
+	// probeMsg is zero and this costs one comparison.
+	if probeMsg != 0 && message == probeMsg {
+		handleProbe(destMain, wParam, lParam)
+		return 0
+	}
+
 	switch message {
 	case wmLButtonDown:
 		app.armed = true
@@ -450,7 +516,7 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		return 0
 
 	case wmMouseMove:
-		if !app.armed || app.dragging || uint32(wParam)&mkLButton == 0 {
+		if !app.armed || dragRunning.Load() || uint32(wParam)&mkLButton == 0 {
 			return 0
 		}
 		p := lParamPoint(lParam)
@@ -468,6 +534,47 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		app.armed = false
 		procReleaseCapture.Call()
 		return 0
+
+	case wmTimer:
+		// -thread's heartbeat: the window thread saying, from inside its own
+		// loop, that it is still dispatching while the drag runs elsewhere.
+		if wParam == timerAlive {
+			aliveTick()
+			return 0
+		}
+
+	case wmDragEnded:
+		// Posted by a drag that ran on another thread. The window thread never
+		// waits on that thread; this is the whole of how a result comes back.
+		stopAliveTimer(hwnd)
+		logf("-thread: the window thread was told drag %d is over", int(wParam))
+		return 0
+
+	case wmSetEnabled:
+		// -disable, applied where it belongs: EnableWindow sends WM_CANCELMODE
+		// and WM_ENABLE to this window before it returns, and doing that from
+		// the window's own thread keeps the whole thing out of a cross-thread
+		// send.
+		applyWindowEnabled(hwnd, wParam != 0, "asked for by the drag")
+		return 0
+
+	case wmEnable:
+		logf("-disable: the main window received WM_ENABLE(%v) on its own thread", wParam != 0)
+		return 0
+
+	case wmCancelMode:
+		// EnableWindow sends this before WM_ENABLE. DefWindowProc's answer to it
+		// is to release the mouse capture -- and during a drag on THIS thread
+		// the capture is DoDragDrop's own, so passing it on would cancel the
+		// very drag -disable is trying to hold the window for. It is swallowed
+		// while a drag is running and passed on otherwise, because outside a
+		// drag the system asking us to cancel a mode is not ours to ignore.
+		if dragRunning.Load() {
+			logf("the main window received WM_CANCELMODE in phase %s (EnableWindow sends it); it is NOT passed to DefWindowProc, "+
+				"because the capture that would release during a drag on this thread is DoDragDrop's", currentDragPhase())
+			return 0
+		}
+		logf("the main window received WM_CANCELMODE outside a drag; passing it to DefWindowProc")
 
 	case wmPaint:
 		paint(hwnd)
@@ -718,16 +825,48 @@ func dropOperationEnded() {
 // ---------------------------------------------------------------------------
 // The drag.
 
+// startDrag is the gesture, and runs on the window thread. It decides which
+// thread the drag itself runs on and does nothing else -- above all it never
+// waits for a drag it handed to another thread, because the whole point of
+// -thread is that this thread stays free.
 func startDrag() {
-	if app.dragging {
+	if !dragRunning.CompareAndSwap(false, true) {
 		logf("a drag is already running; ignoring the gesture")
 		return
 	}
-	app.dragging = true
 	app.drags++
-	defer func() { app.dragging = false }()
+	n := app.drags
 
-	logf("---- drag %d starting ----", app.drags)
+	if threadMode {
+		// The heartbeat is set here, from the window thread, because a timer
+		// belongs to the window and the window belongs to this thread.
+		startAliveTimer(mainHWND.Load())
+		runDragOnOwnThread(n, func() {
+			dragRunning.Store(false)
+			// The only thing the drag sends back: a post, never a wait.
+			if h := mainHWND.Load(); h != 0 {
+				procPostMessageW.Call(h, wmDragEnded, uintptr(n), 0)
+			}
+		})
+		return
+	}
+
+	defer dragRunning.Store(false)
+	runDrag(n)
+}
+
+// runDrag is the drag itself, on whichever thread was chosen for it: the
+// window's own in the default mode, the dedicated OLE thread under -thread.
+// Everything it makes -- the staging folder, the data object, the drop source --
+// is made here, so that under -thread all of it belongs to that thread's
+// apartment.
+func runDrag(n int) {
+	// Set on every exit, so that a drag abandoned before DoDragDrop, one that
+	// was cancelled, and one that returned normally all leave the window
+	// enabled. Taking the hold back is a no-op if it was never taken.
+	defer releaseWindowHold("the drag is over")
+
+	logf("---- drag %d starting ----", n)
 
 	// -hdrop: the staging folder is made HERE, before DoDragDrop, because a
 	// target may ask for CF_HDROP during the hover and the answer has to be the
@@ -740,7 +879,7 @@ func startDrag() {
 			return
 		}
 		stage = s
-		logf("staging folder for drag %d: %s", app.drags, s.root)
+		logf("staging folder for drag %d: %s", n, s.root)
 		for i, p := range s.paths {
 			logf("    [%d] %s (%d bytes) -- the path the file WILL have", i, p, app.files[i].size)
 		}
@@ -785,10 +924,28 @@ func startDrag() {
 	var effect uint32 = dropEffectNone
 	logf("calling DoDragDrop(dataObject=0x%X, dropSource=0x%X, %s)",
 		dataObj.unknown(), srcObj.unknown(), effectName(uint32(allowed)))
+
+	// From here to the return is the stretch the three experiment flags are
+	// about. The probe starts first so that the very first instant of the modal
+	// loop is covered, and the input attachment is made last, immediately
+	// before the call.
+	probe := startProbeRun(n)
+	detach := attachDragInput()
+
 	start := time.Now()
 	ret, _, _ := procDoDragDrop.Call(dataObj.unknown(), srcObj.unknown(),
 		allowed, uintptr(unsafe.Pointer(&effect)))
 	took := time.Since(start)
+
+	setDragPhase(phaseReturned)
+	detach()
+	releaseWindowHold("DoDragDrop has returned")
+	// The OLE thread pumps nothing of its own, so whatever the modal loop did
+	// not dispatch is still sitting in its queue. Emptying it once, here, is
+	// what tells a message that was never dispatched from one that was never
+	// posted. It does nothing in the default mode, where the window's own loop
+	// drains the queue as soon as this call returns.
+	drainOleQueue()
 
 	// Step 3: "After DoDragDrop returns, call InOperation."
 	//
@@ -840,13 +997,23 @@ func startDrag() {
 	dataObj.release()
 
 	if peak, ok := peakWorkingSet(); ok {
-		logf("peak working set after drag %d: %d bytes (%.1f MiB)", app.drags, peak, float64(peak)/(1<<20))
+		logf("peak working set after drag %d: %d bytes (%.1f MiB)", n, peak, float64(peak)/(1<<20))
 	}
 	if stage != nil {
 		logf("%s", stage.summary())
+		// The cross-volume question, and the one that decides whether a staging
+		// folder may be deleted the moment DoDragDrop returns. It runs on a
+		// goroutine: the answer takes -poll-after seconds to arrive and nothing
+		// may wait for it here.
+		stage.reportPollAfter(pollAfterFor)
 	}
+	// The probe outlives the drag by design: in the default mode this thread IS
+	// the window thread, and a backlog the modal loop never dispatched can only
+	// arrive once this function has returned and the loop is running again. The
+	// summary is written by the poster's own goroutine after that grace period.
+	probe.finish()
 	logf("---- drag %d handed over; %d COM interface cells still registered ----",
-		app.drags, comRegistrySize())
+		n, comRegistrySize())
 }
 
 // ---------------------------------------------------------------------------

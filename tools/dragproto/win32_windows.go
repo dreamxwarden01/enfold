@@ -69,17 +69,29 @@ var (
 
 	procRegisterClassExW       = moduser32.NewProc("RegisterClassExW")
 	procCreateWindowExW        = moduser32.NewProc("CreateWindowExW")
+	procDestroyWindow          = moduser32.NewProc("DestroyWindow")
 	procDefWindowProcW         = moduser32.NewProc("DefWindowProcW")
 	procGetMessageW            = moduser32.NewProc("GetMessageW")
+	procPeekMessageW           = moduser32.NewProc("PeekMessageW")
 	procTranslateMessage       = moduser32.NewProc("TranslateMessage")
 	procDispatchMessageW       = moduser32.NewProc("DispatchMessageW")
 	procPostQuitMessage        = moduser32.NewProc("PostQuitMessage")
 	procLoadCursorW            = moduser32.NewProc("LoadCursorW")
 	procGetSystemMetrics       = moduser32.NewProc("GetSystemMetrics")
 	procRegisterClipboardFormW = moduser32.NewProc("RegisterClipboardFormatW")
+	procRegisterWindowMessageW = moduser32.NewProc("RegisterWindowMessageW")
 	procPostMessageW           = moduser32.NewProc("PostMessageW")
 	procSetCapture             = moduser32.NewProc("SetCapture")
 	procReleaseCapture         = moduser32.NewProc("ReleaseCapture")
+	procSetTimer               = moduser32.NewProc("SetTimer")
+	procKillTimer              = moduser32.NewProc("KillTimer")
+	procEnableWindow           = moduser32.NewProc("EnableWindow")
+	procIsWindowEnabled        = moduser32.NewProc("IsWindowEnabled")
+	procAttachThreadInput      = moduser32.NewProc("AttachThreadInput")
+	procGetCursorPos           = moduser32.NewProc("GetCursorPos")
+	procWindowFromPoint        = moduser32.NewProc("WindowFromPoint")
+	procGetAncestor            = moduser32.NewProc("GetAncestor")
+	procGetWindowRect          = moduser32.NewProc("GetWindowRect")
 	procBeginPaint             = moduser32.NewProc("BeginPaint")
 	procEndPaint               = moduser32.NewProc("EndPaint")
 	procDrawTextW              = moduser32.NewProc("DrawTextW")
@@ -216,13 +228,56 @@ const (
 	swShowNormal = 1
 
 	wmDestroy     = 0x0002
+	wmEnable      = 0x000A
 	wmPaint       = 0x000F
 	wmClose       = 0x0010
+	wmCancelMode  = 0x001F
+	wmTimer       = 0x0113
 	wmMouseMove   = 0x0200
 	wmLButtonDown = 0x0201
 	wmLButtonUp   = 0x0202
 
-	mkLButton = 0x0001
+	// WM_APP is "the starting value that applications can use to define
+	// private window messages". Two of them are used here, both posted TO the
+	// window thread and never sent: a drag that runs on another thread reports
+	// back by posting, and never by waiting.
+	wmApp        = 0x8000
+	wmDragEnded  = wmApp + 1
+	wmSetEnabled = wmApp + 2
+
+	// The MK_ flags of winuser.h, which are what IDropSource::QueryContinueDrag
+	// is handed in grfKeyState. MK_ALT is deliberately absent: it is not one of
+	// the MK_ values in winuser.h, and a guessed bit in a log line is worse than
+	// the raw hex that is printed beside these.
+	mkLButton  = 0x0001
+	mkRButton  = 0x0002
+	mkShift    = 0x0004
+	mkControl  = 0x0008
+	mkMButton  = 0x0010
+	mkXButton1 = 0x0020
+	mkXButton2 = 0x0040
+
+	// PM_REMOVE for the one deliberate PeekMessageW in the program: the
+	// -thread drain, which empties the OLE thread's own queue after
+	// DoDragDrop has returned.
+	pmRemove = 0x0001
+
+	// HWND_MESSAGE, ((HWND)-3) in winuser.h, is the parent that makes a window
+	// message-only: "It is not visible, has no z-order, cannot be enumerated,
+	// and does not receive broadcast messages. The window simply dispatches
+	// messages." It is what gives the -thread OLE thread a message queue
+	// without putting anything on screen.
+	hwndMessage = ^uintptr(2) // (HWND)-3
+
+	// GA_ROOT for GetAncestor: "Retrieves the root window by walking the chain
+	// of parent windows." A cursor over the prototype's client area resolves to
+	// the window itself, but a cursor over a child control would not, so the
+	// hit test is taken up to the root before it is compared with ours.
+	gaRoot = 2
+
+	// The -thread heartbeat timer's id. Any non-zero UINT_PTR will do; it is
+	// only ever used with this one window.
+	timerAlive = 1
 
 	smCXDrag = 68
 	smCYDrag = 69
@@ -449,6 +504,79 @@ func registerClipboardFormat(name string) uint16 {
 		panic("dragproto: RegisterClipboardFormatW failed for " + name)
 	}
 	return uint16(cf)
+}
+
+// registerWindowMessage registers a private message by name. "Defines a new
+// window message that is guaranteed to be unique throughout the system", and
+// "If the message is successfully registered, the return value is a message
+// identifier in the range 0xC000 through 0xFFFF" -- so zero is the failure, and
+// a registered value can never collide with WM_NULL or with any of the system
+// messages the window procedure switches on.
+func registerWindowMessage(name string) uint32 {
+	p, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		panic("dragproto: bad window message name: " + err.Error())
+	}
+	m, _, _ := procRegisterWindowMessageW.Call(uintptr(unsafe.Pointer(p)))
+	return uint32(m)
+}
+
+// packPoint puts a POINT into the single 64-bit register x64 passes it in.
+// WindowFromPoint takes its POINT by value, and a POINT is two LONGs, so the
+// whole structure fits one argument slot -- x in the low half, y in the high
+// half. The uint32 conversions are what keep a negative coordinate (a second
+// monitor to the left of or above the primary one) from sign-extending over the
+// other half.
+func packPoint(p point) uintptr {
+	return uintptr(uint32(p.x)) | uintptr(uint32(p.y))<<32
+}
+
+// pointInRect is PtInRect's rule, written out: "The rectangle is defined to
+// include the left and top sides, and to exclude the right and bottom sides."
+// It is a plain function rather than a call so that the release-position test
+// can be checked without a window.
+func pointInRect(p point, r rect) bool {
+	return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom
+}
+
+// cursorPos is the screen position of the mouse, which is what the release
+// position is read from: IDropSource is told the button state, never where it
+// was let go.
+func cursorPos() (point, bool) {
+	var p point
+	r, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	return p, r != 0
+}
+
+// windowUnderPoint resolves a screen point to the root window under it.
+// WindowFromPoint "does not retrieve a handle to a hidden or disabled window",
+// which is exactly the case -disable creates, so the answer is never the only
+// evidence used: the rect test beside it works on a disabled window too.
+func windowUnderPoint(p point) uintptr {
+	h, _, _ := procWindowFromPoint.Call(packPoint(p))
+	if h == 0 {
+		return 0
+	}
+	root, _, _ := procGetAncestor.Call(h, gaRoot)
+	if root == 0 {
+		return h
+	}
+	return root
+}
+
+// windowRect is GetWindowRect, in screen coordinates, which is the frame the
+// release position is tested against.
+func windowRect(hwnd uintptr) (rect, bool) {
+	var r rect
+	ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+	return r, ok != 0
+}
+
+// windowEnabled asks the window itself rather than trusting what -disable
+// believes it did.
+func windowEnabled(hwnd uintptr) bool {
+	r, _, _ := procIsWindowEnabled.Call(hwnd)
+	return r != 0
 }
 
 // peakWorkingSet returns the process's peak working set in bytes.

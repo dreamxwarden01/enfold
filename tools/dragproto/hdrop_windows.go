@@ -603,7 +603,7 @@ func (s *dragStage) requestPaths() ([]string, string, uintptr) {
 	}
 	if done {
 		logf("CF_HDROP request #%d after the extraction: the same paths again, nothing rewritten", n)
-		s.markHandedOut()
+		s.handedOutAfterRelease()
 		return s.pathList(), "the staged paths again", sOK
 	}
 
@@ -621,7 +621,7 @@ func (s *dragStage) requestPaths() ([]string, string, uintptr) {
 	}
 	if done {
 		logf("CF_HDROP request #%d: the extraction had already run (another request got there first); the same paths", n)
-		s.markHandedOut()
+		s.handedOutAfterRelease()
 		return s.pathList(), "the staged paths again", sOK
 	}
 
@@ -631,13 +631,31 @@ func (s *dragStage) requestPaths() ([]string, string, uintptr) {
 	if err != nil {
 		return nil, "nothing: the extraction failed", eUnexpected
 	}
-	s.markHandedOut()
+	s.handedOutAfterRelease()
 	return s.pathList(), "the paths of the files just written", sOK
+}
+
+// handedOutAfterRelease is markHandedOut plus the one thing that is only true
+// after the release: the target now holds paths to files that exist, and from
+// here the copy is its business. That is -disable's moment.
+func (s *dragStage) handedOutAfterRelease() {
+	s.markHandedOut()
+	holdWindowAfterHandover("the post-release GetData has handed the staged paths back; from here the copy is the target's")
 }
 
 // runExtraction writes the files and records what happened. The caller holds
 // extractMu.
 func (s *dragStage) runExtraction() error {
+	// The extraction is a phase of its own for -postprobe: it is the one place
+	// the target is blocked inside a call of ours, so a posted message that
+	// does not get through here is a different finding from one that does not
+	// get through during the drop.
+	enterExtraction()
+	defer leaveExtraction()
+	// One probe at the start, so that an extraction shorter than 64 MiB still
+	// asks the question at least once.
+	postProbe(srcExtract)
+
 	start := time.Now()
 	err := s.writeFiles()
 	took := time.Since(start)
@@ -780,6 +798,11 @@ func (s *dragStage) writeOne(f *synthFile, path string, buf []byte) error {
 			logf("staging: %s -- %d of %d bytes (%.0f%%), %s elapsed",
 				filepath.Base(path), off, f.size, 100*float64(off)/float64(f.size),
 				time.Since(start).Round(time.Millisecond))
+			// One probe per 64 MiB, from whatever thread the extraction is on
+			// -- with -agile that is Explorer's, which is the interesting case:
+			// a message posted from the target's own thread to our window,
+			// while the target is blocked inside this call.
+			postProbe(srcExtract)
 			for nextMark <= off {
 				nextMark += readThrottleBytes
 			}
@@ -1655,10 +1678,119 @@ func (s *dragStage) summary() string {
 // target's own.
 func threadWord() string {
 	tid := windows.GetCurrentThreadId()
-	if tid == dragThreadID.Load() {
+	switch {
+	case tid == dragThreadID.Load():
 		return fmt.Sprintf("tid %d, the drag thread (this program's STA)", tid)
+	case tid == oleThreadID.Load():
+		return fmt.Sprintf("tid %d, the dedicated OLE thread (-thread), which is this program's too", tid)
 	}
 	return fmt.Sprintf("tid %d, a thread of the target's", tid)
+}
+
+// ---------------------------------------------------------------------------
+// -poll-after: is the target still reading after DoDragDrop has returned?
+//
+// This is the question that decides whether a staging folder may be deleted at
+// the return, and the answer is expected to differ by volume. A same-volume
+// drop is one rename: the file is gone from the staging folder within
+// milliseconds and nothing is reading anything afterwards. A cross-volume drop
+// is a copy, and the copy is Explorer's, run on Explorer's own schedule with
+// nothing said to the source -- so the staged file can still be open long after
+// DoDragDrop has come back. Deleting at the return would then take the file out
+// from under the copy.
+//
+// The measurement is the exclusive open the watch already uses, sampled for
+// -poll-after seconds from the moment of the return.
+
+// pollAfterFor is the -poll-after window, set once in main.
+var pollAfterFor time.Duration
+
+// pollAfterFacts is everything the verdict is decided from, so the decision can
+// be checked without a drag, a file system or a clock.
+type pollAfterFacts struct {
+	window   time.Duration
+	samples  int
+	busy     int           // samples in which at least one staged file was open elsewhere
+	lastBusy time.Duration // when that last happened; negative if it never did
+	present  int           // samples in which at least one staged file was still on disk
+	files    []string      // the files that were seen open, in the order first seen
+	folder   bool          // the staging folder was still there at the end
+}
+
+// pollAfterVerdict is the sentence the experiment is read from.
+func pollAfterVerdict(f pollAfterFacts) string {
+	switch {
+	case f.samples == 0:
+		return fmt.Sprintf("no sample was taken in the %s after DoDragDrop returned", f.window)
+
+	case f.busy > 0:
+		return fmt.Sprintf("a staged file was STILL OPEN by another process %s after DoDragDrop returned "+
+			"(%d of %d samples in the %s window; %s) -- for this drop the staging folder could NOT have been deleted at the return, "+
+			"which is what a cross-volume copy looks like",
+			f.lastBusy.Round(time.Millisecond), f.busy, f.samples, f.window, strings.Join(f.files, ", "))
+
+	case f.present == 0:
+		return fmt.Sprintf("every staged file was gone within the first sample and nothing held one open during the %s after DoDragDrop returned "+
+			"-- the drop was a rename, and for this drop the staging folder could have been deleted at the return", f.window)
+
+	case f.folder:
+		return fmt.Sprintf("no staged file was open by anyone during the %s after DoDragDrop returned, but the file(s) and the folder are still there "+
+			"-- nothing came back for them, so the return says nothing about when they may go", f.window)
+
+	default:
+		return fmt.Sprintf("no staged file was open by anyone during the %s after DoDragDrop returned, and the folder has gone", f.window)
+	}
+}
+
+// reportPollAfter samples the staged files for window and writes the verdict.
+// It runs on a goroutine because the answer takes the whole window to arrive and
+// the drag may not wait for it.
+func (s *dragStage) reportPollAfter(window time.Duration) {
+	if window <= 0 {
+		return
+	}
+	logf("staging: -poll-after -- sampling %d staged file(s) every 250 ms for %s from here, to see whether the target is still reading after the return",
+		len(s.paths), window)
+	go func() {
+		start := time.Now()
+		t := time.NewTicker(250 * time.Millisecond)
+		defer t.Stop()
+		facts := pollAfterFacts{window: window, lastBusy: -1}
+		seen := map[string]bool{}
+		for range t.C {
+			at := time.Since(start)
+			if at > window {
+				break
+			}
+			facts.samples++
+			anyBusy, anyPresent := false, false
+			for _, p := range s.paths {
+				inUse, exists, err := stagedFileInUse(p)
+				if err != nil {
+					continue
+				}
+				if exists {
+					anyPresent = true
+				}
+				if inUse {
+					anyBusy = true
+					if !seen[p] {
+						seen[p] = true
+						facts.files = append(facts.files, filepath.Base(p))
+					}
+				}
+			}
+			if anyBusy {
+				facts.busy++
+				facts.lastBusy = at
+			}
+			if anyPresent {
+				facts.present++
+			}
+		}
+		facts.folder = s.onDisk()
+		logf("staging: -poll-after for %s -- %s", s.root, pollAfterVerdict(facts))
+	}()
 }
 
 // ---------------------------------------------------------------------------

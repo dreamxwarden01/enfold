@@ -15,6 +15,13 @@ the other:
   and the first request after the button comes up extracts into it, inside `GetData`.
   Experiments 11–17 are its.
 
+On top of both there is a third group of flags — `-postprobe`, `-thread`, `-disable` and
+`-poll-after` — which are not about the protocol at all but about **the window during a drag**:
+whether posted messages reach its loop, whether the drag can run somewhere else, whether the
+window can be held rather than frozen, and whether the target is still reading after
+`DoDragDrop` has returned. Experiments 18–21 are theirs, and they exist because the real
+application's window shows nothing at all while a drag is in progress.
+
 It exists because APP.md §3 and DECISIONS.md ("Drag out, researched") say it must come
 first: *"a stand-alone prototype under `tools/dragproto` — a window that drags a synthetic
 5 GiB virtual file onto the desktop — before a line of it enters the shell."* The staged mode
@@ -76,6 +83,15 @@ go build .\tools\dragproto
 | `-copy-only` | off | Allow `DROPEFFECT_COPY` only and prefer copy. The default allows **copy and move** and prefers **move**, which is 7-Zip's practice: the staged file is a disposable copy, so a same-volume drop is one rename with nothing left to clean up. |
 | `-scavenge` | `1h` | At launch and every ten minutes, delete **manifested** staging folders older than this whose state is not `live`. This is the cleanup policy, not a backstop — see "How `-hdrop` cleans up". |
 
+### The frozen-window flags
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `-postprobe` | off | Post a **registered window message** (`EnfoldProto.Probe`) to the drag window every 250 ms from just before `DoDragDrop` is called until two seconds after it returns, each carrying a sequence number and the millisecond it was posted, and post one more per 64 MiB from **inside the extraction**, on whatever thread that is running on. Every receipt is written down with its latency and the phase at each end, and a summary per phase is printed at the end of the drag. Experiment 18. |
+| `-thread` | off | Run `DoDragDrop` on a **dedicated OLE thread**: its own `OleInitialize`, its own message-only window, its own data object and drop source, `AttachThreadInput` joining it to the window thread for the duration. The window's thread hands the drag over and goes straight back to its loop; it never waits for the drag thread, and the drag reports back by posting. A 250 ms `WM_TIMER` on the main window is the window thread saying, from inside its own loop, that it is still dispatching. Experiment 19. |
+| `-disable` | off | `EnableWindow(hwnd, FALSE)` for **one phase only** — from the moment the post-release `GetData` has handed the paths (or a contents stream) back, until `DoDragDrop` returns — and `TRUE` again on every path out of the drag. Not for the hover and not for the extraction: the window needs a Cancel and a self-drop during those. Experiment 20. |
+| `-poll-after` | `20s` | With `-hdrop`: after `DoDragDrop` returns, keep sampling every staged file with an exclusive open for this long, and print one verdict saying whether the target was **still reading** after the return. `0` turns it off. Experiment 21. |
+
 `-n`, `-size`, `-file`, `-delay`, `-folder` and `-agile` all apply to `-hdrop` too. `-delay` there is a
 sleep per MiB *inside the extraction*, which is inside `GetData`, which is the target waiting.
 `-streamat` and `-hash` are virtual-file only (`-hash` still prints the digests, and they are
@@ -88,7 +104,8 @@ would never appear there at all.
 
 Press the left mouse button anywhere in the window's client area and move past the system
 drag threshold; the native drag starts there. Work through these in order and keep the log.
-Experiments 1–10 are the default mode's; the staged route's are 11–17, below.
+Experiments 1–10 are the default mode's; the staged route's are 11–17, and the frozen-window
+ones are 18–21, both below.
 
 1. **Onto the desktop.** Drop the default two files on the desktop. Does Explorer accept
    them? Does a copy dialog appear, and does it have a progress bar with a known total (that
@@ -445,6 +462,262 @@ Two more things to run once, whatever else you do:
 - **Memory.** Same as experiment 5: the extraction writes through one 256 KiB buffer, so
   `dragproto.exe` should stay flat while it writes 5 GiB. If it climbs, something buffers.
 
+## The frozen window: experiments 18–21
+
+These are not about the transfer. They are about what the **source's window** can do while a
+drag is in progress, and they exist because of a difference nobody has been able to explain
+from the code.
+
+Enfold's shell is a Wails v3 WebView2 window whose main thread runs `DoDragDrop`. Its frontend
+is told what is happening by callbacks that are **posted** to that thread's hidden window —
+`PostMessage` of a registered message, picked up by the thread's message loop and dispatched to
+its window procedure. During a real drag out of the application, the frontend shows **no
+progress strip at all**. Three explanations fit:
+
+1. `DoDragDrop`'s modal loop never dispatches those posted messages;
+2. it does, but the synchronous `IDropTarget::Drop` — an outgoing COM call into Explorer, on
+   which our thread blocks — does not, and the whole extraction happens inside it;
+3. they arrive perfectly well and something else in the frontend is the problem.
+
+WinRAR's window, meanwhile, looks *held* during a drag out of it rather than dead: it repaints,
+it plainly is not taking clicks, and it comes back the instant the button goes up. That is a
+fourth thing to account for. `-postprobe` decides between 1, 2 and 3 by measurement; `-thread`
+and `-disable` are the two mechanisms that could produce WinRAR's behaviour.
+
+### What the documentation says, and what it does not
+
+Checked on Microsoft Learn rather than recalled, because most of what is "known" about this is
+folklore.
+
+**`DoDragDrop`** (`ole2/nf-ole2-dodragdrop`) says `"You must call OleInitialize before calling
+this function."` and that it `"enters a loop in which it calls various methods"` in
+`IDropSource` and `IDropTarget`. Step 1 of its numbered list is that it `"determines the window
+under the current cursor location"`.
+
+What that page does **not** say, verbatim-searched: which **thread** may call it — the word
+"thread" does not appear on it at all; that the caller needs a message queue; that the caller
+must own the window under the cursor; anything about mouse capture; and, crucially, **anything
+about what its loop does with the message queue** — no "pump", "dispatch", `GetMessage`,
+`PeekMessage` or `DispatchMessage`. `IDropSource::QueryContinueDrag` is the same: it says
+`DoDragDrop` calls it `"whenever it detects a change in the keyboard or mouse button state"`,
+and says nothing about which thread that happens on.
+
+**`OleInitialize`** does document the apartment: it `"identifies the concurrency model as
+single-thread apartment (STA)"`, lists Drag and Drop among the functionality that requires it,
+and requires that `"each successful call to OleInitialize, including those that return S_FALSE,
+must be balanced"`. It is written entirely in terms of *apartments*, never "per thread" — the
+thread binding follows from the STA model, not from a sentence on that page.
+
+**The one documented statement about modal loops** is on `PostThreadMessage`, not on
+`DoDragDrop`: messages not associated with a window `"cannot be dispatched by the
+DispatchMessage function"`, so `"if the recipient thread is in a modal loop (as used by
+MessageBox or DialogBox), the messages will be lost."` Note what it names — `MessageBox` and
+`DialogBox`, **not** `DoDragDrop` — and note that it is about *thread* messages. `PostMessage`
+to a **window** is the documented opposite: it `"Places (posts) a message in the message queue
+associated with the thread that created the specified window"` and returns without waiting.
+That is why the probe posts to a window and never to a thread.
+
+**Raymond Chen's blog, which is not reference documentation**, is the only place the two are
+joined up. "Why do messages posted by PostThreadMessage disappear?" (2009‑09‑30) lists
+`DoDragDrop` among `"functions that are explicitly modal"`, says that when such a loop
+`"call[s] DispatchMessage, your thread message will simply be thrown away"`, and recommends
+exactly the shape Enfold uses: `"create a hidden window and send or post messages to that
+window."` Read together, the blog's claim is that `DoDragDrop`'s loop **does** call
+`DispatchMessage`, so window-targeted posted messages should get through. Two other posts of
+his state that `"The Do­Drag­Drop function calls Set­Capture"` and that during the loop
+`"the mouse is captured to the drag/drop window"`. None of that is on Learn. **Experiment 18 is
+the test of the blog's claim**, and of whether the synchronous `Drop` is the exception to it.
+
+**`EnableWindow`** `"Enables or disables mouse and keyboard input to the specified window or
+control"`, and `"If the window is being disabled, the system sends a WM_CANCELMODE message"`
+followed by `WM_ENABLE`. Its return is documented the other way round from what reads naturally:
+`"If the window was previously disabled, the return value is nonzero."` What the page does
+**not** say is whether a disabled window still repaints or still receives **posted** messages.
+That is inference from the scope of the word "input" — and it is what experiment 20 measures.
+
+**`AttachThreadInput`** `"Attaches or detaches the input processing mechanism of one thread to
+that of another thread"`, and the whole of what it buys is one sentence: `"a thread can share
+its input states (such as keyboard states and the current focus window) with another thread."`
+Three caveats are documented and all three matter here: it `"fails if either of the specified
+threads does not have a message queue"` (which is why the message-only window is created
+first); `"key state ... is reset after a call to AttachThreadInput"` (so if it resets the left
+button under the drag, the very first `QueryContinueDrag` will see the button up and drop
+instantly — watch for `QueryContinueDrag #1` returning `DRAGDROP_S_DROP` milliseconds after the
+call); and `"You cannot attach a thread to a thread in another desktop."` The page says
+**nothing** about `DoDragDrop`, nothing about mouse capture being shared, nothing about the
+foreground window, nothing about deadlocks, and it does not require you to detach.
+
+**Chromium is the only real-world precedent**, and it is a cautionary one. Its Windows drag ran
+on a `base::Thread` named `Chrome_DragDropThread` with a `TYPE_UI` message loop and
+`OleInitialize` on it, used for the drag-out-download case only, with the stated reason in
+`web_contents_drag_win.h`: it did not want to run a nested message loop on the UI thread. It
+called `AttachThreadInput(drag_thread, ui_thread, TRUE)` — **the drag thread attached to the UI
+thread**, that direction — from the UI thread, for exactly one stated purpose: so that
+`SetCursor` would work from the background thread. It needed a `WH_MSGFILTER` hook on the UI
+thread as well, forwarding `WM_MOUSEMOVE`, `WM_LBUTTONUP`, `WM_KEYDOWN` and `WM_KEYUP` to the
+drag thread with `PostThreadMessage`. The design produced at least one whole-browser freeze —
+the fix commit says a `GetData(CF_HDROP)` on the UI thread deadlocked against the drag thread —
+and the whole file was **deleted** in January 2014 when the non-Aura Windows path went. Current
+Chromium calls `DoDragDrop` **directly on the UI thread** and merely tells its hang watcher not
+to count the wait.
+
+So `-thread` is an **experiment, not an implementation of a documented capability**, and it is
+one that a browser tried and abandoned. It is here to be measured, and this prototype is
+exactly where measuring it belongs.
+
+Two deliberate differences from Chromium, both worth knowing before reading the log:
+
+- **The direction of the attach is Chromium's**, `idAttach` = the drag thread, `idAttachTo` =
+  the window thread, because that is the one with evidence behind it. The design review that
+  asked for this experiment suggested the reverse order; the documentation describes the result
+  as the two threads *sharing* state either way and does not settle it, so the log prints both
+  ids in the order they are passed and the choice can be revisited from a real run.
+- **There is no message forwarding.** Chromium needed it because its drag began from a
+  mouse-down the UI thread already owned. Here the window thread calls `ReleaseCapture` before
+  the hand-off, so by the time `DoDragDrop` runs on the OLE thread there is no capture to
+  compete with and the system should deliver mouse messages to the drag thread's own queue.
+  **If the drag cursor does not track the mouse, a `WH_MSGFILTER` hook forwarding those four
+  messages is the next thing to try** — that is the finding to report, not a bug in this build.
+
+### 18. Do posted messages reach the loop while `DoDragDrop` runs?
+
+```
+go build ./tools/dragproto
+./dragproto.exe -hdrop -n 1 -size 64MiB -postprobe 2> probe-main.log
+```
+
+or with a real file, which is better for anything large:
+
+```
+./dragproto.exe -hdrop -file "D:\media\holiday.mp4" -postprobe -agile 2> probe-file.log
+```
+
+Drag onto the desktop and let it drop. Then read the `-postprobe summary for drag 1` block at
+the end. One row per phase:
+
+- **hover** — the modal loop with the button still down. Chen's account predicts these all
+  arrive within a few milliseconds.
+- **drop** — the button released and `DoDragDrop` not yet returned. This is where the
+  synchronous `IDropTarget::Drop` is, and hypothesis 2 says this is the row that stalls.
+- **extraction** — inside `GetData`, which is inside `Drop`. Our own code is on the stack here,
+  so a stall in this row is *this program* not pumping, which is expected and is the shape the
+  real application is in. `-size 64MiB` is deliberately small enough to finish quickly and
+  large enough to post a probe from the extraction thread; `-delay 200` makes the row much
+  louder if the first run is too fast to see.
+- **returned** — after `DoDragDrop` came back. A burst of deliveries here, with latencies
+  matching the length of the drop phase, is the **proof** that the messages were posted and
+  queued rather than lost. The poster deliberately runs for two seconds past the return to
+  catch it.
+
+What to look for in each row: `delivered`, `N of them while the drag was still in that phase`,
+the worst latency, and `the longest stretch with nothing delivered`. A row that ends
+`-- NOTHING posted in this phase was delivered before the phase ended` is the answer that
+explains the missing progress strip.
+
+Run it twice, with and without `-agile`, because with `-agile` the extraction runs on
+Explorer's thread and the probes posted from it come from there.
+
+### 19. Can the drag run on a thread of its own?
+
+```
+./dragproto.exe -hdrop -n 1 -size 64MiB -thread -postprobe 2> probe-thread.log
+```
+
+The first question is whether it works **at all**. Report, in order:
+
+- Does the drag cursor appear and follow the mouse?
+- Does `IDropSource::GiveFeedback` get called, and does the effect change as you move over
+  different targets?
+- Does the drop land — is the file where you dropped it, and does the log show
+  `IDropSource::QueryContinueDrag ... left button released ... -> DRAGDROP_S_DROP`?
+- What does the log say for `AttachThreadInput(...)` in both directions, TRUE and FALSE?
+- What does `DoDragDrop` **return**? If it fails, the `HRESULT` is the result of the
+  experiment.
+- Anything Explorer does differently — a different cursor, a slower first response, a target
+  that refuses where it did not before.
+
+Then the three gestures that stress the input handover, each once:
+
+- **A fast release.** Press, move just past the threshold, let go immediately. The documented
+  key-state reset in `AttachThreadInput` makes this the gesture most likely to go wrong; a
+  `QueryContinueDrag #1` that returns `DRAGDROP_S_DROP` within milliseconds of the call is that
+  failure, not a fast user.
+- **Escape mid-drag.** The log should say `Esc pressed, keys ... -> DRAGDROP_S_CANCEL`, on the
+  drag thread's tid. If Escape does nothing, the drag thread is not seeing the keyboard.
+- **Ctrl and Shift mid-drag.** Every change is logged as `keys now MK_LBUTTON|MK_CONTROL ...`,
+  and `GiveFeedback` should follow it with a changed effect. If the modifiers never reach the
+  drag thread, that is the input attachment failing and it is the finding.
+
+And the point of the whole flag: **the window thread must stay free**. Watch for
+
+- `-thread: the window thread is alive and dispatching -- WM_TIMER tick N` four times a second
+  throughout, with **no gap** during the drop or the extraction;
+- in the probe summary, a row for `the main window` in every phase with everything delivered on
+  time — that is the window thread's loop running while the drag thread sits in the modal loop;
+- a row for `the message-only window` where, most likely, nothing was delivered until the
+  one-off drain after the return. That queue belongs to the thread inside `DoDragDrop`, which
+  pumps nothing of its own, and the line
+  `draining the OLE thread's own queue once -- N message(s) were still in it` says how much was
+  waiting there.
+
+While it runs, try to **move and resize the prototype's window**. Under `-thread` it should
+move; in experiment 18 it will not.
+
+### 20. Can the window be held rather than frozen?
+
+```
+./dragproto.exe -hdrop -n 1 -size 64MiB -thread -disable -postprobe 2> probe-hold.log
+```
+
+`-disable` is deliberately narrow: the window stays **enabled** during the hover and during the
+extraction, because those are the moments the real application needs a Cancel button and needs
+to notice a drop back onto itself, and it is disabled only from the hand-over to the return.
+The log says each transition, and the window procedure logs `WM_ENABLE` and `WM_CANCELMODE`
+arriving on its own thread.
+
+What to report:
+
+- Does the disabled window **still repaint**? Drag another window across it, or make it redraw
+  by uncovering it, during the held stretch. Learn does not document this either way.
+- Does it **still process posted messages**? The probe summary under `-disable` is the
+  measurement: the rows for the held phase should show deliveries if it does.
+- Does it **feel** like WinRAR's — held rather than dead — and does it come back the instant
+  the drop completes?
+- Try **clicking it** while it is held. Nothing should happen, and nothing should be queued up
+  and replayed afterwards.
+- Try `-disable` **without** `-thread` as the comparison. There the window's own thread is
+  inside the modal loop, so the disable is asked for from inside `GetData` and the window is
+  frozen anyway; the interesting part is whether the log shows the `EnableWindow` happening at
+  all and what `WM_CANCELMODE` does to the drag.
+
+### 21. Is the target still reading after `DoDragDrop` returns?
+
+This is the one that decides whether a staging folder may be deleted at the return, and the
+answer is expected to depend on the **volume**. Staging is under `%LOCALAPPDATA%`, which is on
+`C:`. So:
+
+```
+./dragproto.exe -hdrop -n 1 -size 512MiB -poll-after 20 2> poll-same-volume.log   # drop on the desktop
+./dragproto.exe -hdrop -n 1 -size 512MiB -poll-after 20 2> poll-cross-volume.log  # drop on a folder on D:\
+```
+
+Use a folder on `D:\` that is yours and ordinary — **not** `D:\Archives` and not
+`D:\ECON 280 (2026 Summer)`. A scratch folder made for the run is the right target.
+
+For each drop, the line to read is `staging: -poll-after for ... --` at the end:
+
+- The same-volume drop should be a **rename**: the staged file is gone within the first sample
+  and the verdict says the folder could have been deleted at the return.
+- The cross-volume drop should be a **copy on Explorer's own schedule**, with the staged file
+  still open seconds after `DoDragDrop` came back and the verdict saying it could **not** have
+  been deleted at the return.
+
+If that difference appears, it settles the cleanup design: the return is not a signal, and the
+scavenge is the mechanism. If it does *not* appear — if even a cross-volume copy is finished
+before `DoDragDrop` returns — say so, because it would be the one result that makes deleting at
+the return defensible. Use `512MiB` or larger; a small file crosses volumes faster than the
+first sample. `-poll-after 60` if 20 s is not enough to see the end of the copy.
+
 ## Findings so far
 
 From real drops on Windows 11. These are measurements, not expectations.
@@ -556,6 +829,22 @@ the extraction holds `GetData` for a minute and a half (`-delay`), whether a tar
 the files at hover time (Sticky Notes, an upload box) fails without `-stage-early`, and whether
 the `Replace` stall survives pausing the scanner.
 
+**Experiments 18–21: expected, and not yet measured.** Nothing below has been run. It is written
+down before the fact so that a result that contradicts it is recognised as a result rather than
+quietly explained away.
+
+| | Expected | Why, and how confident |
+| --- | --- | --- |
+| 18, hover | Probes delivered within milliseconds | Chen's blog says `DoDragDrop`'s loop calls `DispatchMessage`. **Blog, not documentation** — if this is wrong, hypothesis 1 is right and the real application's whole callback mechanism needs replacing. |
+| 18, drop | Delivered late or not at all, arriving in a burst after the return | This is hypothesis 2, and it is the one that best fits the real application's symptom. **Nothing documents it either way.** |
+| 18, extraction | Nothing delivered while it runs | Our own code is on the stack inside `GetData`; no loop of ours is running. This one is near-certain, and it is also the one the real application can fix by itself. |
+| 19 | Unknown whether it works at all | No Microsoft page sanctions calling `DoDragDrop` off-thread. Chromium made it work, needed `AttachThreadInput` plus a message hook, hit a whole-browser deadlock, and removed it. Treat a working drag here as the surprise. |
+| 19, fast release | The likeliest failure | `AttachThreadInput` is documented to **reset** key state. If the left button reads as up, `QueryContinueDrag #1` drops immediately. |
+| 19, window thread | Stays free throughout | `WM_TIMER` once a second and every main-window probe delivered on time. If this does not hold, `-thread` buys nothing and the experiment is over. |
+| 20 | A disabled window still paints and still gets posted messages | Inference from `EnableWindow` being scoped to "mouse and keyboard input". **Not documented**; the probe rows are the measurement. |
+| 21, same volume | A rename; nothing reading after the return | Already measured in the earlier rounds — a same-volume drop was an instant move. |
+| 21, cross volume | Still being read for seconds after the return | Explorer copies on its own schedule and tells the source nothing. If true, the staging folder may **not** be deleted at `DoDragDrop`'s return, and the scavenge stays the mechanism. |
+
 ## What to paste back
 
 The **stderr log** — all of it — plus:
@@ -585,6 +874,21 @@ For `-hdrop`, the `staging summary for ...` block at the end of each drag, and:
 - what `-fail-extract` made Explorer show,
 - what the scavenge said on the next launch, and whether anything was left in
   `%LOCALAPPDATA%\Enfold-dragproto\drag\` afterwards.
+
+For experiments 18–21, the **stderr log** of each run is again the whole of it, and the blocks
+to look at first are:
+
+- the `---- -postprobe summary for drag N ----` block of every run, in full — it is four or five
+  lines and it is the answer,
+- for `-thread`: whether the drag cursor tracked the mouse, whether the drop landed, what the
+  two `AttachThreadInput` lines said, what `DoDragDrop` returned, and what happened on a fast
+  release, on Escape, and on Ctrl/Shift mid-drag,
+- for `-thread`: whether the prototype's window could be **moved and resized while the drag was
+  running**, and whether the `WM_TIMER` heartbeat ran throughout,
+- for `-disable`: whether the held window still repainted, whether clicking it did anything, and
+  whether it felt held or dead,
+- for `-poll-after`: the one `staging: -poll-after for ... --` verdict line from the
+  same-volume run and from the cross-volume run, side by side.
 
 ## What the log says
 
@@ -634,6 +938,36 @@ In `-hdrop` the lines to read are:
   it was removed or left.
 - `staging summary for <folder>` at the end of each drag: the request counts, the extraction,
   the manifest state, each file's fate and every format that was asked for.
+- `staging: -poll-after for <folder> -- ...` — the one verdict on whether the target was still
+  reading a staged file after `DoDragDrop` returned.
+
+Under `-postprobe`, `-thread` and `-disable`:
+
+- `probe #N from ... reached ... Xs after it was posted: posted in phase A, delivered in phase B`
+  — one line per receipt, throttled to the first of each phase, anything slower than 50 ms, and
+  otherwise one a second. The phase at each end is the whole point: `posted in phase drop,
+  delivered in phase returned` is the missing progress strip, in one line.
+- `---- -postprobe summary for drag N ----` and the rows under it: per phase and per window,
+  how many were posted, how many arrived, how many arrived **while that phase was still going
+  on**, the worst latency, and the longest stretch with nothing delivered. A row ending
+  `-- NOTHING posted in this phase was delivered before the phase ended` is the finding.
+- `-thread: the window thread is alive and dispatching -- WM_TIMER tick N` — every 250 ms,
+  from the window thread's own loop, while the drag runs elsewhere. It is deliberately not
+  throttled: a **gap** in it is the failure worth seeing.
+- `-thread: AttachThreadInput(idAttach=..., idAttachTo=..., TRUE/FALSE)` — both calls, with
+  their results. A `FALSE` that fails leaves two threads attached and is a finding of its own.
+- `-thread: ... draining the OLE thread's own queue once -- N message(s) were still in it` —
+  what the modal loop never dispatched. It is the difference between a message that was queued
+  and ignored and one that was never posted.
+- `-disable: EnableWindow(0x..., false/true)` with what the window was before and after, and
+  `the main window received WM_ENABLE` / `WM_CANCELMODE` from the window's own thread.
+  `WM_CANCELMODE` is logged and **swallowed** while a drag is running, because `DefWindowProc`
+  would answer it by releasing a capture that belongs to `DoDragDrop`.
+- `the button came up at screen (x, y): ...` — the release position against the main window's
+  own frame and against the hit test, on every drag. `a SELF-DROP` means the user let go over
+  the prototype's own window. The two signals are reported separately on purpose:
+  `WindowFromPoint` does not return disabled windows, so under `-disable` the frame is the only
+  one of the two that can answer.
 
 ## What this deliberately does not do
 
@@ -648,5 +982,14 @@ In `-hdrop` the lines to read are:
   staged copy, never the record in the archive.
 - No knowledge of where the drop landed. A standard OLE drag source is not told, and this
   prototype is here partly to confirm that — which is why `-hdrop` watches the staged files
-  instead of asking.
+  instead of asking. The one thing it does read is the **cursor's own position** when the button
+  comes up, and only to say whether the release was over the prototype's own window; that is
+  anyone's to read and says nothing about the target.
+- No message forwarding under `-thread`. Chromium's dedicated drag thread needed a
+  `WH_MSGFILTER` hook forwarding mouse and key messages; this does not have one, because the
+  window thread releases capture before handing the drag over. If the drag turns out not to
+  track the mouse, that hook is the next thing to add — see experiment 19.
+- Nothing waits on the drag thread. Under `-thread` the window thread hands the drag over and
+  goes back to its loop; results come back by `PostMessage` and never by a wait. Chromium's one
+  documented whole-browser freeze in this area was a UI thread blocked on its drag thread.
 - Nothing is recorded, no policy applies, and no archive is opened.

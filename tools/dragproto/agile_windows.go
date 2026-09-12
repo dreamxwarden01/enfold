@@ -71,7 +71,30 @@ var agileMode atomic.Bool
 // calls DoDragDrop: the apartment every call arrives on without -agile. It stays
 // zero in unit tests, where there is no such thread, so a test that cares sets
 // it for the duration.
+//
+// Under -thread it is still the WINDOW's thread; the drag runs on oleThreadID
+// instead, and the accounting below has to count both as ours -- the question
+// -agile asks is whether a call landed on a thread of this program's or on one
+// of the target's, and -thread does not change what that question means.
 var dragThreadID atomic.Uint32
+
+// ourThread is that distinction. Zero never matches a real thread id, so a mode
+// with no OLE thread needs no extra guard.
+func ourThread(tid uint32) bool {
+	return tid == dragThreadID.Load() || tid == oleThreadID.Load()
+}
+
+// threadKind names a thread for the per-object summary.
+func threadKind(tid uint32) string {
+	switch {
+	case tid == dragThreadID.Load():
+		return "drag thread"
+	case tid == oleThreadID.Load():
+		return "the drag's own OLE thread (-thread)"
+	default:
+		return "other"
+	}
+}
 
 // comCalls is the process-wide half of the per-object accounting below.
 var comCalls struct {
@@ -197,7 +220,7 @@ type threadTally struct {
 // totals are the number of COM method calls the object answered.
 func (o *comObject) tally() {
 	tid := windows.GetCurrentThreadId()
-	if tid == dragThreadID.Load() {
+	if ourThread(tid) {
 		o.callsHome.Add(1)
 		comCalls.home.Add(1)
 	} else {
@@ -226,15 +249,10 @@ func (o *comObject) tally() {
 func (o *comObject) threadSummary() string {
 	home := o.callsHome.Load()
 	away := o.callsAway.Load()
-	drag := dragThreadID.Load()
 	o.tidMu.Lock()
 	parts := make([]string, 0, len(o.tids))
 	for _, t := range o.tids {
-		kind := "other"
-		if t.tid == drag {
-			kind = "drag thread"
-		}
-		parts = append(parts, fmt.Sprintf("tid %d (%s): %d", t.tid, kind, t.calls))
+		parts = append(parts, fmt.Sprintf("tid %d (%s): %d", t.tid, threadKind(t.tid), t.calls))
 	}
 	o.tidMu.Unlock()
 	agile := "apartment-bound"

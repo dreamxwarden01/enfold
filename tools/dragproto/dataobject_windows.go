@@ -451,6 +451,13 @@ func dataGetData(this uintptr, pformatetcIn *formatEtc, pmedium *stgMedium) uint
 		pmedium.pUnkForRelease = 0
 		logf("  -> TYMED_ISTREAM for %q (%d bytes), stream at 0x%X, seek pointer at the %s",
 			f.name, f.size, pmedium.data, where)
+		// -disable's moment in the virtual-file mode. A stream handed over
+		// during the hover is one the target may never read -- the first real
+		// 5 GiB drop took one and dropped it unread -- so only a handover after
+		// the release counts as "the copy is now the target's".
+		if p := currentDragPhase(); p != phaseHover && p != phaseIdle {
+			holdWindowAfterHandover("a contents stream was handed over after the release; from here the copy is the target's")
+		}
 		return sOK
 	}
 	logf("  -> DV_E_FORMATETC (matched but unhandled)")
@@ -1014,6 +1021,20 @@ type dropSource struct {
 	mu         sync.Mutex
 	lastEffect uint32
 	haveLast   bool
+	lastKeys   uint32
+	haveKeys   bool
+}
+
+// keysChanged reports whether grfKeyState differs from the last one seen, so
+// that QueryContinueDrag can log the transitions -- a Ctrl or Shift pressed
+// mid-drag changes the effect the target offers -- without a line per call.
+func (s *dropSource) keysChanged(keys uint32) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := !s.haveKeys || s.lastKeys != keys
+	s.lastKeys = keys
+	s.haveKeys = true
+	return changed
 }
 
 func (s *dropSource) comDestroy() {
@@ -1052,10 +1073,18 @@ func dropSourceQueryContinueDrag(this uintptr, fEscapePressed uintptr, grfKeySta
 
 	switch {
 	case esc:
-		logf("IDropSource::QueryContinueDrag #%d: Esc pressed -> DRAGDROP_S_CANCEL", n)
+		logf("IDropSource::QueryContinueDrag #%d on %s: Esc pressed, keys %s -> DRAGDROP_S_CANCEL",
+			n, threadWord(), keyStateWords(keys))
 		return dragDropSCancel
 	case keys&mkLButton == 0:
-		logf("IDropSource::QueryContinueDrag #%d: left button released -> DRAGDROP_S_DROP", n)
+		// Everything a drop source is ever told about the gesture, in one line,
+		// on the thread it was told on. Under -thread that thread is not the
+		// window's, and whether the button state still arrives there at all is
+		// the first thing the experiment has to show.
+		logf("IDropSource::QueryContinueDrag #%d on %s: left button released, Esc=%v, keys %s -> DRAGDROP_S_DROP",
+			n, threadWord(), esc, keyStateWords(keys))
+		setDragPhase(phaseDrop)
+		noteRelease()
 		if s.stage != nil {
 			// "The drop operation should occur completing the drag operation.
 			// This result occurs if grfKeyState indicates that the key that
@@ -1066,6 +1095,13 @@ func dropSourceQueryContinueDrag(this uintptr, fEscapePressed uintptr, grfKeySta
 		}
 		return dragDropSDrop
 	default:
+		// Called on every change in the keyboard or mouse button state, which
+		// makes it the place a Ctrl or Shift pressed mid-drag shows up. Logged
+		// on the change only, like GiveFeedback's effect.
+		if s.keysChanged(keys) {
+			logf("IDropSource::QueryContinueDrag #%d on %s: keys now %s -> S_OK (carry on)",
+				n, threadWord(), keyStateWords(keys))
+		}
 		return sOK
 	}
 }

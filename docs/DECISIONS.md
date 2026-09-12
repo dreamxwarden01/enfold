@@ -3899,3 +3899,20 @@ is really over when `DoDragDrop` returns (the staged file still read after the r
 forbid deleting it then). The prototype gains `-postprobe`, `-thread`, `-disable` and a
 cross-volume poll for exactly that; the design paragraph waits for the numbers.
 
+**Measured, and ruled: the drag thread** (2026-09-11, evening; the research file's last
+section). On the main thread, posted messages reach the window through the whole hover — so
+the strip's absence there was Wails' batch of callbacks, not OLE — and none reach it during
+the extraction inside Explorer's `Drop` — that is OLE, an outgoing call's restricted pumping.
+On a dedicated OLE thread with `AttachThreadInput` (the drag thread attached to the window's,
+Chromium's direction) the drag works and the window's queue is alive throughout, extraction
+included. And across volumes the staged file was still being read eighteen seconds after
+`DoDragDrop` returned: Explorer's `Drop` hands the copy to its engine and returns. Ruled: the
+drag runs on its own thread (`OleInitialize` there, the main thread never waiting on it); the
+window is not held — there is no moment to hold it for, Explorer's copy being its own affair
+after the return, and Enfold's own extraction already wears the strip with *Cancel*; the strip
+is *Extracting N items*, its bar during the staging, full until `DoDragDrop` returns, then
+gone; the staging folder is deleted at the return only for a move that took everything, a
+self-drop, or nothing written — never by the target's window class — and the scavenge takes
+the rest. The main-thread `OleInitialize` at startup, which killed the first launch, is no
+longer needed.
+

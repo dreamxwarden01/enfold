@@ -668,3 +668,33 @@ Use the same long-hover → slow-staging → Explorer cross-volume copy/conflict
 ### Gaps, in the researcher's words
 
 All three requested subagents completed before this assessment. Reviewed 27 local files plus external documentation and source. No files were modified; no builds, tests or application runs were performed. The exact starvation mechanism remains unmeasured, and the running binary was not verified against the inspected module cache. Public documentation does not expose a complete DoDragDrop message-filter table. Worker input handoff, detachment timing, mixed-DPI drag imagery and WebView2 self-drop remain interoperability questions. WinRAR's thread architecture is unverified. Chromium/Electron/7-Zip main-branch sources are mutable; the Chromium worker and LibreOffice examples are explicitly historical. No current Explorer trace establishes that every non-async CF_HDROP drop waits for all destination I/O.
+
+### The drag thread, measured (2026-09-11, evening; Kaspersky off)
+
+`tools/dragproto` experiments 18–21, 64 MiB staged files, the user's hand on the mouse:
+
+- **Main thread as the drag thread** (`-postprobe`): during the hover every probe posted to
+  the window arrived within 10 ms — `DoDragDrop`'s loop dispatches window-posted messages;
+  during the extraction, inside Explorer's synchronous `Drop`, none of the three probes arrived
+  before the phase ended (78 ms), all three 122 ms later — the outgoing call's restricted
+  pumping. So the page's missing strip during the hover in the real application is not OLE's
+  doing but Wails' dispatcher (one batch of callbacks, run in order); its missing bar during
+  the extraction is OLE's.
+- **A dedicated OLE thread** (`-thread -postprobe`): `OleInitialize` on the new thread
+  (`S_OK`, once `S_FALSE` on a reused thread), a message-only window, `AttachThreadInput`
+  (the drag thread attached to the window thread's — Chromium's direction) succeeded every
+  time; the drag ran, the cursor followed, the drops landed, `DoDragDrop` returned normally
+  (238 ms to 2.1 s, the hover included) — and the **main window's queue stayed alive
+  throughout**, probes delivered within 10 ms during the hover and during the extraction,
+  while the OLE thread's own queue was, as expected, silent inside `Drop`.
+- **The held window** (`-thread -disable`): `EnableWindow(FALSE)` at the paths' hand-over and
+  `TRUE` at the return worked (a second, redundant disable/enable pair at the return is a
+  prototype bug); no observation was recorded of the feel.
+- **After the return** (`-poll-after`): a same-volume drop was a rename, the staged file gone
+  before the first sample. A **cross-volume** drop onto `D:\` had the staged file **still
+  open by another process 18.75 s after `DoDragDrop` returned** (7 of 79 samples): Explorer's
+  synchronous `Drop` hands the copy to its own engine and returns before the bytes have moved.
+  The return therefore says nothing about when Explorer is done, and the staging folder must
+  not be deleted on the strength of the target's window class. Drops the user answered *Skip*
+  or cancelled left their folder untouched and unread for the scavenge.
+

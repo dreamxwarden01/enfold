@@ -62,9 +62,6 @@ type shell struct {
 	quitMu   sync.Mutex
 	quitting bool
 	settings func() app.Settings
-	// oleReady: OleInitialize succeeded on the main thread, so a native
-	// drag can run (APP.md §3). Read by the core's Drag hook.
-	oleReady atomic.Bool
 }
 
 // secretRefused tells the page that a submitted secret was not accepted
@@ -150,24 +147,12 @@ func main() {
 	s.app = application.New(opts)
 	logger.printf("start: application created")
 
-	// OLE on the main thread, before the window (APP.md §3): DoDragDrop
-	// belongs to the thread that owns the window and runs its message loop,
-	// and Wails never calls OleInitialize itself. That thread is this one:
-	// Wails locks the main goroutine to its OS thread at package init
-	// (init_desktop.go), and Run's newPlatformApp captures that same thread
-	// as the main-loop thread. It is called DIRECTLY, not through
-	// application.InvokeSync: before Run the application has no platform
-	// implementation yet (application.go, Run: a.impl = newPlatformApp(a)),
-	// and InvokeSync dereferences it — the first build died here, silently,
-	// on every launch (2026-09-11). WebView2's later CoInitializeEx on this
-	// thread finds the apartment already initialised and returns S_FALSE.
-	// A failure is logged and leaves the drag out unsupported; nothing else
-	// needs OLE.
-	if err := dragout.InitOLE(); err != nil {
-		logger.printf("start: %v; the drag out is unavailable", err)
-	} else {
-		s.oleReady.Store(true)
-	}
+	// No OleInitialize here any more (APP.md §3, ruled 2026-09-11): each
+	// drag takes its own apartment on its own thread, so the main thread
+	// needs none — and the one that used to be taken here, directly rather
+	// than through an InvokeSync the application could not yet serve, is
+	// what killed the first launch. WebView2 initialises this thread's
+	// apartment for itself when it needs one.
 
 	sweepProfile(profile)
 	port, err := core.Start()
@@ -451,11 +436,15 @@ func (s *shell) reveal(path string) error {
 }
 
 // beginDrag is the core's Deps.Drag: the native drag of internal/dragout,
-// or none while OLE could not be initialised on the main thread.
+// which runs on a thread of its own and takes its own OLE apartment there,
+// so there is nothing for this side to have made ready. What it does need
+// from the shell is a way onto the window's thread for one call —
+// ReleaseCapture before the hand-off, which "Releases the mouse capture
+// from a window in the current thread" — and application.InvokeSync is it.
+// The drag asks before its own thread exists, from the goroutine of the
+// bound call, so the main thread is free to answer.
 func (s *shell) beginDrag(o dragout.Options) (app.DragHandle, error) {
-	if !s.oleReady.Load() {
-		return nil, dragout.ErrUnsupported
-	}
+	o.OnWindowThread = func(f func()) { application.InvokeSync(f) }
 	d, err := dragout.Begin(o)
 	if err != nil {
 		// A nil interface, not an interface over a nil *Drag.
@@ -465,21 +454,23 @@ func (s *shell) beginDrag(o dragout.Options) (app.DragHandle, error) {
 }
 
 // dragOut is Shell.DragOut (APP.md §3): the core plans the drag and
-// registers its operation, and the drag itself runs on the main thread —
-// DoDragDrop pumps messages, so the WebView stays alive — through the same
-// InvokeSync the rest of the shell's main-thread work uses; the bound call,
-// on its own goroutine, blocks until DoDragDrop returns. The window's HWND
-// is what the drop source compares with the window under the cursor at the
-// button's release to tell a self-drop apart.
+// registers its operation, and the drag itself runs on a thread of its own
+// (ruled 2026-09-11 on the measurements in docs/research/drag-out.md). This
+// call waits for its end — it is a bound call, so this is its own goroutine
+// and never the main thread — and there is no InvokeSync around the drag:
+// the main thread is left to Wails' dispatcher for the whole gesture, which
+// is what keeps the page's events and the operation strip moving while
+// Explorer is inside its own Drop. The window's HWND is what the drop
+// source compares with the window under the cursor at the button's release
+// to tell a self-drop apart, and where the drag's own thread finds the
+// thread to attach its input to.
 //
 // The drop is synchronous (ruled 2026-09-11, WinRAR's model): the data
 // object offers no IDataObjectAsyncCapability, so the target has to finish
-// inside its Drop, and the main thread sits in DoDragDrop's modal loop for
-// as long as Explorer's copy and its conflict dialog take. That is the
-// held window WinRAR shows, and the price of knowing the drop is over: the
-// WebView goes on painting and the strip goes on moving, since neither is
-// the main thread's, Explorer's own window stays in front, and a bound
-// call that needs the main thread waits until the drag ends.
+// inside its Drop, and this wait lasts as long as Explorer's copy and its
+// conflict dialog do. Nothing of Enfold's is held meanwhile: the window is
+// alive, Explorer's own window is in front, and the strip with its bar is
+// the only sign.
 func (s *shell) dragOut(archiveID string, recordIDs []string) (app.DragOutResult, *app.Error) {
 	var hwnd uintptr
 	if w := s.window(); w != nil {
@@ -489,9 +480,7 @@ func (s *shell) dragOut(archiveID string, recordIDs []string) (app.DragOutResult
 	if e != nil {
 		return app.DragOutResult{}, e
 	}
-	var res app.DragOutResult
-	application.InvokeSync(func() { res, e = d.Run() })
-	return res, e
+	return d.Run()
 }
 
 // quit is the tray's and the page's Quit: the running operations are named
@@ -573,12 +562,12 @@ func (s *shell) onShutdown() {
 	if s.profile != "" {
 		os.RemoveAll(s.profile)
 	}
-	// OLE last, on the main thread — Wails runs this hook through InvokeSync
-	// — after everything else: a staging folder nothing was handed out of
-	// goes, one a target has is left for the next launch's scavenge, and the
-	// apartment is closed unless Explorer still holds a data object of ours,
-	// which is then revoked rather than pulled from under it (APP.md §3).
-	dragout.UninitOLE()
+	// The drag out last, after everything else: a staging folder nothing
+	// was handed out of goes, one a target has is left for the next
+	// launch's scavenge, and a data object Explorer still holds is revoked
+	// rather than pulled from under it (APP.md §3). There is no apartment
+	// to close here — each drag's was its own thread's.
+	dragout.Shutdown()
 }
 
 // securityHeaders is the asset middleware (§4): the CSP names the preview

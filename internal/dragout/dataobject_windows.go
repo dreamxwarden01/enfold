@@ -697,16 +697,66 @@ func dropSourceQueryContinueDrag(this uintptr, fEscapePressed uintptr, grfKeySta
 		// is returned — the target's GetData can follow immediately.
 		//
 		// It is also the only moment a source is given to see where the
-		// drop is going: the window under the cursor. Its class is what the
-		// cleanup turns on — Explorer and the desktop finish the drop
-		// inside Drop, so their folder goes the instant DoDragDrop returns
-		// (APP.md §3, ruled 2026-09-11).
+		// drop is going: the window under the cursor. Its class goes in the
+		// log and decides nothing (APP.md §3, ruled 2026-09-11).
 		root := cursorRootWindow()
-		self := s.window != 0 && root == s.window
-		s.stage.arm(self, windowClassName(root))
+		s.stage.arm(s.selfDropAt(root), windowClassName(root))
 		return dragDropSDrop
 	}
 	return sOK
+}
+
+// selfDropAt is the release read twice over, and both readings are logged.
+// A drag source is never told where a drop landed — that is the protocol,
+// not an oversight — but the cursor's own position when the button comes up
+// is window-station wide and belongs to no thread, which is what lets the
+// drag's own thread read it at all:
+//
+//   - the hit test, WindowFromPoint taken up to GA_ROOT, compared with the
+//     caller's window;
+//   - the frame, GetWindowRect on that same window, tested against the
+//     point.
+//
+// Either one is enough. They disagree in the cases each is blind to:
+// WindowFromPoint "does not retrieve a handle to a hidden or disabled
+// window", so a window covered or disabled at that moment is invisible to
+// it, while the frame knows nothing of what is in front of it. The
+// prototype kept both for exactly this reason, and so does this.
+func (s *dropSource) selfDropAt(root uintptr) bool {
+	if s.window == 0 {
+		s.stage.log("drag %s: the button came up with no window of ours to compare it with: not a self-drop", s.stage.id)
+		return false
+	}
+	hit := root != 0 && root == s.window
+	p, havePoint := cursorPosition()
+	frame, haveFrame := windowFrame(s.window)
+	inFrame := havePoint && haveFrame && pointInRect(p, frame)
+	where := "the cursor's position could not be read"
+	if havePoint {
+		where = fmt.Sprintf("the button came up at screen (%d, %d)", p.x, p.y)
+	}
+	within := "our window's frame could not be read"
+	if haveFrame {
+		within = fmt.Sprintf("our window 0x%X is %d,%d-%d,%d and the point is %s it",
+			s.window, frame.left, frame.top, frame.right, frame.bottom, inOrOut(inFrame))
+	}
+	s.stage.log("drag %s: %s; the hit test names window 0x%X (ours is 0x%X, so %s); %s",
+		s.stage.id, where, root, s.window, matchWord(hit), within)
+	return hit || inFrame
+}
+
+func inOrOut(in bool) string {
+	if in {
+		return "inside"
+	}
+	return "outside"
+}
+
+func matchWord(match bool) string {
+	if match {
+		return "ours"
+	}
+	return "not ours"
 }
 
 // dropSourceGiveFeedback asks OLE for the standard cursors.

@@ -1,7 +1,9 @@
 // Package dragout is the drag out of the window (APP.md §3, ruled
 // 2026-09-10 and 2026-09-11): the staged route, 7-Zip's and WinRAR's, with
 // what their authors and users learnt folded in. One native OLE drag per
-// gesture, with a pure-Go, cgo-free data object — agile, so that what runs
+// gesture, run on a thread of its own so that the window's queue stays
+// alive through the whole of it (drag_windows.go), with a pure-Go,
+// cgo-free data object — agile, so that what runs
 // inside the drop's GetData runs on Explorer's worker thread and never the
 // WebView's — offering CF_HDROP by delayed rendering over a staging folder
 // the caller's Extract fills at the first request after the button's
@@ -115,9 +117,21 @@ type Options struct {
 	// land on, which is what makes a move a rename.
 	Root string
 	// Window is the caller's top-level window: a release over it is a
-	// self-drop.
+	// self-drop, and its own thread is the one the drag thread attaches its
+	// input to for the drag's length (GetWindowThreadProcessId returns "the
+	// identifier of the thread that created the window", so the handle is
+	// all this package needs to find it).
 	Window uintptr
-	Items  []Item
+	// OnWindowThread runs f on the thread that owns Window and returns when
+	// it has run — the shell's application.InvokeSync. The drag asks for
+	// exactly one thing through it, before it starts its own thread:
+	// ReleaseCapture, which "Releases the mouse capture from a window in
+	// the current thread" and so has to be the window thread's call and not
+	// the drag thread's. It is never used again, and no thread of this
+	// package's ever waits on the caller's after that. Nil is a caller with
+	// no capture to release.
+	OnWindowThread func(f func())
+	Items          []Item
 	// Extract writes every item under dir. It runs inside the drop's own
 	// GetData, on the target's thread; ctx is cancelled by Cancel. The
 	// caller reports its own progress. An error fails the request, so the
@@ -129,9 +143,9 @@ type Options struct {
 	Log     func(format string, args ...any)
 }
 
-// Result is what Run answers once DoDragDrop has returned, which is where
-// the drag ends: the target had to finish the drop inside Drop, and OnPhase
-// has reported Done with the reason before Run returns.
+// Result is what the drag answers once DoDragDrop has returned, which is
+// where the drag ends: the target had to finish the drop inside Drop, and
+// OnPhase has reported Done with the reason before the answer arrives.
 type Result struct {
 	SelfDrop bool
 	// Extracted: the extraction had run and succeeded by the time
@@ -149,9 +163,17 @@ type Result struct {
 	Folder string
 }
 
+// Outcome is one drag's whole answer, as the drag's own thread posts it
+// back: what Run would return, down a channel instead. Exactly one arrives
+// on the channel Start hands out, whatever became of the drag — a panic on
+// that thread included.
+type Outcome struct {
+	Result Result
+	Err    error
+}
+
 var (
-	// ErrUnsupported is Begin on a platform without OLE, or after an
-	// InitOLE that failed.
+	// ErrUnsupported is Begin on a platform with no native drag at all.
 	ErrUnsupported = errors.New("dragout: the native drag is not available here")
 	// ErrBusy is a second Begin while a drag is running: two cannot run at
 	// once in one process.

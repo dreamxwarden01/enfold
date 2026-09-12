@@ -123,8 +123,9 @@ func dropOnto(s *stage, class string, end Reason, effect uint32) {
 	s.dragEnded(end, effect)
 }
 
-// The window classes the tests drop onto: Explorer's own, which finishes
-// inside Drop, and somebody else's, which may read the paths later.
+// The window classes the tests drop onto. Neither decides anything any
+// more (APP.md §3, ruled 2026-09-11): both are here so that a test can
+// prove the class is recorded, logged, and left out of every verdict.
 const (
 	explorerWindow = "CabinetWClass"
 	otherWindow    = "Chrome_WidgetWin_1"
@@ -662,14 +663,15 @@ func TestAnotherTargetLeavesTheFolderForTheScavenge(t *testing.T) {
 	}
 }
 
-// TestExplorerTargetTakesItsFolderAtOnce is the whole gain of the
-// synchronous drop (APP.md §3, ruled 2026-09-11 after the hung Skip):
-// Explorer finishes the drop inside Drop — its conflict dialog and all — so
-// when DoDragDrop returns it is done with the paths, whatever the user
-// answered. The plaintext goes there and then, and a Skip (DROPEFFECT_NONE
-// with the files still staged) is a drop that is over, not a drag that
-// hangs.
-func TestExplorerTargetTakesItsFolderAtOnce(t *testing.T) {
+// TestTheTargetsClassDecidesNothing is the ruling of 2026-09-11 evening
+// (docs/research/drag-out.md, "The drag thread, measured"): a cross-volume
+// drop onto an Explorer window had the staged file still open by another
+// process 18.75 seconds after DoDragDrop returned, because the synchronous
+// Drop hands the copy to Explorer's own engine and returns. So Explorer's
+// own classes are now treated as any other window's — the reason is still
+// read off the effect, and the folder is left manifested for the scavenge —
+// and the class survives only in the log.
+func TestTheTargetsClassDecidesNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		class  string
@@ -680,10 +682,11 @@ func TestExplorerTargetTakesItsFolderAtOnce(t *testing.T) {
 		{"Skip in Explorer's conflict dialog", "CabinetWClass", dropEffectNone, Cancelled},
 		{"a drop on the desktop", "Progman", dropEffectCopy, Copied},
 		{"a drop on the desktop with Active Desktop on", "workerw", dropEffectCopy, Copied},
+		{"somebody else's window", otherWindow, dropEffectCopy, Copied},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateStages(t)
-			s, ph, _ := newTestStage(t, []Item{{Name: "e.bin", Size: 16}}, nil)
+			s, ph, lg := newTestStage(t, []Item{{Name: "e.bin", Size: 16}}, nil)
 			s.arm(false, tc.class)
 			if _, ok := s.requestPaths(); !ok {
 				t.Fatal("the extraction was refused")
@@ -692,11 +695,14 @@ func TestExplorerTargetTakesItsFolderAtOnce(t *testing.T) {
 			if got := ph.list(); len(got) != 3 || got[2].Step != Done || got[2].Reason != tc.want {
 				t.Fatalf("phases %v, want Done/%s last", got, tc.want)
 			}
-			if _, err := os.Stat(s.root); !os.IsNotExist(err) {
-				t.Errorf("Explorer's staging folder survived the drop: %v", err)
+			if _, err := os.Stat(s.paths[0]); err != nil {
+				t.Fatalf("the file was deleted under a target that may still be reading it: %v", err)
 			}
-			if stageIsActive(s.root) {
-				t.Error("the stage is still registered")
+			if m, ok := ReadManifest(s.root); !ok || m.State != StateHandedOut {
+				t.Fatalf("the folder is manifested %q %v, want %q for the scavenge", m.State, ok, StateHandedOut)
+			}
+			if !strings.Contains(lg.text(), tc.class) {
+				t.Errorf("the log does not say what class the button came up over:\n%s", lg.text())
 			}
 		})
 	}
@@ -839,15 +845,15 @@ func TestDropCleanupTable(t *testing.T) {
 			dropFacts{targetClass: otherWindow}, stageDelete},
 		{"a move that took every item leaves an empty folder, which goes",
 			dropFacts{written: true, effect: dropEffectMove, targetClass: otherWindow}, stageDelete},
-		{"an Explorer window finished inside Drop: the folder goes with the return",
-			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: "CabinetWClass"}, stageDelete},
-		{"... and so did the desktop",
-			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: "Progman"}, stageDelete},
-		{"... and Skip in Explorer's dialog is the same: the drop is over",
-			dropFacts{written: true, anyLeft: true, effect: dropEffectNone, targetClass: "CabinetWClass"}, stageDelete},
+		{"an Explorer window was measured still reading eighteen seconds later: left",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: "CabinetWClass"}, stageLeave},
+		{"... and the desktop is no different",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: "Progman"}, stageLeave},
+		{"... and Skip in Explorer's dialog leaves the files it did not take",
+			dropFacts{written: true, anyLeft: true, effect: dropEffectNone, targetClass: "CabinetWClass"}, stageLeave},
 		{"another program's window may read the paths late: left for the scavenge",
 			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: otherWindow}, stageLeave},
-		{"a window whose class could not be read is nobody we know: left",
+		{"a window whose class could not be read is left too",
 			dropFacts{written: true, anyLeft: true, effect: dropEffectCopy}, stageLeave},
 	}
 	for _, tc := range cases {
@@ -863,18 +869,17 @@ func TestDropCleanupTable(t *testing.T) {
 	}
 }
 
-// TestExplorerClassTable: the classes that mean "the drop is finished when
-// Drop returns" (APP.md §3), compared without case as Windows compares
-// window classes, and nothing else.
-func TestExplorerClassTable(t *testing.T) {
-	for _, name := range []string{"CabinetWClass", "ExploreWClass", "Progman", "WorkerW", "cabinetwclass", "WORKERW"} {
-		if !explorerClass(name) {
-			t.Errorf("%q is not recognised as Explorer's or the desktop's", name)
+// TestTheClassIsNeverInTheVerdict holds the ruling down where it can be
+// checked in one line: the same facts under any window class decide the
+// same way, Explorer's own included.
+func TestTheClassIsNeverInTheVerdict(t *testing.T) {
+	for _, class := range []string{"", "CabinetWClass", "ExploreWClass", "Progman", "WorkerW", "cabinetwclass", "Chrome_WidgetWin_1", "Notepad"} {
+		f := dropFacts{written: true, anyLeft: true, effect: dropEffectCopy, targetClass: class}
+		if d := dropCleanup(f); d.action != stageLeave {
+			t.Errorf("a drop over a window of class %q decided %q: the class is back in the verdict", class, d.action)
 		}
-	}
-	for _, name := range []string{"", "Chrome_WidgetWin_1", "CabinetWClass2", "Progman ", "Notepad", "WorkerW2"} {
-		if explorerClass(name) {
-			t.Errorf("%q was taken for Explorer's", name)
+		if r := dropReason(f); r != Copied {
+			t.Errorf("a drop over a window of class %q read as %s, want copied", class, r)
 		}
 	}
 }

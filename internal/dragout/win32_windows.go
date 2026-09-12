@@ -63,6 +63,19 @@ var (
 	procWindowFromPoint        = moduser32.NewProc("WindowFromPoint")
 	procGetAncestor            = moduser32.NewProc("GetAncestor")
 	procGetClassName           = moduser32.NewProc("GetClassNameW")
+	procGetWindowRect          = moduser32.NewProc("GetWindowRect")
+
+	// The drag thread's own five, none of which existed here while the
+	// drag ran on the window's thread (drag_windows.go).
+	procAttachThreadInput        = moduser32.NewProc("AttachThreadInput")
+	procGetWindowThreadProcessId = moduser32.NewProc("GetWindowThreadProcessId")
+	procReleaseCapture           = moduser32.NewProc("ReleaseCapture")
+	procRegisterClassExW         = moduser32.NewProc("RegisterClassExW")
+	procCreateWindowExW          = moduser32.NewProc("CreateWindowExW")
+	procDestroyWindow            = moduser32.NewProc("DestroyWindow")
+	procDefWindowProcW           = moduser32.NewProc("DefWindowProcW")
+
+	procGetModuleHandleW = modkernel32.NewProc("GetModuleHandleW")
 
 	procGlobalAlloc   = modkernel32.NewProc("GlobalAlloc")
 	procGlobalFree    = modkernel32.NewProc("GlobalFree")
@@ -118,6 +131,16 @@ const (
 	// chain of parent windows."
 	gaRoot = 2
 
+	// HWND_MESSAGE, ((HWND)-3) in winuser.h, is the parent that makes a
+	// window message-only, which is how the drag thread gets a message
+	// queue without putting anything on screen: "To create a message-only
+	// window, supply HWND_MESSAGE ... in the hWndParent parameter"
+	// (CreateWindowExW), and such a window "is not visible, has no z-order,
+	// cannot be enumerated, and does not receive broadcast messages. The
+	// window simply dispatches messages" (Window Features, "Message-Only
+	// Windows").
+	hwndMessage = ^uintptr(2) // (HWND)-3
+
 	// GHND == GMEM_MOVEABLE|GMEM_ZEROINIT, the conventional allocation for
 	// an HGLOBAL handed to a clipboard or data-transfer consumer.
 	gHND = 0x0042
@@ -125,6 +148,18 @@ const (
 
 type point struct {
 	x, y int32
+}
+
+// rect is RECT: the window frame the self-drop reads beside the hit test.
+type rect struct {
+	left, top, right, bottom int32
+}
+
+// pointInRect is the frame test itself, separated from every API call so
+// that it can be checked without a window. A RECT's right and bottom edges
+// are exclusive, the way every Win32 rectangle is.
+func pointInRect(p point, r rect) bool {
+	return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom
 }
 
 // formatEtc mirrors FORMATETC (objidl.h): sizeof 32, cfFormat at 0, ptd at
@@ -137,6 +172,25 @@ type formatEtc struct {
 	lindex   int32
 	tymed    uint32
 	_        uint32
+}
+
+// wndClassExW mirrors WNDCLASSEXW (winuser.h): the class the drag thread's
+// message-only window is made of. Everything but the procedure, the module
+// and the name is zero — there is nothing to paint, no cursor to set and no
+// menu, the window existing only so that the thread has a queue.
+type wndClassExW struct {
+	cbSize        uint32
+	style         uint32
+	lpfnWndProc   uintptr
+	cbClsExtra    int32
+	cbWndExtra    int32
+	hInstance     windows.Handle
+	hIcon         windows.Handle
+	hCursor       windows.Handle
+	hbrBackground windows.Handle
+	lpszMenuName  *uint16
+	lpszClassName *uint16
+	hIconSm       windows.Handle
 }
 
 // stgMedium mirrors STGMEDIUM (objidl.h): sizeof 24, tymed at 0, the union
@@ -224,13 +278,39 @@ func clipboardFormatName(cf uint16) string {
 	return windows.UTF16ToString(buf[:n])
 }
 
+// cursorPosition is where the cursor is right now. It is window-station
+// wide and belongs to no thread, which is what lets the drop source read it
+// from the drag's own thread. A variable, so that a test can put a release
+// anywhere without a mouse.
+var cursorPosition = func() (point, bool) {
+	var pt point
+	if r, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt))); r == 0 {
+		return point{}, false
+	}
+	return pt, true
+}
+
+// windowFrame is GetWindowRect over a window handle: the second of the two
+// signals the self-drop is read from, and the one that survives a window
+// the hit test will not name. A variable, for the same reason.
+var windowFrame = func(hwnd uintptr) (rect, bool) {
+	if hwnd == 0 {
+		return rect{}, false
+	}
+	var r rect
+	if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return rect{}, false
+	}
+	return r, true
+}
+
 // cursorRootWindow is the top-level window under the cursor right now:
 // GetCursorPos, WindowFromPoint, GetAncestor(GA_ROOT). It is what the
 // self-drop compares with the caller's window at the button's release. A
 // variable, so that a test of the drop source can put a window there.
 var cursorRootWindow = func() uintptr {
-	var pt point
-	if r, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt))); r == 0 {
+	pt, ok := cursorPosition()
+	if !ok {
 		return 0
 	}
 	// POINT is passed by value: two LONGs packed into one 64-bit register.

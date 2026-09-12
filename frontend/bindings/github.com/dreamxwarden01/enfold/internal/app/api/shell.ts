@@ -21,8 +21,9 @@ export function CloseWindow(): $CancellablePromise<void> {
 /**
  * DragOut is the one gesture of APP.md §3: a press-and-move over selected
  * rows starts one native drag of those records out of the window, and this
- * call blocks until DoDragDrop returns — the window stays alive meanwhile,
- * since the drag pumps its messages on the main thread. The staged copy is
+ * call blocks until DoDragDrop returns — the window stays alive and its
+ * page keeps moving meanwhile, the drag having a thread of its own and the
+ * main thread being nobody's to hold (ruled 2026-09-11). The staged copy is
  * extracted by the drop's own request under an operation of kind dragout,
  * which the strip follows (preparing, then awaiting) and which ends when
  * the drag reports how it ended (OpView.DragResult). A release over

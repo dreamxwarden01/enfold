@@ -455,9 +455,10 @@ func (s *stage) pathList() []string {
 // which case nothing is ever extracted (APP.md §3, the self-drop).
 //
 // class is the class name of the top-level window under the cursor at that
-// moment, kept for the cleanup: the release is the one instant a source is
-// given to see where the drop is going, and what is there decides whether
-// the folder can go the moment DoDragDrop returns (APP.md §3, ruled
+// moment: the release is the one instant a source is given to see where the
+// drop is going, and it is worth a line in the log for that alone. It
+// decides nothing — the folder's fate turns on what was written and what
+// the effect was, never on who the target is (APP.md §3, ruled
 // 2026-09-11).
 func (s *stage) arm(selfDrop bool, class string) {
 	s.mu.Lock()
@@ -666,9 +667,10 @@ func (s *stage) reportDone(r Reason) {
 // Drop — Explorer's conflict dialog, the user's Replace, Skip or cancel,
 // and the copy itself all happen before DoDragDrop returns, and the return
 // carries the real effect. So there is nothing to watch and nothing to
-// guess: the drag ends when DoDragDrop returns, the effect says how, and
-// the class of the window the button came up over says whether the folder
-// can go at once.
+// guess: the drag ends when DoDragDrop returns and the effect says how.
+// What the return does not say is when the target is done with the staged
+// files — measured, it may be a quarter of a minute later — so the folder
+// outlives the drop wherever anything was handed out of it.
 
 // dragEnded is DoDragDrop returning: the whole end of the drag, reason and
 // cleanup, decided here and now. end is what the call itself reported —
@@ -738,13 +740,18 @@ func (s *stage) anyStagedLeft() bool {
 // the drop LOOKS over is what took files from under FileZilla, VMware and a
 // configuration dialog that kept 7-Zip's paths for minutes, and Igor
 // Pavlov's own note on it is "another program can't open input files in
-// that case". What makes the answer safe here is that the drop is
-// synchronous: with no IDataObjectAsyncCapability on the object the target
-// must finish inside Drop, so when DoDragDrop returns an Explorer or a
-// desktop target IS finished — the class name recorded at the button's
-// release is what says it was one — and its folder goes at once. For
-// anything else the folder outlives the drop, because a consumer may open
-// the paths late, and the sweep is what takes it (APP.md §3).
+// that case". The window the button came up over does not settle it either,
+// and that is a measurement, not a caution (docs/research/drag-out.md, "The
+// drag thread, measured", 2026-09-11): a cross-volume drop onto an Explorer
+// window had the staged file still open by another process 18.75 seconds
+// after DoDragDrop returned — the synchronous Drop hands the copy to
+// Explorer's own engine and returns before the bytes have moved. So the
+// class is logged and decides nothing (APP.md §3, ruled 2026-09-11).
+//
+// What is left is the short list of ends at which there is provably nothing
+// to wait for: a self-drop, a failed extraction, a drag that wrote nothing,
+// and a move that took every item away. Everything else leaves the folder
+// standing, manifested handed-out, and the sweep takes it an hour later.
 
 // dropFacts is everything the end of a drag is decided over.
 type dropFacts struct {
@@ -768,25 +775,10 @@ type dropFacts struct {
 	// after a same-volume move, which renames every one of them away.
 	anyLeft bool
 	// targetClass is the class of the top-level window the button came up
-	// over (stage.targetClass).
+	// over (stage.targetClass). It is carried this far to be said in the
+	// log — a drag that left its folder behind should say who it was left
+	// for — and it decides nothing.
 	targetClass string
-}
-
-// explorerTargets are the window classes that finish a drop inside Drop and
-// are done with the staged paths when DoDragDrop returns: a folder window
-// (CabinetWClass), the old single-pane explorer (ExploreWClass), and the
-// desktop, which is Progman with the icons' WorkerW beside it when Active
-// Desktop is on. Classes are compared the way Windows compares them, which
-// is without case.
-var explorerTargets = []string{"CabinetWClass", "ExploreWClass", "Progman", "WorkerW"}
-
-func explorerClass(name string) bool {
-	for _, c := range explorerTargets {
-		if strings.EqualFold(name, c) {
-			return true
-		}
-	}
-	return false
 }
 
 // dropReason is how the drag ended, in the words APP.md §3 names (ruled
@@ -867,16 +859,12 @@ func dropCleanup(f dropFacts) stageDecision {
 
 	case f.effect == dropEffectMove && !f.anyLeft:
 		return stageDecision{stageDelete, "every staged item was moved away by the target; only the empty folder is left"}
-
-	case explorerClass(f.targetClass):
-		// The whole gain of the synchronous drop: Explorer copies inside
-		// Drop, dialog and all, so its return is the end of its interest in
-		// the paths — including the Skip that used to hang the strip.
-		return stageDecision{stageDelete, fmt.Sprintf("the drop was over a window of class %q: it finished inside Drop and is done with the paths", f.targetClass)}
 	}
-	// Somebody else's window, and consumers open dropped paths late — a
-	// browser reads a dropped file when the upload starts, a configuration
-	// dialog kept 7-Zip's paths for minutes.
+	// The paths are a consumer's now, and consumers open dropped paths late
+	// — a browser reads a dropped file when the upload starts, a
+	// configuration dialog kept 7-Zip's paths for minutes, and Explorer
+	// itself was measured still reading a staged file eighteen seconds
+	// after the drop (the class says who, and nothing more).
 	return stageDecision{stageLeave, fmt.Sprintf("the paths were handed out to a window of class %q; the folder is left manifested for the scavenge", f.targetClass)}
 }
 

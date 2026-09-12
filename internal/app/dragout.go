@@ -13,16 +13,16 @@ import (
 
 // The drag out of the window (APP.md §3, ruled 2026-09-10 and 2026-09-11):
 // a press-and-move over selected rows calls Shell.DragOut, the shell runs
-// one native drag on its main thread, and the core's part is what an
+// one native drag on a thread of its own, and the core's part is what an
 // operation is — the plan, the extraction the drop's own request runs into
 // the staging folder, the strip's two phases and the archive held open
-// meanwhile — with nothing of COM in it. The native drag itself is
-// internal/dragout's, reached through Deps.Drag so that a test drives the
-// same operation with a fake and no COM runs.
+// meanwhile — with nothing of COM in it, and nothing of any one thread's.
+// The native drag itself is internal/dragout's, reached through Deps.Drag
+// so that a test drives the same operation with a fake and no COM runs.
 
-// DragHandle is one native drag the shell runs: Run on the window's
-// thread — DoDragDrop is modal there and pumps the window's messages
-// itself — and Cancel from any.
+// DragHandle is one native drag the shell runs: Run waits for it to end,
+// on any goroutine but the window thread's — the drag has a thread of its
+// own and DoDragDrop is modal there, not here — and Cancel from any.
 type DragHandle interface {
 	Run() (dragout.Result, error)
 	Cancel()
@@ -141,9 +141,11 @@ func (c *Core) DragOutPlan(archiveID string, recordIDs []string) ([]dragout.Item
 }
 
 // DragOut is one drag out of the window: the operation the strip shows,
-// and the native drag the shell runs on its main thread. BeginDragOut makes
-// it and the shell calls Run; the operation ends when the drag reports how
-// it ended, which for a drop is after Run has returned.
+// and the native drag the shell runs on a thread of its own. BeginDragOut
+// makes it and the shell calls Run; the operation ends when the drag
+// reports how it ended, which for a drop is after Run has returned.
+// Nothing here belongs to a thread: the phases arrive from whichever
+// thread they happen on, and the extraction runs on the target's.
 type DragOut struct {
 	c     *Core
 	oa    *openArchive
@@ -176,8 +178,9 @@ type DragOut struct {
 // staging folder exists from here, so a hover-time request can be answered
 // with the final paths — and registers the operation of kind dragout that
 // holds the archive open until the drag ends. window is the shell's
-// top-level HWND, for the self-drop. The shell calls Run next, on its main
-// thread. A drag already running is drag.busy; no native drag at all is
+// top-level HWND, for the self-drop and for the thread the drag attaches
+// its input to. The shell calls Run next, on the goroutine of its bound
+// call. A drag already running is drag.busy; no native drag at all is
 // drag.unsupported.
 func (c *Core) BeginDragOut(archiveID string, recordIDs []string, window uintptr) (*DragOut, *Error) {
 	oa, e := c.findArchive(archiveID)
@@ -243,9 +246,11 @@ func (c *Core) BeginDragOut(archiveID string, recordIDs []string, window uintptr
 // OpID is the dragout operation's id.
 func (d *DragOut) OpID() string { return d.opID }
 
-// Run is the shell's half: the native drag on the calling thread, which
-// must be the one that initialised OLE and runs the window's message loop.
-// It returns when DoDragDrop returns — the page has its answer then — and
+// Run is the shell's half: the native drag, which takes a thread of its
+// own and answers here when it is over. This call waits, so it must not be
+// made on the window's own thread — the shell makes it from the goroutine
+// of a bound call, and the main thread is left free for the page. It
+// returns when DoDragDrop has returned — the page has its answer then — and
 // the operation goes on until the drag reports its end.
 func (d *DragOut) Run() (DragOutResult, *Error) {
 	res, err := d.drag.Run()

@@ -3873,3 +3873,29 @@ ours (the staging), it holds at 100 % while Explorer copies, the only control me
 Explorer's own window, and when Explorer is done, for whatever reason, the window is released
 and the strip destroyed. APP §3 says so; the words are gone.
 
+**No strip, no held window** (2026-09-11, the user's second real drag on the synchronous
+build): the drag works, but the strip never appears — not in the hover, not during the
+extraction — and the page still takes clicks while Explorer copies. Two things were wrong in
+our understanding, and an outside review (Codex Astra, the research file's pass 4) put them
+right. First, the page's events travel by `ExecuteScript` through Wails' main-thread
+dispatcher, and that dispatcher takes every pending callback in one batch and runs them in
+order: when our `DoDragDrop` sits in the batch before the event drainer, the drainer waits for
+the drag to end while the "draining" flag keeps later events from scheduling another —
+starvation for the whole drag, a Wails mechanism rather than an OLE one (plausible, not yet
+measured). Second, and decisive: Explorer's synchronous `Drop` is an *outgoing* COM call on
+which our thread blocks, and an STA waiting on an outgoing call dispatches only a handful of
+special messages — and the extraction, the very thing the bar is for, runs inside that
+`Drop`. With the main thread as the drag thread, the extraction's progress cannot reach the
+page by any dispatch; being agile moves our callbacks onto an RPC thread of our own process,
+not off the main thread's wait. So the drag must run on a **dedicated OLE thread** — the
+review's position, and Chromium's own history (a `Chrome_DragDropThread` with `OleInitialize`,
+input forwarded and `AttachThreadInput` for the cursor and the button state) — with the main
+thread never waiting on it; the held window then is an explicit `EnableWindow(FALSE)`, and only
+from the moment Explorer has the paths (the hover needs the capture, the extraction needs
+*Cancel* and the self-drop needs the drop) to `DoDragDrop`'s return. Two things the review
+insists be measured before the design is final: the input handoff between the two threads (a
+fast release, Escape, Ctrl and Shift, the self-drop), and whether Explorer's cross-volume copy
+is really over when `DoDragDrop` returns (the staged file still read after the return would
+forbid deleting it then). The prototype gains `-postprobe`, `-thread`, `-disable` and a
+cross-volume poll for exactly that; the design paragraph waits for the numbers.
+

@@ -606,3 +606,60 @@ func TestDragScavengeAtStart(t *testing.T) {
 		}
 	}
 }
+
+// The staged copy pays no fsync and a real extract does (APP.md §3, ruled
+// 2026-09-11, after the bar was watched stalling for seconds at the end of
+// every file): the same plan, the same temporary, the same placement, and
+// the flush is the one difference between them. The staged copy is
+// disposable — Explorer's own copy is what lands, and the scavenge takes
+// whatever is left — so its durability is the destination's business.
+func TestTheStagedCopySkipsTheFsync(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id, aID, _, _ := h.dragSource(t)
+	syncs := 0
+	h.c.extractFS = extractFS{sync: func(f *os.File) error {
+		syncs++
+		return extractFS{}.syncFile(f)
+	}}
+
+	drags := h.useDrags()
+	stage := t.TempDir()
+	drags.script = func(f *fakeDrag) (dragout.Result, error) {
+		f.opts.OnPhase(dragout.Phase{Step: dragout.Preparing})
+		if err := f.opts.Extract(f.ctx, stage); err != nil {
+			f.opts.OnPhase(dragout.Phase{Step: dragout.Done, Reason: dragout.Failed})
+			return dragout.Result{Folder: stage}, err
+		}
+		f.opts.OnPhase(dragout.Phase{Step: dragout.Awaiting})
+		return dragout.Result{Extracted: true, Effect: 2, Folder: stage}, nil
+	}
+	d, e := h.c.BeginDragOut(id, []string{aID}, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	res, e := d.Run()
+	if e != nil || !res.Extracted {
+		t.Fatalf("the staging drag: %+v %v", res, e)
+	}
+	if b, err := os.ReadFile(filepath.Join(stage, "a.txt")); err != nil || string(b) != "a" {
+		t.Fatalf("the staged file: %q %v", b, err)
+	}
+	if syncs != 0 {
+		t.Errorf("the staging extract made %d fsync(s): the bar stalls at every file's end for them", syncs)
+	}
+
+	// The same record, extracted the way the user asks for it: the flush is
+	// paid, once for the file.
+	out := t.TempDir()
+	opID, e := h.c.Extract(id, []string{aID}, out, ExtractSkip, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != "" {
+		t.Fatalf("the extract: %+v", o)
+	}
+	if syncs != 1 {
+		t.Errorf("a real extract made %d fsync(s), want one for its one file", syncs)
+	}
+}

@@ -95,6 +95,13 @@ type dataObject struct {
 	// still holds this object. From then on GetData answers E_UNEXPECTED
 	// rather than name files out of a drag that is over.
 	revoked atomic.Bool
+
+	// gone is closed by comDestroy, when the last reference to this object
+	// has gone — the target's included. It is what the drag thread waits on
+	// when a target kept the object past the drop: the apartment the object
+	// is served from cannot be closed under a holder, so the thread stays
+	// until this closes (drag_windows.go, stay).
+	gone chan struct{}
 }
 
 // setCOMObject runs inside newCOMObject, before the interface cells are
@@ -106,15 +113,20 @@ func (d *dataObject) setCOMObject(o *comObject) {
 	d.mu.Unlock()
 }
 
-// comDestroy is the last reference going. Nothing depends on it any more:
-// the drop is synchronous, so the drag was already over when DoDragDrop
-// returned, and whether the target has let the object go by then says
-// nothing the return value did not (APP.md §3, ruled 2026-09-11). It is
-// logged, because a target that holds the object past the drop is worth
-// seeing in a trace.
+// comDestroy is the last reference going, whoever held it — and it runs on
+// whichever thread gave the last one back, which for a target that kept the
+// object is one of its own. The drag itself was over long before: the drop
+// is synchronous, so DoDragDrop's return said everything the result says
+// (APP.md §3, ruled 2026-09-11). What this moment is still needed for is
+// the apartment: the drag thread stays open until it comes, so closing the
+// channel is the one thing here that anything waits on.
 func (d *dataObject) comDestroy() {
 	if d.stage != nil {
 		d.log("drag %s: the data object was let go", d.stage.id)
+	}
+	if d.gone != nil {
+		// Once, by construction: release calls comDestroy exactly once.
+		close(d.gone)
 	}
 }
 
@@ -143,7 +155,7 @@ func newHDropDataObject(s *stage, log func(string, ...any)) *comObject {
 	if log == nil {
 		log = discard
 	}
-	d := &dataObject{stage: s, log: log}
+	d := &dataObject{stage: s, log: log, gone: make(chan struct{})}
 	d.formats = []formatEtc{
 		{cfFormat: cfHDrop, dwAspect: dvAspectContent, lindex: -1, tymed: tymedHGlobal},
 		{cfFormat: cfPreferredDropEffect, dwAspect: dvAspectContent, lindex: -1, tymed: tymedHGlobal},
@@ -717,11 +729,26 @@ func dropSourceQueryContinueDrag(this uintptr, fEscapePressed uintptr, grfKeySta
 //   - the frame, GetWindowRect on that same window, tested against the
 //     point.
 //
-// Either one is enough. They disagree in the cases each is blind to:
-// WindowFromPoint "does not retrieve a handle to a hidden or disabled
-// window", so a window covered or disabled at that moment is invisible to
-// it, while the frame knows nothing of what is in front of it. The
-// prototype kept both for exactly this reason, and so does this.
+// The hit test decides whenever it answers a window at all, and it decides
+// both ways: the window under the cursor is what the release landed on, so
+// ours is a self-drop and anybody else's is not. A rectangle cannot
+// overrule it — windows overlap, and a release inside our frame while
+// Explorer's window covers that part of it is a drop on Explorer, the drag
+// out proper (found 2026-09-11 in review: `hit || inFrame` made every such
+// drop a self-drop, which answers the target with paths nothing will write
+// and takes the folder at the return).
+//
+// The frame is the reading for the one case the hit test has nothing to say
+// about: no window under the point at all, which is what WindowFromPoint
+// answers for a point over no window of this desktop. What it costs is the
+// case that reading was originally kept for — "WindowFromPoint does not
+// retrieve a handle to a hidden or disabled window", so a release over our
+// own window while it is hidden or disabled now reads as somebody else's —
+// and that is a case this drag cannot be in: nothing disables the window
+// for a drag any more (APP.md §3, ruled 2026-09-11, no held window).
+//
+// Both readings stay in the log whichever decided, because the two
+// disagreeing is the thing worth seeing in a trace.
 func (s *dropSource) selfDropAt(root uintptr) bool {
 	if s.window == 0 {
 		s.stage.log("drag %s: the button came up with no window of ours to compare it with: not a self-drop", s.stage.id)
@@ -740,9 +767,20 @@ func (s *dropSource) selfDropAt(root uintptr) bool {
 		within = fmt.Sprintf("our window 0x%X is %d,%d-%d,%d and the point is %s it",
 			s.window, frame.left, frame.top, frame.right, frame.bottom, inOrOut(inFrame))
 	}
-	s.stage.log("drag %s: %s; the hit test names window 0x%X (ours is 0x%X, so %s); %s",
-		s.stage.id, where, root, s.window, matchWord(hit), within)
-	return hit || inFrame
+	self, decided := hit, "the hit test answered a window, so it decides"
+	if root == 0 {
+		self, decided = inFrame, "the hit test answered no window at all, so our own frame decides"
+	}
+	s.stage.log("drag %s: %s; the hit test names window 0x%X (ours is 0x%X, so %s); %s; %s: %s",
+		s.stage.id, where, root, s.window, matchWord(hit), within, decided, selfDropWord(self))
+	return self
+}
+
+func selfDropWord(self bool) string {
+	if self {
+		return "a self-drop"
+	}
+	return "not a self-drop"
 }
 
 func inOrOut(in bool) string {

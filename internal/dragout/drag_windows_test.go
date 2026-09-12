@@ -40,6 +40,14 @@ type fakeSystem struct {
 	// drag is DoDragDrop itself, and the test's whole story: it runs on the
 	// drag thread with the object pointers the drag built.
 	drag func(f *fakeSystem, data, source uintptr, allowed uint32, effect *uint32) uintptr
+
+	// The stay's queue, for a drag whose data object the target kept: wake
+	// stands in for the thread's message queue — pumpMessage waits on it the
+	// way GetMessage waits on an empty one, postWake fills it — and pumps
+	// counts the turns, which is how a test sees that the parked thread is
+	// pumping rather than sitting on a dead loop.
+	wake  chan struct{}
+	pumps int
 }
 
 type event struct {
@@ -86,25 +94,80 @@ func (f *fakeSystem) oneThread(t *testing.T, from string) uint32 {
 }
 
 func (f *fakeSystem) has(what string) bool {
+	return f.count(what) > 0
+}
+
+func (f *fakeSystem) count(what string) int {
+	n := 0
 	for _, e := range f.list() {
 		if e == what {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
+}
+
+// tidOf is the thread one call was made from, which is how a test tells the
+// thread a drag ran on from the one another is parked on.
+func (f *fakeSystem) tidOf(what string) uint32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.events {
+		if e.what == what {
+			return e.tid
+		}
+	}
+	return 0
+}
+
+func (f *fakeSystem) pumped() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pumps
 }
 
 // install puts the fake in every seam for the length of the test.
+//
+// It must not be called while a thread of an earlier drag is still standing
+// by: that thread reads pumpMessage and postWake out of these very
+// variables, and replacing them under it is a data race as well as a
+// nonsense. A second drag over an installed fake goes through beginAnother.
 func (f *fakeSystem) install(t *testing.T) *fakeSystem {
 	t.Helper()
 	oleIn, oleOut := oleInitializeOnThread, oleUninitializeOnThread
 	newWin, closeWin := newDragWindow, closeDragWindow
 	attach, tid, capture, drag := attachThreadInput, windowThreadID, releaseMouseCapture, doDragDrop
+	pump, wake := pumpMessage, postWake
 	t.Cleanup(func() {
 		oleInitializeOnThread, oleUninitializeOnThread = oleIn, oleOut
 		newDragWindow, closeDragWindow = newWin, closeWin
 		attachThreadInput, windowThreadID, releaseMouseCapture, doDragDrop = attach, tid, capture, drag
+		pumpMessage, postWake = pump, wake
 	})
+
+	f.wake = make(chan struct{}, 64)
+	pumpMessage = func() bool {
+		// GetMessage blocks on an empty queue; so does this, or the loop
+		// around it would be a spin and the test would prove nothing about
+		// the shape of the real one.
+		<-f.wake
+		f.mu.Lock()
+		f.pumps++
+		f.mu.Unlock()
+		return true
+	}
+	postWake = func(hwnd uintptr) bool {
+		if hwnd != 0xBEEF {
+			t.Errorf("the stay posted its wake to 0x%X, want the window the drag made", hwnd)
+		}
+		select {
+		case f.wake <- struct{}{}:
+		default:
+			// A full queue needs no more wakes; the real one would coalesce
+			// nothing, but nothing here depends on the count.
+		}
+		return true
+	}
 
 	oleInitializeOnThread = func() uintptr {
 		f.note("OleInitialize")
@@ -167,6 +230,14 @@ func beginFake(t *testing.T, f *fakeSystem, items []Item) (*Drag, *phaseLog, *te
 	t.Cleanup(runtime.UnlockOSThread)
 	isolateStages(t)
 	f.install(t)
+	return beginAnother(t, items)
+}
+
+// beginAnother is a further drag over a fake that is already installed —
+// the shape a test needs when the thread of an earlier drag is still
+// standing by for a target and the seams must be left where they are.
+func beginAnother(t *testing.T, items []Item) (*Drag, *phaseLog, *testLog) {
+	t.Helper()
 	ph, lg := &phaseLog{}, &testLog{}
 	d, err := Begin(Options{
 		Root: t.TempDir(), Window: 0x1000, Items: items,
@@ -181,6 +252,31 @@ func beginFake(t *testing.T, f *fakeSystem, items []Item) (*Drag, *phaseLog, *te
 		d.s.finish()
 	})
 	return d, ph, lg
+}
+
+// stayFor shortens the drag thread's stay for one test: the application's
+// cap is the scavenge's hour, which no test can sit through, and the wake
+// is how often the fake queue is prodded.
+func stayFor(t *testing.T, limit, wake time.Duration) {
+	t.Helper()
+	prevLimit, prevWake := stayCap, stayWake
+	t.Cleanup(func() { stayCap, stayWake = prevLimit, prevWake })
+	stayCap, stayWake = limit, wake
+}
+
+// eventually waits for something the drag thread does after the caller has
+// already been answered — the stay's own end, above all, which by design
+// nobody is told about.
+func eventually(t *testing.T, why string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("%s: it had not happened after 10s", why)
 }
 
 func waitFor(t *testing.T, ch <-chan Outcome) Outcome {
@@ -385,47 +481,171 @@ func TestAPanicOnTheDragThreadIsNotTheProcess(t *testing.T) {
 	running.Store(false)
 }
 
-// TestTheApartmentIsLeftOpenUnderAHeldObject is the prototype's finding
-// turned into behaviour: OleUninitialize "releases any class factories,
-// other COM objects, or servers held by the apartment", and it was watched
-// taking a data object from five references to zero under a target that was
-// still using it. So a target that still holds one keeps it.
-func TestTheApartmentIsLeftOpenUnderAHeldObject(t *testing.T) {
-	items := []Item{{Name: "held.bin", Size: 4}}
-	var held *comObject
-	f := &fakeSystem{drag: func(f *fakeSystem, data, source uintptr, allowed uint32, effect *uint32) uintptr {
-		// A target keeping a reference past the drop, as Explorer's did.
+// holdTheObject is the fake drop that keeps a reference to the data object
+// past the drop, as Explorer's did: the shape the stay exists for.
+func holdTheObject(t *testing.T, held **comObject) func(*fakeSystem, uintptr, uintptr, uint32, *uint32) uintptr {
+	return func(f *fakeSystem, data, source uintptr, allowed uint32, effect *uint32) uintptr {
 		o, _, ok := comLookup(data)
 		if !ok {
 			t.Error("the data object the drag passed to DoDragDrop is not one of ours")
 			return dragDropSCancel
 		}
-		held = o
+		*held = o
 		o.addRef()
 		return dragDropSCancel
-	}}
+	}
+}
+
+// TestTheDragThreadStaysForAHeldObject is the review's finding of
+// 2026-09-11 turned into behaviour. OleUninitialize "releases any class
+// factories, other COM objects, or servers held by the apartment" — the
+// prototype watched it take a data object from five references to zero
+// under a target still using it — but skipping the call and unlocking the
+// thread anyway left an initialised apartment on a thread Go may hand to
+// anything, with nobody pumping it. So the thread stays instead: the caller
+// is answered at DoDragDrop's return, the thread pumps its queue until the
+// target lets the object go, and only then does it balance its apartment
+// and destroy its window.
+func TestTheDragThreadStaysForAHeldObject(t *testing.T) {
+	items := []Item{{Name: "held.bin", Size: 4}}
+	stayFor(t, 30*time.Second, 2*time.Millisecond)
+	var held *comObject
+	f := &fakeSystem{}
+	f.drag = holdTheObject(t, &held)
 	d, _, lg := beginFake(t, f, items)
 	ch, err := d.Start()
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitFor(t, ch)
-	if f.has("OleUninitialize") {
-		t.Error("the apartment was closed over an object the target still holds")
+	if o := waitFor(t, ch); o.Err != nil {
+		t.Fatalf("the drag answered %v", o.Err)
 	}
-	if !f.has("DestroyWindow") {
-		t.Error("the window was left behind as well")
+	// The answer came at the drag's end, with the thread still standing by:
+	// nothing of the teardown that needs the apartment has run.
+	if f.has("OleUninitialize") || f.has("DestroyWindow") {
+		t.Errorf("the thread tore itself down under an object the target still holds: %v", f.list())
 	}
-	if !strings.Contains(lg.text(), "skipping OleUninitialize") {
-		t.Errorf("the log does not say why the apartment was left open:\n%s", lg.text())
+	if running.Load() {
+		t.Error("a thread that only stands by still counts as a running drag: the next gesture would be ErrBusy")
 	}
-	// Shutdown is what the held object meets in the end: revoked, never
-	// destroyed under its holder.
+	// And it pumps, which is what an STA owes anything it is still serving.
+	eventually(t, "the thread that stayed never pumped its queue", func() bool { return f.pumped() > 0 })
+
+	// Shutdown meets the object as it always did: revoked, never destroyed
+	// under its holder — and the stay is still what ends the thread.
 	Shutdown()
 	if !held.impl.(*dataObject).revoked.Load() {
 		t.Error("the held data object was not revoked at shutdown")
 	}
+
+	// The target lets go. The teardown follows, in its order, and the
+	// apartment is balanced at last.
 	held.release()
+	eventually(t, "the stay never ended after the object was let go", func() bool {
+		return strings.Contains(lg.text(), "in every sense")
+	})
+	if got, want := f.count("OleUninitialize"), f.count("OleInitialize"); got != want {
+		t.Errorf("%d OleUninitialize against %d OleInitialize: the apartment is not balanced", got, want)
+	}
+	tail := f.list()[len(f.list())-2:]
+	if !sameOrder(tail, []string{"DestroyWindow", "OleUninitialize"}) {
+		t.Errorf("the stay ended with %v, want the window destroyed and then the apartment closed", tail)
+	}
+	for _, want := range []string{"the drag thread stays on tid", "let the data object go", "closed at last"} {
+		if !strings.Contains(lg.text(), want) {
+			t.Errorf("the log does not say %q:\n%s", want, lg.text())
+		}
+	}
+}
+
+// TestTheStayIsCappedAtTheScavengeAge: a target that never lets go does not
+// own a thread of ours for ever. At the cap the object is revoked — from
+// then on it answers E_UNEXPECTED rather than name files out of a folder
+// the scavenge is taking at that same age — and the thread tears down.
+func TestTheStayIsCappedAtTheScavengeAge(t *testing.T) {
+	if stayCap != ScavengeAge {
+		t.Fatalf("the stay's cap is %s, want the scavenge's own age %s", stayCap, ScavengeAge)
+	}
+	items := []Item{{Name: "kept.bin", Size: 4}}
+	stayFor(t, 30*time.Millisecond, 2*time.Millisecond)
+	var held *comObject
+	f := &fakeSystem{}
+	f.drag = holdTheObject(t, &held)
+	d, _, lg := beginFake(t, f, items)
+	ch, err := d.Start()
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if o := waitFor(t, ch); o.Err != nil {
+		t.Fatalf("the drag answered %v", o.Err)
+	}
+	eventually(t, "the stay was never capped", func() bool { return f.has("OleUninitialize") })
+	if !held.impl.(*dataObject).revoked.Load() {
+		t.Error("the object was not revoked at the cap: it could still name files out of a folder the scavenge is taking")
+	}
+	if !strings.Contains(lg.text(), "the scavenge's own age") {
+		t.Errorf("the log does not say the stay was capped:\n%s", lg.text())
+	}
+	// The reference the fake target never gave back.
+	held.release()
+}
+
+// TestANewDragWhileOneIsParked: a thread standing by for a target is not a
+// drag, and it holds up neither the next Begin nor the next gesture. The
+// second drag gets a thread of its own — never the parked one, which is
+// locked to its own OS thread and busy pumping.
+func TestANewDragWhileOneIsParked(t *testing.T) {
+	items := []Item{{Name: "first.bin", Size: 4}}
+	stayFor(t, 30*time.Second, 2*time.Millisecond)
+	var held *comObject
+	f := &fakeSystem{}
+	f.drag = holdTheObject(t, &held)
+	d, _, lg := beginFake(t, f, items)
+	ch, err := d.Start()
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if o := waitFor(t, ch); o.Err != nil {
+		t.Fatalf("the first drag answered %v", o.Err)
+	}
+	parked := f.tidOf("DoDragDrop")
+	eventually(t, "the first thread never began to pump", func() bool { return f.pumped() > 0 })
+
+	// The next gesture, while that thread stands by. The seams stay where
+	// they are: the parked thread is reading two of them.
+	f.mu.Lock()
+	f.events = nil
+	f.mu.Unlock()
+	f.drag = func(f *fakeSystem, data, source uintptr, allowed uint32, effect *uint32) uintptr {
+		return dragDropSCancel
+	}
+	d2, ph2, _ := beginAnother(t, []Item{{Name: "second.bin", Size: 4}})
+	ch2, err := d2.Start()
+	if err != nil {
+		t.Fatalf("the second Start while one thread is parked: %v", err)
+	}
+	if o := waitFor(t, ch2); o.Err != nil {
+		t.Fatalf("the second drag answered %v", o.Err)
+	}
+	if tid := f.tidOf("DoDragDrop"); tid == parked || tid == 0 {
+		t.Errorf("the second drag ran on thread %d and the first is parked on %d", tid, parked)
+	}
+	for _, what := range []string{"OleInitialize", "CreateWindow", "AttachThreadInput TRUE", "AttachThreadInput FALSE", "DestroyWindow", "OleUninitialize"} {
+		if !f.has(what) {
+			t.Errorf("the second drag never did %s: %v", what, f.list())
+		}
+	}
+	if got := ph2.list(); len(got) != 1 || got[0].Reason != Cancelled {
+		t.Fatalf("the second drag's phases are %v, want Done/Cancelled", got)
+	}
+	if strings.Contains(lg.text(), "in every sense") {
+		t.Error("the first thread went home while its object was still held")
+	}
+	// And the first thread ends when its own target lets go, not before.
+	held.release()
+	eventually(t, "the parked thread never ended", func() bool {
+		return strings.Contains(lg.text(), "in every sense")
+	})
 }
 
 // TestADragThatCouldNotStart: the two ways the thread gives up before

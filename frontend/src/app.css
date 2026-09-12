@@ -729,7 +729,12 @@ tbody tr.up .fname { color: var(--ink-2); }
 
 /* ---------- ops, dialogs, toasts ---------------------------------------- */
 .ops { display: flex; flex-direction: column; gap: 6px; flex: none; }
-.op { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); font-size: 12px; }
+/* The row is as tall as a row with a button in it, always: a drag out's
+   hover carries no bar and no *Cancel*, and the strip must not grow under
+   the user when the staging begins (APP.md §3, ruled 2026-09-11 — a strip
+   that reflows while it is being watched). 28px of .btn.sm, the padding and
+   the border. */
+.op { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 6px 10px; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); font-size: 12px; }
 .op progress { flex: 1; height: 6px; accent-color: var(--accent); }
 /* The name keeps its room and the byte readout does not shuffle the bar as
    the figures grow (APP.md §6: progress is by bytes). */

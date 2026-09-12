@@ -657,11 +657,12 @@ func TestDropSourceTellsASelfDropApart(t *testing.T) {
 	}
 }
 
-// TestTheSelfDropIsReadTwiceOver: the release is decided on two signals,
-// and either is enough (APP.md §3). They are blind to different things —
-// WindowFromPoint "does not retrieve a handle to a hidden or disabled
-// window", and a frame knows nothing of what is in front of it — so a
-// window that only one of them sees is still our own.
+// TestTheSelfDropIsReadTwiceOver: the release is read on two signals and
+// both are logged, but only one of them decides (APP.md §3, and the review
+// of 2026-09-11). The hit test decides whenever it names a window at all,
+// ours or anybody's — windows overlap, and a release inside our rectangle
+// over Explorer's window is a drop on Explorer — and our own frame is
+// consulted only where WindowFromPoint named nothing.
 func TestTheSelfDropIsReadTwiceOver(t *testing.T) {
 	isolateStages(t)
 	prevRoot, prevClass := cursorRootWindow, windowClassName
@@ -685,7 +686,12 @@ func TestTheSelfDropIsReadTwiceOver(t *testing.T) {
 	}{
 		{"both agree it is ours", ours, point{200, 200}, true, ours, true, "the hit test names window 0x1000"},
 		{"the hit test alone: the point is outside the frame we read", ours, point{10, 10}, true, ours, true, "outside it"},
-		{"the frame alone: a covered or disabled window is invisible to the hit test", theirs, point{200, 200}, true, ours, true, "inside it"},
+		// The overlap, and the reason the rectangle cannot overrule the hit
+		// test: Explorer's window is in front of ours at a point that is
+		// inside our frame, and the release belongs to Explorer.
+		{"another window over our own rectangle is not a self-drop", theirs, point{200, 200}, true, ours, false, "so it decides: not a self-drop"},
+		{"the frame alone: the hit test named no window at all", 0, point{200, 200}, true, ours, true, "no window at all, so our own frame decides: a self-drop"},
+		{"no window under the cursor, and the point is outside our frame", 0, point{10, 10}, true, ours, false, "no window at all, so our own frame decides: not a self-drop"},
 		{"neither: somebody else's window", theirs, point{10, 10}, true, ours, false, "not ours"},
 		{"no frame to read, and the hit test says no", theirs, point{200, 200}, false, ours, false, "frame could not be read"},
 		{"no window of ours at all", theirs, point{200, 200}, false, 0, false, "no window of ours"},

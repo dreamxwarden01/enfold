@@ -112,6 +112,19 @@ export function cancellable(kind: string, phase = ""): boolean {
   return kind === "add" || kind === "replace" || kind === "reclaim";
 }
 
+// showsCancel is the other half of that question, and a different one:
+// whether the strip draws the button at all, where cancellable says whether
+// it can be pressed. They part company in one place — a drag out's awaiting,
+// where the bar stands full and there is nothing left to cancel: the button
+// stays where it is, greyed and unclickable, because a button that vanishes
+// reflows the strip under the user's eyes and a greyed one keeps its shape
+// (APP.md §3, ruled 2026-09-11). The hover draws none, the label standing
+// alone there; the strip's own height does not depend on it (app.css, .op).
+export function showsCancel(kind: string, phase = ""): boolean {
+  if (kind === "dragout") return phase === "preparing" || phase === "awaiting";
+  return cancellable(kind, phase);
+}
+
 // hasBar: whether the strip draws a bar for the operation — indeterminate
 // until Total is known, and moving by bytes once it is. A drag out's hover
 // is the one phase without one: nothing is being written yet, and the label

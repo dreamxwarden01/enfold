@@ -1025,17 +1025,18 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 		if len(items) == 0 {
 			return nil, coded(CodeFileNotFound)
 		}
-		return c.extractItems(ctx, o, oa, items, root, policy, "extracting")
+		return c.extractItems(ctx, o, oa, items, root, policy, "extracting", fsyncEachFile)
 	}), nil
 }
 
 // extractItems writes a resolved plan under root: the extract's own
 // (extractPlan) and the drag out's (dragPlan, dragout.go), which differ in
-// where the paths start and in nothing else — the same targets, the same
-// outcomes, the same progress by bytes under phase, the same refusals per
-// record. The destination root itself failing is the operation's error,
-// before any outcome.
-func (c *Core) extractItems(ctx context.Context, o *op, oa *openArchive, items []extractItem, root string, policy ExtractPolicy, phase string) ([]FileOutcome, error) {
+// where the paths start, in dur — the drag out's staging pays no fsync per
+// file (APP.md §3, ruled 2026-09-11) — and in nothing else: the same
+// targets, the same outcomes, the same progress by bytes under phase, the
+// same refusals per record. The destination root itself failing is the
+// operation's error, before any outcome.
+func (c *Core) extractItems(ctx context.Context, o *op, oa *openArchive, items []extractItem, root string, policy ExtractPolicy, phase string, dur durability) ([]FileOutcome, error) {
 	// Every target is resolved before the first byte, case-folded
 	// destinations de-duplicated, each asserted to lie under dir. Every
 	// record satisfying R20 and R39 does, so a failure means the index
@@ -1150,14 +1151,14 @@ func (c *Core) extractItems(ctx context.Context, o *op, oa *openArchive, items [
 		c.mu.Unlock()
 		base := done
 		count := func(written uint64) { o.progress(base+written, total, phase) }
-		err := extractFile(ctx, c.extractFS, oa.a, it.id, it.dst, policy == ExtractReplace, count)
+		err := extractFile(ctx, c.extractFS, oa.a, it.id, it.dst, policy == ExtractReplace, dur, count)
 		// Keep-both numbering is bounded — " (2)" to " (999)" — and
 		// stops at the first refusal that is not "already exists": a
 		// name the volume would not take is that record's outcome, not
 		// a reason to try a longer one (APP.md §3, checked 2026-09-10).
 		for n := 2; err != nil && errors.Is(err, os.ErrExist) && policy == ExtractRename && n < 1000; n++ {
 			res.Path = renamed(it.dst, n)
-			err = extractFile(ctx, c.extractFS, oa.a, it.id, res.Path, false, count)
+			err = extractFile(ctx, c.extractFS, oa.a, it.id, res.Path, false, dur, count)
 		}
 		c.mu.Lock()
 		oa.readers--

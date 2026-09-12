@@ -854,10 +854,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   aggregated, `IAgileObject` answered) so a call from Explorer's RPC thread runs there rather
   than being marshalled to the drag thread. It offers `CF_HDROP` by **delayed rendering** and, beside it, `CFSTR_PREFERREDDROPEFFECT` =
   *move* with both *copy* and *move* allowed — and **not** `IDataObjectAsyncCapability` (ruled
-  2026-09-11 after the first real drag, WinRAR's model): without it Windows requires the
-  target to finish the drop *inside* `Drop` — Explorer's conflict dialog, its *Replace*, *Skip*
-  or cancel, and the copy itself all happen before `DoDragDrop` returns, and the return carries
-  the real effect; with it Explorer had copied in the background, never called `EndOperation`,
+  2026-09-11 after the first real drag, WinRAR's model): without it Windows requires the target to answer the drop *inside* `Drop` — Explorer's
+  conflict dialog, its *Replace*, *Skip* or cancel, and a same-volume move all happen before
+  `DoDragDrop` returns, and the return carries the real effect (a cross-volume copy, measured,
+  is handed to Explorer's own engine and runs on after the return); with it Explorer had copied in the background, never called `EndOperation`,
   and after a *Skip* neither read, nor moved, nor let the object go, so nothing could say the
   drop was over. Nothing of Enfold's is held while `DoDragDrop` runs: it runs on its own thread, the page is
   alive, and the operation strip is the only sign — there is no moment to hold the window for,
@@ -879,13 +879,16 @@ sentinel of every package with a catch-all `internal` — and services are regis
   are written**: a `CF_HDROP` request that arrives during the hover — targets do ask, Raymond
   Chen and 7-Zip's comments are the witness — is answered with the *final* paths (never a
   placeholder: Edge caches the early names, 7-Zip found); the files themselves are written by the first request after the button's release — the
-  core's `Extract` with `replace` into the folder — **and that phase is visible** (ruled
+  core's `Extract` with `replace` into the folder, **without the `fsync` a real extract pays
+  per file** (ruled 2026-09-11 after the bar was seen to stall for seconds at each file's end:
+  the staged copy is disposable and Explorer's own copy is what lands; durability is the
+  destination's) — **and that phase is visible** (ruled
   2026-09-11 after the measured 5 GiB drop: Explorer shows nothing until the request returns,
   and a user who sees nothing move thinks the program is dead — the reason WinRAR and 7-Zip
   put a progress window on the screen at that moment): the page's operation strip is there from the moment the drag starts (ruled 2026-09-11, after
-  a first real drag whose staging was over before the strip appeared): its label is **Extracting N items** throughout — the hover shows the label alone, the staging
-  shows a bar that moves by bytes with *Cancel*, and when the staging is done the bar simply
-  stays full, with no *Cancel* and no new words: from then on Explorer's own window is in front
+  a first real drag whose staging was over before the strip appeared): its label is **Extracting N items** throughout — the hover shows the label alone, the staging shows a bar that moves by bytes with *Cancel*, and when the staging is done the bar
+  simply stays full and *Cancel* stays where it is, greyed and unclickable (ruled 2026-09-11:
+  a button that vanishes reflows the strip; a greyed one keeps its shape), with no new words: from then on Explorer's own window is in front
   and the only control there is — so a fast staging is a change inside a strip already on the
   screen, never a strip that flashes; the window never freezes, since the request runs on Explorer's thread (the object being agile)
   and the WebView's stays free; a cancel fails the request and Explorer abandons the drop.
@@ -905,9 +908,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
   files to exist at hover time (Sticky Notes refuses a path that is not there) is the
   measurement the prototype makes before the rule is final; if such targets matter, a small
   selection may be written at the first request. **When the folder goes**: at once when the drag ends with nothing written (Escape, a
-  refused drop, a failed extraction), at `DoDragDrop`'s return when the release was over an
-  Explorer window or the desktop or a move took every item (above); otherwise the folder
-  outlives the drop and even the process, because consumers open the paths late (a browser reads a dropped file when the
+  refused drop, a failed extraction), at `DoDragDrop`'s return when it was a self-drop or a
+  move took every item (above); otherwise the folder outlives the drop and even the process, because consumers open the paths late (a browser reads a dropped file when the
   upload starts, a configuration dialog kept 7-Zip's paths for minutes, FileZilla and VMware
   broke on early deletion) — and the **scavenge** removes what is ours: at launch and every ten
   minutes while running, every manifested folder whose state is not live and whose age is

@@ -466,11 +466,16 @@ func (s *shell) beginDrag(o dragout.Options) (app.DragHandle, error) {
 // thread to attach its input to.
 //
 // The drop is synchronous (ruled 2026-09-11, WinRAR's model): the data
-// object offers no IDataObjectAsyncCapability, so the target has to finish
-// inside its Drop, and this wait lasts as long as Explorer's copy and its
-// conflict dialog do. Nothing of Enfold's is held meanwhile: the window is
-// alive, Explorer's own window is in front, and the strip with its bar is
-// the only sign.
+// object offers no IDataObjectAsyncCapability, so the target has to take
+// the drop inside its Drop, and this wait is for that and no more —
+// DoDragDrop returns when Explorer has the paths, and that instant is the
+// end of the drag for Enfold. It is not a wait for Explorer's copy: a
+// cross-volume copy is handed to Explorer's own engine and runs on after
+// the return (measured — docs/research/drag-out.md, "The drag thread,
+// measured": a staged file still open 18.75 s later), and the conflict
+// dialog belongs to that copy. Nothing of Enfold's is held meanwhile: the
+// window is alive, Explorer's own window is in front, and the strip with
+// its bar is the only sign.
 func (s *shell) dragOut(archiveID string, recordIDs []string) (app.DragOutResult, *app.Error) {
 	var hwnd uintptr
 	if w := s.window(); w != nil {

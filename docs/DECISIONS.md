@@ -3916,3 +3916,12 @@ self-drop, or nothing written — never by the target's window class — and the
 the rest. The main-thread `OleInitialize` at startup, which killed the first launch, is no
 longer needed.
 
+**The drag thread in the real window** (2026-09-11, late evening, the user's test with a
+real video): the strip appears from the press, the bar moves through the staging, and a fresh
+write, a *Skip* and a *Replace* all end cleanly; the window is not held, but Explorer's copy
+dialog and the destination folder come to the front by themselves, which the user called
+acceptable. Two rulings from what was seen: the bar stalled for seconds at each file's end —
+the per-file `fsync` a real extract pays — so the staged copy is written without it (it is
+disposable; Explorer's copy is what lands); and *Cancel* vanishing at the second phase reflowed
+the strip thinner, so it stays, greyed, and the strip keeps its shape.
+

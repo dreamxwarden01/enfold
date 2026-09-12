@@ -882,7 +882,7 @@ func TestExtractReplacePlacesOverTheOldFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	chunks := 0
-	err := extractFile(ctx, extractFS{}, oa.a, fid, dst, true, func(uint64) { chunks++; cancel() })
+	err := extractFile(ctx, extractFS{}, oa.a, fid, dst, true, fsyncEachFile, func(uint64) { chunks++; cancel() })
 	if err == nil {
 		t.Fatal("the cancelled extraction reported success")
 	}

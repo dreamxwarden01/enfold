@@ -33,7 +33,29 @@ var (
 type extractFS struct {
 	place func(tmp, path string, replace bool) error
 	mkdir func(path string) error
+	// sync is the flush of one written temporary before it is placed. It is
+	// a seam for the same reason the other two are: whether an extract pays
+	// it is a decision (durability below) and a decision is worth a test.
+	sync func(f *os.File) error
 }
+
+// durability is whether an extract flushes each file to the volume before
+// placing it (APP.md §3, ruled 2026-09-11). It is a type of its own rather
+// than a bare bool because it is read at the call sites, where "false"
+// would say nothing about what is being given up.
+type durability bool
+
+const (
+	// fsyncEachFile is every extract the user asked for: they asked for
+	// these files, and a file that is not on the volume after a crash is
+	// not a file they got.
+	fsyncEachFile durability = true
+	// noFsync is the drag out's staging alone. The bar was watched stalling
+	// for seconds at each file's end; the staged copy is disposable —
+	// Explorer's own copy is what lands, and the scavenge takes whatever is
+	// left — so durability there is the destination's, not ours.
+	noFsync durability = false
+)
 
 func (fs extractFS) placeFile(tmp, path string, replace bool) error {
 	if fs.place != nil {
@@ -50,6 +72,13 @@ func (fs extractFS) makeDir(path string) error {
 		return fs.mkdir(path)
 	}
 	return os.Mkdir(path, 0o700)
+}
+
+func (fs extractFS) syncFile(f *os.File) error {
+	if fs.sync != nil {
+		return fs.sync(f)
+	}
+	return f.Sync()
 }
 
 // extractFile writes one record's plaintext to path with the discipline
@@ -82,7 +111,13 @@ func (fs extractFS) makeDir(path string) error {
 // refused: the temporary's creation is errPathRefused — its name is short
 // and fixed, so the folder's path is what was refused — and the placement
 // onto the final name is errNameRefused. Every other error goes up as it is.
-func extractFile(ctx context.Context, fs extractFS, a *archive.Archive, id [16]byte, path string, replace bool, on func(written uint64)) error {
+//
+// dur is the one thing that differs between an extract the user asked for
+// and the drag out's staging: the flush before the placement. The placement
+// itself is the same rename either way, so a staged file is whole or absent
+// exactly as a real one is — what is given up is only its survival of a
+// crash, which for a folder the scavenge takes within the hour is nothing.
+func extractFile(ctx context.Context, fs extractFS, a *archive.Archive, id [16]byte, path string, replace bool, dur durability, on func(written uint64)) error {
 	// The cheap pre-check: it may see the collision first, and it spares
 	// the decryption; the exclusive move below is what places a file, so
 	// nothing here is a check the placement then trusts (DECISIONS:
@@ -115,8 +150,10 @@ func extractFile(ctx context.Context, fs extractFS, a *archive.Archive, id [16]b
 	if err := a.Extract(ctx, id, &countingWriter{w: f, on: on}); err != nil {
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		return err
+	if dur == fsyncEachFile {
+		if err := fs.syncFile(f); err != nil {
+			return err
+		}
 	}
 	if err := f.Close(); err != nil {
 		return err

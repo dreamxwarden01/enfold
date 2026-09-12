@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cancellable, hasBar, opErrorLine, opLabel, opPhase, reclaimedLine, stripCount } from "./ops";
+import { cancellable, hasBar, opErrorLine, opLabel, opPhase, reclaimedLine, showsCancel, stripCount } from "./ops";
 import { dragOutCopy, reclaimedText } from "./strings";
 
 // The operation strip (APP.md §2.3, §6). Since 2026-09-09 the strip says
@@ -83,11 +83,13 @@ describe("the drag out on the strip", () => {
   it("is the label alone during the hover: no bar, nothing to cancel", () => {
     expect(hasBar("dragout", "dragging")).toBe(false);
     expect(cancellable("dragout", "dragging")).toBe(false);
+    expect(showsCancel("dragout", "dragging")).toBe(false);
   });
 
   it("shows the byte bar with Cancel while it stages", () => {
     expect(hasBar("dragout", "preparing")).toBe(true);
     expect(cancellable("dragout", "preparing")).toBe(true);
+    expect(showsCancel("dragout", "preparing")).toBe(true);
   });
 
   it("keeps that bar, full and uncancellable, while Explorer copies", () => {
@@ -96,6 +98,20 @@ describe("the drag out on the strip", () => {
     expect(hasBar("dragout", "awaiting")).toBe(true);
     expect(cancellable("dragout", "awaiting")).toBe(false);
     expect(opLabel("dragout", 3, "awaiting")).toBe("Extracting 3 items");
+  });
+
+  it("keeps Cancel in its place while it stands full, greyed and unclickable", () => {
+    // The button is drawn and cannot be pressed: one that vanished would
+    // reflow the strip at the very moment the user is watching the bar
+    // (APP.md §3, ruled 2026-09-11).
+    expect(showsCancel("dragout", "awaiting")).toBe(true);
+    expect(cancellable("dragout", "awaiting")).toBe(false);
+  });
+
+  it("draws the button for every other kind exactly when it can be pressed", () => {
+    for (const [kind, phase] of [["add", ""], ["replace", ""], ["reclaim", "moving"], ["extract", "extracting"], ["verify", "hashing"], ["compact", "compacting"]] as const) {
+      expect(showsCancel(kind, phase)).toBe(cancellable(kind, phase));
+    }
   });
 
   it("says nothing about Explorer anywhere in its copy", () => {

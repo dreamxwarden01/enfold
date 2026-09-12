@@ -298,7 +298,7 @@ func (d *DragOut) extract(dragCtx context.Context, dir string) error {
 	defer cancel()
 	stop := context.AfterFunc(dragCtx, cancel)
 	defer stop()
-	results, err := d.c.extractItems(ctx, d.o, d.oa, d.items, dir, ExtractReplace, "preparing")
+	results, err := d.c.extractItems(ctx, d.o, d.oa, d.items, dir, ExtractReplace, "preparing", noFsync)
 	if err == nil {
 		// extractItems looks at the context before each item and nowhere
 		// after the last: a cancel that lands during the last file's

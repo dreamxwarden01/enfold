@@ -75,6 +75,12 @@ var (
 	procDestroyWindow            = moduser32.NewProc("DestroyWindow")
 	procDefWindowProcW           = moduser32.NewProc("DefWindowProcW")
 
+	// The message loop the drag thread runs while it stays behind for a
+	// target that kept the data object (drag_windows.go, stay).
+	procGetMessageW      = moduser32.NewProc("GetMessageW")
+	procDispatchMessageW = moduser32.NewProc("DispatchMessageW")
+	procPostMessageW     = moduser32.NewProc("PostMessageW")
+
 	procGetModuleHandleW = modkernel32.NewProc("GetModuleHandleW")
 
 	procGlobalAlloc   = modkernel32.NewProc("GlobalAlloc")
@@ -141,6 +147,11 @@ const (
 	// Windows").
 	hwndMessage = ^uintptr(2) // (HWND)-3
 
+	// WM_NULL, the message that "performs no operation" — what the stay's
+	// heartbeat posts to its own window so that a GetMessage waiting on an
+	// idle queue returns and the loop can look at its channels again.
+	wmNull = 0x0000
+
 	// GHND == GMEM_MOVEABLE|GMEM_ZEROINIT, the conventional allocation for
 	// an HGLOBAL handed to a clipboard or data-transfer consumer.
 	gHND = 0x0042
@@ -172,6 +183,23 @@ type formatEtc struct {
 	lindex   int32
 	tymed    uint32
 	_        uint32
+}
+
+// msgW mirrors MSG (winuser.h), the one struct the stay's message loop
+// passes about: hwnd at 0, message at 8 with four bytes of padding after it,
+// wParam at 16, lParam at 24, time at 32, pt at 36 and the private DWORD at
+// 44 on x64, 48 bytes in all. Nothing here reads a field — GetMessage fills
+// it and DispatchMessage consumes it — but a struct short of the real one
+// would be memory Windows writes past.
+type msgW struct {
+	hwnd    uintptr
+	message uint32
+	_       uint32
+	wParam  uintptr
+	lParam  uintptr
+	time    uint32
+	pt      point
+	_       uint32
 }
 
 // wndClassExW mirrors WNDCLASSEXW (winuser.h): the class the drag thread's

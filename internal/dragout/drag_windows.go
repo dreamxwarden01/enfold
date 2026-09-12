@@ -46,6 +46,21 @@ var (
 	// all a mouse has — and a second Begin while one runs is ErrBusy.
 	running atomic.Bool
 
+	// stayCap is the longest the drag thread will stand by for a target that
+	// kept the data object past the drop (stay). The scavenge's own hour is
+	// the number because it is the same hour: at that age the staging folder
+	// the object names is taken anyway, and an object that can only name a
+	// folder which is gone is worth nothing to the holder. A variable, so
+	// that a test need not sit through it.
+	stayCap = ScavengeAge
+
+	// stayWake is the heartbeat of that stay: how often a wake is posted to
+	// the thread's own window so that its GetMessage returns and the loop
+	// looks at its channels. The release itself posts one too, so this is
+	// only the guard against a wake that was never delivered — a second is
+	// nothing against an hour.
+	stayWake = time.Second
+
 	// endLog is the log the process's own teardown speaks with: Shutdown
 	// runs long after the last drag's Options are gone, and a line about a
 	// data object a target still holds is worth having in the same file as
@@ -79,15 +94,17 @@ func endLogger() func(string, ...any) {
 //
 // There is no OleUninitialize here any more, and nothing for one to
 // balance: OLE belongs to each drag's own thread now and is closed there
-// (see endApartment). What the revoke is for is the finding that made it
-// (tools/dragproto, "Findings so far"): OleUninitialize "Closes the COM
-// library on the apartment, releases any class factories, other COM
-// objects, or servers held by the apartment", and in the prototype's second
-// real drop that one call took the data object from five references to zero
-// under a target still using it — its progress dialog could not even be
-// cancelled afterwards. So an object a target still holds is never
-// destroyed by us; it is revoked, and process exit ends the transfer in a
-// way the target's own RPC layer understands.
+// (see endApartment) — by the thread itself, which for a drag whose object
+// a target kept is a thread still standing by when this runs (stay). Its
+// apartment goes when the process does. What the revoke is for is the
+// finding that made it (tools/dragproto, "Findings so far"):
+// OleUninitialize "Closes the COM library on the apartment, releases any
+// class factories, other COM objects, or servers held by the apartment",
+// and in the prototype's second real drop that one call took the data
+// object from five references to zero under a target still using it — its
+// progress dialog could not even be cancelled afterwards. So an object a
+// target still holds is never destroyed by us; it is revoked, and process
+// exit ends the transfer in a way the target's own RPC layer understands.
 func Shutdown() {
 	log := endLogger()
 	closeAllStages()
@@ -117,11 +134,21 @@ type Drag struct {
 	s       *stage
 	log     func(string, ...any)
 	started atomic.Bool
-	// held: the target still had a reference to the data object when we
-	// gave ours back, so the apartment is left open rather than closed over
-	// an object somebody is using. Written on the drag thread before its
-	// own teardown reads it.
+
+	// The rest belongs to the drag's own thread and is touched from nowhere
+	// else: written and read there, in the order that thread runs in.
+	//
+	// held and data: the target still had a reference to the data object
+	// when we gave ours back, so the thread stays behind rather than close
+	// the apartment that object is served from (stay, endApartment).
 	held bool
+	data *comObject
+	// outcome is the one answer this drag gives, recorded where it becomes
+	// known — DoDragDrop's return, a drag that could not start, a recovered
+	// panic — and sent by report, which happens once.
+	outcome  Outcome
+	out      chan<- Outcome
+	answered sync.Once
 }
 
 // Begin makes the staging folder atomically with its manifest and builds
@@ -172,14 +199,19 @@ func (d *Drag) Start() (<-chan Outcome, error) {
 
 // Run is Start and the wait in one, for a caller that has a goroutine to
 // spare and wants the drag's end as a return value — the shape the core's
-// operation is written against. It blocks until DoDragDrop has returned and
-// the drag thread has taken itself down, which is as long as Explorer's
-// copy and its conflict dialog last, and it must not be called on the
-// window's own thread for the reason Start gives.
+// operation is written against. It blocks until DoDragDrop has returned,
+// which is when the target has taken the drop and not when Explorer has
+// finished with what it took: a cross-volume copy runs on in Explorer's own
+// engine afterwards (measured — docs/research/drag-out.md, "The drag
+// thread, measured": a staged file still open 18.75 s after the return).
+// It must not be called on the window's own thread for the reason Start
+// gives.
 //
 // When it returns the drag is over: Options.OnPhase has reported Done with
 // the reason, and the staging folder has been deleted or left for the
-// scavenge (APP.md §3, ruled 2026-09-11).
+// scavenge (APP.md §3, ruled 2026-09-11). The drag's own thread has taken
+// itself down as well — unless the target kept the data object, in which
+// case that thread stays behind for it and no caller waits on that (stay).
 func (d *Drag) Run() (Result, error) {
 	ch, err := d.Start()
 	if err != nil {
@@ -216,29 +248,61 @@ func (d *Drag) releaseCapture() {
 	d.log("drag %s: ReleaseCapture on the window's own thread before the hand-off -> %v", d.s.id, had)
 }
 
-// thread is the drag's goroutine, from its first line to its last. The
-// three defers below are the order the end has to happen in, and a defer
-// registered first runs last: the apartment is closed and the window
-// destroyed inside run, then running is cleared, and only then does the
-// answer go out. That last step is the one that matters to the user: a
-// caller who has heard that the drag is over may start the next gesture in
-// the same breath, and it must not meet this one's teardown as ErrBusy.
+// thread is the drag's goroutine, from its first line to its last. It ends
+// in one of two places, and which one is the target's doing:
+//
+//   - an ordinary drag answers here, when run has closed the apartment and
+//     destroyed the window, so that a caller hearing the drag is over meets
+//     nothing of it afterwards;
+//   - a drag whose data object the target kept answers inside stay, at
+//     DoDragDrop's return, because the thread then stands by for as long as
+//     the target holds on — up to an hour — and no caller may be made to
+//     wait for that.
+//
+// report is what both go through, and it clears running before the answer
+// goes out: a caller who has heard that the drag is over may start the next
+// gesture in the same breath, and it must meet neither this one's teardown
+// nor a thread still standing by as ErrBusy.
 func (d *Drag) thread(out chan<- Outcome) {
-	var o Outcome
-	defer func() { out <- o }()
-	defer running.Store(false)
+	d.out = out
+	// Registered first, so it runs last: whatever became of the drag, the
+	// caller is answered exactly once.
+	defer d.report()
 	defer func() {
 		if r := recover(); r != nil {
-			// A panic here is ours, and it would otherwise take the process
-			// with it: a goroutine's panic is not the caller's to recover,
-			// and no drag is worth the window and the vault going with it.
-			// The recovered value only — never a file name (APP.md §3).
-			d.log("drag %s: the drag thread panicked and was recovered: %v", d.s.id, r)
-			o = Outcome{Result: d.panicked(), Err: fmt.Errorf("dragout: the drag thread panicked: %v", r)}
+			d.recovered(r)
 		}
 	}()
-	res, err := d.run()
-	o = Outcome{Result: res, Err: err}
+	d.run()
+	if d.held {
+		d.log("drag %s: the drag is over in every sense: the thread that stayed for the target has closed its apartment and gone", d.s.id)
+	}
+}
+
+// recovered turns a panic on the drag thread into this drag's answer. A
+// panic here is ours, and it would otherwise take the process with it: a
+// goroutine's panic is not the caller's to recover, and no drag is worth
+// the window and the vault going with it. The recovered value only — never
+// a file name (APP.md §3).
+func (d *Drag) recovered(r any) {
+	d.log("drag %s: the drag thread panicked and was recovered: %v", d.s.id, r)
+	d.record(Outcome{Result: d.panicked(), Err: fmt.Errorf("dragout: the drag thread panicked: %v", r)})
+}
+
+// record keeps the answer this drag will give when it is reported. Written
+// and read on the drag thread alone.
+func (d *Drag) record(o Outcome) { d.outcome = o }
+
+// report sends the one Outcome and frees the next gesture, in that order.
+// Once, because the two places it is called from are the two ends a drag
+// has and a drag has only one answer.
+func (d *Drag) report() {
+	d.answered.Do(func() {
+		running.Store(false)
+		// Buffered by Start, so this never waits on the caller — the whole
+		// contract of this package's threading.
+		d.out <- d.outcome
+	})
 }
 
 // panicked is the end a recovered panic gives the drag: the operation hears
@@ -260,9 +324,10 @@ func (d *Drag) panicked() Result {
 // run is everything the drag thread does, in the order it does it: the
 // apartment, the window, the input attachment, the objects, the drag. The
 // teardown is that list read backwards, which is what the defers are for —
-// the objects go back, the input is detached, the window is destroyed, the
-// apartment is closed, and only then is the thread let go of.
-func (d *Drag) run() (Result, error) {
+// the objects go back, the input is detached, the thread stays behind if
+// the target kept the object, the window is destroyed, the apartment is
+// closed, and only then is the thread let go of.
+func (d *Drag) run() {
 	// The apartment, the window and DoDragDrop must all be one OS thread's.
 	// Without this the goroutine could be moved between threads at any call
 	// and none of the three would belong to the thread the next one ran on.
@@ -280,7 +345,8 @@ func (d *Drag) run() (Result, error) {
 		// RPC_E_CHANGED_MODE would be this thread already being an MTA,
 		// which no drag can run from; anything else is as fatal. It is
 		// fatal to this drag and to nothing else.
-		return d.abandon(fmt.Errorf("dragout: OleInitialize: %s", hrName(hr)))
+		d.abandon(fmt.Errorf("dragout: OleInitialize: %s", hrName(hr)))
+		return
 	}
 	defer d.endApartment(tid)
 
@@ -291,7 +357,8 @@ func (d *Drag) run() (Result, error) {
 		// not have a message queue" — and a drag that skipped it would be a
 		// shape nobody has measured. A failed drag with a line in the log
 		// is the better answer.
-		return d.abandon(fmt.Errorf("dragout: the drag thread's message-only window: %w", werr))
+		d.abandon(fmt.Errorf("dragout: the drag thread's message-only window: %w", werr))
+		return
 	}
 	d.log("drag %s: the drag thread's message-only window 0x%X was created with HWND_MESSAGE as its parent, so this thread has a queue", s.id, hwnd)
 	defer func() {
@@ -299,9 +366,31 @@ func (d *Drag) run() (Result, error) {
 		d.log("drag %s: the drag thread's message-only window 0x%X was destroyed", s.id, hwnd)
 	}()
 
+	// Registered before the attachment and so run after it is undone, and
+	// before the window and the apartment go: the thread that stays behind
+	// needs its queue and its apartment, and it needs no share of anybody's
+	// input state.
+	defer d.stay(hwnd, tid)
+
 	detach := d.attachInput(tid, win)
 	defer detach()
 
+	d.drag()
+}
+
+// drag is the objects and DoDragDrop, and it catches its own panic — which
+// is the reason it is a function of its own. What follows it on the way out
+// is the teardown, the stay among it, and the stay reports this drag's
+// answer to the caller: an answer still unset because a panic was unwinding
+// past it would be an answer that said nothing of what happened.
+func (d *Drag) drag() {
+	defer func() {
+		if r := recover(); r != nil {
+			d.recovered(r)
+		}
+	}()
+
+	s := d.s
 	// Made here, on this thread, and not before: an apartment object made
 	// on one thread and used from another is the shape this whole ruling is
 	// about. The data object is agile, so a call from the target's own RPC
@@ -318,7 +407,7 @@ func (d *Drag) run() (Result, error) {
 
 	var effect uint32 = dropEffectNone
 	start := time.Now()
-	hr = doDragDrop(dataObj.unknown(), srcObj.unknown(), allowedEffects, &effect)
+	hr := doDragDrop(dataObj.unknown(), srcObj.unknown(), allowedEffects, &effect)
 	took := time.Since(start)
 	d.log("drag %s: DoDragDrop returned %s after %s, effect %s", s.id, hrName(hr), took.Round(time.Millisecond), effectName(effect))
 
@@ -343,18 +432,20 @@ func (d *Drag) run() (Result, error) {
 	s.mu.Lock()
 	res := Result{SelfDrop: s.selfDrop, Extracted: s.extracted && !s.failed, Effect: effect, Folder: s.root}
 	s.mu.Unlock()
-	return res, err
+	d.record(Outcome{Result: res, Err: err})
 }
 
 // releaseObjects gives back the two references this side made. A target
 // that holds one of its own past the drop keeps the data object alive, and
-// that is the one fact endApartment turns on: the object answers out of a
-// drag that is over until Shutdown revokes it, rather than being destroyed
-// under a target still calling it.
+// that is the one fact the rest of the teardown turns on: the thread stays
+// with it rather than close the apartment it is served from, and the object
+// answers out of a drag that is over until it is let go, revoked at the cap
+// or revoked by Shutdown.
 func (d *Drag) releaseObjects(dataObj, srcObj *comObject) {
 	srcObj.release()
 	if n := dataObj.release(); n > 0 {
 		d.held = true
+		d.data = dataObj
 		d.log("drag %s: the target still holds the data object (%d reference(s)) after the drag", d.s.id, n)
 	}
 }
@@ -362,10 +453,10 @@ func (d *Drag) releaseObjects(dataObj, srcObj *comObject) {
 // abandon is a drag the thread could not run at all: the caller hears
 // Done/failed, so its strip goes, and the staging folder goes with it —
 // nothing was ever handed out of it.
-func (d *Drag) abandon(err error) (Result, error) {
+func (d *Drag) abandon(err error) {
 	d.s.reportDone(Failed)
 	d.s.remove()
-	return Result{Folder: d.s.root}, err
+	d.record(Outcome{Result: Result{Folder: d.s.root}, Err: err})
 }
 
 // attachInput joins the drag thread's input state to the window thread's
@@ -418,23 +509,107 @@ func (d *Drag) attachInput(drag, window uint32) func() {
 	}
 }
 
-// endApartment is the drag thread's last OLE act, and the one place this
-// package decides not to make a documented call.
+// stay is the drag thread standing by for a target that kept the data
+// object past the drop, and it is the answer to the question the teardown
+// could not answer before (found 2026-09-11 in review).
 //
 // OleUninitialize "Closes the COM library on the apartment, releases any
-// class factories, other COM objects, or servers held by the apartment".
-// When the target still holds a data object of ours, that sentence is the
-// whole problem: the prototype watched exactly this call take an object
-// from five references to zero under a target that was still using it. So
-// the balance is skipped in that one case and the apartment is left as it
-// is — the thread ends either way, the object is agile and answers on
-// whichever thread calls it, and Shutdown revokes it at the process's end
-// rather than letting it name files out of a drag that is over.
-func (d *Drag) endApartment(tid uint32) {
-	if d.held {
-		d.log("drag %s: skipping OleUninitialize on tid %d: the target still holds a data object, and that call is what would take it away", d.s.id, tid)
+// class factories, other COM objects, or servers held by the apartment",
+// and the prototype watched exactly that call take an object from five
+// references to zero under a target still using it. Skipping the call was
+// the first answer and it was the wrong one: a goroutine's OS thread goes
+// back to Go's pool when it unlocks, so what was left behind was an
+// initialised apartment on a thread with nobody pumping it — a later drag
+// landing there gets S_FALSE and balances nothing, and an apartment-bound
+// object (the free-threaded marshaler having failed) would have no loop to
+// answer a late call on.
+//
+// So the thread stays instead: locked, its apartment open, its queue pumped
+// — that last part being what an STA owes anything it is serving — until
+// the object's last reference goes, and then it tears down like any other
+// drag. The caller is answered first and never waits for this.
+//
+// The cap is the scavenge's hour. At it the object is revoked, so that it
+// answers E_UNEXPECTED rather than name files out of a folder the scavenge
+// is about to take, and the thread goes anyway: a target that has held an
+// object for an hour without a drop to finish is one nothing can be kept
+// open for.
+func (d *Drag) stay(hwnd uintptr, tid uint32) {
+	if !d.held || d.data == nil {
 		return
 	}
+	// The caller first. The drag itself is over — DoDragDrop has returned,
+	// the phase is reported and the folder decided about — and nothing on
+	// this side ever waits on the caller's thread, nor makes it wait here.
+	d.report()
+
+	obj, _ := d.data.impl.(*dataObject)
+	if obj == nil || obj.gone == nil {
+		return
+	}
+	d.log("drag %s: the drag thread stays on tid %d, its apartment open and its queue pumped, until the target lets the data object go (at most %s)", d.s.id, tid, stayCap)
+
+	// The waker: the release itself posts one, so the loop notices it at
+	// once, and the ticker is the guard against a wake that never arrived.
+	// Neither runs on this thread — PostMessage "returns without waiting",
+	// which is what makes that legal from a goroutine.
+	stop, waker := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(waker)
+		t := time.NewTicker(stayWake)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-obj.gone:
+				postWake(hwnd)
+				return
+			case <-t.C:
+				postWake(hwnd)
+			}
+		}
+	}()
+	// It is joined and not merely told to stop: it posts to this thread's
+	// window, and the teardown that follows this return destroys that
+	// window. Waiting is what puts its last post before that.
+	defer func() {
+		close(stop)
+		<-waker
+	}()
+
+	began := time.Now()
+	capped := time.NewTimer(stayCap)
+	defer capped.Stop()
+	for {
+		select {
+		case <-obj.gone:
+			d.log("drag %s: the target let the data object go %s after the drag ended; the drag thread takes itself down", d.s.id, time.Since(began).Round(time.Millisecond))
+			return
+		case <-capped.C:
+			obj.revoked.Store(true)
+			d.log("drag %s: the target has held the data object for %s, the scavenge's own age: it is revoked and the drag thread goes anyway, its apartment closed under it", d.s.id, stayCap)
+			return
+		default:
+		}
+		if !pumpMessage() {
+			d.log("drag %s: the drag thread's queue is done with (WM_QUIT or an error from GetMessage); the stay ends with the object still held", d.s.id)
+			return
+		}
+	}
+}
+
+// endApartment is the drag thread's last OLE act, and by the time it runs
+// there is nothing left to weigh: either no target ever held the object, or
+// the stay above has waited until one let it go — or revoked it at the cap
+// and decided for it. "Each successful call to OleInitialize, including
+// those that return S_FALSE, must be balanced by a corresponding call to
+// OleUninitialize", and this is that call, on the thread that made it.
+func (d *Drag) endApartment(tid uint32) {
 	oleUninitializeOnThread()
+	if d.held {
+		d.log("drag %s: OleUninitialize on tid %d: the apartment the target was served from is closed at last", d.s.id, tid)
+		return
+	}
 	d.log("drag %s: OleUninitialize on tid %d: the drag's apartment is closed", d.s.id, tid)
 }

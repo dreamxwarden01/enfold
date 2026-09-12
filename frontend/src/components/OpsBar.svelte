@@ -11,12 +11,14 @@
   // moment the drag starts, under one label — *Extracting 2 items* (APP.md
   // §3, ruled 2026-09-11): the label alone during the hover, the byte bar
   // with *Cancel* while the drop's request runs the extraction, and then
-  // that same bar standing full, with nothing to cancel, for as long as
-  // Explorer is inside its own Drop — its window is in front by then — until
-  // DoDragDrop returns, the operation ends and the strip goes.
+  // that same bar standing full for as long as Explorer is inside its own
+  // Drop — its window is in front by then — with *Cancel* still in its
+  // place, greyed and unclickable, because a button that vanishes reflows
+  // the strip; and at DoDragDrop's return the operation ends and the strip
+  // goes.
   import { Archive, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { cancellable, hasBar, opLabel, opPhase, stripCount } from "../lib/ops";
+  import { cancellable, hasBar, opLabel, opPhase, showsCancel, stripCount } from "../lib/ops";
   import { codeText } from "../lib/strings";
   import { bytes } from "../lib/format";
 
@@ -45,8 +47,14 @@
         {:else}
           <span class="grow"></span>
         {/if}
-        {#if cancellable(o.kind, o.phase)}
-          <button type="button" class="btn sm" onclick={() => void cancel(o.id)}>Cancel</button>
+        {#if showsCancel(o.kind, o.phase)}
+          {@const can = cancellable(o.kind, o.phase)}
+          <button
+            type="button"
+            class="btn sm"
+            disabled={!can}
+            aria-disabled={!can}
+            onclick={can ? () => void cancel(o.id) : undefined}>Cancel</button>
         {/if}
       </div>
     {/each}

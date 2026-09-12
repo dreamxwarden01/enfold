@@ -100,6 +100,43 @@ var (
 			uintptr(unsafe.Pointer(effect)))
 		return hr
 	}
+
+	// pumpMessage is one turn of the loop the drag thread runs while it
+	// stays behind for a target that kept the data object: GetMessage, which
+	// blocks until there is something, and DispatchMessage.
+	//
+	// The window filter is NULL on purpose — "retrieves messages for any
+	// window that belongs to the current thread" — because the window this
+	// thread has to serve is not only its own: OleInitialize makes a hidden
+	// one of its own on the apartment's thread, and that is where a late
+	// call to an apartment-bound object of ours would arrive. Serving only
+	// EnfoldDragThread's queue would be a loop that looks like a pump and
+	// answers nothing.
+	//
+	// False is the queue being done with: "If the function retrieves the
+	// WM_QUIT message, the return value is zero", and "If there is an
+	// error, the return value is -1" — for which the page's own example is
+	// an invalid window handle. Neither is a thing to keep looping on.
+	pumpMessage = func() bool {
+		var m msgW
+		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		if int32(r) <= 0 {
+			return false
+		}
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+		return true
+	}
+
+	// postWake posts WM_NULL to the drag thread's own window so that a
+	// GetMessage sitting on an idle queue returns and the stay can look at
+	// its channels again. PostMessage "places (posts) a message in the
+	// message queue associated with the thread that created the specified
+	// window and returns without waiting", which is what lets another
+	// goroutine do it.
+	postWake = func(hwnd uintptr) bool {
+		r, _, _ := procPostMessageW.Call(hwnd, wmNull, 0, 0)
+		return r != 0
+	}
 )
 
 // ---------------------------------------------------------------------------

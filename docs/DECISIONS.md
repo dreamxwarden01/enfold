@@ -4170,3 +4170,20 @@ predictable first block gives the keystream block and AES⁻¹ of it is the nonc
 so what removes the bytes is a compaction, and the page says "unreachable" where it said
 "erased" (APP §3, §6).
 
+**Wails v3 beta.16 → beta.20** (2026-09-13). Probed in a worktree before it was taken: the
+four tags between them changed nothing this shell binds — the CLI, the templates and the
+NSIS scripts byte-identical, `InvokeSync` and the main-thread dispatcher unchanged (the
+platform application is still created inside `Run()`, so the 2026-09-11 lesson stands), the
+systray, the window events, `NativeWindow()`, the bindings generator and the injected runtime
+the same — and one thing worth having: the `log.Fatal` in `WebResourceRequested` that killed
+the process when COM would not set a request's out-pointer under load, bypassing the ordered
+shutdown, the lock and the drag sweep, is gone (it logs and drops the one request). What is
+new and unproven without the window: a CDP-based request-cancellation mechanism, Windows only,
+that defers the first navigation behind an asynchronous setup and runs on `WM_CLOSE` and on
+`destroy()` — exactly the destroy-and-recreate, file-drop and drag-thread paths this shell is
+unusual in. So the upgrade is four files — `go.mod`, `go.sum`, the frontend's `package.json`
+and its lock — with no source change, the regenerated bindings a zero diff and the bundle's
+hash unchanged, and it lands on the user's launch test (start, tray, close and reopen, a file
+drop, a drag out) rather than on the green gates alone; the commit stands on its own so that
+a misbehaviour is one revert away.
+

@@ -69,6 +69,29 @@ func FuzzReader(f *testing.F) {
 	f.Add(make([]byte, SealedChunkSize+TagSize))
 	f.Add(make([]byte, SealedChunkSize+TagSize+1))
 	f.Add(encrypt(f, pattern(3), nil))
+	// One valid chunk is not enough to reach the failures that happen *after*
+	// a chunk has authenticated: the counter in the nonce, the final flag, and
+	// the reader's refusal to report a clean end before a final chunk verifies
+	// (R26, §12). These are three sealed chunks — 65536, 65536, 5 — and the
+	// ways a blob of them goes wrong.
+	multi := encrypt(f, pattern(2*ChunkSize+5), nil)
+	edit := func(fn func([]byte)) []byte {
+		b := append([]byte(nil), multi...)
+		fn(b)
+		return b
+	}
+	f.Add(multi)                                                           // valid: must round-trip exactly
+	f.Add(edit(func(b []byte) { b[SealedChunkSize+10] ^= 0x40 }))          // corruption in the second chunk
+	f.Add(edit(func(b []byte) { b[len(b)-1] ^= 1 }))                       // corruption in the final chunk's tag
+	f.Add(multi[:2*SealedChunkSize])                                       // cut at a chunk boundary: a canonical length whose last chunk is not final
+	f.Add(multi[:len(multi)-1])                                            // cut inside the final chunk
+	f.Add(append(append([]byte(nil), multi...), make([]byte, TagSize)...)) // extended past the final chunk
+	f.Add(edit(func(b []byte) {                                            // two chunks swapped: the counter catches it
+		var tmp [SealedChunkSize]byte
+		copy(tmp[:], b[:SealedChunkSize])
+		copy(b[:SealedChunkSize], b[SealedChunkSize:2*SealedChunkSize])
+		copy(b[SealedChunkSize:2*SealedChunkSize], tmp[:])
+	}))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		r, err := NewReader(bytes.NewReader(data), uint64(len(data)), testDEK, testArchiveID, testFileID)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -30,12 +31,19 @@ func stamp(prev int64) int64 {
 // superblock, the live slot region, and the registry ciphertext. Nothing in
 // it is secret.
 type Keystore struct {
-	f      *os.File
-	path   string
-	size   uint64
-	sb     *format.KeystoreSuperblock
-	live   format.Copy // which superblock copy is live
-	region []byte      // the live slot region as written
+	f    *os.File
+	path string
+	size uint64
+	sb   *format.KeystoreSuperblock
+	// diskSeq is the seq of the superblock copy on disk that this handle
+	// read or last wrote, which is not always sb.Seq: a registry that
+	// authenticated under seq + 1 — §4's copy B, R31's retired copy — puts
+	// the *state's* number in sb.Seq, since that is what a writer continues
+	// from (§7), while the bytes on disk still carry the copy's. Only the
+	// concurrent-writer check compares against it.
+	diskSeq uint64
+	live    format.Copy // which superblock copy is live
+	region  []byte      // the live slot region as written
 	// hdr is the slot region's 32-byte header (§6): the vault's entangle
 	// switch, Argon2id parameters and entangle_salt. Plaintext, readable
 	// before any credential, and copied forward byte for byte by every write
@@ -130,7 +138,7 @@ func load(f *os.File, path string) (*Keystore, error) {
 	if [format.TagSize]byte(ct[sb.RegistryLen:]) != sb.RegistryTag {
 		return nil, corrupt("registry tag in the file differs from the superblock's")
 	}
-	return &Keystore{f: f, path: path, size: size, sb: sb, live: live, region: region, hdr: sr.Header, slots: sr.Slots, ct: ct, Stale: stale}, nil
+	return &Keystore{f: f, path: path, size: size, sb: sb, diskSeq: sb.Seq, live: live, region: region, hdr: sr.Header, slots: sr.Slots, ct: ct, Stale: stale}, nil
 }
 
 // Close releases the file. An Unlocked or Session over this Keystore is
@@ -170,8 +178,10 @@ func (k *Keystore) checkOnDisk() error {
 	if err != nil {
 		return err
 	}
-	if sb.Seq != k.sb.Seq || sb.VaultID != k.sb.VaultID {
-		k.broken = fmt.Errorf("%w: seq %d on disk, %d in memory", ErrConflict, sb.Seq, k.sb.Seq)
+	// Against diskSeq, not sb.Seq: this handle may have adopted the state's
+	// number where the copy on disk carries one less (§7, diskSeq).
+	if sb.Seq != k.diskSeq || sb.VaultID != k.sb.VaultID {
+		k.broken = fmt.Errorf("%w: seq %d on disk, %d in memory", ErrConflict, sb.Seq, k.diskSeq)
 		return k.broken
 	}
 	return nil
@@ -223,12 +233,34 @@ func registryAEAD(meta []byte) (cipher.AEAD, error) {
 
 // openRegistry decrypts the registry ciphertext under meta with the live
 // superblock's AAD.
+//
+// The AAD binds that superblock's seq (§7), so a registry opens under the
+// number it was sealed with — or under one more than the copy's own, which is
+// the shape §4's initialisation leaves: a new file's copy B holds the same
+// superblock at seq 0 beside copy A's 1, since two valid copies never carry
+// equal seq, so a fresh file whose copy A is damaged opens through B. The
+// tolerance runs one way only — a copy may name a state one commit newer than
+// its own number, never an older one — so a registry can never be promoted to
+// a higher seq than it was sealed under, which is what putting seq in the AAD
+// is for (R36).
 func (k *Keystore) openRegistry(meta []byte) (*format.Registry, error) {
 	g, err := registryAEAD(meta)
 	if err != nil {
 		return nil, err
 	}
 	plain, err := g.Open(nil, k.sb.RegistryNonce[:], k.ct, k.sb.RegistryAAD())
+	if err != nil && k.sb.Seq != math.MaxUint64 {
+		retired := *k.sb
+		retired.Seq++
+		if plain, err = g.Open(nil, k.sb.RegistryNonce[:], k.ct, retired.RegistryAAD()); err == nil {
+			// The state's number, not the copy's: this handle continues from
+			// what the registry authenticated under, so the next commit
+			// cannot seal a second state under a number an older copy of the
+			// file already holds (§7). diskSeq keeps the copy's, which is
+			// what the concurrent-writer check compares.
+			k.sb.Seq = retired.Seq
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: registry", ErrAuth)
 	}
@@ -276,6 +308,14 @@ func (k *Keystore) commit(tx txn) error {
 	if tx.reg == nil {
 		return fmt.Errorf("%w: commit without a registry", ErrParams)
 	}
+	// The number this commit would carry, before anything is read or written:
+	// seq counts commits and never wraps, so a writer at 2^64 − 1 refuses the
+	// commit rather than let the new state lose to the old one (§4). No file
+	// reaches it; the guard is what keeps "never wraps" a property of the
+	// writer and not of the arithmetic.
+	if k.sb.Seq == math.MaxUint64 {
+		return fmt.Errorf("%w: the superblock sequence is at 2^64 − 1", ErrSeqExhausted)
+	}
 	if err := k.checkOnDisk(); err != nil {
 		return err
 	}
@@ -293,7 +333,7 @@ func (k *Keystore) commit(tx txn) error {
 	}
 
 	next := *k.sb
-	next.Seq++
+	next.Seq++ // refused above at 2^64 − 1 (§4)
 	next.VMKGeneration = tx.gen
 	if tx.at != 0 {
 		next.ModifiedAt = tx.at
@@ -393,7 +433,7 @@ func (k *Keystore) commit(tx txn) error {
 	} else {
 		k.size = end
 	}
-	k.sb, k.live, k.region, k.hdr, k.slots, k.ct = &next, target, region, hdr, slots, ct
+	k.sb, k.diskSeq, k.live, k.region, k.hdr, k.slots, k.ct = &next, next.Seq, target, region, hdr, slots, ct
 	if tx.reg != nil {
 		k.reg = tx.reg
 		k.Stale = nil

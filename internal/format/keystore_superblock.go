@@ -119,7 +119,7 @@ func DecodeKeystoreSuperblock(b []byte) (*KeystoreSuperblock, error) {
 	}
 	r := newReader(b[8:checksumOffset], "keystore superblock")
 	if v := r.u16(); v != FormatVersion {
-		return nil, invalidf("keystore superblock: format_version %d unsupported", v)
+		return nil, versionf("keystore superblock", v)
 	}
 	r.skip(2) // reserved0: ignored on read (§1)
 	s := &KeystoreSuperblock{}
@@ -145,11 +145,18 @@ func DecodeKeystoreSuperblock(b []byte) (*KeystoreSuperblock, error) {
 }
 
 // RegistryAAD is the AAD for the registry ciphertext (§7):
-// vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_version ‖
-// modified_at. A pure byte construction over the superblock as given.
+// vault_id ‖ seq ‖ registry_off ‖ registry_len ‖ registry_nonce ‖
+// format_version ‖ modified_at. A pure byte construction over the superblock
+// as given.
+//
+// Seq is in it for the same reason it is in the index AAD (§5, §7): the
+// superblock is checksummed and not authenticated, so without it a registry
+// kept from an earlier commit could be promoted by raising the plaintext seq
+// and recomputing the checksum. With it, that file fails to authenticate.
 func (s *KeystoreSuperblock) RegistryAAD() []byte {
-	w := &writer{b: make([]byte, 0, 16+8+8+NonceSize+2+8)}
+	w := &writer{b: make([]byte, 0, 16+8+8+8+NonceSize+2+8)}
 	w.fixed(s.VaultID[:])
+	w.u64(s.Seq)
 	w.u64(s.RegistryOff)
 	w.u64(s.RegistryLen)
 	w.fixed(s.RegistryNonce[:])

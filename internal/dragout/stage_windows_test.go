@@ -292,3 +292,56 @@ func TestTheSweepAtExitWaitsForNothing(t *testing.T) {
 		t.Fatalf("the folder survived the next pass: %v", err)
 	}
 }
+
+// TestProbeProcessAsksWindowsAfterAnOwner is the half of the owner check
+// that only Windows can answer. This process is the one process a test can
+// be certain about, so it is the one the answers are pinned to: it is
+// alive, it has a start time, and a manifest that claims another start time
+// for its id is a PID handed out again and not this process at all.
+func TestProbeProcessAsksWindowsAfterAnOwner(t *testing.T) {
+	started, state := probeProcess(os.Getpid())
+	if state != ownerAlive {
+		t.Fatalf("this process reads as owner %v, want alive", state)
+	}
+	if started == 0 {
+		t.Fatal("this process has no start time, so a reused PID could not be told apart")
+	}
+
+	mine := Manifest{Tool: manifestTool, Version: manifestVersion, PID: os.Getpid(), PIDStarted: started, State: StateLive}
+	if got := manifestOwner(mine); got != ownerAlive {
+		t.Fatalf("a manifest this process wrote reads as owner %v, want alive", got)
+	}
+	// The same id, another moment: the process that wrote this is gone and
+	// Windows has given its number to somebody else.
+	reused := mine
+	reused.PIDStarted = started - 1
+	if got := manifestOwner(reused); got != ownerGone {
+		t.Fatalf("a manifest whose owner started at another moment reads as %v, want gone", got)
+	}
+	// A manifest an older build wrote names an id and no moment. An id
+	// alone is not an identity — Windows hands a freed one out again within
+	// seconds — so this is unknown and never alive, however alive that id
+	// happens to be right now.
+	unknown := mine
+	unknown.PIDStarted = 0
+	if got := manifestOwner(unknown); got != ownerUnknown {
+		t.Fatalf("a manifest with no start time reads as %v, want unknown", got)
+	}
+
+	// A process id far past anything this machine hands out: OpenProcess
+	// refuses it, and the refusal must not read as a living owner.
+	if _, state := probeProcess(0x7FFFFFF0); state == ownerAlive {
+		t.Fatal("an id that names no process reads as a living owner")
+	}
+	if _, state := probeProcess(0); state != ownerUnknown {
+		t.Fatalf("probeProcess(0) = %v, want unknown", state)
+	}
+
+	// PID 4 is the System process. An unelevated test may not open it, and
+	// ERROR_ACCESS_DENIED is the id resolving to a process this one has no
+	// rights over — an existence, not an absence — so it must not read as
+	// gone whichever way the open went.
+	if _, state := probeProcess(4); state == ownerGone {
+		t.Fatal("a process this one may not open reads as gone")
+	}
+}

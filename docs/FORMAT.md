@@ -4,7 +4,11 @@ Byte-level specification. Read `DESIGN.md` first — this document assumes the k
 the reasoning behind it, and specifies only serialisation.
 
 Status: **draft, no implementation yet.** Nothing is frozen until v1 ships; after that, every
-change needs a format version bump.
+change needs a format version bump. The semantic changes ruled on 2026-09-13 — `seq` in the index
+and registry AADs (§7, §11), `seq` continued across compaction (R33), an intact envelope of an
+unsupported `format_version` refused (§10, R33) — are made under that rule, as Revision 2's were
+(§18): no file exists outside a test vault that they could break, so `format_version` stays `1`
+and readers accept the revised layouts only.
 
 > **This document was rewritten on 2026-09-01.** An earlier draft described a single container
 > holding slots, index and data together. That design was replaced: the keystore is now its own
@@ -221,9 +225,14 @@ u-coordinate**. Nothing is hashed at this stage on either curve; `H` feeds the H
 `H ‖ K_P`, or is `pre` itself when the vault has no entangled password — and `H_x` feeds the
 combine step directly.
 
-**R6 — Argon2id.** Version `0x13`. `m` is in **KiB**. The number of threads used equals `p`
-exactly — an implementation may not "helpfully" use more cores, because `p` is part of the
-function. Output 32 bytes. Go: `argon2.IDKey(pwd, salt, t, m, p, 32)`.
+**R6 — Argon2id.** Version `0x13`. `m` is in **KiB**. `p` is the **parallelism parameter — the
+number of lanes** the algorithm fills, not a count of OS threads: the output depends on it, so
+the `p` a slot or a slot region header stores must be used exactly as stored and never adjusted
+to the machine that happens to be deriving (RFC 9106 §3.1, `DESIGN.md` §6). **How those lanes are computed is an implementation's own business**: fewer
+execution threads than lanes — one, on a single-core machine — give the same 32 bytes, only more
+slowly. What is forbidden is changing `p` itself, upward on a machine with cores to spare as much
+as downward. Output 32 bytes. Go: `argon2.IDKey(pwd, salt, t, m, p, 32)`, whose `p` is the lane
+count.
 
 **R7 — Retired (Revision 2).** The HMAC fold `pwd' = HMAC-SHA256(key = H, msg = P)` is gone:
 nothing folds `H` into the password any more (§3.1, §18.1). The number is kept so that the rules
@@ -290,9 +299,19 @@ of it, and neither is `wrapped_vmk` — the phrase "with `wrapped_vmk` zeroed" i
 56, plus 16.
 
 **R15 — Length prefixes.** Public keys (`pubkey`) carry a `u16` length prefix, the same as
-`string` and `bytes (u16 len)`. Records inside a region — slot records in §6, file records in
-§11 — carry a `u32 record_len` and must be consumed exactly; a record with bytes left over is
-invalid, not tolerated.
+`string` and `bytes (u16 len)`. Records inside a region — slot records in §6, directory and file
+records in §11 — carry a `u32 record_len` and must be consumed exactly; a record with bytes left
+over is invalid, not tolerated.
+
+**Every length prefix counts what follows it and never itself.** `record_len` is the length of
+the record body that follows those four bytes: R18's hardware slot record is 338 bytes *on the
+wire*, and the `record_len` it opens with reads 334. The same holds for a `u16` string or `bytes`
+prefix and for the index's `u32`-prefixed `dict` (§11). The lengths in a superblock are not
+prefixes, but they are exact in the same way: `slot_region_len` is the header and the records as
+packed, not the 128 KiB copy that holds them (§5); `registry_len`, `index_len` and `freemap_len`
+are the encoded length of what they name, with the two AEAD extents carrying their 16-byte tag
+**on top of** the stated length (§5, §11). A reader that added or omitted the four bytes of a
+prefix anywhere would decode a different structure, so there is nothing here to choose.
 
 **R16 — Reserved values fail closed; reserved fields do not.** A reader meeting `key_source = 2`
 (prf-derived) or `alg_id = 2` (ChaCha20-Poly1305) rejects the record, per §1's rule on the
@@ -361,6 +380,62 @@ authenticated structure fails to open:
 All four are AES-256-GCM, 32 bytes in, 48 out — a secrets record's plaintext is padded to 32
 where the secret is shorter (§7.6); every wrap draws a fresh 96-bit random nonce. `wrapped_vmk`
 keeps its own AAD (R14).
+
+**The two metadata encryptions draw their nonces the same way.** `registry_nonce` (§5) and
+`index_nonce` (§11) are 96-bit values read fresh from the OS CSPRNG **at every sealing** of the
+registry and of the index — never derived from `seq` or from any counter, never carried forward
+from the value a read found, and never reused by a later sealing, whether it is an ordinary
+rewrite, an export, a key rotation or a compaction. The rule binds encryptions, not bytes:
+**copying sealed bytes verbatim is not an encryption and draws no nonce.** A plain file copy, a
+backup, R40's verbatim move of a live extent, and the duplicated superblock a writer leaves in the
+other copy all carry the nonce they already had, which is correct — the same ciphertext under the
+same key with the same nonce is one encryption, not two — and a copier holding no key could not
+comply with a rule written any other way. Nothing else keeps sealings apart: the Metadata key
+survives every registry rewrite and the archive index key every commit, so uniqueness under one
+key rests on the randomness alone, which is why a writer that reused one would be handing over the
+keystream of two states.
+
+**The budget for random IVs, and the workload this format assumes.** NIST SP 800-38D §8.3 bounds a
+key used with random 96-bit IVs at **2^32 invocations**, which holds the probability of a repeated
+IV under 2^−32; past it the guarantee is gone, and with a repeated IV under one key so is the
+confidentiality of both messages and the authentication key. Nothing in the file counts
+invocations, so the ceiling is met by an assumption about the workload, stated here rather than
+enforced anywhere:
+
+| Key | What it seals | Invocations spent |
+| --- | --- | --- |
+| Metadata key | the registry (§5, §7) | **one per keystore commit** |
+| archive index key | the file index (§11) | **one per archive commit**, two when the commit gives the tail back (R31) |
+| archive wrap key | `wrapped_dek` (§11) | **one per DEK minted**: one per file added, one per *replace* of a file, and one per live file at a key rotation |
+| `KWK` | `wrapped_archive_key` (§7.2) | one per archive key wrapped: one per archive created or re-keyed, and one per archive at a VMK rotation |
+| `KWK_identity`, `KWK_secrets` | the identity key and the secrets records (§7, §7.6) | a handful per commit that touches them; a VMK rotation re-encrypts the whole secrets section |
+
+These are **cumulative over the key's life, not bounded by what the file holds at any moment**.
+R19's ceilings bound the records present in one snapshot and say nothing about how often a record
+was rewritten: a thousand replaces of one file spend a thousand of the archive wrap key's
+invocations while the index still holds one record, and so do commits that were abandoned, and so
+does every independently edited copy of the file that shares the key. The assumption is therefore
+about use, and it is a wide one: a file would have to reach **2^32 commits, or 2^32 DEKs minted
+under one archive key**, to approach the bound — a replace every second for 136 years. A vault
+committing once a second for a century spends about 2^31.5 invocations of its Metadata key, which
+is the closest ordinary use comes.
+
+**Where the assumption does not hold, rotation is the remedy, and it already exists.** Every
+wrapping key here is derived, not stored, so a rotation retires the key and its budget with it: a
+**key rotation** (§7.3) derives a new archive index key and archive wrap key and re-wraps every
+live DEK under it, and a **VMK rotation** (§8) derives a new `KWK`, `KWK_identity`, `KWK_secrets`
+and Metadata key before re-wrapping anything. What a rotation itself spends is charged to a key
+that has never been used before. A writer that expects a workload of this size — an automated one,
+not a person — **must rotate the wrapping key before its budget is spent** rather than lean on
+these numbers.
+
+So **no counter is kept**: there is no field for one, and a reader trusts none. The two
+assumptions written down instead are the ones that matter — that `crypto/rand` is a real CSPRNG
+and every nonce comes from it fresh, and that the workload is a person's rather than a machine's.
+A writer that reused a nonce would have broken the first rule, not exhausted this budget.
+(R26's 2^32 is the same number reached from the other side: a file's STREAM chunks use
+deterministic counter nonces, so there the bound is a hard limit on chunks per DEK rather than a
+birthday budget.)
 
 **R23 — Recovery-key input.** Whitespace is ignored and the groups may be typed with `-`, with
 spaces, or run together; what is checked is exactly 48 digits, each group of 6 below 720 896 and
@@ -448,7 +523,8 @@ not recorded, so the 512 MiB ceiling is part of the format: a writer that wants 
 
 **R28 — An export is a keystore file.** The backup of §15 is a keystore file of this same format,
 with the same `vault_id`, `vmk_generation` and registry, whose slot region holds only the active
-recovery slots — never a stale one — and whose superblocks start again at `seq` 1 with
+recovery slots — never a stale one — and whose superblock copies start again as any new file's
+do: copy A at `seq` 1 and copy B the same superblock at `seq` 0, never both at 1 (§4), with
 `modified_at` set to the time of the export (R35). The recovery key opens it like any keystore,
 which is how an export is verified before it is needed and how it is restored: open it, unlock
 with the recovery key, enrol new slots. Of the secrets section (§7.6) an export carries the
@@ -488,9 +564,13 @@ is what makes the fallback its own state rather than the one before it, and ther
 way round it: no placement can shorten the file while a copy still references a byte of the run
 being given back, so the losing copy is retired onto the state just committed *before* anything
 is truncated, and brought onto the follow-up commit's state after the flip. Both copies then
-name one state — the same files, readable — and the previous state is spent. That is the price
-of the truncation this rule requires, and it is paid only by a commit that freed the tail; every
-other commit leaves the fallback one behind, as above. Two things this rule assumes, written
+name one state — the same files, readable — and the previous state is spent. A retired copy
+carries that state's superblock at one less than its number, since two valid copies are never
+equal (§4) — the same shape §4's initialisation leaves on a new file and a compaction on a fresh
+one, and the reason a reader accepts an index or a registry sealed at `seq` + 1 as well as at
+`seq`, and at nothing higher (§7, §11). That is the price of the truncation this rule requires,
+and it is paid only by a commit that freed the tail; every other commit leaves the fallback one
+behind, as above. Two things this rule assumes, written
 down after an outside audit (2026-09-09): **`Sync` is honest** — a drive that acknowledges a
 write before it is persistent voids every ordering here, as it voids every journaling file
 system's, and no barrier the format could add would restore it; and **the readers a writer
@@ -507,8 +587,43 @@ sets `state = 2` and advances `revision`, `last_writer` and `modified_at`; it ke
 `name` and `dek_epoch` (monotone per file, never reused); it zeroes `orig_size`, `stored_size`,
 `data_off`, `content_hash`, `dek_nonce`, `wrapped_dek` and `dek_created_at`; and it sets
 `storage` to raw so that no tombstone references the dictionary, which may then be replaced or
-cleared once no live record uses it. Deletion is cryptographic erasure: the ciphertext stays in
-the freed extent until it is reused or compacted away, unreadable because its wrapped DEK is gone.
+cleared once no live record uses it. Deletion makes the content **unreachable**: the commit writes
+a whole new index and the deleted file's `wrapped_dek` is not in it, so nothing a reader follows
+leads to the key any more.
+
+**What "cryptographic erasure" means here, and what it does not.** It means exactly the sentence
+above — the key is dropped from the structure a reader follows — and it is worth being precise
+about the rest, because "erasure" invites more than it delivers:
+
+1. **The DEK is unreachable, not erased.** The deleting commit's own losing superblock still names
+   the *previous* index, which carries the wrapped DEK: R31 keeps that state whole for one more
+   commit so that a torn live copy opens something complete, and that state is the one in which
+   the file was not yet deleted. From the next commit on, no live superblock names an index
+   carrying it.
+2. **Retiring a superblock removes no bytes.** The previous index's ciphertext lies in an extent
+   the commit published free, and a freed interior extent keeps its bytes until something writes
+   over it. The deleted file's own ciphertext does the same.
+3. **Those bytes are not protected by their nonce having gone with the superblock.** AES-GCM is
+   counter mode: a holder of the archive index key who finds an old index extent can guess its
+   first plaintext block — an index opens with `index_version` and a `dict` length, both
+   predictable — XOR it with the ciphertext to recover that keystream block, and decrypt the
+   keystream block with AES to recover the counter block it came from: `IV ‖ 0^31 ‖ 2`, since a
+   96-bit IV makes `J0 = IV ‖ 0^31 ‖ 1`, `J0` is spent on the tag mask, and the first plaintext
+   block is encrypted under `inc32(J0)` (SP 800-38D §7.1). The IV is that block's leading 96
+   bits, so the whole old index falls out without its superblock; only its *authentication* is
+   lost, and confidentiality was never in the nonce. So "the nonce is gone" is not a security
+   argument, here or anywhere.
+4. **What removes it.** A **compaction** writes a fresh file from the current records alone: the
+   old index and the deleted extents are not in it, and the file that held them is replaced. A
+   **key rotation** puts the old index beyond the archive's current key — it opens only under the
+   retired one, which §7.2 keeps deliberately so that older copies of the file stay readable, so a
+   rotation moves the reach rather than ending it until that retired key is pruned.
+5. **The medium is outside the format's reach.** Blocks freed inside the file, the file the
+   compaction replaced, backups, snapshots and copies someone else holds are not this rule's to
+   promise anything about (`DESIGN.md`, "what no design can revoke").
+
+A user deleting a file in order to destroy it is therefore served by a compaction, and by the
+commit after next only against a reader who follows the format rather than the bytes.
 
 **A directory tombstone is the same rule with one field short.** Deleting a directory — the same
 write tombstoning every live record beneath it, R39 — sets `state = 2` on the directory record and
@@ -524,8 +639,16 @@ file, live and tombstone, unchanged apart from a live file record's `data_off` �
 dictionary; the records are re-encoded in the order §11 requires, directories before the files
 that name them, and no `dir_id` or `file_id` changes under compaction or key rotation, so the
 tree a caller was holding is the tree it gets back (`APP.md` §3); live extents are copied verbatim, since every chunk
-AAD and every wrapped DEK binds `archive_id` and `file_id` and would fail under any other. Key
-rotation re-wraps every live DEK under the new archive key's wrap key with a fresh nonce and the
+AAD and every wrapped DEK binds `archive_id` and `file_id` and would fail under any other.
+**Compaction continues the sequence**: the fresh file's copy A carries the source's committed
+`seq` plus one and its copy B the same superblock one lower, which is §4's initialisation rule at
+*n* and *n* − 1 rather than at 1 and 0. It does not restart at 1, because one `archive_id` must
+never name two different contents by the same `seq` — a compacted file that began again at 1
+would collide with every state the source had published, and R36's identity would hold only until
+the first compaction. A writer that cannot advance refuses the compaction, as §4 requires of
+every commit.
+
+Key rotation re-wraps every live DEK under the new archive key's wrap key with a fresh nonce and the
 same `dek_epoch` (the DEK AAD does not include the kid), re-seals the index with the new kid in
 its AAD, and rewrites the envelope last. **The registry is written first**: the new version is
 recorded as current and the old retired before the archive is touched, so a crash anywhere
@@ -539,6 +662,16 @@ superblock and the index (whose AAD binds `archive_id` ‖ `kid`, which is what 
 the envelope stale, and the next *Verify* rewrites it before the hash is taken (`APP.md` §3 —
 Open itself never writes); only when no key opens the index is the file corrupt. §10
 already says the envelope is trusted for nothing but a fast lookup.
+
+**An intact envelope of an unsupported `format_version` is refused, not treated as absent.** The
+recovery above is for an envelope that is *torn*: one that does not decode, or whose checksum
+fails. An envelope that decodes and whose checksum holds is what the writer meant to leave, and if
+its `format_version` is not one this reader supports then the file is a later format's and this
+reader has no business opening it — it refuses with the version error, tries no key, recovers
+nothing and repairs nothing. The difference matters because the repair is the damage: a reader
+that treated a version it does not know as "absent" would open a newer file through the candidate
+list and then, at the next *Verify*, rewrite the envelope in its own version over it. That is the
+opposite of fail-closed evolution (§1, §10), which is the whole reason the field is there.
 
 **R34 — One token, one slot.** No two non-empty slot records in a region may carry the same
 `slot_pubkey`; a decoder refuses the region (alongside R21's `recipient_id` rule), and a writer
@@ -568,6 +701,15 @@ only where the file is already read end to end — compaction, and an explicit v
 `last_seq` is stale by that many commits and is shown as such, never as corruption. Reason: a
 manager that re-read 48 GB to save three renames would not be used. Key rotation and envelope
 repair change bytes without refreshing the hash, so they too leave it behind.
+
+**The identity is (`archive_id`, `seq`), and `seq` is monotonic for the life of an `archive_id`.**
+It counts commits and never restarts: not on a key rotation, which is a commit like any other, and
+**not on a compaction**, whose fresh file carries the source's committed `seq` plus one (R33). One
+`archive_id` therefore never names two different contents by the same number — the pair identifies
+a state for as long as the archive exists — and a copy's number is authenticated by the index it
+names (§11), so a raised `seq` is a file that does not open rather than a copy that lies about
+which state it holds. The creation of the archive is the one place a sequence begins, at 1 (§4);
+nothing afterwards resets it.
 
 **R37 — Session timeouts live in the registry.** `idle_minutes` and `absolute_minutes` are
 authenticated under the Metadata key, so a process that cannot unlock cannot lengthen them; a
@@ -697,6 +839,7 @@ than every hole before it.
 0x02000  Slot region A       128 KiB
 0x22000  Slot region B       128 KiB
 0x42000  Registry              encrypted; offset and length in the superblock
+                               registry_len + 16 bytes on disk: the ciphertext, then its tag
 ```
 
 The keystore is small — a few MB even with thousands of archives — so the registry is **rewritten
@@ -705,6 +848,36 @@ wholesale** on every change and lands in one superblock flip. **No allocator is 
 Superblocks alternate: write the one that is not live, fsync, and it becomes live by carrying the
 higher `seq`. A reader takes the valid superblock with the higher `seq`; "valid" means the
 checksum verifies.
+
+**Initialisation, ties and exhaustion.** A new file is written with copy A at `seq` 1 and copy B
+holding the same superblock at `seq` 0 — a valid predecessor rather than an empty or damaged
+copy, so that a fresh file has no damage to report and the first commit, which targets B, has a
+loser to leave behind. `seq` 0 is a real sequence number, not a marker for "unused". **Two valid
+copies with equal `seq` are a corrupt file**: not a tie to be broken, and never "identical, so
+take either" — equal numbers mean something other than this writer's alternation produced them,
+and a reader refuses the file rather than choosing. A valid copy beats a copy that does not
+decode whatever number the damaged bytes appear to carry, and the damaged copy is exactly the one
+the next commit writes, which is how it is repaired. `seq` counts commits, one per commit, and
+**never wraps**: a writer that would pass 2^64 − 1 must refuse the commit rather than wrap to 0,
+since a wrapped counter would make the new state lose to the old one — a rule no file will reach
+and every writer must keep, the range being what it is. Nothing resets it either: an export is a
+new file rather than a new sequence, and starts as any new file does (R28). All of this holds for
+the archive superblocks of §11 as well, which alternate by the same rules — with one addition
+there: an archive's compaction writes a fresh file and still continues the sequence, at *n* and
+*n* − 1 rather than 1 and 0, since the contents keep their `archive_id` (R33, R36).
+
+**A new registry never lands on the committed one.** The extent the winning superblock names —
+`registry_off` through `registry_off + registry_len + 16`, the appended tag included (§5, R19) —
+is not written to by the commit that replaces it. The commit places the new registry at the fixed
+`0x42000` when the live registry lies above it and the new one, tag included, ends at or before
+where the live one begins; otherwise at the next 4 KiB boundary at or after the end of the live
+registry's tag. The two extents are therefore always disjoint, and the committed registry is
+intact until the flip and after it. The order is a barrier, not just a sequence: the slot region
+(when the commit writes one) and the new registry are written, **fsynced**, and only then is the
+inactive superblock written and fsynced, so no flip can be durable before the bytes it points at
+are. Once the flip is durable the file is trimmed to the end of the later of the two registries —
+the losing superblock's extent stays addressable, so a reader that finds the live copy damaged
+still has a registry to open, which is R31's guarantee one level up.
 
 ### Why the slot region is doubled too
 
@@ -749,11 +922,11 @@ Fixed 4096 bytes. Everything before `checksum` is covered by it.
 | `seq` | `u64` | Monotonic; higher valid superblock wins |
 | `vault_id` | `u8[16]` | Random at creation, **immutable**. In HKDF info strings and AADs |
 | `slot_region_off` | `u64` | Which slot region copy is live |
-| `slot_region_len` | `u64` | |
+| `slot_region_len` | `u64` | The encoded region's own length: the 32-byte header plus the records packed after it (§6), never the 128 KiB the copy is sized for. The rest of the copy is not part of the region, is not read, and is not covered by `slot_region_hash` (R25) |
 | `registry_off` | `u64` | |
-| `registry_len` | `u64` | Ciphertext length, excluding tag |
-| `registry_nonce` | `u8[12]` | |
-| `registry_tag` | `u8[16]` | |
+| `registry_len` | `u64` | Ciphertext length, excluding tag. The tag follows the ciphertext, so the extent occupies `registry_len + 16` bytes on disk |
+| `registry_nonce` | `u8[12]` | 96 bits drawn fresh from the OS CSPRNG at every **sealing** of the registry — a verbatim copy of sealed bytes is not one; never derived from `seq` and never reused (R22) |
+| `registry_tag` | `u8[16]` | The registry's AEAD tag — **stored twice**: here, and appended to the ciphertext extent. A reader requires the appended copy to equal this one and reports a difference as corruption, before any key is tried (R22) |
 | `vmk_generation` | `u64` | `1` at creation; incremented on each VMK rotation, so `0` never exists. Plaintext and checksummed only: it orders, it never decides (§6.2, §18.2) |
 | `rotation_pending` | `u8` | Reserved since Revision 2: written zero — a rotation is one atomic flip and can no longer be partial (§8) — and ignored on read, since the superblock is checksummed, not authenticated, and failing on it would hand anyone with write access a one-byte denial of service |
 | `modified_at` | `i64` | Unix seconds of the commit that sealed this registry; never decreases; an export's is the time of the export (R35) |
@@ -761,9 +934,14 @@ Fixed 4096 bytes. Everything before `checksum` is covered by it.
 | `checksum` | `u8[32]` | SHA-256 over bytes `[0, 4064)` |
 
 **Checksummed, not authenticated.** It must be readable before unlocking, so no key exists to MAC
-it. Integrity of what matters comes from the registry AEAD instead: `registry_off`,
+it. Integrity of what matters comes from the registry AEAD instead: `seq`, `registry_off`,
 `registry_len`, `registry_nonce`, `vault_id` and `modified_at` are all in the registry's AAD, so
-editing them causes an authentication failure rather than a silent misread.
+editing them causes an authentication failure rather than a silent misread. `seq` is there for the
+freshness it decides: the higher valid copy wins, and the number that wins must be the one the
+registry it names was sealed under — or one less, §7's single tolerance for the copy §4 retires
+onto a state it did not itself publish, never one more. A reader that opened through that
+tolerance takes the number the registry authenticated under as the state's, and writes from it
+(§7, R36).
 
 ## 6. Slot region
 
@@ -787,9 +965,14 @@ asserts over the whole region.
 fields are zero and R24's bounds are not applied — the carve-out for a reader that will run no
 Argon2id; with `entangle` 1 all four are non-zero, R24's bounds and its work ceiling are checked
 before any derivation, and a header that breaks either rule is invalid. `entangle_salt` is 16
-fresh random bytes drawn each time the password is set or changed, never reused and never
-carried forward by any other write; turning the password off zeroes all four fields. The lock
-screen reads the header to know whether to ask for the password before the PIN.
+fresh random bytes, drawn from the OS CSPRNG **by exactly the writes that set the vault's
+password or change it** — creating a vault with one, taking the first way in of an adopted export
+(§15), turning the switch on, and a password change — and never reused. Turning the password off
+zeroes all four fields. **No other write draws one, and no other write alters the header**: a
+write that is not about the password carries the header forward byte for byte, `entangle_salt`
+included, whatever else it changes (see *What authenticates the header* below, which is why the
+carried bytes are the ones R25 already vouched for). The lock screen reads the header to know
+whether to ask for the password before the PIN.
 
 *What authenticates the header.* No slot record does: R14's AAD is the record's own bytes, and
 extending it to the header would make turning the password on or off re-wrap the standalone
@@ -807,8 +990,9 @@ indistinguishable at that moment from a wrong password; it is named as tampering
 is opened a way that does not use the header, and from then R25's freeze applies — no rotation,
 re-wrap or slot mutation, which includes turning the password on, changing it and enrolling a
 key. A write never takes these values from the file: setting or changing the password draws a
-fresh salt and takes `argon2_m/t/p` from the app's defaults, and every other write copies the
-header forward byte for byte after R25 has passed.
+fresh salt and takes `argon2_m/t/p` from the app's defaults, turning it off zeroes the switch and
+the other four fields with it, and every write that is neither — the whole of the rest — copies
+the header forward byte for byte after R25 has passed.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -903,8 +1087,22 @@ refused.
 One AES-256-GCM ciphertext under the Metadata key.
 
 ```
-AAD = vault_id ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_version ‖ modified_at
+AAD = vault_id ‖ seq ‖ registry_off ‖ registry_len ‖ registry_nonce ‖ format_version ‖ modified_at
 ```
+
+`seq` is the superblock's own sequence number (§5), a `u64` little-endian like the offsets beside
+it: the registry opens only under the number of the commit that sealed it, so a registry kept from
+an earlier commit and pointed at by a superblock whose plaintext `seq` was raised — the checksum
+recomputed, which anyone with write access can do — fails to authenticate instead of passing as
+the current state. §11's one tolerance holds here too and for the same reason: a reader accepts
+the registry under the copy's own `seq` or under `seq` + 1, since §4's initialisation leaves copy
+B holding copy A's superblock at one less, and a fresh file whose copy A is damaged must still
+open. It runs one way — a copy may name a state one commit newer than its number, never an older
+one — so an old registry can never be promoted. §11's step-by-step open is the recipe here too,
+the registry standing where the index does, and so is what follows from it: **the state's number
+is the one the registry authenticated under, and a writer continues from it, never from the
+copy's.** A commit sealed at the copy's number would leave two different states under one number,
+and the keystore file it replaced could be put back as the current one.
 
 Plaintext:
 
@@ -955,6 +1153,15 @@ anything, and `last_seq` answers "is this copy the current one?" from the copy's
 superblock, also without a key and without reading the whole file. That is a different question from the per-file **plaintext**
 hashes inside the archive (§11), which verify that a decryption produced the right bytes. Both
 exist; do not conflate them.
+
+**The plaintext `seq` is read without a key, but it is not unauthenticated.** It is in the index's
+AAD (§11) and in the registry's (§7), so a copy's `seq` is authenticated by the very index or
+registry it names: raising the number over an older extent — the obvious forgery against a
+checksummed superblock — produces a file that fails to open rather than one that passes as
+current. `last_seq` therefore identifies a copy: a file whose superblock says *n* holds the state
+this record saw at commit *n*, or it does not open at all — with the one exception §11 states, a
+copy retired onto the state one commit newer than its own number, which reads as *older* than it
+is and so is shown as an older copy rather than taken for the current one.
 
 It lives on the archive record rather than on a version record because the ciphertext changes on
 every edit while the archive key does not — see §7.2.
@@ -1083,7 +1290,11 @@ is §8 step 3; what an export carries is R28.
    hardware slot's `pre` from a fresh ECDH against its stored `slot_pubkey` and, while the slot
    region header's `entangle` is 1, from the `K_P` step 3 held (§3.1) — and, for hybrid software
    slots, a fresh ML-KEM encapsulation, so `mlkem_ct` is replaced too.
-5. Write the slot region, then the registry, then flip the superblock.
+5. Write the slot region into the copy that is not live and the registry into an extent clear of
+   the live one, **fsync**, then write the superblock into the copy that is not live and fsync
+   again. §4 fixes where each lands, and why the barrier sits between the bodies and the flip:
+   the committed registry and the committed slot region are untouched until the flip makes their
+   successors live, so an interrupted rotation leaves the previous state whole.
 
 The whole rotation lands in **one superblock flip**, so it is atomic: a crash leaves the old VMK
 and old registry fully intact. There is never a moment when some archive keys are under the new
@@ -1118,6 +1329,7 @@ reach.
 0x1000  Superblock A          4 KiB
 0x2000  Superblock B          4 KiB
 0x3000  File index            encrypted under the archive index key
+                              index_len + 16 bytes on disk: the ciphertext, then its tag
    …    Free-space map
    …    Data region           per-file chunk streams
 ```
@@ -1145,6 +1357,12 @@ the right key.
 key and everything after that is authenticated by AEAD. An attacker editing the envelope achieves
 a failed lookup, not a misdirected decryption.
 
+**`format_version` is the one field a reader acts on before any key.** An envelope that decodes
+with a checksum that holds and a `format_version` this reader does not support is refused outright
+— no key is tried, the recovery R33 allows a *torn* envelope is not entered, and nothing is
+repaired. A reader that cannot read a file must say so; opening it anyway, through a path meant
+for damage, is how a newer file gets rewritten by an older program (R33, §1).
+
 **No `vault_id`, deliberately.** An earlier draft carried one so the manager could "fail fast and
 clearly", and it was wrong twice over. It **breaks sync**: every device has its own keystore with
 its own `vault_id` (`SYNC.md` §1), so a phone that receives an archive key legitimately would find
@@ -1161,7 +1379,12 @@ copy lives in the encrypted index.
 ## 11. Archive superblock and file index
 
 The superblock mirrors §5 in structure — `seq`, offsets and lengths for the index and free map,
-a checksum — and alternates the same way, so an edit is atomic. Fixed 4096 bytes:
+a checksum — and alternates the same way, so an edit is atomic. §4's `seq` rules hold here
+unchanged: a new archive is written with copy A at `seq` 1 and copy B the same superblock at
+`seq` 0, the valid copy with the higher `seq` wins, two valid copies with equal `seq` are a
+corrupt file rather than a tie, and `seq` never wraps. A compacted file is not a new archive and
+does not start again: its copy A carries the source's committed `seq` plus one and its copy B one
+lower, the same rule at *n* and *n* − 1 (R33, R36). Fixed 4096 bytes:
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -1170,9 +1393,9 @@ a checksum — and alternates the same way, so an edit is atomic. Fixed 4096 byt
 | `reserved0` | `u16` | |
 | `seq` | `u64` | Higher valid copy wins |
 | `index_off` | `u64` | ≥ `0x3000` |
-| `index_len` | `u64` | Ciphertext length, excluding tag |
-| `index_nonce` | `u8[12]` | |
-| `index_tag` | `u8[16]` | |
+| `index_len` | `u64` | Ciphertext length, excluding tag. The tag follows the ciphertext, so the extent occupies `index_len + 16` bytes on disk — which is what an allocation, a free-map entry and the overlap checks all count, while R19's ceiling bounds `index_len` itself |
+| `index_nonce` | `u8[12]` | 96 bits drawn fresh from the OS CSPRNG at every **sealing** of the index, a key rotation's reseal and a tail-reclaiming rewrite included — a verbatim copy of sealed bytes is not one; never derived from `seq` and never reused (R22) |
+| `index_tag` | `u8[16]` | The index's AEAD tag — **stored twice**: here, and appended to the ciphertext extent. A reader requires the appended copy to equal this one and reports a difference as corruption, before any key is tried (R22) |
 | `freemap_off` | `u64` | ≥ `0x3000` |
 | `freemap_len` | `u64` | |
 | `freemap_hash` | `u8[32]` | SHA-256 of the encoded free-space map (§13) |
@@ -1188,19 +1411,76 @@ them, so a swapped envelope fails authentication rather than misdirecting a decr
 The file index is one AES-256-GCM ciphertext under the **archive index key**.
 
 ```
-AAD = archive_id ‖ kid ‖ index_off ‖ index_len ‖ index_nonce ‖ format_version
+AAD = archive_id ‖ kid ‖ seq ‖ index_off ‖ index_len ‖ index_nonce ‖ format_version
 ```
+
+`seq` is the sequence number of the superblock that names this index, a `u64` little-endian like
+the offsets beside it. It is in the AAD because the superblock is checksummed and not
+authenticated: without it, anyone with write access could keep an older index, raise the winning
+copy's plaintext `seq` and recompute the unkeyed checksum, and a promoted older state would open
+as the current one. With it, that file fails to open at all — the index authenticates under the
+number it was sealed with, and under no other save the single case below (R36).
+
+**One tolerance, and it runs one way only.** Two valid copies never carry equal `seq` (§4), so a
+writer that must put *both* copies on one state gives the losing copy that state's superblock at
+one less: R31's retirement before a truncation, a new file's copy B at `seq` 0 beside copy A's 1,
+a compacted file's copy B at *n* − 1. A reader therefore accepts an index that authenticates
+under the copy's own `seq` **or under `seq` + 1**, and under nothing else. What that allows is a
+copy naming a state one commit *newer* than its own number; what it still forbids is the
+promotion the rule exists to stop, since no index can be presented under a **higher** number than
+it was sealed with. A copy's `seq` can therefore understate its state by one commit and never
+overstate it — the direction that fails closed, since a copy reading as behind the registry is
+shown as an older copy (R36) rather than accepted as the current one.
+
+**The state's number is the one the index authenticated under, and a writer continues from it,
+never from the copy's.** A reader that opened through the tolerance holds a state whose number is
+`seq` + 1; that is the number it reports, and the next commit is that number plus one. Sealing
+the next commit at the copy's number instead would put **two different states under one number**:
+the state the index already holds, and the new one. The file just replaced would then still be a
+valid, openable copy carrying the very number the registry recorded for the new one (R36), and
+putting those bytes back would be a rollback no reader could name — the failure the `seq` in this
+AAD exists to make impossible. The same rule governs the registry (§7).
+
+**The open, step by step**, so that two implementations cannot diverge:
+
+1. Decode both superblock copies and select structurally: the valid copy with the higher `seq`
+   wins; two valid copies with **equal** `seq` are a corrupt file and the read stops there (§4).
+2. Only the winner is opened. The losing copy is read for the extents it names — which a writer
+   must not reuse for one commit (R31) — and for nothing else.
+3. Require the tag appended to the ciphertext extent to equal the one in the superblock before
+   any key is tried (R22).
+4. For each candidate key in turn (the envelope's `kid` first, then the archive's other known
+   kids, R33): **one** GCM open with the AAD built from the stored `seq`; only if that fails to
+   authenticate, **one** more with the AAD's `seq` incremented by one and nothing else changed —
+   never at 2^64 − 1, where there is no next number (§4). At most two attempts per candidate key,
+   and no third.
+5. Decode the plaintext only after it has authenticated: a structure that did not authenticate is
+   never parsed.
+6. If the winner authenticates under neither number, the read fails. It does **not** fall back to
+   the losing copy: that copy is R31's fallback for a superblock that did not *decode*, not for an
+   index that did not authenticate, and trying it would hand an attacker a second state to
+   present by damaging the first.
+7. Adopt the number that authenticated as the state's own (above), and write from it.
 
 Plaintext:
 
 ```
 u32    index_version          2 — the only version read (directories, ruled 2026-09-08); a 1 is refused
-bytes  dict (u32 len)         zstd trained dictionary; empty when unused
+bytes  dict (u32 len)         zstd trained dictionary; empty when unused. The prefix counts the
+                              dictionary's bytes only, so the field is 4 + len (R15, R27)
 u32    dir_count
        … directory records, each prefixed with u32 record_len (R15)
 u32    file_count
        … file records, each prefixed with u32 record_len (R15)
 ```
+
+Both record tables are framed the same way and the framing is the reader's authority on where a
+record ends: `record_len` is the length of the body that follows those four bytes, so a record
+occupies `4 + record_len` bytes of the plaintext, and `dir_count` and `file_count` say how many
+of each follow — no terminator, no padding between records, and nothing after the last file
+record. A record body must be consumed **exactly**: bytes left over inside one, a `record_len`
+reaching past the end of the plaintext, or trailing bytes after the last record are all invalid
+(§1, R15).
 
 **The index is a tree, not a list of keys** (ruled 2026-09-08, DECISIONS). A directory is a
 record of its own and a file hangs off a directory by id: nothing is derived from a path, an

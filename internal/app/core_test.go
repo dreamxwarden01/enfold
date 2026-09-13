@@ -971,6 +971,170 @@ func TestSettingsAndTimeouts(t *testing.T) {
 	}
 }
 
+// TestCloseAction is the close question's answer (APP.md §2.4, ruled
+// 2026-09-13): ask by default — the close button never means "to the tray"
+// until the user has said so — those three values and nothing else, and a
+// settings file an older build wrote, whose closeToTray key this one
+// simply no longer reads, loading with everything beside it intact.
+func TestCloseAction(t *testing.T) {
+	dir := t.TempDir()
+	if got := defaultSettings().CloseAction; got != CloseAsk {
+		t.Fatalf("the default: %q", got)
+	}
+	if got := loadSettings(dir).CloseAction; got != CloseAsk {
+		t.Fatalf("with no file at all: %q", got)
+	}
+	for _, v := range []string{CloseAsk, CloseTray, CloseQuit} {
+		f := defaultSettings()
+		f.CloseAction, f.DisplayName = v, "Personal"
+		if err := saveSettings(dir, f); err != nil {
+			t.Fatal(err)
+		}
+		if got := loadSettings(dir); got.CloseAction != v || got.DisplayName != "Personal" {
+			t.Fatalf("round trip of %q: %+v", v, got)
+		}
+	}
+	f := defaultSettings()
+	f.CloseAction = "destroy"
+	if err := saveSettings(dir, f); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSettings(dir).CloseAction; got != CloseAsk {
+		t.Fatalf("a value that is not one of the three: %q", got)
+	}
+	old := `{"vaultPath": "D:/Vaults/p.eks", "displayName": "Older", "closeToTray": "hide", "theme": "dark", "recoveryRecordPct": 5, "dictionaryBelow": 65536}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := loadSettings(dir)
+	if got.CloseAction != CloseAsk || got.VaultPath != "D:/Vaults/p.eks" || got.DisplayName != "Older" || got.Theme != "dark" || got.RecoveryRecordPct != 5 || got.DictionaryBelow != 65536 {
+		t.Fatalf("a settings file from before the close question: %+v", got)
+	}
+
+	// Through the core, the way the settings page saves and the way
+	// Shell.CloseDecided remembers.
+	h := newHarness(t, nil, nil)
+	if v := h.c.GetSettings().CloseAction; v != CloseAsk {
+		t.Fatalf("a fresh core: %q", v)
+	}
+	s := h.c.GetSettings()
+	s.CloseAction = "destroy"
+	if e := h.c.SetSettings(s); !isCode(e, CodeParams) {
+		t.Fatalf("a close action that is not one of the three: %v", e)
+	}
+	s.CloseAction = CloseQuit
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	if v := h.c.GetSettings().CloseAction; v != CloseQuit {
+		t.Fatalf("get after set: %q", v)
+	}
+	if v := loadSettings(h.c.deps.DataDir).CloseAction; v != CloseQuit {
+		t.Fatalf("the file after set: %q", v)
+	}
+}
+
+// TestSetCloseActionMovesOneField is how Shell.CloseDecided remembers
+// (APP.md §2.4): the close question's answer alone, written over the
+// settings as they are — never a read-change-write of the whole snapshot
+// from the shell, which would take the lock twice and could put back
+// everything the page had saved in between.
+func TestSetCloseActionMovesOneField(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	s := h.c.GetSettings()
+	s.Theme, s.DisplayName, s.RecoveryRecordPct, s.DictionaryBelow = "dark", "Personal", 7, 1<<20
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	if e := h.c.SetCloseAction("destroy"); !isCode(e, CodeParams) {
+		t.Fatalf("a close action that is not one of the three: %v", e)
+	}
+	if e := h.c.SetCloseAction(CloseTray); e != nil {
+		t.Fatal(e)
+	}
+	got := h.c.GetSettings()
+	if got.CloseAction != CloseTray {
+		t.Fatalf("the answer was not kept: %q", got.CloseAction)
+	}
+	if got.Theme != "dark" || got.DisplayName != "Personal" || got.RecoveryRecordPct != 7 || got.DictionaryBelow != 1<<20 {
+		t.Fatalf("something beside the close action moved: %+v", got)
+	}
+	// The file, not only the memory: the next launch reads this.
+	file := loadSettings(h.c.deps.DataDir)
+	if file.CloseAction != CloseTray || file.Theme != "dark" || file.DisplayName != "Personal" || file.RecoveryRecordPct != 7 || file.DictionaryBelow != 1<<20 {
+		t.Fatalf("the settings file: %+v", file)
+	}
+	// A stamp another writer put down between two of these is not put back
+	// by them: only the fields a call owns are applied after the write.
+	h.c.recordExport()
+	if e := h.c.SetCloseAction(CloseQuit); e != nil {
+		t.Fatal(e)
+	}
+	if got := h.c.GetSettings(); got.CloseAction != CloseQuit {
+		t.Fatalf("the second answer: %q", got.CloseAction)
+	}
+	if h.c.LastExportAt() == 0 {
+		t.Fatal("the export stamp was dropped by a close-action write")
+	}
+}
+
+// TestSettingsRefuseLeaveMemoryAlone is the commit-then-apply rule: a
+// settings file that cannot be written is refused with the settings in
+// memory exactly as they were. It matters most for the close question —
+// the shell's gate reads CloseAction the moment the window closes, and a
+// remembered answer whose write was refused must not be obeyed while the
+// page still shows the old one.
+func TestSettingsRefuseLeaveMemoryAlone(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	s := h.c.GetSettings()
+	s.Theme, s.DisplayName, s.RecoveryRecordPct = "dark", "Personal", 7
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	before := h.c.GetSettings()
+	fileBefore := loadSettings(h.c.deps.DataDir)
+
+	// The seam saveSettings has: it writes settings.json.tmp and renames
+	// it. A directory at that path fails the write every time, on every
+	// platform, without touching settings.json.
+	blocked := filepath.Join(h.c.deps.DataDir, "settings.json.tmp")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bad := before
+	bad.Theme, bad.DisplayName, bad.RecoveryRecordPct, bad.CloseAction = "light", "Renamed", 11, CloseQuit
+	if e := h.c.SetSettings(bad); e == nil {
+		t.Fatal("a settings file that could not be written was not refused")
+	}
+	if got := h.c.GetSettings(); got.Theme != before.Theme || got.DisplayName != before.DisplayName ||
+		got.RecoveryRecordPct != before.RecoveryRecordPct || got.CloseAction != before.CloseAction {
+		t.Fatalf("a refused save moved the settings in memory: %+v, was %+v", got, before)
+	}
+	if e := h.c.SetCloseAction(CloseTray); e == nil {
+		t.Fatal("a close action that could not be written was not refused")
+	}
+	if got := h.c.GetSettings().CloseAction; got != before.CloseAction {
+		t.Fatalf("a refused close action moved the settings in memory: %q", got)
+	}
+	if got := loadSettings(h.c.deps.DataDir); got.Theme != fileBefore.Theme || got.CloseAction != fileBefore.CloseAction || got.DisplayName != fileBefore.DisplayName {
+		t.Fatalf("a refused save changed the file: %+v", got)
+	}
+
+	// With the way clear again, both write.
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if e := h.c.SetCloseAction(CloseTray); e != nil {
+		t.Fatal(e)
+	}
+	if got := h.c.GetSettings(); got.CloseAction != CloseTray || got.Theme != "dark" {
+		t.Fatalf("after the way was clear: %+v", got)
+	}
+	if got := loadSettings(h.c.deps.DataDir); got.CloseAction != CloseTray {
+		t.Fatalf("the file after the way was clear: %+v", got)
+	}
+}
+
 func TestEnrollPasswordAndRemove(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollPassword, Label: "Second"}); !isCode(e, CodeNeedsUnlock) {

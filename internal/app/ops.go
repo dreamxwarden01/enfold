@@ -360,10 +360,199 @@ type addDest struct {
 	planned []*planItem
 }
 
+// ---------------------------------------------------------------------------
+// The vault is never a source and never a destination (APP.md §3, the
+// outside review of 2026-09-13).
+//
+// The data folder holds the vault, the settings and the log, and the
+// keystore's lock leaves the vault file readable by design
+// (keystore/lock_windows.go): nothing else stops a page under someone
+// else's control from having the core copy vault.eks into an archive that
+// page can then read and extract. So the core refuses the place itself, on
+// the way in, for every call that names one — the sources of AddFiles,
+// AddFolder and ReplaceFile, the destination of Extract, and the staging
+// root of a drag (dragout.go).
+//
+// Both directions are refused, and the second is what makes the first worth
+// anything: a path INSIDE the data folder is the vault named outright, and
+// a path that STANDS ABOVE it — AddFolder of %LOCALAPPDATA%, or of the
+// profile — would walk the vault in without ever naming it, and an extract
+// of a tree with an "Enfold" folder in it would write back over the vault.
+//
+// The comparison is the file system's own, since the file system is what
+// the paths are then used through: cleaned, made absolute and case folded
+// (insideDir is filepath.Rel, whose Windows build compares with
+// strings.EqualFold), with "inside" a whole element — C:\…\Enfold2 is a
+// sibling of C:\…\Enfold, not a child of it.
+//
+// One file has many names on Windows, and every one of them has to arrive
+// at the same string before the comparison is worth making (the outside
+// review of 2026-09-13, findings 1 and 2):
+//
+//   - the extended-length prefix. \\?\C:\…\Enfold\vault.eks is the vault,
+//     but filepath.Rel reads \\?\C as another volume than C: and answers
+//     that the two paths are unrelated. The prefix is taken off first, and
+//     \\?\UNC\host\share becomes \\host\share, which is the same share
+//     written the way the rest of the system writes it.
+//   - the 8.3 short name. ENFOLD~1 is the data folder under another name,
+//     and folding case does not make the two equal. GetLongPathNameW
+//     expands it (longPath).
+//   - a link. addFile opens its source with os.Open, which follows a
+//     junction or a symlink wherever it points, so the check follows them
+//     too — through the file system itself (canonicalPath), since
+//     filepath.EvalSymlinks walks on Go's file mode and leaves a junction
+//     where it found it.
+//   - a trailing separator, and any other spelling filepath.Clean settles.
+//
+// And a name is still only a request. What is finally opened is judged
+// again, on the handle, where no spelling can lie (refuseOpenedSource).
+
+// extendedPrefix and uncPrefix are the two extended-length spellings
+// documented under "Maximum Path Length Limitation": "\\?\" before a drive
+// path, and "\\?\UNC\" before a share, where the UNC part "replaces the
+// leading two backslashes" of the ordinary \\server\share form.
+const (
+	extendedPrefix = `\\?\`
+	uncPrefix      = `\\?\UNC\`
+	// devicePrefix is the device namespace, \\.\, which reaches the same
+	// file system objects by another door and is stripped for the same
+	// reason.
+	devicePrefix = `\\.\`
+)
+
+// plainSpelling takes an extended-length or device prefix off p, so that
+// one file has one spelling before anything is compared. A path without one
+// is returned untouched, and so is a bare prefix with nothing after it.
+func plainSpelling(p string) string {
+	switch {
+	case len(p) > len(uncPrefix) && strings.EqualFold(p[:len(uncPrefix)], uncPrefix):
+		return `\\` + p[len(uncPrefix):]
+	case len(p) > len(extendedPrefix) && strings.HasPrefix(p, extendedPrefix):
+		return p[len(extendedPrefix):]
+	case len(p) > len(devicePrefix) && strings.HasPrefix(p, devicePrefix):
+		return p[len(devicePrefix):]
+	}
+	return p
+}
+
+// resolveLinks is path as the file system will reach it: one spelling,
+// absolute, with every link followed and every short name expanded as far
+// as the path exists. The tail that does not exist yet is kept and joined
+// back on — an extract's destination may be a folder the extract itself
+// makes, and a junction above it still has to be seen — and a path with
+// nothing of it on disk is simply its absolute self.
+func resolveLinks(p string) string {
+	abs, err := filepath.Abs(plainSpelling(p))
+	if err != nil {
+		abs = filepath.Clean(plainSpelling(p))
+	}
+	rest := ""
+	for cur := abs; ; {
+		if r, ok := realPath(cur); ok {
+			return filepath.Clean(filepath.Join(r, rest))
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return filepath.Clean(plainSpelling(longPath(abs)))
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
+}
+
+// realPath is one path that exists, as the file system itself names it: the
+// open-and-ask that resolves everything at once where there is one
+// (canonicalPath), and otherwise the mode-walking resolver plus the short
+// name expansion, which is what the platforms without the former have. The
+// prefix is taken off either answer, since both may put one back.
+func realPath(p string) (string, bool) {
+	if r, ok := canonicalPath(p); ok {
+		return plainSpelling(r), true
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return plainSpelling(longPath(plainSpelling(r))), true
+	}
+	return "", false
+}
+
+// vaultPlaces is what no call of the user's may name: the data folder, and
+// the vault's own file when it is kept elsewhere — the default place is
+// inside the data folder already and is not named twice. Both resolved, so
+// that the caller compares like with like.
+func (c *Core) vaultPlaces() []string {
+	places := []string{resolveLinks(c.deps.DataDir)}
+	c.mu.Lock()
+	vaultPath := c.vault.path
+	c.mu.Unlock()
+	if vaultPath != "" {
+		if p := resolveLinks(vaultPath); !insideDir(places[0], p) {
+			places = append(places, p)
+		}
+	}
+	return places
+}
+
+// refuseVaultPlaces is the check: archive.source_is_vault for any of paths
+// that is one of those places, lies inside one, or holds one. An empty path
+// is the caller's own business (params, elsewhere) and is passed over here.
+func (c *Core) refuseVaultPlaces(paths ...string) *Error {
+	places := c.vaultPlaces()
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		target := resolveLinks(p)
+		for _, place := range places {
+			if insideDir(place, target) || insideDir(target, place) {
+				return coded(CodeSourceIsVault)
+			}
+		}
+	}
+	return nil
+}
+
+// refuseOpenedSource is the same refusal made again on what was actually
+// opened, and it is the one that cannot be raced or spelled around (the
+// outside review of 2026-09-13, finding 3). The name-based check above
+// happens before the walk and before the open; between them a link can be
+// swung onto a planned child, and a name never sees a hard link at all —
+// a second directory entry for vault.eks, in a folder of the attacker's
+// own, is not a path any containment test can recognise.
+//
+// So the handle is asked instead, two ways:
+//
+//   - os.SameFile against the vault file. This is the volume serial and the
+//     file id, which is the file's identity and not its name, so a hard
+//     link answers yes. The stat of the vault succeeds while the keystore
+//     holds the file open: it asks for no access at all, only metadata.
+//   - the handle's own final path, which Windows resolves for us, run back
+//     through the containment check. That catches anything else in the data
+//     folder, which has no one file to compare identities with.
+//
+// A handle that will not answer either question leaves the early check as
+// the only answer, which is where this stood before.
+func (c *Core) refuseOpenedSource(f *os.File) *Error {
+	c.mu.Lock()
+	vaultPath := c.vault.path
+	c.mu.Unlock()
+	if vaultPath != "" {
+		if vfi, err := os.Stat(vaultPath); err == nil {
+			if fi, err := f.Stat(); err == nil && os.SameFile(fi, vfi) {
+				return coded(CodeSourceIsVault)
+			}
+		}
+	}
+	if p, ok := finalPath(f); ok {
+		return c.refuseVaultPlaces(p)
+	}
+	return nil
+}
+
 // AddFiles adds files under parentID in one transaction, committed at its
 // end (APP.md §2.3). Every name is one element, validated with
 // format.ValidateName and matched case folded against the live children of
-// its parent (APP.md §3).
+// its parent (APP.md §3). A source that is Enfold's own place is
+// archive.source_is_vault, and the whole call is refused with it.
 func (c *Core) AddFiles(id, parentID string, paths []string, policy AddPolicy) (string, *Error) {
 	oa, pid, e := c.addTarget(id, parentID)
 	if e != nil {
@@ -371,6 +560,9 @@ func (c *Core) AddFiles(id, parentID string, paths []string, policy AddPolicy) (
 	}
 	if len(paths) == 0 {
 		return "", coded(CodeParams)
+	}
+	if e := c.refuseVaultPlaces(paths...); e != nil {
+		return "", e
 	}
 	srcs := append([]string(nil), paths...)
 	return c.startOp("add", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
@@ -398,10 +590,14 @@ func (c *Core) AddFiles(id, parentID string, paths []string, policy AddPolicy) (
 // AddFolder adds a directory tree under parentID in one transaction. Every
 // directory the walk creates becomes a record with its own time; an existing
 // directory of that name is entered whatever the policy, so one source
-// folder is never split across two records (APP.md §3).
+// folder is never split across two records (APP.md §3). A folder that is
+// Enfold's own place, or that holds it, is archive.source_is_vault.
 func (c *Core) AddFolder(id, parentID, dir string, policy AddPolicy) (string, *Error) {
 	oa, pid, e := c.addTarget(id, parentID)
 	if e != nil {
+		return "", e
+	}
+	if e := c.refuseVaultPlaces(dir); e != nil {
 		return "", e
 	}
 	return c.startOp("add", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
@@ -811,6 +1007,14 @@ func (c *Core) addFile(ctx context.Context, o *op, tx *archive.Tx, it *planItem,
 		return nil
 	}
 	defer f.Close()
+	// What was opened, not what was named: the walk planned this child some
+	// time ago, and the early refusal judged a path (APP.md §3). One item's
+	// outcome and not the batch's — the transaction is open and the other
+	// sources are nobody's fault — but nothing of this one is read.
+	if e := c.refuseOpenedSource(f); e != nil {
+		res.Outcome, res.Code = "failed", e.Code
+		return nil
+	}
 	src := &countingReaderAt{src: f, size: it.node.size, on: func(read int64) {
 		o.progress(base+uint64(read), total, "adding")
 	}}
@@ -845,7 +1049,8 @@ func max64(a, b int64) int64 {
 }
 
 // ReplaceFile is the in-place edit: the file's content from src, same id,
-// its own transaction (APP.md §2.3). Cancel aborts it.
+// its own transaction (APP.md §2.3). Cancel aborts it. A src that is
+// Enfold's own place is archive.source_is_vault, as it is for an add.
 func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
@@ -854,6 +1059,9 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 	fid, ok := parseID(fileID)
 	if !ok || fid == format.RootID {
 		return "", coded(CodeParams)
+	}
+	if e := c.refuseVaultPlaces(src); e != nil {
+		return "", e
 	}
 	return c.startOp("replace", id, func(ctx context.Context, o *op) ([]FileOutcome, error) {
 		oa.opMu.Lock()
@@ -876,6 +1084,11 @@ func (c *Core) ReplaceFile(id, fileID, src string) (string, *Error) {
 			return nil, err
 		}
 		defer f.Close()
+		// The handle, not the name it was opened by: one file, so the
+		// refusal is the whole operation's.
+		if e := c.refuseOpenedSource(f); e != nil {
+			return nil, e
+		}
 		total := uint64(max64(st.Size(), 0))
 		o.items.Store(1) // one file, which the strip says in the singular
 		o.progress(0, total, "replacing")
@@ -971,6 +1184,10 @@ type extractItem struct {
 // is path_refused — a refused directory takes its subtree with it, reported
 // once for its top — and the rest is written. The destination root itself
 // failing is the operation's error, before any outcome.
+//
+// A destination that is Enfold's own place — the data folder, a folder
+// inside it or above it, or the vault kept elsewhere — is refused with
+// archive.source_is_vault before any of that (APP.md §3).
 func (c *Core) Extract(id string, recordIDs []string, dir string, policy ExtractPolicy, names map[string]string) (string, *Error) {
 	oa, e := c.findArchive(id)
 	if e != nil {
@@ -978,6 +1195,11 @@ func (c *Core) Extract(id string, recordIDs []string, dir string, policy Extract
 	}
 	if !filepath.IsAbs(dir) {
 		return "", coded(CodeParams)
+	}
+	// Enfold's own place is not a destination either: an extract writes a
+	// whole tree, and a tree can reach down onto the vault.
+	if e := c.refuseVaultPlaces(dir); e != nil {
+		return "", e
 	}
 	if len(recordIDs) == 0 {
 		return "", coded(CodeParams)
@@ -1116,12 +1338,22 @@ func (c *Core) extractItems(ctx context.Context, o *op, oa *openArchive, items [
 		if it.isDir {
 			// Created into the parent the order has already made; an
 			// existing folder is used as it stands — never renamed,
-			// never pre-Lstat'ed, never emptied.
+			// never emptied — and the one thing it is asked is whether it
+			// is a folder at all rather than a link out of the
+			// destination (linkInTheWay).
 			err := c.extractFS.makeDir(it.dst)
 			switch {
 			case err == nil:
 				res.Outcome = "created"
 				made = append(made, it)
+			case errors.Is(err, os.ErrExist) && c.extractFS.linkInTheWay(it.dst):
+				// A junction or a symbolic link standing where this folder
+				// would be entered. The subtree goes with it, reported
+				// once for its top, as a refused directory's does: nothing
+				// beneath a link this extraction will not follow is
+				// attempted or listed.
+				res.Outcome, res.Code = "failed", CodeDestinationLink
+				refused[it.id] = true
 			case errors.Is(err, os.ErrExist):
 				res.Outcome = "skipped"
 			case refusedByVolume(err):
@@ -1441,6 +1673,11 @@ func (c *Core) startCompaction(oa *openArchive) string {
 		oa.state = "compacting"
 		c.mu.Unlock()
 		o.progress(0, 1, "compacting")
+		// The compacted file continues the sequence (FORMAT.md R33, ruled
+		// 2026-09-13): its first commit is the source's last plus one, and
+		// the receipt below names that number so hash_at_seq is current
+		// rather than a whole file's worth of commits behind (R36).
+		seqAfter := oa.a.Seq() + 1
 		hash, newSize, err := oa.a.Compact(ctx, func(done, total uint64) { o.progress(done, total, "compacting") })
 		// Whatever happened, this handle is finished: closed (idempotent
 		// after a successful compaction) so that a failure never leaves the
@@ -1454,9 +1691,8 @@ func (c *Core) startCompaction(oa *openArchive) string {
 		c.closeArchiveLocked(oa)
 		if err == nil {
 			// The receipt is recorded (or owed) now, before the reopen: a
-			// reopen that fails must not lose it. A compacted file starts
-			// again at seq 1.
-			c.recordReceiptLocked(oa, archive.Receipt{Seq: 1, Size: newSize, WrittenAt: c.now().Unix()}, &hash)
+			// reopen that fails must not lose it.
+			c.recordReceiptLocked(oa, archive.Receipt{Seq: seqAfter, Size: newSize, WrittenAt: c.now().Unix()}, &hash)
 		}
 		c.mu.Unlock()
 		if err != nil {

@@ -70,9 +70,9 @@ func (u *Unlocked) OpenForeign(other *Keystore) (*ForeignRegistry, error) {
 	if err := other.usable(); err != nil {
 		return nil, err
 	}
-	reg, err := tryForeign(u.vmk, other)
+	reg, err := tryForeign(u.vmk(), other)
 	if err == nil {
-		return u.convert(other, reg, u.vmk, u.gen)
+		return u.convert(other, reg, u.vmk(), u.gen)
 	}
 	if !errors.Is(err, ErrAuth) {
 		// The AEAD opened and the plaintext did not decode: the file is this
@@ -83,7 +83,7 @@ func (u *Unlocked) OpenForeign(other *Keystore) (*ForeignRegistry, error) {
 	}
 
 	vaultID := u.k.sb.VaultID
-	kwks := kdf.KWKSecrets(u.vmk, vaultID)
+	kwks := kdf.KWKSecrets(u.vmk(), vaultID)
 	defer kdf.Zero(kwks)
 	gens := historyGens(u.k.reg)
 	for i := len(gens) - 1; i >= 0; i-- {
@@ -132,7 +132,7 @@ func (u *Unlocked) OpenForeignUnlocked(other *Unlocked) (*ForeignRegistry, error
 	// convert computes Tampered from the same region and the same authenticated
 	// hash the foreign Unlocked read it against, so the verdict it reports is
 	// that Unlocked's own.
-	return u.convert(other.k, reg, other.vmk, 0)
+	return u.convert(other.k, reg, other.vmk(), 0)
 }
 
 // convert re-wraps every version record's archive key from the KWK of the VMK
@@ -142,7 +142,7 @@ func (u *Unlocked) OpenForeignUnlocked(other *Unlocked) (*ForeignRegistry, error
 func (u *Unlocked) convert(other *Keystore, reg *format.Registry, opened [32]byte, openedAt uint64) (*ForeignRegistry, error) {
 	from := kdf.KWK(opened, other.sb.VaultID)
 	defer kdf.Zero(from)
-	to := kdf.KWK(u.vmk, u.k.sb.VaultID)
+	to := kdf.KWK(u.vmk(), u.k.sb.VaultID)
 	defer kdf.Zero(to)
 	for a := range reg.Archives {
 		ar := &reg.Archives[a]

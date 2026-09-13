@@ -21,6 +21,11 @@ func newNonce() ([NonceSize]byte, error) {
 	return n, err
 }
 
+// gcm builds the AEAD for one wrap or unwrap. key may be a slice of a secmem
+// page — the session hands it the KWK's — and crypto/aes expands it into a key
+// schedule on the Go heap, which nothing here can lock or erase. That copy is
+// the one SCOPE.md's line leaves outside the wrapper; it lives as long as the
+// AEAD, which is this call.
 func gcm(key []byte) (cipher.AEAD, error) {
 	if len(key) != KeySize {
 		return nil, ErrKeySize

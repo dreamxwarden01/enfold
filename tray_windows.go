@@ -19,7 +19,6 @@ type tray struct {
 	s     *shell
 	t     *application.SystemTray
 	lock  *application.MenuItem
-	close *application.MenuItem
 	icons [3][2][]byte // state × {light, dark}
 
 	mu     sync.Mutex
@@ -42,14 +41,10 @@ func newTray(s *shell) *tray {
 	menu.Add("Open").OnClick(func(*application.Context) { go s.ensureWindow() })
 	t.lock = menu.Add("Lock now")
 	t.lock.OnClick(func(*application.Context) { go s.core.Lock() })
-	t.close = menu.Add("Close all archives")
-	t.close.OnClick(func(*application.Context) {
-		go func() {
-			if kept := s.core.CloseAllArchives(); len(kept) > 0 {
-				s.ensureWindow() // the page shows what would not close
-			}
-		}()
-	})
+	// No *Close all archives* since 2026-09-13 (APP.md §2.4): the window's
+	// close already leaves every page, and while the window is up the page
+	// closes archives — an item that changed the core under a page that did
+	// not refresh was worse than none.
 	menu.AddSeparator()
 	menu.Add("Quit").OnClick(func(*application.Context) { go s.quit() })
 	t.t.SetMenu(menu)
@@ -82,7 +77,6 @@ func (t *tray) update(st app.VaultStatus) {
 		t.t.SetDarkModeIcon(t.icons[state][1])
 	}
 	t.lock.SetEnabled(st.State == app.StateUnlocked)
-	t.close.SetEnabled(st.OpenArchives > 0)
 	t.t.SetTooltip(t.tooltip())
 }
 

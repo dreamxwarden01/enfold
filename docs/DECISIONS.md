@@ -2188,7 +2188,7 @@ file that does not exist. Branches for broadcasts a message-only window never re
 removed and `APP.md` §5 says why.
 
 **Keystore.** The OS-level lock was never exercised by a test — the in-process table refused the
-second handle first; a `\?\`-spelled path bypasses the table so only `LockFileEx` can refuse.
+second handle first; a `\\?\`-spelled path bypasses the table so only `LockFileEx` can refuse.
 
 **Refuted, with reasons in the journal.** The reopen-after-lock race (the state event is emitted
 after the close) and parked ceremonies holding the file (neither park is reachable there) — both
@@ -3346,7 +3346,7 @@ kept: a read-only handle opened beside a writable one in the same process regist
 with itself, so a trim could truncate under it — the archive layer now refuses that second open
 (`ErrBusy`) where the path is spelled the same way, that table being keyed on the canonical
 path, and R31 says why every other reader fails closed instead: a foreign process's, and a
-read-only handle under a `\?\` spelling, a junction or a short name, which no lock catches
+read-only handle under a `\\?\` spelling, a junction or a short name, which no lock catches
 either; and the whole rule assumes an honest `Sync`, now written into R31. Two test gaps closed:
 the crash seam tears and fails writes rather than skipping them, and an interrupted follow-up is
 retried on the same handle. One prompt lesson: telling Codex "do not run any tool" stops it
@@ -4037,4 +4037,136 @@ repository writes) for a few hundred milliseconds, and Go's cleanup retries shar
 violations but not `ERROR_DIR_NOT_EMPTY`; a retry 300 ms later always succeeds. That is the
 scanner in the Go temp folder despite its exclusion — a setting, not code — and is left to
 the machine.
+
+## 2026-09-13 — Before the phone: what is struck, what is deferred, what is asked
+
+The user's pass over the list of what remains before a phone application, after the panel
+landed. **Struck:** BitLocker detection — no unelevated mechanism was measured and the product
+never asks for elevation; the import dialog's sentence about BitLocker-protected drives stays
+as advice. **Deferred, with its reason written:** code signing — "a personal project,
+distributed from GitHub, which is why NSIS"; the certificate's cost is not justified; the
+release notes will say the binaries are unsigned. **Kept as it is:** the password's minimum of
+8 with no entropy estimate — a word-aware estimate has no standard to agree with, the entangled
+password is optional, and a password as the only way in is not the recommended one. **To
+Astra, since there is nobody else to look:** the outside review of `FORMAT.md` and of the fuzz
+harnesses' reach (SCOPE "Before the format is frozen", items 2 and 3); the feasibility of
+`memguard` and `VirtualLock` in a Go program built without cgo; and PDF preview under one
+condition — an RCE in the PDF renderer must not reach the keystore, and if that cannot be
+excluded the PDF is extracted to a temporary file and handed to the browser. **Wails:** the
+version is to be looked at (beta.17–20 exist; a probe in a worktree). **Decided by use:**
+destroy, not hide, on the way to the tray — reopening shows nothing worth ~130 MB resident.
+**And a rule:** the close button never means "to the tray" by default. The first close — the
+button or Alt+F4 — asks whether to keep Enfold in the tray or to quit, with *Remember my
+choice*; the answer and the asking are both changeable in Settings; the `closeToTray`
+destroy/hide setting goes with it. The tray's *Close all archives* goes too: the window's
+close already leaves every page, and an item that changed the core under a page that did not
+refresh was worse than none.
+
+**Three evaluations, and what they settled** (2026-09-13, Codex Astra, each alone — its
+subagents would not spawn). **`memguard`:** not adopted. In a Go program every secret crosses
+into crypto/aes, HKDF, Argon2 and ML-KEM as a plain slice the library copies, so an enclave
+protects nothing past the first call, and the threat in scope — the pagefile, a later read of
+the disk — is met by the smaller thing: the retained VMK, KWK and K_P in pages allocated
+outside the Go heap, `VirtualLock`ed and erased explicitly; best-effort zeroing elsewhere;
+Windows Error Reporting off for the process (SCOPE's line rewritten). **PDF preview:** no
+route inside the window gives the isolation the user asked for — pdf.js in the page inherits
+the page's authority, which is every bound service; a cross-site iframe separates the DOM but
+the runtime shim runs in child frames too; a second Wails window shares the application's
+bindings and runtime, and a bridge-free WebView2 is integration work past what beta.16
+offers; the built-in PDFium viewer is available but its toolbar writes plaintext to disk and
+a policy can swap it for another reader. So the user's fallback stands as the design: a
+temporary copy under the staging folder, opened by the program the user chooses (a browser,
+which is sandboxed, rather than whatever PDF handler ShellExecute finds), with the manifest
+and the sweep drag-out already has — and the same lifecycle is what "open a temporary copy,
+edit, put it back" will need, so it is designed once (to be written up when it is built; not
+in v1). Two things the pass found on the way are fixed now: a page could add the vault's own
+file to an archive and read it back (`AddFiles`/`Replace` refuse a source inside the data
+folder; APP §3), and a staging manifest marked live is never swept even when the process that
+owned it is gone (a dead owner makes it sweepable). **`FORMAT.md`:** not ready to freeze — the
+reviewer's words — because it says less than the code in several places and treats an
+unauthenticated `seq` as a copy's freshness; the precision items (nonce generation, the
+registry's landing extent and its barrier, A/B initialization and ties, the duplicated tags,
+length-field boundaries, the entanglement salt's two contradicting sentences, Argon2 lanes vs
+threads) are being written into the text, the fuzz harnesses' reach widened; the semantic
+ones — `seq` in the index AAD, `seq` across compaction, an intact envelope of an unsupported
+version, the erasure claim against R31's retained state, a per-key budget for random-IV GCM —
+wait for the user's rulings, being format changes.
+
+**The format, before it freezes: five rulings** (2026-09-13, the user's "do as you suggest" on
+the outside review's semantic findings; format changes, made now because no file exists yet
+that they would break). **`seq` goes into the AAD** of the archive index and of the keystore
+registry: an attacker who can write the file could otherwise keep an older valid index (or
+registry), raise the plaintext superblock's `seq` to the expected value and recompute its
+unkeyed checksum, and the copy would pass as current — with `seq` authenticated, a promoted
+copy fails to open. **`seq` continues across compaction** rather than restarting at 1, so
+one `archive_id` never reuses a sequence value for different contents and R36's identity
+(`archive_id`, `seq`) holds across a copy's whole life; a compacted file carries the old
+file's last `seq` plus one. **An intact envelope of an unsupported `format_version` is
+refused**, not treated as absent: R33's recovery is for a torn or corrupt envelope, and an
+older reader opening a newer file through it — and repairing the envelope on the way — is
+the opposite of fail-closed evolution. **R32's erasure claim is qualified**: a deleted file's
+wrapped DEK is gone from the index the winning superblock names, and for one more commit it
+is still in the index the losing superblock keeps (R31); the next commit retires that, and a
+compaction erases it for good — the text says so. **Random-IV GCM gets its budget written
+down**: SP 800-38D §8.3's 2^32 invocations per key for random 96-bit IVs; the wrapping
+domains (the KWK, the archive wrap key, the identity and secrets keys) spend a handful of
+invocations per commit, so the ceiling is unreachable in a file's life, and the text states
+the bound and the assumption instead of a counter. The KDF test vectors and the fuzz seeds
+follow the AAD change.
+
+**The hardenings, reviewed** (2026-09-13). The outside review of the vault-source refusal, the
+dead-owner sweep and `secmem` found six things, all real, and the fix found a seventh: a
+`\\?\` spelling or an 8.3 name of the vault passed the name comparison; the check was on the
+name given while the open, later, would follow a link swapped in between — now the opened
+handle answers, its identity against the vault file's (`SameFile`, which sees a hard link) and
+its final path against the data folder; an extraction checked its root and then followed a
+junction beneath it — it never descends into a reparse point now (`file.destination_link`);
+the sweep's "an unknown owner is dead after a day" was a guess — an unknown owner is never
+swept while the manifest says live, a process that exists but refuses to be queried is alive,
+a recorded id without its creation time is unknown; the WER exclusion took a path longer than
+`MAX_PATH` — the base name goes then. And the seventh: `filepath.EvalSymlinks` left a
+junction as it found it on this machine, so a folder junctioned onto the data folder had
+compared as unrelated — the file system's own final name (`GetFinalPathNameByHandle`) is
+the canonical spelling now. `secmem` itself drew no finding.
+
+**The five rulings, implemented — and the one thing they needed** (2026-09-13). `seq` in the
+AAD collides with the A/B duplication: a writer that must put both copies on one state writes
+the losing copy at `seq − 1` (R31's retirement before a truncation; a new file's copy B at 0;
+a compacted file's copy B at n − 1), and that copy names an index sealed at `seq + 1`, so a
+strict AAD opened nothing for it — twenty-six of R31's tests said so. Ruled with the
+implementation: a reader accepts an index or a registry that authenticates under the copy's
+own `seq` **or under `seq + 1`**, and nothing else (FORMAT.md §7, §11, R31). It runs one way:
+a copy may name a state one commit newer than its number, never older, so an old extent can
+never be presented under a higher number than it was sealed with, and the attack the rulings
+were for — keep an old index, raise the plaintext `seq`, recompute the unkeyed checksum —
+still opens nothing; a copy can only read as behind the registry, the conservative direction.
+The alternatives — sealing the index twice in four places, a real change to the crash
+protocol; or letting byte-identical copies share a `seq`, which §4 forbids — were rejected.
+The version stays 1: FORMAT.md's own Status says nothing is frozen until v1 ships, and
+Revision 2 set the precedent. The compacted file's continued sequence reaches the registry
+too: `Compact`'s receipt names the source's last `seq` plus one rather than 1, so
+`hash_at_seq` is current instead of a file's worth of commits behind. Every writer now refuses
+at 2^64 − 1 (`ErrSeqExhausted`, before any byte is written). The KDF vectors were untouched —
+they cover the KDF chain and the key-wrap AADs, not the metadata's.
+
+**The tolerance, reviewed twice** (2026-09-13). The second outside pass on the format
+accepted the tolerance's argument — a state sealed at k can never authenticate under a number
+above k — and found what the first implementation of it left open: a copy opened through the
+tolerance kept the copy's number in memory, so the next commit sealed a different state under
+the number the previous state already carried, and the replaced file, restored, read as
+current against the registry. Ruled: **the state's number is the one the index authenticated
+under, and a writer continues from it, never from the copy's** — the open adopts it, the
+keystore the same, a compacted file refuses an index that authenticates at anything but its
+own number. And with it: the exhaustion refusal moved to where a transaction begins, since a
+transaction fills free extents as it goes and an abort cannot unwrite an interior one; the
+open's steps written as a numbered recipe (selection and the equal-number rejection first, only
+the winner opened, two GCM attempts at most per key, no fall-back to the loser on an
+authentication failure); the GCM budget restated as an assumption about a person's workload
+with the rotations named as the remedy; a plain copy of the file draws no nonce, since a copy
+is not an encryption. **And R32 narrowed:** deletion makes a file *unreachable* — no live
+index carries its key — not erased: freed extents keep their bytes until reused, and a holder
+of the archive key recovers an old index from them without its nonce (GCM is counter mode; a
+predictable first block gives the keystream block and AES⁻¹ of it is the nonce and counter),
+so what removes the bytes is a compaction, and the page says "unreachable" where it said
+"erased" (APP §3, §6).
 

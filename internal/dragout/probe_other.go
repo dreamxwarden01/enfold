@@ -18,6 +18,15 @@ func stagedFileInUse(path string) (inUse bool, exists bool, err error) {
 	return false, true, nil
 }
 
+// probeProcess has nobody to ask here. The staged route runs on Windows
+// alone, and this keeps the portable half — the state machine and the
+// scavenge — compiling and testable everywhere: every owner is unknown, so
+// the sweep falls back on the rule it had before it could ask (stage.go,
+// scavengeVerdict).
+func probeProcess(pid int) (started int64, state ownerState) {
+	return 0, ownerUnknown
+}
+
 // isReparsePoint is a symlink here: the one kind of link the rest of the
 // world has.
 func isReparsePoint(path string) bool {

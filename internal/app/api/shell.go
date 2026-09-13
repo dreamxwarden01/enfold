@@ -8,6 +8,11 @@ import "github.com/dreamxwarden01/enfold/internal/app"
 type Hooks struct {
 	ShowWindow  func()
 	CloseWindow func()
+	// CloseDecided is the close question's answer (APP.md §2.4): "tray" or
+	// "quit", with remember writing Settings.CloseAction first. The shell
+	// then closes the window its own way — which never asks again — or
+	// runs its Quit.
+	CloseDecided func(action string, remember bool) *app.Error
 	// PickFiles and PickFolder return nil/"" and no error when cancelled.
 	PickFiles  func(title string, multiple bool) ([]string, error)
 	PickFolder func(title string) (string, error)
@@ -37,6 +42,23 @@ func NewShell(h Hooks) *Shell { return &Shell{h: h} }
 func (s *Shell) ShowWindow()  { s.h.ShowWindow() }
 func (s *Shell) CloseWindow() { s.h.CloseWindow() }
 func (s *Shell) Quit()        { s.h.Quit() }
+
+// CloseDecided answers the close question the page asked when the window's
+// close was cancelled (APP.md §2.4, ruled 2026-09-13). action is "tray" or
+// "quit" — never "ask", which is what was being asked — and remember
+// writes it to Settings.CloseAction through the core, exactly as the
+// settings page's own save does, so the next close does not ask. The
+// window then goes to the tray, leaving every page, or the shell's Quit
+// runs.
+func (s *Shell) CloseDecided(action string, remember bool) error {
+	if action != app.CloseTray && action != app.CloseQuit {
+		return &app.Error{Code: app.CodeParams}
+	}
+	if s.h.CloseDecided == nil {
+		return &app.Error{Code: app.CodeInternal}
+	}
+	return asErr(s.h.CloseDecided(action, remember))
+}
 
 func (s *Shell) PickFiles(title string, multiple bool) ([]string, error) {
 	p, err := s.h.PickFiles(title, multiple)

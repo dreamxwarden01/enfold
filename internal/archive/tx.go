@@ -33,11 +33,13 @@ type Tx struct {
 	done    bool
 }
 
-// Begin opens a transaction. Only one may be open.
+// Begin opens a transaction. Only one may be open. An archive whose
+// sequence is exhausted opens none: a transaction that could not commit
+// would still have written content into free extents (§4, committable).
 func (a *Archive) Begin() (*Tx, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.writable(); err != nil {
+	if err := a.committable(); err != nil {
 		return nil, err
 	}
 	if a.tx != nil {
@@ -793,9 +795,13 @@ func (a *Archive) commit(ctx context.Context, tx *Tx, index *format.Index, kid [
 		return Receipt{}, fmt.Errorf("%w: index of %d bytes exceeds %d", ErrNoSpace, len(plain), format.MaxIndexLen)
 	}
 
-	// The index extent, first-fit or appended; then the sealed index.
+	// The index extent, first-fit or appended; then the sealed index. The
+	// sequence is advanced first because it can be refused (§4): a commit
+	// that cannot number itself writes nothing at all.
 	next := *a.sb
-	next.Seq++
+	if next.Seq, err = nextSeq(a.sb.Seq); err != nil {
+		return Receipt{}, err
+	}
 	ie, err := tx.alloc(uint64(len(plain))+format.TagSize, false)
 	if err != nil {
 		return Receipt{}, err
@@ -874,8 +880,10 @@ func (a *Archive) commit(ctx context.Context, tx *Tx, index *format.Index, kid [
 	// commit that lets it be truncated. A failure before that commit's own
 	// flip is nobody's to hear — this one is durable, and the next commit
 	// finds the tail and tries again; one at or after it breaks the Archive
-	// like any other indeterminate commit.
-	if err := a.reclaimTail(plain, kid, indexKey); err != nil {
+	// like any other indeterminate commit. A sequence that cannot be advanced
+	// is a refusal of that second commit alone (§4): this one is published,
+	// so it is reported as the success it is and the tail simply stays.
+	if err := a.reclaimTail(plain, kid, indexKey); err != nil && !errors.Is(err, ErrSeqExhausted) {
 		return Receipt{}, err
 	}
 	return Receipt{Seq: a.sb.Seq, Size: a.size, WrittenAt: now()}, nil

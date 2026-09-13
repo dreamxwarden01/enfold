@@ -37,6 +37,11 @@ type extractFS struct {
 	// a seam for the same reason the other two are: whether an extract pays
 	// it is a decision (durability below) and a decision is worth a test.
 	sync func(f *os.File) error
+	// isLink answers whether a directory already standing where the tree
+	// would be entered is a reparse point. A seam because a junction needs
+	// a machine willing to make one, and the rule is worth proving on every
+	// machine that runs the tests.
+	isLink func(path string) bool
 }
 
 // durability is whether an extract flushes each file to the volume before
@@ -79,6 +84,28 @@ func (fs extractFS) syncFile(f *os.File) error {
 		return fs.sync(f)
 	}
 	return f.Sync()
+}
+
+// linkInTheWay reports a reparse point where a directory of the tree would
+// otherwise be entered (APP.md §3, the outside review of 2026-09-13).
+//
+// The destination the user chose is judged once, on the way in, and found
+// not to be Enfold's own place (refuseVaultPlaces). That says nothing about
+// what is inside it: a folder named Enfold under an ordinary destination
+// may be a junction onto the data folder, and an archive holding
+// Enfold\vault.eks would then be extracted straight over the vault. So an
+// extraction never descends into a reparse point — it does not follow the
+// link, does not look at where it goes, and does not care: a link is not a
+// directory of this extraction's making, and that is the whole test.
+//
+// Only a directory already there is asked about. One this extraction made
+// itself is real by construction, and it was made a moment ago with Mkdir,
+// which creates a directory and never a link.
+func (fs extractFS) linkInTheWay(path string) bool {
+	if fs.isLink != nil {
+		return fs.isLink(path)
+	}
+	return isReparsePoint(path)
 }
 
 // extractFile writes one record's plaintext to path with the discipline

@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   List: vi.fn(),
   Leave: vi.fn(),
   DragOut: vi.fn(),
+  CloseDecided: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -38,7 +39,7 @@ vi.mock("./api", async () => {
     ...actual,
     Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children },
     Archives: { List: m.List, Leave: m.Leave },
-    Shell: { DragOut: m.DragOut },
+    Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided },
     Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: never },
     Keys: { Slots: never, EntangledState: never },
     Settings: { Get: never },
@@ -91,6 +92,7 @@ beforeEach(async () => {
   m.List.mockReset().mockResolvedValue([]);
   m.Leave.mockReset().mockResolvedValue(undefined);
   m.DragOut.mockReset();
+  m.CloseDecided.mockReset().mockResolvedValue(undefined);
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -562,5 +564,69 @@ describe("the drag out in flight (beginDragOut)", () => {
       drop(["D:\\Pictures\\b.jpg"]);
       expect(dropped()).toEqual(["D:\\Pictures\\b.jpg"]);
     });
+  });
+});
+
+// The close question (APP.md §2.4, ruled 2026-09-13): the shell cancels the
+// first close and emits shell.close; the page asks, and the answer goes
+// back as Shell.CloseDecided(action, remember). Esc calls nothing at all.
+describe("the close the shell cancelled", () => {
+  const close = () => m.handlers["shell.close"]({ data: undefined });
+
+  beforeEach(() => {
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+  });
+
+  it("puts the question up, and a second close while it is up is nothing", () => {
+    expect(store.closeAsked).toBe(false);
+    close();
+    expect(store.closeAsked).toBe(true);
+    close();
+    expect(store.closeAsked).toBe(true);
+    expect(m.CloseDecided).not.toHaveBeenCalled();
+  });
+
+  it("tells the shell nothing when Esc takes it away — the window stays", () => {
+    close();
+    store.dismissClose();
+    expect(store.closeAsked).toBe(false);
+    expect(m.CloseDecided).not.toHaveBeenCalled();
+  });
+
+  it("sends the answer and whether to remember it", async () => {
+    close();
+    await store.decideClose("quit", true);
+    expect(m.CloseDecided).toHaveBeenCalledWith("quit", true);
+    expect(store.closeAsked).toBe(false);
+    expect(store.closeBusy).toBe(false);
+  });
+
+  it("does not remember an answer the user did not tick", async () => {
+    close();
+    await store.decideClose("tray", false);
+    expect(m.CloseDecided).toHaveBeenCalledWith("tray", false);
+  });
+
+  it("answers once: a second press while the first is on its way is nothing", async () => {
+    close();
+    const d = deferred<void>();
+    m.CloseDecided.mockReturnValueOnce(d.promise);
+    const p = store.decideClose("tray", false);
+    expect(store.closeBusy).toBe(true);
+    await store.decideClose("quit", true); // the second press
+    expect(m.CloseDecided).toHaveBeenCalledTimes(1);
+    d.resolve();
+    await p;
+    expect(store.closeAsked).toBe(false);
+  });
+
+  it("keeps the question up and says why when the shell refused", async () => {
+    close();
+    m.CloseDecided.mockRejectedValueOnce({ cause: { code: "params" } });
+    await store.decideClose("tray", false);
+    expect(store.closeAsked).toBe(true);
+    expect(store.closeBusy).toBe(false);
+    expect(store.toasts.length).toBe(1);
   });
 });

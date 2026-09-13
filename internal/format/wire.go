@@ -16,10 +16,22 @@ var (
 	ErrInvalid   = errors.New("format: invalid")
 	ErrTruncated = fmt.Errorf("%w: truncated", ErrInvalid)
 	ErrTrailing  = fmt.Errorf("%w: trailing bytes", ErrInvalid)
+	// ErrVersion: the structure decoded and, where it carries one, its
+	// checksum holds, but its format_version is not one this reader supports.
+	// It is an ErrInvalid like the rest — a v2 structure is not a well-formed
+	// v1 one — and the distinction matters where a reader recovers from
+	// damage: an envelope of an unsupported version is intact, not torn, so
+	// it is refused rather than treated as absent (docs/FORMAT.md §10, R33).
+	ErrVersion = fmt.Errorf("%w: unsupported format_version", ErrInvalid)
 )
 
 func invalidf(msg string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(msg, a...))
+}
+
+// versionf reports a format_version this reader does not support.
+func versionf(what string, got uint16) error {
+	return fmt.Errorf("%w: %s: format_version %d, want %d", ErrVersion, what, got, FormatVersion)
 }
 
 // reader decodes little-endian values from a byte slice. Errors are sticky:

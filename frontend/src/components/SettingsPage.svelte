@@ -4,6 +4,7 @@
   import { store } from "../lib/state.svelte";
   import { codeText } from "../lib/strings";
   import { minutesLabel } from "../lib/format";
+  import { closeActionLabel, closeChoices } from "../lib/closing";
   import SaveBar from "./SaveBar.svelte";
   import type { PendingItem } from "./SaveBar.svelte";
 
@@ -18,7 +19,7 @@
   // page); the page shows saved ⊕ draft and diffs the two for the bar
   // (APP.md §6, the save bar): dirty is derived, never stored, so an edit
   // put back by hand un-dirties itself.
-  type Key = "displayName" | "idleMinutes" | "absoluteMinutes" | "closeToTray" | "recoveryRecordPct" | "dictionaryBelow" | "theme";
+  type Key = "displayName" | "idleMinutes" | "absoluteMinutes" | "closeAction" | "recoveryRecordPct" | "dictionaryBelow" | "theme";
   const draft = $derived({ ...(s ?? ({} as SettingsView)), ...(store.settingsDraft as Partial<SettingsView>) } as SettingsView);
 
   function edit<K extends Key>(key: K, value: SettingsView[K]) {
@@ -37,7 +38,7 @@
     displayName: "Vault name",
     idleMinutes: "Idle lock",
     absoluteMinutes: "Absolute lock",
-    closeToTray: "When the window closes",
+    closeAction: "When the window closes",
     recoveryRecordPct: "Recovery record",
     dictionaryBelow: "Dictionary",
     theme: "Theme",
@@ -47,7 +48,7 @@
     switch (key) {
       case "idleMinutes": return v === 0 ? "default (10 minutes)" : minutesLabel(v as number);
       case "absoluteMinutes": return v === 0 ? "default (1 hour)" : minutesLabel(v as number);
-      case "closeToTray": return v === "hide" ? "keep the window" : "free the window";
+      case "closeAction": return closeActionLabel(v);
       case "recoveryRecordPct": return `${v}%`;
       case "dictionaryBelow": return dictChoices.find((c) => c[0] === v)?.[1] ?? String(v);
       case "theme": return v === "system" ? "follow Windows" : String(v);
@@ -132,10 +133,9 @@
             </select></div>
           </div>
           <div class="setrow">
-            <div class="lab"><b>When the window closes</b><span>Enfold stays in the tray either way.</span></div>
-            <div class="ctl"><select class="input" value={draft.closeToTray} onchange={(e) => edit("closeToTray", str(e))}>
-              <option value="destroy">Free the window's memory</option>
-              <option value="hide">Keep the window in memory</option>
+            <div class="lab"><b>When the window closes</b><span>The close button asks until this says otherwise. Going to the tray leaves every archive's page, as closing the window always does; Enfold reopens from the tray at the list.</span></div>
+            <div class="ctl"><select class="input" value={draft.closeAction} onchange={(e) => edit("closeAction", str(e))}>
+              {#each closeChoices as [v, label] (v)}<option value={v}>{label}</option>{/each}
             </select></div>
           </div>
         </div>

@@ -42,6 +42,31 @@ func (c *Core) dragRoot() string {
 	return filepath.Join(c.deps.DataDir, "drag")
 }
 
+// refuseStagingRoot is the sanity assertion on that root (APP.md §3, the
+// outside review of 2026-09-13). Nobody chooses this path — the shell
+// stages under %TEMP%\Enfold\drag — so this is not a refusal a user is ever
+// meant to meet; it is the assertion that the one place Enfold writes
+// plaintext into by itself can never reach the vault. A root that IS the
+// data folder, or that stands above the data folder or above a vault kept
+// elsewhere, is refused, since the staged tree could then be written down
+// onto them.
+//
+// A folder of its own INSIDE the data folder is allowed, and is what a
+// caller naming no root gets: every staged file lands under
+// <root>\<id>\items, two levels down, so it can never land on vault.eks
+// beside it. That is the one place this differs from the refusal
+// refuseVaultPlaces makes for a source or an extract's destination, where
+// the path the user gave is written into directly.
+func (c *Core) refuseStagingRoot(root string) *Error {
+	target := resolveLinks(root)
+	for _, place := range c.vaultPlaces() {
+		if insideDir(target, place) {
+			return coded(CodeSourceIsVault)
+		}
+	}
+	return nil
+}
+
 // dragIDs parses a drag's selection. An empty selection is params, as it
 // is for an extract; so is the root, which a drag never offers — the
 // explicit Extract all is for the whole archive, since staging serves it
@@ -194,6 +219,11 @@ func (c *Core) BeginDragOut(archiveID string, recordIDs []string, window uintptr
 	if c.deps.Drag == nil {
 		return nil, coded(CodeDragUnsupported)
 	}
+	root := c.dragRoot()
+	if e := c.refuseStagingRoot(root); e != nil {
+		c.log("drag out: the staging root is Enfold's own place; refused")
+		return nil, e
+	}
 	c.mu.Lock()
 	items, e := dragPlan(oa.merge(), ids)
 	c.mu.Unlock()
@@ -217,7 +247,7 @@ func (c *Core) BeginDragOut(archiveID string, recordIDs []string, window uintptr
 		}
 	}
 	h, err := c.deps.Drag(dragout.Options{
-		Root: c.dragRoot(), Window: window, Items: dragItems(items),
+		Root: root, Window: window, Items: dragItems(items),
 		Extract: d.extract, OnPhase: d.onPhase, Log: c.log,
 	})
 	if err != nil {

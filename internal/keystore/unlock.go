@@ -4,9 +4,11 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"runtime"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
 	"github.com/dreamxwarden01/enfold/internal/kdf"
+	"github.com/dreamxwarden01/enfold/internal/secmem"
 )
 
 // Unlocked is a keystore whose VMK is in memory. It exists for slot
@@ -16,12 +18,18 @@ import (
 // An Unlocked is bound to the VMK generation it opened: after a rotation —
 // its own or another handle's — every mutation and Session refuses with
 // ErrStale, because its VMK no longer wraps anything in the file.
+//
+// The two secrets it retains are the two SCOPE.md names beside the KWK, so
+// both live in secmem pages: outside the Go heap, locked out of the pagefile
+// and erased by Close. Every derivation below still takes them as ordinary
+// values — the copy a call makes is the library's, and the wrapper never
+// claimed those.
 type Unlocked struct {
-	k    *Keystore
-	vmk  [32]byte
-	gen  uint64   // the generation this VMK belongs to
-	slot [16]byte // the recipient ID of the slot that opened the vault
-	// kp is the vault's K_P as this handle read it from the kind-2 secrets
+	k      *Keystore
+	vmkBuf *secmem.Buffer
+	gen    uint64   // the generation this VMK belongs to
+	slot   [16]byte // the recipient ID of the slot that opened the vault
+	// kpBuf is the vault's K_P as this handle read it from the kind-2 secrets
 	// record, nil while the header's entangle is 0. It is present whatever
 	// credential opened the vault — which is what lets a key be enrolled, the
 	// password changed and the VMK rotated from a recovery-key or standalone
@@ -29,9 +37,48 @@ type Unlocked struct {
 	// this handle's copy and no more: a change on another handle over the same
 	// file replaces the record without moving the generation, so every wrap
 	// re-reads the record (Unlocked.entangleKey) instead of trusting this.
-	kp       *[32]byte
+	kpBuf    *secmem.Buffer
 	tampered error // ErrTampered when the slot region failed R25
 	closed   bool
+}
+
+// newUnlocked moves the VMK — and the vault's K_P, where the header has one —
+// into locked pages and zeroes the caller's copies, so that the handle's are
+// the only ones the package keeps. The lifetimes do not change: these live
+// until Close, as the struct fields they replace did.
+func newUnlocked(k *Keystore, vmk *[32]byte, gen uint64, slot [16]byte, kp *[32]byte) *Unlocked {
+	u := &Unlocked{k: k, vmkBuf: secmem.New(kdf.KeySize), gen: gen, slot: slot}
+	copy(u.vmkBuf.Bytes(), vmk[:])
+	kdf.Zero(vmk[:])
+	if kp != nil {
+		u.kpBuf = secmem.New(kdf.KeySize)
+		copy(u.kpBuf.Bytes(), kp[:])
+		kdf.Zero(kp[:])
+	}
+	return u
+}
+
+// vmk is the VMK as the derivations take it: a copy on the caller's frame, the
+// retained one staying in its page. Zero once the handle is closed.
+func (u *Unlocked) vmk() [32]byte {
+	var v [32]byte
+	copy(v[:], u.vmkBuf.Bytes())
+	runtime.KeepAlive(u.vmkBuf)
+	return v
+}
+
+// kp points into the page K_P lives in, nil while the header's entangle is 0.
+// The pointer is only as live as the handle: whatever holds it keeps u
+// reachable, or the cleanup can release the pages under it.
+func (u *Unlocked) kp() *[32]byte {
+	if u.kpBuf == nil {
+		return nil
+	}
+	b := u.kpBuf.Bytes()
+	if len(b) < kdf.KeySize {
+		return nil // closed
+	}
+	return (*[kdf.KeySize]byte)(b)
 }
 
 // entangledKey is kdf.EntangledKey behind a variable so that a test can count
@@ -171,7 +218,7 @@ func (k *Keystore) Unlock(c Credential) (*Unlocked, error) {
 	}
 
 	k.reg = reg
-	u := &Unlocked{k: k, vmk: vmk, gen: gen, slot: opened.RecipientID, kp: kept}
+	u := newUnlocked(k, &vmk, gen, opened.RecipientID, kept)
 	if err := reg.VerifySlotRegion(k.region); err != nil {
 		u.tampered = fmt.Errorf("%w: %v", ErrTampered, err)
 	}
@@ -222,25 +269,36 @@ func (u *Unlocked) Session() (*Session, error) {
 		return nil, err
 	}
 	vaultID := u.k.sb.VaultID
-	return &Session{
+	vmk := u.vmk()
+	defer kdf.Zero(vmk[:])
+	s := &Session{
 		k:    u.k,
 		gen:  u.gen,
-		kwk:  kdf.KWK(u.vmk, vaultID),
-		meta: kdf.MetadataKey(u.vmk, vaultID),
-		db:   kdf.DBKey(u.vmk, vaultID),
-	}, nil
+		kwk:  secmem.New(kdf.KeySize),
+		meta: kdf.MetadataKey(vmk, vaultID),
+		db:   kdf.DBKey(vmk, vaultID),
+	}
+	// HKDF hands its output back on the Go heap, so the retained copy is the
+	// page and HKDF's is zeroed here. meta and db stay ordinary slices —
+	// SCOPE.md's line names three secrets and neither is one — and Lock zeroes
+	// them where Go allows it.
+	kwk := kdf.KWK(vmk, vaultID)
+	copy(s.kwk.Bytes(), kwk)
+	kdf.Zero(kwk)
+	return s, nil
 }
 
-// Close destroys the VMK and the vault's K_P.
+// Close destroys the VMK and the vault's K_P: their pages are erased and given
+// back, so nothing of either is left for the pager to find.
 func (u *Unlocked) Close() {
 	if u.closed {
 		return
 	}
 	u.closed = true
-	kdf.Zero(u.vmk[:])
-	if u.kp != nil {
-		kdf.Zero(u.kp[:])
-		u.kp = nil
+	u.vmkBuf.Free()
+	if u.kpBuf != nil {
+		u.kpBuf.Free()
+		u.kpBuf = nil
 	}
 }
 
@@ -250,9 +308,12 @@ func (u *Unlocked) Close() {
 // and every operation refuses with ErrStale: derive a new Session from a
 // fresh Unlocked.
 type Session struct {
-	k      *Keystore
-	gen    uint64
-	kwk    []byte
+	k   *Keystore
+	gen uint64
+	// kwk is the one key of the three SCOPE.md keeps off the Go heap that
+	// lives as long as the session; meta and db are the ordinary slices the
+	// same line leaves to best-effort zeroing.
+	kwk    *secmem.Buffer
 	meta   []byte
 	db     []byte
 	locked bool
@@ -354,7 +415,12 @@ func (s *Session) UnwrapArchiveKey(archiveID [16]byte, v *format.VersionRecord) 
 	if err := s.live(); err != nil {
 		return [32]byte{}, err
 	}
-	key, err := kdf.UnwrapKey(s.kwk, v.WrappedArchiveKey, v.WrapNonce, format.ArchiveKeyAAD(archiveID, v.KID))
+	// The AEAD copies the key into an AES key schedule, which is Go heap the
+	// wrapper does not reach — SCOPE.md says so, and this is where it happens.
+	// KeepAlive because the slice points outside the heap: the collector
+	// cannot see it in the call, and the cleanup would free the pages.
+	key, err := kdf.UnwrapKey(s.kwk.Bytes(), v.WrappedArchiveKey, v.WrapNonce, format.ArchiveKeyAAD(archiveID, v.KID))
+	runtime.KeepAlive(s.kwk)
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("%w: archive %x version %x", ErrAuth, archiveID, v.KID)
 	}
@@ -366,7 +432,9 @@ func (s *Session) WrapArchiveKey(archiveID, kid [16]byte, key [32]byte) (wrapped
 	if err := s.live(); err != nil {
 		return wrapped, nonce, err
 	}
-	return kdf.WrapKey(s.kwk, key, format.ArchiveKeyAAD(archiveID, kid))
+	wrapped, nonce, err = kdf.WrapKey(s.kwk.Bytes(), key, format.ArchiveKeyAAD(archiveID, kid))
+	runtime.KeepAlive(s.kwk) // as in UnwrapArchiveKey: the pages outlive the call
+	return wrapped, nonce, err
 }
 
 // Lock destroys the cached keys. The Session is unusable afterwards.
@@ -375,8 +443,8 @@ func (s *Session) Lock() {
 		return
 	}
 	s.locked = true
-	kdf.Zero(s.kwk)
+	s.kwk.Free() // erases the page, then gives it back
 	kdf.Zero(s.meta)
 	kdf.Zero(s.db)
-	s.kwk, s.meta, s.db = nil, nil, nil
+	s.meta, s.db = nil, nil
 }

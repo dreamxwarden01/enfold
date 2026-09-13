@@ -22,6 +22,7 @@ import { opErrorLine, opLabel, reclaimedLine } from "./ops";
 import type { Outcome } from "./outcome";
 import { answer as answerDrag, beginFlight, land, ownDrop } from "./dragout";
 import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
+import type { Decision } from "./closing";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
 
@@ -168,6 +169,12 @@ class Store {
   // and not whether a secret was asked (APP.md §2.2, §13).
   unlockMethod = $state("");
   drop = $state<Drop | null>(null);
+  // The close question (APP.md §2.4, ruled 2026-09-13): the shell cancelled
+  // a close — the button, Alt+F4, the taskbar's close — and asked the page
+  // to ask. closeBusy is the answer on its way back to the shell; the
+  // dialog stays put until the window goes.
+  closeAsked = $state(false);
+  closeBusy = $state(false);
   // The drag out of the window in flight (APP.md §3, lib/dragout.ts): the
   // ids the gesture took and the folder they left, from the press-and-move
   // until Shell.DragOut has answered and, for a self-drop, the WebView's
@@ -338,6 +345,14 @@ class Store {
     Events.On("secret.refused", (e) => {
       const r = e.data as { code: string };
       this.toast(codeText(r.code), "error");
+    });
+    // The close the shell cancelled (APP.md §2.4). No payload: the question
+    // is the same one every time. A second one arriving while the question
+    // is up is nothing — the shell cancels every close it does not let
+    // through, so pressing the button twice must not stack two dialogs nor
+    // restart the one already asking.
+    Events.On("shell.close", () => {
+      this.closeAsked = true;
     });
     setInterval(() => {
       this.now = Date.now();
@@ -575,6 +590,32 @@ class Store {
       this.settings = await Settings.Get();
     } catch {
       /* the defaults stand */
+    }
+  }
+
+  // dismissClose is Esc on the close question: the window stays and the
+  // shell is told nothing at all (APP.md §2.4, §6).
+  dismissClose(): void {
+    if (!this.closeBusy) this.closeAsked = false;
+  }
+
+  // decideClose answers it. With remember the shell writes CloseAction
+  // through the core's settings before it acts, so the settings page is
+  // read again here — a settings save emits no event of its own, and the
+  // row must not still show *Ask each time*. The window is destroyed on
+  // the way to the tray and the process ends on a quit, so nothing waits
+  // on that read.
+  async decideClose(action: Decision, remember: boolean): Promise<void> {
+    if (this.closeBusy) return;
+    this.closeBusy = true;
+    try {
+      await Shell.CloseDecided(action, remember);
+      this.closeAsked = false;
+      if (remember) void this.refreshSettings();
+    } catch (e) {
+      this.toast(codeText(errorOf(e).code), "error");
+    } finally {
+      this.closeBusy = false;
     }
   }
 

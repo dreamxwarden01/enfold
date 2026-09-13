@@ -455,6 +455,21 @@ export enum Code {
     CodeSourceChanged = "file.source_changed",
 
     /**
+     * CodeSourceIsVault: the call named Enfold's own place (APP.md §3, the
+     * outside review of 2026-09-13) — a source of an add or a replace, the
+     * destination of an extract, or a drag's staging root that is the data
+     * folder, lies inside it, stands above it, or is the vault file kept
+     * elsewhere. A page under someone else's control could otherwise have
+     * the core copy vault.eks into an archive that page can read and
+     * extract, and the keystore's lock leaves the file readable by design
+     * (keystore/lock_windows.go), so the refusal is the core's. The whole
+     * call is refused, never one item of it: this is not an outcome the
+     * rest of a batch is written around. "Enfold's own folder and the vault
+     * file are not yours to put in an archive, or to write over."
+     */
+    CodeSourceIsVault = "archive.source_is_vault",
+
+    /**
      * The two refusals of an extract's destination (APP.md §3, ruled
      * 2026-09-10). R20 holds Windows' rules on the way in, so the name
      * itself fits a Windows volume; what cannot be known beforehand is the
@@ -467,6 +482,20 @@ export enum Code {
      * this long."
      */
     CodeFileNameRefused = "file.name_refused",
+
+    /**
+     * CodeDestinationLink: a directory of the extracted tree would be
+     * entered and the thing standing in its place is a reparse point — a
+     * junction or a symbolic link — so entering it would write outside the
+     * destination the user chose, and possibly into the data folder (APP.md
+     * §3, the outside review of 2026-09-13). The item fails and its whole
+     * subtree goes with it, reported once for its top, as a refused
+     * directory's is. A new code rather than file.kind_mismatch, whose copy
+     * is about a file and a folder replacing one another inside the archive
+     * and would say nothing true here. "A link stands where this folder
+     * would go. An extract never follows one out of its destination."
+     */
+    CodeDestinationLink = "file.destination_link",
 
     /**
      * CodeFilePathRefused: the temporary — a fixed short name in the same
@@ -854,9 +883,9 @@ export interface Settings {
     "displayName": string;
 
     /**
-     * destroy | hide
+     * ask | tray | quit
      */
-    "closeToTray": string;
+    "closeAction": string;
 
     /**
      * system | light | dark

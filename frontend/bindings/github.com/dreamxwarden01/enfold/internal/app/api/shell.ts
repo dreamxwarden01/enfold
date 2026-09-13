@@ -14,6 +14,19 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as app$0 from "../models.js";
 
+/**
+ * CloseDecided answers the close question the page asked when the window's
+ * close was cancelled (APP.md §2.4, ruled 2026-09-13). action is "tray" or
+ * "quit" — never "ask", which is what was being asked — and remember
+ * writes it to Settings.CloseAction through the core, exactly as the
+ * settings page's own save does, so the next close does not ask. The
+ * window then goes to the tray, leaving every page, or the shell's Quit
+ * runs.
+ */
+export function CloseDecided(action: string, remember: boolean): $CancellablePromise<void> {
+    return $Call.ByID(2169987085, action, remember);
+}
+
 export function CloseWindow(): $CancellablePromise<void> {
     return $Call.ByID(3606391931);
 }

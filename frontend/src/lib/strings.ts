@@ -142,6 +142,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeMoveIntoSelf]: "A folder cannot be moved into itself, or into anything inside it.",
   [Code.CodeTreeBounds]: "That would put it too deep, or give it a name too long to store: at most 255 folders down, and 4 096 bytes of joined name.",
   [Code.CodeSourceChanged]: "The source file changed while it was being read.",
+  [Code.CodeSourceIsVault]: "Enfold's own folder and the vault file are not yours to put in an archive, or to write over. Choose somewhere else.",
   [Code.CodeContentHash]: "The file's content does not match its record.",
   [Code.CodeNoSpace]: "Not enough space.",
   [Code.CodeDictInUse]: "The dictionary is still in use.",
@@ -158,6 +159,7 @@ export const codeCopy: Record<CodeKey, string> = {
   // final name refused on placement, where a shorter one may do, and the
   // folder's path, where no name helps. The page asks per record in its
   // own words (refusedCopy); these are the codes' lines for a list.
+  [Code.CodeDestinationLink]: "A link stands where this folder would go. An extract never follows one out of its destination.",
   [Code.CodeFileNameRefused]: "The destination cannot take a name this long.",
   [Code.CodeFilePathRefused]: "The folder's path is too long for this destination.",
   // The drag out of the window (APP.md §3): no native drag can run here,
@@ -340,6 +342,21 @@ export const listCopy = {
 // on no evidence.
 export const bootCopy = {
   retry: "Retry",
+};
+
+// The close question (APP.md §2.4, ruled 2026-09-13): the close button
+// never means "to the tray" until the user has said so, so the first close
+// is cancelled and this is asked — one sentence, the two answers, and the
+// tick that makes the answer the setting. Esc is neither: the window
+// stays. The quiet line is there because the tick is a setting and the
+// user should know where to undo it.
+export const closeCopy = {
+  title: "Close Enfold?",
+  body: "Keep it running in the tray, ready to open, or quit?",
+  tray: "Keep running in the tray",
+  quit: "Quit",
+  remember: "Remember my choice",
+  inSettings: "You can change this in Settings.",
 };
 
 // The Archives list (APP.md §6, ruled 2026-09-10): its rows and header

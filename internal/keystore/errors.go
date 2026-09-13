@@ -94,6 +94,11 @@ var (
 	ErrEscrowMismatch = errors.New("keystore: the kept recovery key does not match its slot")
 	// ErrParams: an argument the package refuses.
 	ErrParams = errors.New("keystore: invalid parameters")
+	// ErrSeqExhausted: the superblock's seq is at 2^64 − 1 and the commit
+	// would have to wrap it to 0, which would make the new state lose to the
+	// old one. The writer refuses before anything is written (§4); the file
+	// is untouched and the handle stays usable for everything but a commit.
+	ErrSeqExhausted = errors.New("keystore: the superblock sequence is exhausted")
 )
 
 // corrupt wraps a structural failure so that errors.Is(err, format.ErrInvalid)

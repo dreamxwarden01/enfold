@@ -900,6 +900,16 @@ func TestScavengeVerdict(t *testing.T) {
 			scavengeFacts{reparse: true, haveManifest: true, state: StateDone, age: 10 * hour, maxAge: hour}, false},
 		{"a live drag is never swept",
 			scavengeFacts{haveManifest: true, state: StateLive, age: 10 * hour, maxAge: hour}, false},
+		{"a live drag whose process is running is never swept, at any age",
+			scavengeFacts{haveManifest: true, state: StateLive, owner: ownerAlive, age: 1000 * hour, maxAge: hour}, false},
+		{"a live drag whose process is gone is swept under the ordinary age rule",
+			scavengeFacts{haveManifest: true, state: StateLive, owner: ownerGone, age: 10 * hour, maxAge: hour}, true},
+		{"a live drag whose process is gone is still given the age",
+			scavengeFacts{haveManifest: true, state: StateLive, owner: ownerGone, age: 30 * time.Minute, maxAge: hour}, false},
+		{"a live drag whose process is gone is still this process's while it watches",
+			scavengeFacts{haveManifest: true, state: StateLive, owner: ownerGone, active: true, age: 10 * hour, maxAge: hour}, false},
+		{"a live drag with no owner to ask after is left alone, at any age",
+			scavengeFacts{haveManifest: true, state: StateLive, owner: ownerUnknown, age: 10000 * hour, maxAge: hour}, false},
 		{"a drag this process still watches is left to it",
 			scavengeFacts{haveManifest: true, state: StateHandedOut, active: true, age: 10 * hour, maxAge: hour}, false},
 		{"younger than the limit",
@@ -1028,6 +1038,128 @@ func TestScavengeLeavesALiveStageAlone(t *testing.T) {
 	s.finish()
 	if rep := Scavenge(parent, time.Hour, nil); rep.Removed != 1 {
 		t.Fatalf("the sweep removed %d folder(s) after the stage let go, want 1", rep.Removed)
+	}
+}
+
+// answerOwner makes the sweep's question about a manifest's owner answer
+// the same way every time, so that a crash mid-drag can be staged without
+// one.
+func answerOwner(t *testing.T, state ownerState) {
+	t.Helper()
+	prev := ownerOf
+	ownerOf = func(Manifest) ownerState { return state }
+	t.Cleanup(func() { ownerOf = prev })
+}
+
+// TestAManifestNamesItsOwner: the folder records who is dragging, so that a
+// later sweep can ask whether they are still there. A manifest from a build
+// that recorded no start time still parses, and reads as an owner nobody
+// can ask after — which is the answer the old rule was built on.
+func TestAManifestNamesItsOwner(t *testing.T) {
+	isolateStages(t)
+	s, err := newStage(Options{Root: t.TempDir(), Items: []Item{{Name: "x.bin"}}, Extract: writeItems(nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.finish()
+	m, ok := ReadManifest(s.root)
+	if !ok {
+		t.Fatal("a new staging folder has no manifest of ours")
+	}
+	if m.PID != os.Getpid() {
+		t.Fatalf("manifest pid = %d, want %d", m.PID, os.Getpid())
+	}
+	if _, state := probeProcess(os.Getpid()); state == ownerAlive && m.PIDStarted == 0 {
+		t.Error("the platform gives this process a start time and the manifest recorded none")
+	}
+	// Every transition writes the owner out again, so a folder that has
+	// been handed out still names the process that holds it.
+	s.setState(StateHandedOut)
+	if after, _ := ReadManifest(s.root); after.PID != m.PID || after.PIDStarted != m.PIDStarted {
+		t.Fatalf("the owner changed across a transition: %d/%d, was %d/%d", after.PID, after.PIDStarted, m.PID, m.PIDStarted)
+	}
+
+	// A version 1 manifest: no pidStarted at all, which must parse and read
+	// as unknown rather than as a match.
+	old := t.TempDir()
+	blob, err := json.Marshal(map[string]any{
+		"tool": manifestTool, "version": 1, "pid": m.PID,
+		"created": s.created, "state": StateLive, "files": []string{"items/x.bin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old, manifestName), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v1, ok := ReadManifest(old)
+	if !ok {
+		t.Fatal("a manifest an older build wrote was refused as not ours")
+	}
+	if v1.PIDStarted != 0 || v1.PID != m.PID || v1.State != StateLive {
+		t.Fatalf("an older manifest read as %+v", v1)
+	}
+	// A manifest naming no process at all can never be matched to one.
+	if got := manifestOwner(Manifest{Tool: manifestTool, State: StateLive}); got != ownerUnknown {
+		t.Fatalf("a manifest with no pid read as owner %v, want unknown", got)
+	}
+}
+
+// TestTheSweepTakesALiveFolderWhoseOwnerDied is the hole this closes: a
+// process killed mid-drag leaves a folder saying "live", and the old rule
+// left it there forever with plaintext in it. Only a known-dead owner opens
+// the folder to the sweep: a living one holds it at any age, and an owner
+// nobody can ask after holds it at any age too.
+func TestTheSweepTakesALiveFolderWhoseOwnerDied(t *testing.T) {
+	isolateStages(t)
+	now := time.Now()
+	mk := func(t *testing.T, age time.Duration) string {
+		t.Helper()
+		root := t.TempDir()
+		dir := filepath.Join(root, "aaaaaaaa")
+		if err := os.MkdirAll(filepath.Join(dir, itemsDirName), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, itemsDirName, "secret.txt"), []byte("plaintext"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteManifest(dir, Manifest{
+			Tool: manifestTool, Version: manifestVersion, PID: 4242, PIDStarted: 99,
+			State: StateLive, Created: now.Add(-age), Files: []string{"items/secret.txt"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	cases := []struct {
+		name  string
+		owner ownerState
+		age   time.Duration
+		gone  bool
+	}{
+		{"the process that was dragging is gone", ownerGone, 2 * time.Hour, true},
+		{"gone, but the folder is younger than the age", ownerGone, 5 * time.Minute, false},
+		{"the process is still dragging", ownerAlive, 100 * time.Hour, false},
+		{"nobody can be asked, so the folder stays however old it is", ownerUnknown, 10000 * time.Hour, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			answerOwner(t, tc.owner)
+			root := mk(t, tc.age)
+			lg := &testLog{}
+			rep := scavenge(root, time.Hour, now, sweepMode{retry: true}, lg.printf)
+			want := 0
+			if tc.gone {
+				want = 1
+			}
+			if rep.Removed != want {
+				t.Fatalf("the sweep removed %d, want %d:\n%s", rep.Removed, want, lg.text())
+			}
+			_, err := os.Stat(filepath.Join(root, "aaaaaaaa"))
+			if tc.gone != os.IsNotExist(err) {
+				t.Fatalf("the folder's presence disagrees with the verdict: %v", err)
+			}
+		})
 	}
 }
 

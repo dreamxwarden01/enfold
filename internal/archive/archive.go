@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -167,12 +168,17 @@ func ReadEnvelope(path string) (*format.Envelope, error) {
 // Open opens the archive at path with the first of keys that opens its
 // index — the one the envelope names first, then the others (R33), which is
 // how an interrupted rotation is recovered from. An envelope that does not
-// decode — checksum, magic or version — is treated as absent when the caller
-// supplied Options.ArchiveID, since rotation rewrites it in place and a crash
-// inside that write must not cost the archive: every key is tried at that id
-// and EnvelopeStale then says the envelope is owed a rewrite. It never writes
-// to the file and never modifies keys. A writable handle takes an exclusive
-// lock on the file and needs Options.DeviceID.
+// decode — a failed checksum, or bad magic — is treated as absent when the
+// caller supplied Options.ArchiveID, since rotation rewrites it in place and a
+// crash inside that write must not cost the archive: every key is tried at
+// that id and EnvelopeStale then says the envelope is owed a rewrite. An
+// envelope that *does* decode but names a format_version this reader does not
+// support is a different thing and is refused with format.ErrVersion: it is
+// intact rather than torn, so recovering from it — and repairing it into this
+// version at the next Verify — would be an older program rewriting a newer
+// file (§10, R33). It never writes to the file and never modifies keys. A
+// writable handle takes an exclusive lock on the file and needs
+// Options.DeviceID.
 //
 // One handle per path per process (doc.go "Handles"): a path this process
 // already holds a writable handle on is refused with ErrBusy, whether the
@@ -252,6 +258,12 @@ func (a *Archive) load(keys []Key) error {
 	switch {
 	case envErr == nil:
 		a.env, a.archiveID = env, env.ArchiveID
+	case errors.Is(envErr, format.ErrVersion):
+		// Intact, and of a version this reader does not support: refused
+		// here, before any key is tried. The recovery below is for damage,
+		// and entering it would end in a Verify rewriting a newer file's
+		// envelope in this version (§10, R33).
+		return envErr
 	case a.opts.ArchiveID != [16]byte{}:
 		env, a.env, a.archiveID = nil, nil, a.opts.ArchiveID
 	default:
@@ -278,7 +290,7 @@ func (a *Archive) load(keys []Key) error {
 	var index *format.Index
 	for _, k := range candidateOrder(keys, env) {
 		indexKey := kdf.ArchiveIndexKey(k.Key, a.archiveID)
-		plain, err := openIndex(indexKey, ct, sb, a.archiveID, k.KID)
+		plain, seq, err := openIndex(indexKey, ct, sb, a.archiveID, k.KID)
 		if err != nil {
 			kdf.Zero(indexKey)
 			continue
@@ -289,6 +301,13 @@ func (a *Archive) load(keys []Key) error {
 			kdf.Zero(indexKey)
 			return err
 		}
+		// The state's number, not the copy's. A copy retired onto a state
+		// newer than its own number (R31, §4) opened the index under seq + 1,
+		// and this handle continues from there: sealing the next commit at
+		// the copy's number would put two different states under one number,
+		// and an older copy of the file could then be replayed as the
+		// current one (§11).
+		sb.Seq = seq
 		a.kid, a.indexKey = k.KID, indexKey
 		a.wrapKey = kdf.ArchiveWrapKey(k.Key, a.archiveID)
 		break
@@ -319,7 +338,10 @@ func (a *Archive) load(keys []Key) error {
 		a.loser = []extent{{Off: lsb.IndexOff, Len: lsb.IndexLen + format.TagSize}, {Off: lsb.FreeMapOff, Len: lsb.FreeMapLen}}
 		lct := make([]byte, lsb.IndexLen+format.TagSize)
 		if _, err := a.f.ReadAt(lct, int64(lsb.IndexOff)); err == nil {
-			if plain, err := openIndex(a.indexKey, lct, lsb, a.archiveID, a.kid); err == nil {
+			// The number this one authenticated under is nobody's to adopt:
+			// the losing copy is read for the extents it holds, never for
+			// the state this handle writes from.
+			if plain, _, err := openIndex(a.indexKey, lct, lsb, a.archiveID, a.kid); err == nil {
 				lidx, err := format.DecodeIndex(plain)
 				kdf.Zero(plain)
 				if err == nil {
@@ -488,18 +510,46 @@ func sealIndex(key, plain []byte, sb *format.ArchiveSuperblock, archiveID, kid [
 	return sealed, [format.TagSize]byte(sealed[len(plain):]), nil
 }
 
-// openIndex decrypts ct ‖ tag under key. A failure is reported as ErrKey:
-// wrong key, wrong kid, or a modified index are indistinguishable.
-func openIndex(key, ct []byte, sb *format.ArchiveSuperblock, archiveID, kid [16]byte) ([]byte, error) {
+// openIndex decrypts ct ‖ tag under key and reports the sequence number the
+// index authenticated under — the state's number, which is the copy's own or
+// one more. A failure is reported as ErrKey: wrong key, wrong kid, or a
+// modified index are indistinguishable.
+//
+// The AAD binds the seq of the superblock that publishes the index (§11), and
+// an index opens under the number it was sealed with — or under one more than
+// the copy's own, which is R31's retirement: a writer that must put both
+// copies on one state gives the losing copy that state's superblock at one
+// less, since two valid copies never carry equal seq (§4). A fresh file's
+// copy B and a compacted file's are the same shape. The tolerance runs one
+// way only — a copy may name a state one commit *newer* than its own number,
+// never an older one — so an index can never be promoted to a higher seq than
+// it was sealed under, which is what putting seq in the AAD is for.
+//
+// Exactly two GCM attempts per key, the second only after the first failed to
+// authenticate, and never past 2^64 − 1. The caller adopts the number
+// returned: a writer continues from the state's number, never from the
+// copy's, so the next commit cannot seal a second state under a number an
+// older copy already holds (§11, "the state's number").
+func openIndex(key, ct []byte, sb *format.ArchiveSuperblock, archiveID, kid [16]byte) ([]byte, uint64, error) {
 	g, err := indexAEAD(key)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	plain, err := g.Open(nil, sb.IndexNonce[:], ct, sb.IndexAAD(archiveID, kid))
-	if err != nil {
-		return nil, ErrKey
+	if err == nil {
+		return plain, sb.Seq, nil
 	}
-	return plain, nil
+	retired := *sb
+	seq, serr := nextSeq(sb.Seq)
+	if serr != nil {
+		return nil, 0, ErrKey
+	}
+	retired.Seq = seq
+	plain, err = g.Open(nil, sb.IndexNonce[:], ct, retired.IndexAAD(archiveID, kid))
+	if err != nil {
+		return nil, 0, ErrKey
+	}
+	return plain, seq, nil
 }
 
 // usable refuses a closed or broken Archive. Caller holds a.mu.
@@ -520,6 +570,24 @@ func (a *Archive) writable() error {
 	}
 	if a.opts.ReadOnly {
 		return ErrReadOnly
+	}
+	return nil
+}
+
+// committable refuses what writable refuses, and an archive whose sequence
+// has no room for another commit (§4). It gates every operation that ends in
+// a flip — a transaction, a publish, a compaction, a key rotation — at the
+// point where the operation begins rather than at the flip, because a
+// transaction writes file content into free extents as it goes: Abort gives
+// back what it appended and cannot unwrite an interior extent it filled, so
+// "nothing is written" has to be decided before the first byte. The guard in
+// commit stays as the last line. Caller holds a.mu.
+func (a *Archive) committable() error {
+	if err := a.writable(); err != nil {
+		return err
+	}
+	if _, err := nextSeq(a.sb.Seq); err != nil {
+		return err
 	}
 	return nil
 }
@@ -582,6 +650,19 @@ func (a *Archive) Seq() uint64 {
 		return 0
 	}
 	return a.sb.Seq
+}
+
+// nextSeq is the sequence number after seq, or ErrSeqExhausted at the end of
+// the range: seq counts commits and never wraps, since a wrapped counter would
+// make the new state lose to the old one, so a writer that would pass
+// 2^64 − 1 refuses the commit instead (FORMAT.md §4). No file reaches it; the
+// guard is what keeps "never wraps" a property of the writers and not of the
+// arithmetic.
+func nextSeq(seq uint64) (uint64, error) {
+	if seq == math.MaxUint64 {
+		return 0, fmt.Errorf("%w: the superblock sequence is at 2^64 − 1", ErrSeqExhausted)
+	}
+	return seq + 1, nil
 }
 
 // Stat's count is live files only: a directory is a record of its own (R39)

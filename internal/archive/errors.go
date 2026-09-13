@@ -66,6 +66,12 @@ var (
 	ErrStalePlan = errors.New("archive: the plan does not fit the archive's state")
 	// ErrNoSpace: the file would exceed the format's bounds.
 	ErrNoSpace = errors.New("archive: size limit")
+	// ErrSeqExhausted: the superblock's seq is at 2^64 − 1 and the commit
+	// would have to wrap it to 0, which would make the new state lose to the
+	// old one. The writer refuses before anything is written (FORMAT.md §4);
+	// nothing in the file changes and the archive stays usable, read and
+	// write alike, for everything but a commit.
+	ErrSeqExhausted = errors.New("archive: the superblock sequence is exhausted")
 	// ErrParams: an argument the package refuses.
 	ErrParams = errors.New("archive: invalid parameters")
 	// ErrInternal: an invariant this package maintains was found broken —

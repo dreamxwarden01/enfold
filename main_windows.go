@@ -28,6 +28,7 @@ import (
 	"github.com/dreamxwarden01/enfold/internal/app/pivcards"
 	"github.com/dreamxwarden01/enfold/internal/brand"
 	"github.com/dreamxwarden01/enfold/internal/dragout"
+	"github.com/dreamxwarden01/enfold/internal/secmem"
 )
 
 //go:embed all:frontend/dist
@@ -67,6 +68,12 @@ type shell struct {
 	quitMu   sync.Mutex
 	quitting bool
 	settings func() app.Settings
+	// ours marks a close the shell is performing itself — the page asking
+	// to go to the tray (CloseWindow), the close question answered *tray*,
+	// and the quit's own — so the WindowClosing gate lets it through
+	// without asking (APP.md §2.4). It is set before the close and taken
+	// by the gate, one close each.
+	ours atomic.Bool
 }
 
 // secretRefused tells the page that a submitted secret was not accepted
@@ -83,6 +90,8 @@ func main() {
 	}
 	logger := openLog(dataDir)
 	defer logger.close()
+	excludeFromWER(logger.printf) // the other half of the SetErrorMode above
+	secmem.Log = logger.printf    // a page the kernel would not lock is worth one line here
 
 	s := &shell{log: logger.printf}
 	core, err := app.New(app.Deps{
@@ -102,14 +111,15 @@ func main() {
 
 	vault, archives, archive, keys, settings := api.Services(core)
 	shellSvc := api.NewShell(api.Hooks{
-		ShowWindow:  s.ensureWindow,
-		CloseWindow: s.closeWindow,
-		PickFiles:   s.pickFiles,
-		PickFolder:  s.pickFolder,
-		SaveFile:    s.saveFile,
-		Reveal:      s.reveal,
-		Quit:        s.quit,
-		DragOut:     s.dragOut,
+		ShowWindow:   s.ensureWindow,
+		CloseWindow:  s.closeWindow,
+		CloseDecided: s.closeDecided,
+		PickFiles:    s.pickFiles,
+		PickFolder:   s.pickFolder,
+		SaveFile:     s.saveFile,
+		Reveal:       s.reveal,
+		Quit:         s.quit,
+		DragOut:      s.dragOut,
 	})
 
 	profile := filepath.Join(dataDir, "WebView2")
@@ -366,16 +376,58 @@ func (s *shell) ensureWindow() {
 			s.app.Event.Emit("shell.drop", drop)
 		}()
 	})
+	// The close question's gate (APP.md §2.4, ruled 2026-09-13: "we must
+	// not default to going to the tray"). Common.WindowClosing is what
+	// WM_CLOSE becomes under the default event mapping — the button,
+	// Alt+F4, the taskbar's close — and what Close() emits.
+	//
+	// This is a *hook* and not a listener, and the difference is the whole
+	// mechanism. Wails takes each window event off its channel on a
+	// goroutine of its own — off the main thread, as the listener below
+	// relies on — and then runs the event's hooks on that goroutine,
+	// synchronously and in order: a hook's Cancel() returns before a single
+	// listener has been started. The listeners are each started in their
+	// own goroutine and only read IsCancelled() on entry, so cancelling
+	// from a listener is a race against Wails' own destroy-the-window
+	// listener, which NewWindow registers before this file sees the window.
+	// A cancelled close costs nothing: while the window has not been told
+	// to close unconditionally, WM_CLOSE returns 0 without destroying
+	// anything, so the window simply stays.
+	w.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if s.ownClose() {
+			return // ours: the tray, the answered question, the way out
+		}
+		switch s.settings().CloseAction {
+		case app.CloseTray:
+			// The user has said so: on to the tray, as below.
+		case app.CloseQuit:
+			e.Cancel()
+			go s.quit() // off this goroutine: quit shows a native question
+		default:
+			// ask, and anything a file no longer holds: the page asks.
+			e.Cancel()
+			s.app.Event.Emit("shell.close")
+		}
+	})
 	// Destroying the window leaves every page (APP.md §2.3, §2.4): the
 	// process keeps running in the tray and a window recreated from it
 	// starts at the list, so every archive a page held closes — or drains
 	// while a body is in flight — exactly as if its page had been left.
-	// Common.WindowClosing is what WM_CLOSE becomes under the default event
-	// mapping, and what Close() emits; Wails runs each listener on a
-	// goroutine of its own, off the main thread.
+	// Wails runs each listener on a goroutine of its own, off the main
+	// thread, and none of them runs at all when the hook above cancelled.
 	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		s.core.LeaveAllArchives()
 	})
+}
+
+// ownClose reports whether this close is the shell's own, and takes the
+// mark if it is: a quit never asks, and neither does the one close a
+// CloseWindow or an answered close question performs.
+func (s *shell) ownClose() bool {
+	s.quitMu.Lock()
+	quitting := s.quitting
+	s.quitMu.Unlock()
+	return quitting || s.ours.Swap(false)
 }
 
 // dropPayload is what a file drop becomes for the page: the paths, what
@@ -397,10 +449,37 @@ type dropPayload struct {
 	DirID     string   `json:"dirId"`
 }
 
+// closeWindow is Shell.CloseWindow: the page's own request to put Enfold
+// in the tray. It is a close the shell performs, so the question is not
+// asked of a page that has already decided (APP.md §2.4).
 func (s *shell) closeWindow() {
 	if w, ok := s.app.Window.GetByName(windowName); ok {
+		s.ours.Store(true)
 		w.Close()
 	}
+}
+
+// closeDecided is Shell.CloseDecided: the answer to the question the page
+// asked when the close was cancelled (APP.md §2.4). The service has
+// already refused anything but "tray" and "quit". With remember, the
+// answer goes through the core's SetCloseAction, which moves that one
+// field and writes the file — never a read-change-write of the whole
+// snapshot from out here, which would take the settings lock twice and
+// could overwrite a save the page had in flight. A refused write is
+// reported and nothing is closed: a close the user cannot undo in
+// Settings is worse than a question asked twice.
+func (s *shell) closeDecided(action string, remember bool) *app.Error {
+	if remember {
+		if e := s.core.SetCloseAction(action); e != nil {
+			return e
+		}
+	}
+	if action == app.CloseQuit {
+		go s.quit() // the bound call answers; the native question follows
+		return nil
+	}
+	s.closeWindow()
+	return nil
 }
 
 func (s *shell) window() application.Window {

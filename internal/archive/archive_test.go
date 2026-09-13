@@ -1189,13 +1189,18 @@ func TestHostileMetadata(t *testing.T) {
 		sb := *live
 		// Put the new map at the end so its extent is valid.
 		sb.FreeMapOff, sb.FreeMapLen, sb.FreeMapHash = uint64(len(b)), uint64(len(enc)), hash
-		sb.Seq++
 		b = append(b, enc...)
 		encSB, err := sb.Encode()
 		if err != nil {
 			t.Fatal(err)
 		}
-		off := liveCopy.Other().ArchiveSuperblockOff()
+		// The forgery edits the live copy where it stands, at its own seq.
+		// It cannot be published as a commit that never happened — a
+		// superblock at seq + 1 names an index sealed at seq, and the seq is
+		// in the index AAD (§11), so such a copy opens nothing. The free map
+		// is the one thing a file with write access can still lie about,
+		// which is what this test is about.
+		off := liveCopy.ArchiveSuperblockOff()
 		copy(b[off:], encSB)
 		return b
 	}

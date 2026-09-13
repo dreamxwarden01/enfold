@@ -480,7 +480,7 @@ const (
 type Settings struct {
 	VaultPath         string `json:"vaultPath"`
 	DisplayName       string `json:"displayName"`
-	CloseToTray       string `json:"closeToTray"` // destroy | hide
+	CloseAction       string `json:"closeAction"` // ask | tray | quit
 	Theme             string `json:"theme"`       // system | light | dark
 	Look              string `json:"look"`        // native
 	RecoveryRecordPct int    `json:"recoveryRecordPct"`
@@ -495,6 +495,16 @@ type Settings struct {
 	TimeoutsFromVault  bool   `json:"timeoutsFromVault"`
 	TimeoutsAdjustable bool   `json:"timeoutsAdjustable"` // only while unlocked
 }
+
+// What Settings.CloseAction may be (APP.md §2.4, ruled 2026-09-13): the
+// close button never means "to the tray" until the user has said so, so
+// the first close asks, and the answer — remembered or not — is one of
+// these three.
+const (
+	CloseAsk  = "ask"
+	CloseTray = "tray"
+	CloseQuit = "quit"
+)
 
 // Events the core emits. There is no archive.expiring since 2026-09-09 — an
 // archive is clean between operations, so nothing was ever asked before a

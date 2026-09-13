@@ -20,9 +20,13 @@ type lastExport struct {
 // settingsFile is the machine-local part of Settings: nothing secret and
 // nothing security-relevant (the timeouts live in the registry, R37).
 type settingsFile struct {
-	VaultPath         string `json:"vaultPath"`
-	DisplayName       string `json:"displayName"`
-	CloseToTray       string `json:"closeToTray"`
+	VaultPath   string `json:"vaultPath"`
+	DisplayName string `json:"displayName"`
+	// CloseAction is the close question's answer (APP.md §2.4, ruled
+	// 2026-09-13): ask — the first close asks — tray, or quit. The older
+	// closeToTray destroy/hide choice is gone: destroy is the behaviour,
+	// and an old file's key is simply no longer read.
+	CloseAction       string `json:"closeAction"`
 	Theme             string `json:"theme"`
 	Look              string `json:"look"`
 	RecoveryRecordPct int    `json:"recoveryRecordPct"`
@@ -38,7 +42,7 @@ type settingsFile struct {
 }
 
 func defaultSettings() settingsFile {
-	return settingsFile{CloseToTray: "destroy", Theme: "system", Look: "native", RecoveryRecordPct: 3, DictionaryBelow: 256 << 10}
+	return settingsFile{CloseAction: CloseAsk, Theme: "system", Look: "native", RecoveryRecordPct: 3, DictionaryBelow: 256 << 10}
 }
 
 // loadSettings reads the file; anything missing or unreadable is the
@@ -57,8 +61,8 @@ func loadSettings(dir string) settingsFile {
 		s.VaultPath = f.VaultPath
 	}
 	s.DisplayName = f.DisplayName
-	if f.CloseToTray == "hide" {
-		s.CloseToTray = "hide"
+	if validCloseAction(f.CloseAction) {
+		s.CloseAction = f.CloseAction
 	}
 	if f.Theme == "light" || f.Theme == "dark" {
 		s.Theme = f.Theme
@@ -82,6 +86,13 @@ func loadSettings(dir string) settingsFile {
 		}
 	}
 	return s
+}
+
+// validCloseAction reports whether v is one of the close question's three
+// answers. Anything else — an older file's value, a page's typo — is not
+// read and not stored; the default stands.
+func validCloseAction(v string) bool {
+	return v == CloseAsk || v == CloseTray || v == CloseQuit
 }
 
 // saveSettings writes temp-then-rename in the same directory.
@@ -138,7 +149,7 @@ func (c *Core) GetSettings() Settings {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := Settings{
-		VaultPath: c.settings.VaultPath, DisplayName: c.settings.DisplayName, CloseToTray: c.settings.CloseToTray,
+		VaultPath: c.settings.VaultPath, DisplayName: c.settings.DisplayName, CloseAction: c.settings.CloseAction,
 		Theme: c.settings.Theme, Look: c.settings.Look, RecoveryRecordPct: c.settings.RecoveryRecordPct,
 		DictionaryBelow: c.settings.DictionaryBelow, LastArchiveFolder: c.settings.LastArchiveFolder,
 	}
@@ -152,13 +163,52 @@ func (c *Core) GetSettings() Settings {
 	return s
 }
 
+// SetCloseAction writes the close question's answer and nothing else
+// (APP.md §2.4). Shell.CloseDecided remembers through this rather than
+// through a whole-snapshot Set: a Get-mutate-Set from the shell takes the
+// lock twice and writes every field, so a settings save the page has in
+// flight — a theme, a timeout, staged and saved a moment before the user
+// closed the window — would be overwritten by a snapshot taken before it,
+// or would itself put the asking back. Here one field moves, over the
+// settings as they are at this moment.
+//
+// Accepted, and small: a page save whose own snapshot carries the old
+// closeAction and lands *after* this one still puts the asking back. The
+// user would have had to be mid-save at the instant they answered the
+// close question, and the answer is theirs to give again.
+func (c *Core) SetCloseAction(action string) *Error {
+	if !validCloseAction(action) {
+		return coded(CodeParams)
+	}
+	c.mu.Lock()
+	file := c.settings
+	file.CloseAction = action
+	c.mu.Unlock()
+	// Commit, then apply (SetSettings says why).
+	if err := saveSettings(c.deps.DataDir, file); err != nil {
+		return c.fail("settings", err)
+	}
+	c.mu.Lock()
+	c.settings.CloseAction = action
+	c.mu.Unlock()
+	return nil
+}
+
 // SetSettings stores the machine-local part and, while unlocked, the
 // timeouts into the registry. Out-of-range timeouts are refused.
+//
+// The write commits before anything is applied: the new values are built
+// on a copy, the file is written, and only a written file moves the
+// settings in memory. A settings file that cannot be written is refused
+// with the values in memory exactly as they were, so what the shell and
+// the page read is never a setting that was not stored — the close
+// question's gate reads CloseAction the moment the window closes, and a
+// remembered answer that was refused must not be obeyed anyway.
 func (c *Core) SetSettings(s Settings) *Error {
 	if s.RecoveryRecordPct < 0 || s.RecoveryRecordPct > 20 {
 		return coded(CodeParams)
 	}
-	if s.CloseToTray != "destroy" && s.CloseToTray != "hide" {
+	if !validCloseAction(s.CloseAction) {
 		return coded(CodeParams)
 	}
 	if s.Theme != "system" && s.Theme != "light" && s.Theme != "dark" {
@@ -168,20 +218,28 @@ func (c *Core) SetSettings(s Settings) *Error {
 		return coded(CodeParams)
 	}
 	c.mu.Lock()
-	c.settings.CloseToTray, c.settings.Theme, c.settings.RecoveryRecordPct = s.CloseToTray, s.Theme, s.RecoveryRecordPct
+	file := c.settings // a copy: nothing in memory moves until the file is written
+	file.CloseAction, file.Theme, file.RecoveryRecordPct = s.CloseAction, s.Theme, s.RecoveryRecordPct
 	if s.DictionaryBelow >= 0 && s.DictionaryBelow <= 64<<20 {
-		c.settings.DictionaryBelow = s.DictionaryBelow
+		file.DictionaryBelow = s.DictionaryBelow
 	}
 	if s.DisplayName != "" {
-		c.settings.DisplayName = s.DisplayName
+		file.DisplayName = s.DisplayName
 	}
-	file := c.settings
 	sess := c.vault.sess
 	unlocked := c.vault.state == StateUnlocked
 	c.mu.Unlock()
 	if err := saveSettings(c.deps.DataDir, file); err != nil {
 		return c.fail("settings", err)
 	}
+	// Written: apply the fields this call owns, and only those, since the
+	// copy above may have been overtaken — the export stamp and the last
+	// archive folder are written from elsewhere and are nobody's to put
+	// back here.
+	c.mu.Lock()
+	c.settings.CloseAction, c.settings.Theme, c.settings.RecoveryRecordPct = file.CloseAction, file.Theme, file.RecoveryRecordPct
+	c.settings.DictionaryBelow, c.settings.DisplayName = file.DictionaryBelow, file.DisplayName
+	c.mu.Unlock()
 	changed := false
 	if unlocked && sess != nil {
 		if g := sess.Registry(); g != nil {

@@ -32,7 +32,10 @@ consequences worth stating up front:
 - One keystore file, superblock A/B, slot region A/B, encrypted registry (`FORMAT.md` Part I)
 - Slot types: **hardware (YubiKey PIV 9d, P-256 ECDH)**, **standalone password**, **recovery**
 - Software slots are hybrid X25519 + ML-KEM-1024 (`FORMAT.md` §3.1)
-- Optional entangled password, off by default, with an entropy estimate shown
+- Optional entangled password, off by default; the minimum of 8 characters is the only
+  strength rule (ruled 2026-09-13: no estimate — a word-aware estimate has no standard to
+  agree with, the entangled password is optional, and a password as the only way in is not
+  the recommended one)
 - Recovery key: 48 digits, BitLocker encoding with its checksum; kept once more under the VMK
   (`FORMAT.md` R38) so it can be shown again after a YubiKey or password unlock; every showing
   offers save as a text file, print, or written down with a second confirmation (ruling
@@ -59,11 +62,13 @@ consequences worth stating up front:
 **Application**
 
 - Unlock, lock, idle and absolute timeouts, the lock triggers in `DESIGN.md` §10
-- A tray-resident process. **Provisional:** closing the window destroys it (and the WebView2
-  process group with it) and the window is recreated on demand — 7–9 MB idle against ~130 MB
-  open, measured 2026-09-04 (`DESIGN.md` §14). Settled once the real UI exists: kept if reopening
-  shows no noticeable delay, stutter or state loss; otherwise the window is hidden and ~130 MB
-  resident is accepted (see "Deliberately unresolved")
+- A tray-resident process. Closing the window destroys it (and the WebView2 process group
+  with it) and the window is recreated on demand — 7–9 MB idle against ~130 MB open, measured
+  2026-09-04 (`DESIGN.md` §14); settled 2026-09-13 by use: reopening shows nothing worth
+  ~130 MB resident. **But going to the tray is never the default meaning of the close button**
+  (ruled 2026-09-13): the first close — the button or Alt+F4 — asks whether to keep Enfold in
+  the tray or to quit, with *Remember my choice*; the remembered answer, and the asking
+  itself, are changeable in Settings (`APP.md` §2.4)
 - Unlocked-state banner with countdown, and a tray icon that changes when unlocked
 - **Look: the Native direction** (`docs/ui/native.html`) — a first-party Windows 11 feel, light
   and dark. One look in 1.0; the interface is a frontend over the Go core's service API, so a
@@ -72,11 +77,18 @@ consequences worth stating up front:
 - Loopback HTTP streaming with Range support, for media preview — every response `no-store`,
   and the WebView2 profile with caching disabled, so the browser engine never writes decrypted
   content to disk (`DESIGN.md` trap #13)
-- Secrets in `memguard`; `VirtualLock`; crash dumps suppressed
-- BitLocker detection with a warning when the system volume or the vault's volume is
-  unprotected (suspended counts as unprotected; an unreadable state warns nobody) —
-  **provisional until an unelevated mechanism is measured**: the WMI class is admin-only and the
-  product never asks for elevation (`APP.md` §9)
+- The retained VMK, KWK and K_P allocations live in pages the process allocates outside the Go
+  heap, `VirtualLock`ed and erased explicitly; every other secret buffer the application owns is
+  zeroed best-effort when it is done with; automatic Windows Error Reporting is off for the
+  process. Not `memguard` (ruled 2026-09-13 on an outside feasibility pass: in a Go program
+  every secret crosses into crypto/aes, HKDF, Argon2 and ML-KEM as a plain slice the library
+  copies, so an enclave protects nothing past that first call, and its guard pages, canaries
+  and lifecycle machinery buy no more than the wrapper does against the threat that is in
+  scope — the pagefile and a later read of the disk). Library copies, the renderer's strings,
+  hibernation and dumps someone configured elsewhere stay outside it, and the document says so
+- ~~BitLocker detection with a warning~~ — **struck 2026-09-13** (the user's ruling): no
+  unelevated mechanism was measured and the product never asks for elevation; the import
+  dialog's sentence about BitLocker-protected drives stays as advice, not a check
 
 ## v1 does not ship
 
@@ -99,6 +111,7 @@ Written down so that "just a small addition" has to argue with a list rather tha
 
 - Multi-volume archives and recovery records — **committed for 1.1**, see below; neither needs a
   v1 format change, which is why they can wait
+- BitLocker detection (struck 2026-09-13, see above)
 
 ## Committed for 1.1
 
@@ -183,12 +196,15 @@ location and is invisible to the same binary started from Explorer. Verify file-
 from a normal terminal before drawing conclusions from it.
 
 **That workaround must never become user-facing advice.** A release cannot ask people to whitelist
-it. The standard answer, required before any build leaves the developer's machine:
+it. The standard answer — with one deferral, ruled 2026-09-13: **code signing is not bought for
+this release.** This is a personal project distributed from GitHub, which is also why the
+installer is NSIS; a certificate's cost is not justified yet. The release notes say the
+binaries are unsigned and what SmartScreen will show; the rest of the list stands:
 
-- **Authenticode code signing** of every shipped executable and installer. SmartScreen and every
-  major AV weight signer reputation heavily; an EV certificate carries reputation from day one, an
-  OV certificate earns it with downloads. `DESIGN.md` already requires this for the update
-  channel — it is a prerequisite for the *first* release too, not only for updates.
+- **Authenticode code signing** of every shipped executable and installer — *deferred* (above).
+  SmartScreen and every major AV weight signer reputation heavily; an EV certificate carries
+  reputation from day one, an OV certificate earns it with downloads. `DESIGN.md` requires it
+  for an update channel, which this release does not have.
 - **False-positive submission** to the major vendors (Microsoft, Kaspersky, and whichever else
   flags a release) for each shipped build, until the signing certificate's reputation makes it
   unnecessary.
@@ -207,9 +223,10 @@ Recorded so they are not mistaken for oversights. Neither blocks v1.
   binaries.
 - **Divergent archive files** — the same archive edited on two devices. Keystore sync handles keys
   and metadata and deliberately does not merge archive contents (`SYNC.md` §5).
-- **Destroy or hide on close-to-tray.** The default is destroy (7–9 MB idle). It switches to hide
-  (~130 MB resident) if reopening the real interface shows noticeable delay, stutter or state
-  loss. A trade-off to be judged by use, not decided on paper (`DECISIONS.md` 2026-09-04).
+- ~~**Destroy or hide on close-to-tray.**~~ **Decided 2026-09-13** by use: destroy. Reopening
+  from the tray shows nothing worth ~130 MB resident (`DECISIONS.md` 2026-09-13); the
+  `closeToTray` setting that offered the choice goes, replaced by the close question's answer
+  (`APP.md` §2.4).
 - ~~**PIV PIN policy and token session semantics.**~~ **Decided 2026-09-05** (`DECISIONS.md`):
   every unlock is PIN + touch; the token is used for the unlock alone and released — and reset —
   the moment the VMK is derived, so nothing is held for the session and no verification is

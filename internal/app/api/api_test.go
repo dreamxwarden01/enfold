@@ -91,6 +91,7 @@ func TestBoundSurface(t *testing.T) {
 			"Set(app.Settings) error",
 		},
 		"Shell": {
+			"CloseDecided(string, bool) error",
 			"CloseWindow()",
 			"DragOut(string, []string) (app.DragOutResult, error)",
 			"PickFiles(string, bool) ([]string, error)",

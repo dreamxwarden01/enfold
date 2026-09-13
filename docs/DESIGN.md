@@ -1081,7 +1081,7 @@ binding in-tree (`v3/internal/webview2`); the probe binary's build info confirms
 | Dependency | Version | Role |
 | --- | --- | --- |
 | `github.com/go-piv/piv-go/v2` | v2.6.0 | YubiKey PIV; pure Go, talks to winscard directly. Verified on hardware 2026-09-04 (GET METADATA, AES management keys, ECDH). Lacks MOVE/DELETE KEY (0xF6), never resets the card on disconnect (trap 14), leaks an exclusive connection on two `Open` failure paths (trap 24); `internal/piv` wraps it with its own PC/SC probe and reset |
-| `github.com/awnumar/memguard` | v0.23.0 (+ `memcall` v0.4.0) | secrets outside the GC heap |
+| ~~`github.com/awnumar/memguard`~~ | — | not adopted (2026-09-13): the retained secrets live in `internal/secmem`'s own `VirtualLock`ed pages instead; §11 below keeps the reasoning about what an enclave can and cannot hold |
 | `github.com/klauspost/compress` | v1.20.0 | zstd, pure Go. Bumped 2026-09-05: 1.19.2 fixed three dictionary bugs; 1.20.0 differs from it only in regenerated assembly |
 | `golang.org/x/crypto` | v0.55.0 | argon2 (`IDKey` only — see §3) |
 | `crypto/ecdh` | stdlib | P-256 for YubiKey slots, X25519 for the recovery slot; validates points on `NewPublicKey` (trap #2) |

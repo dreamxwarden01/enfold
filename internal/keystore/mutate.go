@@ -9,6 +9,7 @@ import (
 
 	"github.com/dreamxwarden01/enfold/internal/format"
 	"github.com/dreamxwarden01/enfold/internal/kdf"
+	"github.com/dreamxwarden01/enfold/internal/secmem"
 )
 
 // Entangle is the vault's entangled password as a mutation carries it. The
@@ -150,7 +151,7 @@ func Create(path string, opts CreateOptions) (*Unlocked, error) {
 	// The Unlocked carries the K_P just derived — the same value the kind-2
 	// record holds — so an entangled create can enrol, rotate or change the
 	// switch at once.
-	return &Unlocked{k: k, vmk: vmk, gen: gen, kp: kp}, nil
+	return newUnlocked(k, &vmk, gen, [16]byte{}, kp), nil
 }
 
 // mutable refuses every slot mutation while the Unlocked is closed, stale or
@@ -197,7 +198,7 @@ func (u *Unlocked) AddSlot(spec SlotSpec) error {
 			}
 		}
 	}
-	s, err := newRecord(spec, u.k.sb.VaultID, kp, u.vmk, u.gen)
+	s, err := newRecord(spec, u.k.sb.VaultID, kp, u.vmk(), u.gen)
 	if err != nil {
 		return err
 	}
@@ -212,7 +213,7 @@ func (u *Unlocked) AddSlot(spec SlotSpec) error {
 	}
 	var secret *format.SecretRecord
 	if rs, ok := spec.(RecoverySlot); ok {
-		rec, err := secretRecord(u.vmk, u.k.sb.VaultID, format.SecretRecoveryEscrow, s.RecipientID, rs.Key.Padded())
+		rec, err := secretRecord(u.vmk(), u.k.sb.VaultID, format.SecretRecoveryEscrow, s.RecipientID, rs.Key.Padded())
 		if err != nil {
 			return err
 		}
@@ -265,7 +266,7 @@ func (u *Unlocked) AddFirstWayIn(spec SlotSpec, e *Entangle) error {
 			}
 		}
 	}
-	s, err := newRecord(spec, vaultID, kp, u.vmk, u.gen)
+	s, err := newRecord(spec, vaultID, kp, u.vmk(), u.gen)
 	if err != nil {
 		return fail(err)
 	}
@@ -277,7 +278,7 @@ func (u *Unlocked) AddFirstWayIn(spec SlotSpec, e *Entangle) error {
 	slots := append(cloneSlots(u.k.slots), s)
 	var secret *format.SecretRecord
 	if rs, ok := spec.(RecoverySlot); ok {
-		rec, err := secretRecord(u.vmk, vaultID, format.SecretRecoveryEscrow, s.RecipientID, rs.Key.Padded())
+		rec, err := secretRecord(u.vmk(), vaultID, format.SecretRecoveryEscrow, s.RecipientID, rs.Key.Padded())
 		if err != nil {
 			return fail(err)
 		}
@@ -382,13 +383,13 @@ func (u *Unlocked) writeEntangle(hdr format.SlotRegionHeader, kp *[32]byte, slot
 		if i == skip || s.State != format.SlotActive || s.Type != format.SlotExternalECDH {
 			continue
 		}
-		if err := rewrap(s, kp, vaultID, u.vmk, u.gen); err != nil {
+		if err := rewrap(s, kp, vaultID, u.vmk(), u.gen); err != nil {
 			return err
 		}
 	}
 	var kpRec *format.SecretRecord
 	if kp != nil {
-		rec, err := secretRecord(u.vmk, vaultID, format.SecretEntangledKey, [16]byte{}, *kp)
+		rec, err := secretRecord(u.vmk(), vaultID, format.SecretEntangledKey, [16]byte{}, *kp)
 		if err != nil {
 			return err
 		}
@@ -407,13 +408,23 @@ func (u *Unlocked) writeEntangle(hdr format.SlotRegionHeader, kp *[32]byte, slot
 }
 
 // installKP replaces the vault's K_P on this handle once the commit that
-// changed it landed, zeroing the one it retires. Called on no other path: a
-// rotation re-wraps K_P, it never replaces it (§18.1).
+// changed it landed, zeroing the one it retires — the new value is written
+// over the retiring one in the page it lived in, and the caller's copy is
+// zeroed here. Called on no other path: a rotation re-wraps K_P, it never
+// replaces it (§18.1).
 func (u *Unlocked) installKP(kp *[32]byte) {
-	if u.kp != nil {
-		kdf.Zero(u.kp[:])
+	if kp == nil {
+		if u.kpBuf != nil {
+			u.kpBuf.Free()
+			u.kpBuf = nil
+		}
+		return
 	}
-	u.kp = kp
+	if u.kpBuf == nil {
+		u.kpBuf = secmem.New(kdf.KeySize)
+	}
+	copy(u.kpBuf.Bytes(), kp[:])
+	kdf.Zero(kp[:])
 }
 
 // HistoryGenerations are the VMK generations the secrets section remembers,
@@ -472,7 +483,7 @@ func (u *Unlocked) entangleKey() (*[32]byte, error) {
 		return nil, corrupt("the registry keeps no entangled_key record")
 	}
 	vaultID := u.k.sb.VaultID
-	kwks := kdf.KWKSecrets(u.vmk, vaultID)
+	kwks := kdf.KWKSecrets(u.vmk(), vaultID)
 	defer kdf.Zero(kwks)
 	pt, err := openSecretWith(kwks, vaultID, rec)
 	if err != nil {
@@ -514,7 +525,7 @@ func (u *Unlocked) RecoveryKey(recipientID [16]byte) (kdf.RecoveryKey, error) {
 		return kdf.RecoveryKey{}, ErrEscrowMissing
 	}
 	vaultID := u.k.sb.VaultID
-	kwks := kdf.KWKSecrets(u.vmk, vaultID)
+	kwks := kdf.KWKSecrets(u.vmk(), vaultID)
 	defer kdf.Zero(kwks)
 	pt, err := openSecretWith(kwks, vaultID, rec)
 	if err != nil {
@@ -598,7 +609,7 @@ func (u *Unlocked) Rotate() error {
 	if _, err := rand.Read(newVMK[:]); err != nil {
 		return err
 	}
-	// Zeroed on every path; on success u.vmk holds its own copy by then.
+	// Zeroed on every path; on success u.vmk() holds its own copy by then.
 	defer kdf.Zero(newVMK[:])
 	newGen := u.gen + 1
 
@@ -608,7 +619,7 @@ func (u *Unlocked) Rotate() error {
 	if err != nil {
 		return err
 	}
-	kwk, kwkNew := kdf.KWK(u.vmk, vaultID), kdf.KWK(newVMK, vaultID)
+	kwk, kwkNew := kdf.KWK(u.vmk(), vaultID), kdf.KWK(newVMK, vaultID)
 	defer kdf.Zero(kwk)
 	defer kdf.Zero(kwkNew)
 	for a := range reg.Archives {
@@ -630,7 +641,7 @@ func (u *Unlocked) Rotate() error {
 
 	// Step 3, the identity key under KWK_identity'.
 	idAAD := format.IdentityKeyAAD(vaultID, reg.DeviceID)
-	kwkID, kwkIDNew := kdf.KWKIdentity(u.vmk, vaultID), kdf.KWKIdentity(newVMK, vaultID)
+	kwkID, kwkIDNew := kdf.KWKIdentity(u.vmk(), vaultID), kdf.KWKIdentity(newVMK, vaultID)
 	defer kdf.Zero(kwkID)
 	defer kdf.Zero(kwkIDNew)
 	identity, err := kdf.UnwrapKey(kwkID, reg.WrappedIdentityKey, reg.IdentityNonce, idAAD)
@@ -652,7 +663,7 @@ func (u *Unlocked) Rotate() error {
 	// that does not open, or one left un-re-encrypted, abandons the rotation
 	// before the flip (§1, fail closed).
 	pruneSecrets(reg, u.k.slots)
-	kwkS, kwkSNew := kdf.KWKSecrets(u.vmk, vaultID), kdf.KWKSecrets(newVMK, vaultID)
+	kwkS, kwkSNew := kdf.KWKSecrets(u.vmk(), vaultID), kdf.KWKSecrets(newVMK, vaultID)
 	defer kdf.Zero(kwkS)
 	defer kdf.Zero(kwkSNew)
 	var kp *[32]byte
@@ -685,7 +696,7 @@ func (u *Unlocked) Rotate() error {
 	if reg.Secret(format.SecretVMKHistory, histID) != nil {
 		return corrupt("the secrets section already keeps a vmk_history record for generation %d", u.gen)
 	}
-	hist, err := sealSecretWith(kwkSNew, vaultID, format.SecretVMKHistory, histID, u.vmk)
+	hist, err := sealSecretWith(kwkSNew, vaultID, format.SecretVMKHistory, histID, u.vmk())
 	if err != nil {
 		return err
 	}
@@ -711,15 +722,18 @@ func (u *Unlocked) Rotate() error {
 		}
 	}
 
-	// Step 5: the slot region, the registry, then the superblock flip. u.kp is
-	// left as it was — a rotation re-wraps K_P, it never replaces it (§18.1).
+	// Step 5: the slot region, the registry, then the superblock flip. The
+	// handle's K_P is left as it was — a rotation re-wraps K_P, it never
+	// replaces it (§18.1).
 	metaNew := kdf.MetadataKey(newVMK, vaultID)
 	defer kdf.Zero(metaNew)
 	if err := u.k.commit(txn{slots: slots, reg: reg, meta: metaNew, gen: newGen}); err != nil {
 		return err
 	}
-	kdf.Zero(u.vmk[:])
-	u.vmk, u.gen = newVMK, newGen
+	// The new VMK goes over the retiring one in the page it lived in, which
+	// erases it; the local copy is zeroed by the defer above.
+	copy(u.vmkBuf.Bytes(), newVMK[:])
+	u.gen = newGen
 	return nil
 }
 
@@ -753,7 +767,7 @@ func (u *Unlocked) commitSlots(hdr format.SlotRegionHeader, slots []format.SlotR
 		edit(reg)
 	}
 	pruneSecrets(reg, slots)
-	meta := kdf.MetadataKey(u.vmk, u.k.sb.VaultID)
+	meta := kdf.MetadataKey(u.vmk(), u.k.sb.VaultID)
 	defer kdf.Zero(meta)
 	return u.k.commit(txn{slots: slots, hdr: &hdr, reg: reg, meta: meta, gen: u.gen})
 }
@@ -765,7 +779,7 @@ func (u *Unlocked) UpdateRegistry(fn func(*format.Registry) error) error {
 	if err := u.current(); err != nil {
 		return err
 	}
-	meta := kdf.MetadataKey(u.vmk, u.k.sb.VaultID)
+	meta := kdf.MetadataKey(u.vmk(), u.k.sb.VaultID)
 	defer kdf.Zero(meta)
 	return updateRegistry(u.k, meta, fn)
 }
@@ -776,7 +790,7 @@ func (u *Unlocked) UpdateRegistryAt(fn func(g *format.Registry, modifiedAt int64
 	if err := u.current(); err != nil {
 		return err
 	}
-	meta := kdf.MetadataKey(u.vmk, u.k.sb.VaultID)
+	meta := kdf.MetadataKey(u.vmk(), u.k.sb.VaultID)
 	defer kdf.Zero(meta)
 	return updateRegistryAt(u.k, meta, fn)
 }
@@ -817,7 +831,7 @@ func (u *Unlocked) Export(path string) error {
 	}
 	pruneSecrets(reg, slots) // kind 1 of the slots the export carries
 	reg.DeleteSecret(format.SecretEntangledKey, [16]byte{})
-	meta := kdf.MetadataKey(u.vmk, u.k.sb.VaultID)
+	meta := kdf.MetadataKey(u.vmk(), u.k.sb.VaultID)
 	defer kdf.Zero(meta)
 	k, err := create(path, u.k.sb.VaultID, format.SlotRegionHeader{}, slots, reg, meta, u.gen, u.k.sb.ModifiedAt)
 	if err != nil {

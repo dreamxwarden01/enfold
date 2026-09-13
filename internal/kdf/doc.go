@@ -11,11 +11,15 @@
 // transposed argument or a wrong info string fails a test instead of producing
 // 32 plausible bytes.
 //
-// Secrets pass through this package as ordinary byte slices and arrays. Callers
-// that keep a secret for longer than one derivation — the session's KWK above
-// all — are expected to move it into a memguard buffer; this package zeroes its
-// own intermediates where Go allows it and makes no stronger promise
-// (DESIGN.md §14). Key objects from crypto/ecdh and crypto/mlkem hold their
-// private material in fields this package cannot reach and offer no wipe, so
-// they are outside that discipline.
+// Secrets pass through this package as ordinary byte slices and arrays.
+// Callers that keep a secret for longer than one derivation — the VMK, the
+// vault's K_P and the session's KWK — move it into an internal/secmem buffer,
+// which is off the Go heap and locked out of the pagefile; this package zeroes
+// its own intermediates where Go allows it and makes no stronger promise
+// (DESIGN.md §14). A derivation here copies what it is handed whatever the
+// caller keeps it in — HKDF copies the IKM, Argon2 fills megabytes, the AEAD
+// builds an AES key schedule — and those copies are the ones SCOPE.md's line
+// leaves outside the wrapper. Key objects from crypto/ecdh and crypto/mlkem
+// hold their private material in fields this package cannot reach and offer no
+// wipe, so they are outside that discipline.
 package kdf

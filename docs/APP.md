@@ -442,7 +442,9 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   is `Abort`: nothing is published, and the bytes it wrote lie in extents the committed free map
   still holds free, so nothing is lost and nothing leaks. A Delete asks first, on the page —
   "Permanently delete 3 files and 1 folder from ECON 280? A folder takes everything beneath it.
-  This cannot be undone." — and then commits; deletion is cryptographic erasure (FORMAT R32).
+  This cannot be undone." — and then commits; a deleted file is unreachable from then on — no
+  live index carries its key — and its bytes leave the file at the next compaction (FORMAT R32,
+  narrowed 2026-09-13: unreachable, not erased).
   Rename, Move and CreateFolder commit at once, with no question. **Space comes back** (ruled 2026-09-09, after an emptied archive stood at 8 GB; the in-place form
   ruled 2026-09-10): a cancelled add's appended bytes are truncated at `Abort` (the archive
   layer's rule); a commit that frees the tail of the file is followed at once by a second, empty
@@ -509,8 +511,17 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   operation of its own that is running — Close never waits behind an add or a verify: the token
   dies and the bodies fail first, and the handle closes as soon as the cancelled operation has
   let go. **Closing the window is leaving every page** (ruled 2026-09-10, the user's own rule: "closing
-  the window should exit the archive; minimising to the taskbar is not that"): the window's
-  close — which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the shell, so an
+the window should exit the archive; minimising to the taskbar is not that") — and **the close
+button never means "to the tray" until the user has said so** (ruled 2026-09-13: "we must not
+default to going to the tray"): the first close — the button, Alt+F4, the taskbar's close —
+is cancelled and the page asks, in its own dialog, *Keep Enfold running in the tray* or
+*Quit*, with *Remember my choice* unticked; Esc or the backdrop is neither, the window stays.
+The answer, remembered or not, is `Settings.CloseAction` — `ask` (the default) · `tray` ·
+`quit` — and the Settings page shows it as *When the window closes: Ask each time · Keep
+running in the tray · Quit*, so the remembering is undone there too. *Quit* is the shell's Quit
+(§3: the running operations named, `ResolveForShutdown`, `app.Quit()`); a close the shell
+performs itself (a lock trigger's, Quit's own) never asks. With *tray* the window's close —
+which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the shell, so an
   archive whose window was closed closes, or drains, exactly like one whose page was left, and a
   window recreated from the tray starts at the list. Minimising to the taskbar is not a close:
   the page stays mounted and the archive open. When the external player exists (§4), closing the
@@ -566,8 +577,10 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
 `ensureWindow()` in the shell (`app.Window.GetByName` then `NewWithOptions`); the tray's
 `AttachWindow`/`ShowWindow`/`ToggleWindow` helpers are not used — they assume a window that
 exists at tray creation and that close only hides. Tray: three states — Locked, Locked with
-archives open, Unlocked — each with a light and a dark icon set together; tooltip with the
-countdown and the open-archive count; menu Open / Lock now / Close all archives / Quit.
+archives open, Unlocked — each with a light and a dark icon set together; tooltip with the countdown and the open-archive count; menu Open / Lock now / Quit (*Close all
+archives* went 2026-09-13: the window's close already leaves every page, and while the window
+is up the page closes archives; a tray item that changed the core under a page that did not
+refresh was worse than none).
 
 **Boot order in the frontend:** subscribe to every event at module scope, before the first
 `await`; then `Vault.Status()`. `VaultStatus` and every `vault.*` payload carry one `Seq`
@@ -740,7 +753,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
   opID` is the in-place edit (never Delete + Add). `Delete(id, recordIDs)` — a directory takes its subtree as the index has it, tombstoned in the
   same commit (FORMAT R39, R32); the page asks first, naming files and folders apart and saying a
   folder takes everything beneath it and that this cannot be undone, and the operation then runs
-  at once: there is no undo, deletion being cryptographic erasure — `Rename(id, recordID, newName)` (one record, file or directory; a `/` is refused, and a name that
+  at once: there is no undo, a deleted file being unreachable (FORMAT R32) — `Rename(id, recordID, newName)` (one record, file or directory; a `/` is refused, and a name that
   folds onto a live sibling of the record's own parent is `file.exists` — a change of case alone
   is not one, since a record is not its own sibling), `Move(id, recordIDs, parentID)` re-parents
   each record, one record written per item whatever subtree hangs beneath it. Both, like
@@ -916,7 +929,11 @@ sentinel of every package with a catch-all `internal` — and services are regis
   item, when it was a self-drop, or when nothing was written; **never by the target's window
   class** — the return says nothing about a copy still running in Explorer's engine (measured
   across volumes) — so every other folder stays manifested for the scavenge, which is the
-  mechanism, not the exception. No watch, no idle clock — and a request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
+  mechanism, not the exception. No watch, no idle clock (and, since 2026-09-13, an owner: a manifest records the process that wrote it — its id and
+  creation time — and a folder whose manifest says the drag is live is swept only when that
+  process is gone, the id dead or reused by a process of another creation time; a process that
+  exists but cannot be queried counts as alive, and a manifest with no owner recorded is never
+  swept while it says live) — and a request that cannot be honoured (the extraction failed or was cancelled) **fails `GetData`**
   rather than hand out half-written files, which 7-Zip's does not. A target that needs the
   files to exist at hover time (Sticky Notes refuses a path that is not there) is the
   measurement the prototype makes before the rule is final; if such targets matter, a small
@@ -1047,15 +1064,42 @@ sentinel of every package with a catch-all `internal` — and services are regis
 
 **Settings** — `Get()`, `Set()`. Machine-local, in `%LOCALAPPDATA%\Enfold\settings.json`
 (temp-then-rename): the vault's path when kept elsewhere (empty: `vault.eks` in the data folder)
-and its display name, close-to-tray behaviour, theme, look, recovery
-record percentage, dictionary threshold, the last export (`lastExportAt`, §13) and the folder of
+and its display name, the close question's answer (`CloseAction`: ask · tray · quit; the older
+`closeToTray` destroy/hide choice is gone — destroy is the behaviour, decided 2026-09-13, and
+an old file's value is ignored), theme, look, recovery record percentage, dictionary threshold, the last export (`lastExportAt`, §13) and the folder of
 the last archive created (`lastArchiveFolder`).
 **Security-relevant values live in the authenticated
 registry, not the file:** the idle and absolute minutes (`Registry.IdleMinutes`,
 `AbsoluteMinutes`, zero = default) and the per-archive compression choice
 (`ArchiveRecord.Policy` bit `no_compression`); `Compress.Padding` rides with it.
 
-**Shell** — `ShowWindow`, `CloseWindow`, `PickFiles`, `PickFolder`, `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
+**A source that is the vault.** `AddFiles` and `Replace` refuse a source path inside the data
+folder (`%LOCALAPPDATA%\Enfold`, or the vault's own path when kept elsewhere) with
+`archive.source_is_vault` — an outside review (2026-09-13) noted that a page under someone
+else's control could otherwise copy `vault.eks` into an archive it can read and extract it; the
+keystore's lock leaves the file readable by design (`lock_windows.go`), so the refusal is the
+core's. The same for `Extract`'s destination — never inside the data folder, nor above it, since a
+tree written there could reach down onto `vault.eks` — and, the other way round, `AddFolder`
+of a folder above the data folder is refused too: it would walk the vault in without naming
+it. A drag-out's staging root may not be the data folder itself nor stand above it (the shell
+names `%TEMP%\Enfold\drag`; the core's own fallback is a `drag` folder of its own inside the
+data folder, two levels above anything staged, which is fine). The name is checked first and
+the file second (an outside review's finding, 2026-09-13): every spelling is canonicalised before the comparison — on Windows by opening the path and
+asking the file system for its final name (`GetFinalPathNameByHandle`: links, junctions, 8.3
+names, `\\?\`, volume spelling and case settled in one answer; `EvalSymlinks` was found to
+leave a junction as it was), elsewhere by `EvalSymlinks` — and after a source
+is opened the handle itself answers — its identity against the vault file's (`SameFile`, which
+sees a hard link the name never can) and its final path against the data folder — so a link
+swapped in between the check and the open is refused at the open. An extraction never
+descends into a reparse point below its destination: an existing directory it would enter is
+read for the reparse attribute first, and a junction there is refused (`file.destination_link`,
+the item and its subtree, reported once at its top), since a junction named
+`Enfold` in an allowed destination would carry an archive's `Enfoldault.eks` straight into
+the data folder.
+
+**Shell** — `ShowWindow`, `CloseWindow`, `CloseDecided(action, remember)` (the close question's
+answer: `tray` or `quit`; with `remember` the setting is written first; the shell then closes
+to the tray without asking again, or quits), `PickFiles`, `PickFolder`, `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
 `Reveal`, `Quit`
 (names the running operations, if any, in a native Yes/No question — the only buttons a Windows
 message box has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
@@ -1492,11 +1536,21 @@ generated (`wails3 generate bindings`) and committed. Strings in one table.
 
 ## 8. Memory hygiene
 
-The session's keys live in `keystore.Session` as Go slices zeroed on lock; memguard enclaves
-for them are a keystore change proposed as a follow-up, not part of this layer. Crash dumps:
-`SetErrorMode(SEM_NOGPFAULTERRORBOX)`; WER's LocalDumps policy is outside a user-mode process's
-control and is documented as the limit. Destroying the window on close destroys the renderer's
-copy of what was on screen.
+The three retained secrets — the VMK and K_P in `keystore.Unlocked`, the KWK in
+`keystore.Session` — live in pages the process allocates outside the Go heap (`internal/secmem`:
+`VirtualAlloc` + `VirtualLock`, so they are never written to the pagefile; erased by a loop the
+compiler cannot elide and released on `Close` and `Lock`; a page the kernel refuses to lock is
+used unlocked and logged once, never fatal; three pages fit the default minimum working set of
+50, so the working set is not raised). Not memguard (SCOPE, ruled 2026-09-13): a secret handed
+to crypto/aes, HKDF, Argon2 or ML-KEM is copied by the library beyond any enclave's reach, and
+the comments say where. Every other secret buffer the application owns is zeroed best-effort
+(`kdf.Zero`) when it is done with. Crash dumps: `SetErrorMode(SEM_NOGPFAULTERRORBOX |
+SEM_FAILCRITICALERRORS)` means the system does not invoke Windows Error Reporting for the
+process, and `WerAddExcludedApplication` (per user, no elevation) covers what the error mode
+does not — a report raised for something other than the process's own fault; WER's LocalDumps,
+an administrator's opt-in that writes memory to disk independently of the rest of WER, and the
+hibernation file remain outside a user-mode process's control and are the documented limit.
+Destroying the window on close destroys the renderer's copy of what was on screen.
 
 ## 9. BitLocker
 
@@ -1534,12 +1588,12 @@ ceremony states and the "never 0 attempts" rule.
 
 ## 12. Deferred, and open for the user
 
-pdf.js preview; memguard for the session keys; an entropy estimate for a chosen
-password (SCOPE: "with an entropy estimate shown"; the minimum of 8 stands in for it);
+pdf.js preview (ruled 2026-09-13: not in the window — a temporary copy opened by a browser,
+designed with the future "open a temporary copy, edit, put it back"; DECISIONS); an entropy
+estimate for a chosen password (ruled out 2026-09-13: the minimum of 8 is the rule; SCOPE);
 (folder move is `Move` since the tree, §3);
-`overwrite` on extraction (an archive-layer change); an unelevated BitLocker check (measure
-first — if none exists, the SCOPE bullet or the least-privilege ruling has to move); the
-permitted range of the timeouts beyond the clamps.
+`overwrite` on extraction (an archive-layer change); the permitted range of the timeouts beyond the clamps. (The BitLocker check was struck
+2026-09-13, SCOPE.)
 
 ## 13. Ruled 2026-09-07, critiqued the same day, to implement (with FORMAT.md Revision 2)
 

@@ -31,7 +31,7 @@ import (
 func (a *Archive) RotateKey(ctx context.Context, newKID [16]byte, newKey [32]byte) (Receipt, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.writable(); err != nil {
+	if err := a.committable(); err != nil {
 		return Receipt{}, err
 	}
 	if a.tx != nil {
@@ -106,7 +106,11 @@ func (a *Archive) RotateKey(ctx context.Context, newKID [16]byte, newKey [32]byt
 // This handle is closed by the operation — on success its file no longer
 // exists, on a failed rename the original is intact — and the caller
 // reopens the path; the returned hash and size are the new file's, for the
-// registry. Readers must be closed first (ErrBusy otherwise).
+// registry. **The sequence continues across a compaction** (R33, R36): the
+// new file's superblock carries the source's committed seq plus one, so a
+// caller recording the receipt takes the seq from the reopened file and never
+// assumes 1 — one archive_id never names two different contents by the same
+// number. Readers must be closed first (ErrBusy otherwise).
 //
 // progress, when non-nil, is called on this goroutine with the Archive's
 // lock held, once per chunk copied; it must not call back into the Archive
@@ -114,7 +118,7 @@ func (a *Archive) RotateKey(ctx context.Context, newKID [16]byte, newKey [32]byt
 func (a *Archive) Compact(ctx context.Context, progress func(done, total uint64)) (hash [32]byte, size uint64, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.writable(); err != nil {
+	if err := a.committable(); err != nil {
 		return hash, 0, err
 	}
 	if a.tx != nil {
@@ -122,6 +126,12 @@ func (a *Archive) Compact(ctx context.Context, progress func(done, total uint64)
 	}
 	if len(a.held) != 0 {
 		return hash, 0, fmt.Errorf("%w: readers are open", ErrBusy)
+	}
+	// The compacted file's own sequence, refused at the end of the range like
+	// any other commit's (§4) and taken before a byte is written.
+	seqNext, err := nextSeq(a.sb.Seq)
+	if err != nil {
+		return hash, 0, err
 	}
 
 	index, err := cloneIndex(a.index)
@@ -219,7 +229,14 @@ func (a *Archive) Compact(ctx context.Context, progress func(done, total uint64)
 		return hash, 0, err
 	}
 	defer kdf.Zero(plain)
-	sb := format.ArchiveSuperblock{Seq: 1, IndexOff: off, IndexLen: uint64(len(plain))}
+	// The sequence continues: the fresh file's copy A carries the source's
+	// committed seq plus one and copy B the same superblock one lower, which
+	// is §4's A/B rule at n and n − 1 rather than at 1 and 0. It does not
+	// restart, because one archive_id must never name two different contents
+	// by the same seq — that pair is the identity R36 hands the registry, and
+	// a compacted file beginning again at 1 would reuse every number the
+	// source had published. seqNext was checked before the file was opened.
+	sb := format.ArchiveSuperblock{Seq: seqNext, IndexOff: off, IndexLen: uint64(len(plain))}
 	if _, err := rand.Read(sb.IndexNonce[:]); err != nil {
 		return hash, 0, err
 	}
@@ -241,7 +258,7 @@ func (a *Archive) Compact(ctx context.Context, progress func(done, total uint64)
 		return hash, 0, err
 	}
 	older := sb
-	older.Seq = 0
+	older.Seq = sb.Seq - 1
 	encA, err := sb.Encode()
 	if err != nil {
 		return hash, 0, err
@@ -339,9 +356,15 @@ func (a *Archive) verifyCompacted(path string) error {
 	if _, err := f.ReadAt(ct, int64(sb.IndexOff)); err != nil {
 		return err
 	}
-	plain, err := openIndex(a.indexKey, ct, sb, a.archiveID, a.kid)
+	plain, seq, err := openIndex(a.indexKey, ct, sb, a.archiveID, a.kid)
 	if err != nil {
 		return fmt.Errorf("%w: compacted index does not open", ErrInternal)
+	}
+	// This writer knows exactly what it sealed and under which number, so the
+	// tolerance is not something the check may lean on: the compacted file's
+	// winning copy must authenticate under its own seq.
+	if seq != sb.Seq {
+		return fmt.Errorf("%w: the compacted index authenticated at seq %d, not the winning copy's %d", ErrInternal, seq, sb.Seq)
 	}
 	defer kdf.Zero(plain)
 	index, err := format.DecodeIndex(plain)

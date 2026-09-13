@@ -47,8 +47,11 @@ func DecodeEnvelope(b []byte) (*Envelope, error) {
 		return nil, invalidf("envelope: checksum mismatch")
 	}
 	r := newReader(b[8:checksumOffset], "envelope")
+	// The checksum has already held, so this envelope is what a writer meant
+	// to leave: an unsupported version is refused as a version, never
+	// recovered from as damage (§10, R33).
 	if v := r.u16(); v != FormatVersion {
-		return nil, invalidf("envelope: format_version %d unsupported", v)
+		return nil, versionf("envelope", v)
 	}
 	r.skip(2)
 	e := &Envelope{}
@@ -145,7 +148,7 @@ func DecodeArchiveSuperblock(b []byte) (*ArchiveSuperblock, error) {
 	}
 	r := newReader(b[8:checksumOffset], "archive superblock")
 	if v := r.u16(); v != FormatVersion {
-		return nil, invalidf("archive superblock: format_version %d unsupported", v)
+		return nil, versionf("archive superblock", v)
 	}
 	r.skip(2)
 	s := &ArchiveSuperblock{}
@@ -167,12 +170,19 @@ func DecodeArchiveSuperblock(b []byte) (*ArchiveSuperblock, error) {
 }
 
 // IndexAAD is the AAD for the file index ciphertext (§11):
-// archive_id ‖ kid ‖ index_off ‖ index_len ‖ index_nonce ‖ format_version.
+// archive_id ‖ kid ‖ seq ‖ index_off ‖ index_len ‖ index_nonce ‖ format_version.
 // A pure byte construction over the superblock as given.
+//
+// Seq is in it because the superblock is checksummed and not authenticated
+// (§11, R36): an index authenticates under the sequence number it was sealed
+// with and under no other, so an older index kept in place under a raised
+// plaintext seq — with the unkeyed checksum recomputed — fails to open rather
+// than passing as the current state.
 func (s *ArchiveSuperblock) IndexAAD(archiveID, kid [16]byte) []byte {
-	w := &writer{b: make([]byte, 0, 16+16+8+8+NonceSize+2)}
+	w := &writer{b: make([]byte, 0, 16+16+8+8+8+NonceSize+2)}
 	w.fixed(archiveID[:])
 	w.fixed(kid[:])
+	w.u64(s.Seq)
 	w.u64(s.IndexOff)
 	w.u64(s.IndexLen)
 	w.fixed(s.IndexNonce[:])

@@ -195,7 +195,7 @@ func TestPasswordAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	u.Close()
-	if len(s.DBKey()) != 32 || len(s.kwk) != 32 || len(s.meta) != 32 {
+	if len(s.DBKey()) != 32 || len(s.kwk.Bytes()) != 32 || len(s.meta) != 32 {
 		t.Fatal("session keys missing")
 	}
 	s.Lock()
@@ -599,7 +599,7 @@ func TestEntangledUnlock(t *testing.T) {
 			RecoverySlot{Key: rk, Label: "paper"},
 		},
 	})
-	if u.kp == nil {
+	if u.kp() == nil {
 		t.Fatal("Create did not install K_P on the Unlocked it returned")
 	}
 	u.Close()
@@ -630,7 +630,7 @@ func TestEntangledUnlock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("token with the vault password: %v", err)
 		}
-		if uu.kp == nil {
+		if uu.kp() == nil {
 			t.Error("a hardware unlock did not keep K_P")
 		}
 		uu.Close()
@@ -656,7 +656,7 @@ func TestEntangledUnlock(t *testing.T) {
 	}
 	// It still holds K_P, from the kind-2 record — which is what makes every
 	// offline operation behave the same whatever opened the vault.
-	if ur.kp == nil {
+	if ur.kp() == nil {
 		t.Error("a recovery unlock did not read K_P from the registry")
 	}
 	ur.Close()
@@ -1422,7 +1422,7 @@ func TestRecoveryKeyEscrow(t *testing.T) {
 	if n := secretsOf(u.Registry(), format.SecretRecoveryEscrow); n != 1 {
 		t.Fatalf("kind-1 records after remove: %d", n)
 	}
-	orphan, err := secretRecord(u.vmk, u.k.sb.VaultID, format.SecretRecoveryEscrow, [16]byte{7}, rk.Padded())
+	orphan, err := secretRecord(u.vmk(), u.k.sb.VaultID, format.SecretRecoveryEscrow, [16]byte{7}, rk.Padded())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1463,7 +1463,7 @@ func TestRecoveryKeyEscrow(t *testing.T) {
 	}
 	// The unlock is never refused over it.
 	if err := u.UpdateRegistry(func(g *format.Registry) error {
-		rec, err := secretRecord(u.vmk, u.k.sb.VaultID, format.SecretRecoveryEscrow, rid, rk.Padded())
+		rec, err := secretRecord(u.vmk(), u.k.sb.VaultID, format.SecretRecoveryEscrow, rid, rk.Padded())
 		if err != nil {
 			return err
 		}
@@ -1496,7 +1496,7 @@ func TestRecoveryKeyEscrow(t *testing.T) {
 		t.Fatalf("a rotation over a record that does not unwrap: %v", err)
 	}
 	if err := u.UpdateRegistry(func(g *format.Registry) error {
-		rec, err := secretRecord(u.vmk, u.k.sb.VaultID, format.SecretRecoveryEscrow, rid3, recoveryKey(t).Padded())
+		rec, err := secretRecord(u.vmk(), u.k.sb.VaultID, format.SecretRecoveryEscrow, rid3, recoveryKey(t).Padded())
 		if err != nil {
 			return err
 		}
@@ -1515,7 +1515,7 @@ func TestRecoveryKeyEscrow(t *testing.T) {
 	copy(dirty[:], rk[:])
 	dirty[31] = 1
 	if err := u.UpdateRegistry(func(g *format.Registry) error {
-		rec, err := secretRecord(u.vmk, u.k.sb.VaultID, format.SecretRecoveryEscrow, rid, dirty)
+		rec, err := secretRecord(u.vmk(), u.k.sb.VaultID, format.SecretRecoveryEscrow, rid, dirty)
 		if err != nil {
 			return err
 		}
@@ -1540,7 +1540,7 @@ func TestRecoveryKeyEscrow(t *testing.T) {
 		t.Fatalf("damaged record: %v", err)
 	}
 	if err := u.UpdateRegistry(func(g *format.Registry) error {
-		rec, err := secretRecord(u.vmk, u.k.sb.VaultID, format.SecretRecoveryEscrow, rid, rk.Padded())
+		rec, err := secretRecord(u.vmk(), u.k.sb.VaultID, format.SecretRecoveryEscrow, rid, rk.Padded())
 		if err != nil {
 			return err
 		}
@@ -1599,8 +1599,8 @@ func TestRotationSecrets(t *testing.T) {
 	if secretsOf(u.Registry(), format.SecretEntangledKey) != 1 {
 		t.Fatal("a fresh entangled vault keeps no K_P")
 	}
-	kp1 := *u.kp
-	vmk1 := u.vmk
+	kp1 := *u.kp()
+	vmk1 := u.vmk()
 
 	if err := u.Rotate(); err != nil {
 		t.Fatal(err)
@@ -1614,7 +1614,7 @@ func TestRotationSecrets(t *testing.T) {
 		t.Fatalf("history after one rotation: %v", got)
 	}
 	// It holds the VMK that was retired, under the new KWK_secrets.
-	kwks := kdf.KWKSecrets(u.vmk, vaultID)
+	kwks := kdf.KWKSecrets(u.vmk(), vaultID)
 	rec := u.Registry().Secret(format.SecretVMKHistory, format.VMKHistoryID(1))
 	if rec == nil {
 		t.Fatal("no vmk_history record for generation 1")
@@ -1693,7 +1693,7 @@ func TestRotationFailsClosed(t *testing.T) {
 		t.Fatalf("a failed rotation committed: seq %d gen %d", u.k.sb.Seq, u.k.Generation())
 	}
 	if err := u.UpdateRegistry(func(g *format.Registry) error {
-		rec, err := secretRecord(u.vmk, vaultID, format.SecretRecoveryEscrow, u.k.Slots()[1].RecipientID, rk.Padded())
+		rec, err := secretRecord(u.vmk(), vaultID, format.SecretRecoveryEscrow, u.k.Slots()[1].RecipientID, rk.Padded())
 		if err != nil {
 			return err
 		}
@@ -1707,7 +1707,7 @@ func TestRotationFailsClosed(t *testing.T) {
 	// for one generation are invalid (§18.2), so the rotation is abandoned.
 	if err := u.UpdateRegistry(func(g *format.Registry) error {
 		var junk [32]byte
-		rec, err := secretRecord(u.vmk, vaultID, format.SecretVMKHistory, format.VMKHistoryID(u.gen), junk)
+		rec, err := secretRecord(u.vmk(), vaultID, format.SecretVMKHistory, format.VMKHistoryID(u.gen), junk)
 		if err != nil {
 			return err
 		}
@@ -1777,7 +1777,7 @@ func TestRemovalThenRotation(t *testing.T) {
 			RecoverySlot{Key: rk2, Label: "spare"},
 		},
 	})
-	kp := *u.kp
+	kp := *u.kp()
 	// One rotation first, so there is a history record to lose.
 	if err := u.Rotate(); err != nil {
 		t.Fatal(err)
@@ -1812,7 +1812,7 @@ func TestRemovalThenRotation(t *testing.T) {
 		t.Fatalf("history after removal then rotation: %v", got)
 	}
 	vaultID := u.k.sb.VaultID
-	kwks := kdf.KWKSecrets(u.vmk, vaultID)
+	kwks := kdf.KWKSecrets(u.vmk(), vaultID)
 	defer kdf.Zero(kwks)
 	if got, err := openSecretWith(kwks, vaultID, u.Registry().Secret(format.SecretEntangledKey, [16]byte{})); err != nil || got != kp {
 		t.Fatalf("K_P after removal then rotation: %v", err)
@@ -1988,7 +1988,7 @@ func TestHeaderIsAuthenticatedByTheRegion(t *testing.T) {
 	if err := us.UpdateRegistry(func(g *format.Registry) error {
 		var other [32]byte
 		other[0] = 1
-		rec, err := secretRecord(us.vmk, us.k.sb.VaultID, format.SecretEntangledKey, [16]byte{}, other)
+		rec, err := secretRecord(us.vmk(), us.k.sb.VaultID, format.SecretEntangledKey, [16]byte{}, other)
 		if err != nil {
 			return err
 		}
@@ -2102,7 +2102,7 @@ func TestExportContents(t *testing.T) {
 	if ue.Tampered() != nil {
 		t.Fatal(ue.Tampered())
 	}
-	if ue.kp != nil {
+	if ue.kp() != nil {
 		t.Error("the export's Unlocked holds a K_P")
 	}
 	g := ue.Registry()
@@ -2432,7 +2432,7 @@ func TestRotateFromAHandleOpenedBeforeTheSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer early.Close()
-	if early.kp != nil {
+	if early.kp() != nil {
 		t.Fatal("a handle opened while the switch is off holds a K_P")
 	}
 	on, err := k.Unlock(RecoveryCredential{Key: rk})
@@ -3026,5 +3026,61 @@ func TestUpdateRegistryAt(t *testing.T) {
 	defer uk.Close()
 	if got := uk.Registry().Archives[0].ForgottenAt; got != at2 {
 		t.Errorf("forgotten_at after a reopen: %d, want %d", got, at2)
+	}
+}
+
+// TestRetainedSecretsErased holds SCOPE.md's line to the three secrets it
+// names: the VMK, the vault's K_P and the session's KWK live in secmem pages,
+// and the call that ends each lifetime erases its page. The pages are released
+// in the same call — reading them afterwards would fault — so the bytes are
+// checked while they are there and the erasure is read off the buffer after.
+func TestRetainedSecretsErased(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v.eks")
+	tok := newToken(t)
+	u := mustCreateWith(t, path, CreateOptions{
+		Entangle: &Entangle{Password: "the vault's own", Argon2: fast},
+		Slots: []SlotSpec{
+			HardwareSlot{PublicKey: tok.PublicKey(), Label: "A"},
+			RecoverySlot{Key: recoveryKey(t), Label: "paper"},
+		},
+	})
+	vmkBuf, kpBuf := u.vmkBuf, u.kpBuf
+	if kpBuf == nil {
+		t.Fatal("Create did not install K_P on the Unlocked it returned")
+	}
+	vmk := u.vmk()
+	if vmk == ([32]byte{}) {
+		t.Fatal("the VMK page is zero while the handle is open")
+	}
+	if bytes.Equal(kpBuf.Bytes(), make([]byte, 32)) {
+		t.Fatal("the K_P page is zero while the handle is open")
+	}
+
+	s, err := u.Session()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(s.kwk.Bytes(), kdf.KWK(vmk, u.k.VaultID())) {
+		t.Fatal("the session's page does not hold the KWK")
+	}
+	kwkBuf := s.kwk
+	kdf.Zero(vmk[:])
+
+	// The VMK and K_P go when the handle closes, which is right after the
+	// session is derived; the KWK lasts as long as the session (DESIGN.md §10).
+	u.Close()
+	if vmkBuf.Zeros() == 0 || vmkBuf.Bytes() != nil {
+		t.Error("Close did not erase the VMK page")
+	}
+	if kpBuf.Zeros() == 0 || kpBuf.Bytes() != nil {
+		t.Error("Close did not erase the K_P page")
+	}
+	if kwkBuf.Zeros() != 0 {
+		t.Error("Close erased the session's KWK, which outlives the handle")
+	}
+
+	s.Lock()
+	if kwkBuf.Zeros() == 0 || kwkBuf.Bytes() != nil {
+		t.Error("Lock did not erase the KWK page")
 	}
 }

@@ -116,11 +116,23 @@ func (a *Archive) trimWrite(step int, b []byte, off uint64) (begun bool, err err
 //
 // Caller holds a.mu, and calls it only from commit, with the first flip
 // durable and the transaction finished. It reports the error that broke the
-// Archive, if one did; every other failure leaves the archive at the first
-// commit's state and is not the caller's to report.
+// Archive, if one did, and ErrSeqExhausted when the sequence cannot be
+// advanced at all (§4) — a refusal of this commit alone, which the caller
+// treats as "no trim" rather than as a failure of the commit that led here;
+// every other failure leaves the archive at the first commit's state and is
+// not the caller's to report.
 func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error {
 	if a.opts.ReadOnly || a.closed || a.broken != nil || a.sb.Seq < 2 {
 		return nil
+	}
+	// The follow-up commit's own number, refused at the end of the range like
+	// any other commit's (§4). It is taken here, before the first write, so
+	// that an exhausted sequence costs nothing but the tail; the caller treats
+	// this one refusal as "no trim", since the commit that led here is durable
+	// and is not made a failure by a tail that stayed.
+	seqNext, err := nextSeq(a.sb.Seq)
+	if err != nil {
+		return err
 	}
 
 	// What must keep its place: the data of every live file, and the extents
@@ -224,7 +236,7 @@ func (a *Archive) reclaimTail(plain []byte, kid [16]byte, indexKey []byte) error
 	// 2. The same index, resealed where it now lies, and the map that drops
 	//    the trailing run.
 	next := *a.sb
-	next.Seq = a.sb.Seq + 1
+	next.Seq = seqNext
 	next.IndexOff, next.IndexLen = at, uint64(len(plain))
 	if _, err := rand.Read(next.IndexNonce[:]); err != nil {
 		return nil

@@ -11,6 +11,7 @@
   import KeysPage from "./components/KeysPage.svelte";
   import SettingsPage from "./components/SettingsPage.svelte";
   import RecoveryReveal from "./components/RecoveryReveal.svelte";
+  import CloseDialog from "./components/CloseDialog.svelte";
   import LayerFoot from "./components/LayerFoot.svelte";
   import { fade, fly } from "svelte/transition";
   import { motion, delay, enter, GAP, OUT, MOVE } from "./lib/motion";
@@ -109,6 +110,13 @@
   {#key reveal}
     <RecoveryReveal url={reveal} kind={store.ceremony?.kind ?? ""} vaultName={store.status?.displayName ?? ""} recoveryId={store.ceremony?.recoveryId ?? ""} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
   {/key}
+{/if}
+
+<!-- The close question (APP.md §2.4): above every route, and above the
+     splash too — a close while the first status is still on its way
+     deserves the same answer. -->
+{#if store.closeAsked}
+  <CloseDialog busy={store.closeBusy} onclose={() => store.dismissClose()} ondecide={(a, r) => void store.decideClose(a, r)} />
 {/if}
 
 <Toasts />

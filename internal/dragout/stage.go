@@ -43,8 +43,9 @@ import (
 //
 // A scavenger that deletes directories needs to know which directories are
 // its own, and an age alone cannot say. So every staging folder carries one
-// small JSON file naming the tool that made it, when, which process, what
-// state the drag is in and which files it staged. The sweep acts on folders
+// small JSON file naming the tool that made it, when, which process and
+// when that process started, what state the drag is in and which files it
+// staged. The sweep acts on folders
 // that carry this and on nothing else: a folder a user put there by hand, a
 // folder another program made, a reparse point pointing anywhere at all —
 // none of them are ours and none of them are touched.
@@ -56,10 +57,16 @@ import (
 // transition. Kept a level apart, no dragged name can reach it.
 
 const (
-	manifestName    = "manifest.json"
-	itemsDirName    = "items"
-	manifestTool    = "enfold"
-	manifestVersion = 1
+	manifestName = "manifest.json"
+	itemsDirName = "items"
+	manifestTool = "enfold"
+	// Version 2 added the owner's start time beside its PID (Manifest,
+	// manifestOwner). Nothing reads the number — ReadManifest asks after
+	// the tool and nothing else, and every field is optional to a reader —
+	// so it is a record of what was written and not a gate: a version 1
+	// manifest, which names a PID and no start time, is read as an unknown
+	// owner and treated as such.
+	manifestVersion = 2
 
 	// The three states APP.md names. StateLive is a drag still in progress
 	// — the folder is never swept while it says that; StateHandedOut is a
@@ -74,13 +81,26 @@ const (
 )
 
 // Manifest is what a staging folder says about itself.
+//
+// PID and PIDStarted together name the owner: the process that wrote this
+// manifest, and when that process started. The PID alone is not an
+// identity — Windows hands a freed PID out again within seconds — so the
+// creation time rides with it, and an owner is the same owner only when
+// both match. PIDStarted is the FILETIME the platform gives, 100-ns ticks
+// since 1601, and zero when the platform would not say or a version 1
+// manifest never wrote one; a zero is "unknown", never "matches".
+//
+// Every field is optional to a reader: a manifest an older build wrote
+// parses here with its new field at the zero value, which is exactly the
+// answer the sweep must then act on (manifestOwner, scavengeVerdict).
 type Manifest struct {
-	Tool    string    `json:"tool"`
-	Version int       `json:"version"`
-	PID     int       `json:"pid"`
-	Created time.Time `json:"created"`
-	State   string    `json:"state"`
-	Files   []string  `json:"files"`
+	Tool       string    `json:"tool"`
+	Version    int       `json:"version"`
+	PID        int       `json:"pid"`
+	PIDStarted int64     `json:"pidStarted,omitempty"`
+	Created    time.Time `json:"created"`
+	State      string    `json:"state"`
+	Files      []string  `json:"files"`
 }
 
 // WriteManifest writes a folder's manifest.
@@ -109,6 +129,75 @@ func ReadManifest(dir string) (Manifest, bool) {
 	}
 	return m, true
 }
+
+// ---------------------------------------------------------------------------
+// The owner of a manifest.
+//
+// A manifest that says "live" says a drag is in progress, and a drag in
+// progress is never swept. That was once the whole of it, which left one
+// hole: a process that crashed or was killed mid-drag leaves a folder
+// saying "live" forever, and what it holds is plaintext. So the manifest
+// records who is dragging, and the sweep asks after them.
+
+// ownerState is what a sweep could learn about the process that wrote a
+// manifest. ownerUnknown is not a middle ground between the other two: it
+// is the sweep having no answer — the manifest names no owner, or the
+// platform would not say — and the cautious reading is what it gets.
+type ownerState int
+
+const (
+	ownerUnknown ownerState = iota
+	ownerAlive
+	ownerGone
+)
+
+// selfOwner is this process as a manifest records it: its id, and when it
+// started where the platform says so cheaply (0 otherwise).
+func selfOwner() (pid int, started int64) {
+	pid = os.Getpid()
+	started, _ = probeProcess(pid)
+	return pid, started
+}
+
+// manifestOwner asks after the process a manifest names. Only three
+// answers are possible, and only one of them lets a sweep act:
+//
+//   - gone, and nothing else, is the PID naming no process at all. A live
+//     manifest whose owner is gone is a drag that died with its process.
+//   - alive needs BOTH halves to agree: a process at that id, and the same
+//     start time the manifest recorded. Windows hands a freed PID out again
+//     within seconds, so an id alone is not an identity and is never read
+//     as one.
+//   - everything else is unknown: a manifest with no PID, a manifest from a
+//     build that recorded no start time (version 1), or a process this one
+//     may look at but not time. Unknown is not "probably dead" — it is the
+//     sweep having no answer, and a live manifest it cannot vouch for is
+//     left exactly where the older rule left it.
+//
+// A version 2 manifest always writes both halves, so unknown here means an
+// older folder or a refusal, never one of this build's own drags.
+func manifestOwner(m Manifest) ownerState {
+	if m.PID <= 0 || m.PIDStarted == 0 {
+		return ownerUnknown
+	}
+	started, state := probeProcess(m.PID)
+	if state != ownerAlive {
+		return state
+	}
+	if started == 0 {
+		// There is a process at that id and no way to tell it from the one
+		// that took the id after ours let it go.
+		return ownerUnknown
+	}
+	if started != m.PIDStarted {
+		return ownerGone
+	}
+	return ownerAlive
+}
+
+// ownerOf is how the sweep asks, a variable so that a test can answer for a
+// process that never existed rather than arranging for one to die.
+var ownerOf = manifestOwner
 
 // newStageID is the <random 8 hex> of one drag's folder. crypto/rand because
 // two drags a millisecond apart must not collide, and because a predictable
@@ -389,8 +478,9 @@ func newStage(opts Options) (*stage, error) {
 			s.drop = append(s.drop, p)
 		}
 	}
+	pid, started := selfOwner()
 	if err := WriteManifest(root, Manifest{
-		Tool: manifestTool, Version: manifestVersion, PID: os.Getpid(),
+		Tool: manifestTool, Version: manifestVersion, PID: pid, PIDStarted: started,
 		Created: s.created, State: StateLive, Files: rel,
 	}); err != nil {
 		cancel()
@@ -433,8 +523,9 @@ func (s *stage) persistManifest(state string) error {
 	s.mu.Lock()
 	created := s.created
 	s.mu.Unlock()
+	pid, started := selfOwner()
 	return WriteManifest(s.root, Manifest{
-		Tool: manifestTool, Version: manifestVersion, PID: os.Getpid(),
+		Tool: manifestTool, Version: manifestVersion, PID: pid, PIDStarted: started,
 		Created: created, State: state, Files: rel,
 	})
 }
@@ -1086,6 +1177,12 @@ func removeTreeNoReparse(root string) error {
 // their age and not live. WinRAR's hour is the threshold, for WinRAR's
 // stated reason — "external applications may still need them" — and
 // against a longer one because what lingers is plaintext.
+//
+// "Not live" is the manifest's word AND its owner's: a folder saying "live"
+// whose process is no longer there is a drag that died with it, and is
+// swept under the ordinary age rule like any other. A folder whose owner
+// cannot be asked after is left alone at any age, as it always was
+// (manifestOwner).
 
 // scavengeFacts is everything a sweep may look at before deciding to delete
 // a directory. Keeping it a struct is what makes the decision testable
@@ -1097,12 +1194,18 @@ type scavengeFacts struct {
 	state        string
 	age          time.Duration
 	maxAge       time.Duration
-	active       bool // a stage this process is still watching
+	active       bool       // a stage this process is still watching
+	owner        ownerState // the process the manifest names, as far as this sweep could tell
 }
 
 // scavengeVerdict decides one directory. Every "no" carries its reason,
 // because a scavenger that silently leaves things behind is
 // indistinguishable from one that is broken.
+//
+// A live manifest is swept for exactly one reason: its owner is known to be
+// gone. Not because it is old — no age makes it safe to delete under a drag
+// this sweep cannot vouch for, and an unknown owner is left alone forever,
+// which is the rule as it stood before the owner was recorded at all.
 func scavengeVerdict(f scavengeFacts) (remove bool, why string) {
 	switch {
 	case f.reparse:
@@ -1111,10 +1214,14 @@ func scavengeVerdict(f scavengeFacts) (remove bool, why string) {
 		return false, "no manifest of ours: not this program's folder"
 	case f.active:
 		return false, "this process is still watching this drag"
-	case f.state == StateLive:
-		return false, "the manifest says the drag is still live"
+	case f.state == StateLive && f.owner == ownerAlive:
+		return false, "the manifest says the drag is still live and the process that wrote it is running"
+	case f.state == StateLive && f.owner != ownerGone:
+		return false, "the manifest says the drag is still live and names no owner this sweep could ask after"
 	case f.age <= f.maxAge:
 		return false, fmt.Sprintf("only %s old, under the %s limit", f.age.Round(time.Second), f.maxAge)
+	case f.state == StateLive:
+		return true, fmt.Sprintf("manifested %q with its owner gone, %s old, past the %s limit", f.state, f.age.Round(time.Second), f.maxAge)
 	}
 	return true, fmt.Sprintf("manifested %q, %s old, past the %s limit", f.state, f.age.Round(time.Second), f.maxAge)
 }
@@ -1162,8 +1269,9 @@ type sweepMode struct {
 // now, which is a parameter.
 var sweepNow = time.Now
 
-// Scavenge is one sweep of root: every manifested folder of ours whose
-// state is not live, that this process is not watching, and that is older
+// Scavenge is one sweep of root: every manifested folder of ours that no
+// live drag holds — its state is not live, or the process whose drag it was
+// is gone — that this process is not watching, and that is older
 // than olderThan is removed, a folder something still has open retried with
 // the bounded backoff and left for the next sweep. It can sit in that
 // backoff for over a minute, so the caller runs it on a goroutine of its
@@ -1233,6 +1341,11 @@ func scavenge(root string, maxAge time.Duration, now time.Time, mode sweepMode, 
 			facts.haveManifest = true
 			facts.state = m.State
 			facts.age = now.Sub(m.Created)
+			// Only a live manifest turns on the answer, and the question
+			// costs an OpenProcess, so it is not asked of the rest.
+			if m.State == StateLive {
+				facts.owner = ownerOf(m)
+			}
 		}
 		remove, why := scavengeVerdict(facts)
 		if !remove {
@@ -1332,7 +1445,8 @@ func restoreManifest(path, name string, m Manifest, log func(string, ...any)) {
 		return
 	}
 	if m.Tool != manifestTool {
-		m = Manifest{Tool: manifestTool, Version: manifestVersion, PID: os.Getpid(), Created: time.Now()}
+		pid, started := selfOwner()
+		m = Manifest{Tool: manifestTool, Version: manifestVersion, PID: pid, PIDStarted: started, Created: time.Now()}
 	}
 	m.State = StateDone
 	if err := WriteManifest(path, m); err != nil {

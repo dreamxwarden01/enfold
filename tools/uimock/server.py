@@ -48,7 +48,13 @@ record, so build the event's dataTransfer with a File of each selected
 row's name - a drop of other names is Explorer's and stays an add) - and
 {"drag": {"fail": "file.name_refused"}} fails the extraction half-way
 through the preparing phase, which fails the drop's request (dragResult
-failed)."""
+failed).
+
+The close question (APP.md 2.4, ruled 2026-09-13) is played too: POST
+/mock/preview {"name": "close"} queues the shell.close the shell emits when
+it has cancelled a window close, so the page shows its close question here;
+Shell.CloseDecided records the answer in state["closeDecided"] and, with
+remember, writes closeAction into the settings the page reads back."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -160,7 +166,7 @@ state = {
     ],
     "entangled": {"on": True, "canEnable": True},
     "lastExportAt": NOW - 1_900_000,
-    "settings": {"vaultPath": "D:/Vaults/personal.eks", "displayName": "Personal vault", "closeToTray": "destroy", "theme": "system",
+    "settings": {"vaultPath": "D:/Vaults/personal.eks", "displayName": "Personal vault", "closeAction": "ask", "theme": "system",
                  "look": "native", "recoveryRecordPct": 3, "dictionaryBelow": 262144, "idleMinutes": 0, "absoluteMinutes": 0,
                  "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives"},
     "text": {"text": "# Iceland, July 2024\n\nDay 1: Reykjavik...\n", "truncated": False},
@@ -196,6 +202,11 @@ state = {
     # fails while preparing, or a target that answers Skip. All three are
     # read at the next DragOut.
     "drag": {"selfDrop": False, "fail": "", "skip": False},
+    # What the close question was answered with (APP.md 2.4): every
+    # Shell.CloseDecided(action, remember) in order, so the pane can be
+    # checked against what the shell would have been told. There is no
+    # window to close here, so the call records and answers.
+    "closeDecided": [],
 }
 
 # Scenes the lock screen cannot reach on its own here (the mock dispatches
@@ -210,7 +221,11 @@ state = {
 # enough of the tail back (APP.md 2.3, FORMAT.md R40). It is in the same
 # set because it is the same question - "show me that" - and the route
 # tells the two apart by name.
-PREVIEW_OPS = {"reclaim": lambda: start_reclaim()}
+# "close" is neither a vault state nor an operation but the one event the
+# pane cannot raise for itself: the shell's cancelled window close (APP.md
+# 2.4), which the page answers with its close question. It is queued like
+# every other event and drained by GET /mock/events.
+PREVIEW_OPS = {"reclaim": lambda: start_reclaim(), "close": lambda: emit("shell.close", None)}
 
 PREVIEWS = {
     "pin": {
@@ -1310,6 +1325,22 @@ def listed(show_hidden):
     return [a for a in state["archives"] if show_hidden or (not a["hidden"] and not a.get("forgottenAt"))]
 
 
+def close_decided(args):
+    """Shell.CloseDecided(action, remember): the close question's answer
+    (APP.md 2.4). The service takes "tray" or "quit" and nothing else; with
+    remember the answer is written to closeAction through the core's own
+    settings, which here is this dict. No window closes and nothing quits -
+    the answer is recorded in state["closeDecided"] so the pane can be
+    checked against what the shell would have been told."""
+    action, remember = (list(args) + ["", False])[:2]
+    if action not in ("tray", "quit"):
+        return Err("params")
+    if remember:
+        state["settings"]["closeAction"] = action
+    state["closeDecided"].append({"action": action, "remember": bool(remember)})
+    return None
+
+
 def handle(method_id, args):
     v = state["vault"]
     m = METHODS.get(method_id)
@@ -1389,6 +1420,7 @@ METHODS = {
     3606391931: lambda a: None, 3229291943: lambda a: ["D:/Pictures/a.jpg", "D:/Pictures/b.jpg"], 2529646972: lambda a: "D:/Pictures", 2079207478: lambda a: None,
     842300112: lambda a: None, 1923582270: lambda a: "D:/new.efd", 3130426784: lambda a: None,
     945813141: drag_out,                                        # shell.DragOut (APP.md 3)
+    2169987085: close_decided,                                  # shell.CloseDecided (APP.md 2.4)
 }
 
 class H(SimpleHTTPRequestHandler):

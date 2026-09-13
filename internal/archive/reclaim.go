@@ -423,7 +423,7 @@ func (a *Archive) followUpAt(index *format.Index, ilen uint64) extent {
 func (a *Archive) Publish(ctx context.Context) (Receipt, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.writable(); err != nil {
+	if err := a.committable(); err != nil {
 		return Receipt{}, err
 	}
 	if a.tx != nil {

@@ -168,11 +168,22 @@ func TestKeystoreSuperblockRoundTripAndLayout(t *testing.T) {
 	if again, err := dp.Encode(); err != nil || again[104] != 0 {
 		t.Fatalf("rotation_pending re-encoded as 0x%02x: %v", again[104], err)
 	}
-	// AAD layout: 16 + 8 + 8 + 12 + 2 + 8 (R35: modified_at is authenticated).
+	// AAD layout: vault_id 16, seq 8, registry_off 8, registry_len 8, nonce
+	// 12, format_version 2, modified_at 8 (§7; R35: modified_at is
+	// authenticated; the seq is what makes a promoted older registry fail).
 	aad := s.RegistryAAD()
-	if len(aad) != 54 || !bytes.Equal(aad[:16], s.VaultID[:]) || aad[16] != 0x00 || aad[17] != 0x20 || aad[18] != 0x04 || aad[44] != 1 || aad[45] != 0 ||
-		hex.EncodeToString(aad[46:54]) != "0807060504030201" {
+	if len(aad) != 62 || !bytes.Equal(aad[:16], s.VaultID[:]) ||
+		hex.EncodeToString(aad[16:24]) != "0700000000000000" ||
+		aad[24] != 0x00 || aad[25] != 0x20 || aad[26] != 0x04 || aad[52] != 1 || aad[53] != 0 ||
+		hex.EncodeToString(aad[54:62]) != "0807060504030201" {
 		t.Fatalf("registry AAD %x", aad)
+	}
+	// One seq, one AAD: the same superblock at the next sequence number
+	// authenticates nothing the previous one sealed.
+	bumped := *s
+	bumped.Seq++
+	if bytes.Equal(bumped.RegistryAAD(), aad) {
+		t.Fatal("the registry AAD does not depend on seq")
 	}
 	neg := *s
 	neg.ModifiedAt = -1
@@ -1489,9 +1500,28 @@ func TestEnvelope(t *testing.T) {
 	if err != nil || *d != *e {
 		t.Fatalf("round trip: %v %+v", err, d)
 	}
+	// An intact envelope of a version this reader does not support is a
+	// version refusal and says so, so that a reader can tell it from the torn
+	// envelope it may recover from (§10, R33). It is an ErrInvalid too: a v2
+	// structure is not a well-formed v1 one.
+	future := bytes.Clone(b)
+	binary.LittleEndian.PutUint16(future[8:], FormatVersion+1)
+	sum := sha256.Sum256(future[:checksumOffset])
+	copy(future[checksumOffset:], sum[:])
+	_, err = DecodeEnvelope(future)
+	if !errors.Is(err, ErrVersion) || !errors.Is(err, ErrInvalid) {
+		t.Fatalf("envelope of format_version %d: %v", FormatVersion+1, err)
+	}
+	// The superblocks answer the same way, and a checksum that fails is
+	// reported before the version is ever read.
+	if _, err := DecodeEnvelope(bytes.Clone(b)[:checksumOffset]); errors.Is(err, ErrVersion) {
+		t.Error("a short envelope was reported as a version")
+	}
 	b[12] ^= 1
 	if _, err := DecodeEnvelope(b); err == nil {
 		t.Fatal("tampered archive_id passed the checksum")
+	} else if errors.Is(err, ErrVersion) {
+		t.Error("a failed checksum was reported as a version")
 	}
 	if _, err := DecodeEnvelope(b[:100]); err == nil {
 		t.Fatal("short envelope accepted")
@@ -1513,9 +1543,18 @@ func TestArchiveSuperblockAndIndexAAD(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(s, d) {
 		t.Fatalf("round trip: %v", err)
 	}
+	// AAD layout: archive_id 16, kid 16, seq 8, index_off 8, index_len 8,
+	// nonce 12, format_version 2 (§11). The seq is what makes an older index
+	// kept under a raised plaintext seq fail to open.
 	aad := s.IndexAAD(fill16(0xA5), fill16(0x5A))
-	if len(aad) != 62 || aad[32] != 0x00 || aad[33] != 0x30 || aad[60] != 1 || aad[61] != 0 {
+	if len(aad) != 70 || hex.EncodeToString(aad[32:40]) != "0200000000000000" ||
+		aad[40] != 0x00 || aad[41] != 0x30 || aad[68] != 1 || aad[69] != 0 {
 		t.Fatalf("index AAD %x", aad)
+	}
+	bumped := *s
+	bumped.Seq++
+	if bytes.Equal(bumped.IndexAAD(fill16(0xA5), fill16(0x5A)), aad) {
+		t.Fatal("the index AAD does not depend on seq")
 	}
 	// Pick: higher seq wins, a damaged copy is reported, equal seq is corruption.
 	s2 := *s

@@ -103,6 +103,11 @@ func (p Argon2Params) Validate() error {
 // zero-length salt, which Extract treats as 32 zero bytes. Every caller asks
 // for 32 or 64 bytes with an IKM of at least 16, so hkdf.Key's errors are not
 // expected outside FIPS-140-only mode, which this program does not run in.
+//
+// The IKM here may be a slice of a secmem page — the VMK's, say. crypto/hkdf
+// copies it into the HMAC state, and the output is a fresh Go slice: both are
+// heap the wrapper does not reach, which is what SCOPE.md's line means by a
+// library's own copy.
 func hkdfN(ikm, salt, info []byte, n int) []byte {
 	out, err := hkdf.Key(sha256.New, ikm, salt, string(info), n)
 	if err != nil {

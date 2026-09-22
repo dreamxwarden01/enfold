@@ -813,6 +813,15 @@
     if (p.length) merging = p[0];
   }
 
+  // Import records… asked for from the dialog a file opened from Explorer
+  // put up (APP.md §14): its key is not in this vault, and the picker and
+  // the merge dialog live here. Handed over the way deleteAfterClose is.
+  $effect(() => {
+    if (!store.importRecordsAsked) return;
+    store.importRecordsAsked = false;
+    void importRecords();
+  });
+
   // ---- Forget key… and Delete archive… -----------------------------------
   // Both close the archive first (APP.md §13); the core refuses either
   // with archive.busy while a preview reader is live, and a refusal on

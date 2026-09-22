@@ -123,6 +123,25 @@ const (
 	// CodeArchiveDeleteFailed: the archive_id matched and the removal still
 	// failed. The record is kept, since its keys open a file that is there.
 	CodeArchiveDeleteFailed Code = "archive.delete_failed"
+	// The two refusals of a file opened from Explorer (APP.md §14, decision
+	// 4). CodeKeyNotInVault: the envelope decoded and no record in this
+	// vault holds that archive_id — the file is an Enfold archive and its
+	// keys are somewhere else, so the way in is *Import records…* and the
+	// file is not touched. Never archive.not_found, which is a record the
+	// page named and this is a file the user did.
+	CodeKeyNotInVault Code = "archive.key_not_in_vault"
+	// CodeNotAnArchive: the envelope did not decode — the magic is wrong,
+	// the checksum failed, the format_version is one this reader refuses —
+	// or the file could not be read at all. A toast and nothing more: a
+	// double-click of the wrong file is not an error to dwell on.
+	CodeNotAnArchive Code = "archive.not_an_archive"
+	// CodeOpenElsewhere: the file opened from Explorer is a second copy of
+	// an archive this vault already holds open from another path. One
+	// handle per archive is the rule (APP.md §2.3), and the handle that
+	// exists is on the other file: adopting last_path here would leave the
+	// registry naming a file the page is not reading. Nothing is written
+	// and nothing is opened; Error.Path names where it is open from.
+	CodeOpenElsewhere Code = "archive.open_elsewhere"
 	// CodeDescriptionLong: over MaxDescriptionLen bytes, or not UTF-8
 	// (FORMAT.md §7.1).
 	CodeDescriptionLong Code = "archive.description_long"
@@ -234,6 +253,11 @@ type Error struct {
 	Code    Code   `json:"code"`
 	Retries *int   `json:"retries,omitempty"` // token.pin: attempts left
 	Slot    string `json:"slot,omitempty"`    // token.slot_occupied: the slot, as text
+	// Path: archive.open_elsewhere, the file the archive is already open
+	// from. The one datum that code's copy needs, carried the way Retries
+	// and Slot are — a path the user themselves named a copy of, never a
+	// path of Enfold's own.
+	Path string `json:"path,omitempty"`
 }
 
 func (e *Error) Error() string { return string(e.Code) }

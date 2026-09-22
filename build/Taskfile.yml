@@ -86,6 +86,16 @@ tasks:
 
   update:build-assets:
     summary: Regenerates the build assets from build/config.yml
+    # This is how `fileAssociations:` in config.yml reaches the wails.associateFiles
+    # macro in windows/nsis/wails_tools.nsh. Mind three side effects, all verified
+    # against wails3 beta.16/beta.20 (the templates are identical between them):
+    #   * it extracts the WHOLE template tree, so it creates build/darwin,
+    #     build/ios and build/linux, which this Windows-only repo does not keep --
+    #     delete them again afterwards;
+    #   * it overwrites windows/info.json, replacing FileDescription "Enfold" with
+    #     config.yml's long `description`, and drops both that file's and
+    #     wails.exe.manifest's trailing newline -- revert those two;
+    #   * windows/nsis/project.nsi is NOT a template and is never touched.
     dir: build
     cmds:
       - wails3 update build-assets -name "{{.APP_NAME}}" -binaryname "{{.APP_NAME}}" -config config.yml -dir .

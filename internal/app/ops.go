@@ -511,6 +511,35 @@ func (c *Core) refuseVaultPlaces(paths ...string) *Error {
 	return nil
 }
 
+// samePlace reports whether two paths name one file, asked the way the
+// vault-source check asks it: both resolved to the spelling the file
+// system itself reaches them by — every link followed, every short name
+// expanded, one case — and then each tested against the other, since
+// insideDir answers "." for a path that is the directory it is given.
+// Mutual containment is therefore equality, and a path that is not there
+// resolves to its plain absolute self, which is what "the file moved"
+// looks like (APP.md §14, the record's last_path against the file that
+// has just proved where it is).
+func samePlace(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return samePlaceAs(resolveLinks(a), b)
+}
+
+// samePlaceAs is samePlace with one side resolved already: the caller
+// resolved its own path once, before it took the state mutex, and the
+// other side is a path it can only read while holding it (archives.go,
+// OpenPath's decision). Only that one path is resolved here, so the work
+// done under the lock is the least it can be.
+func samePlaceAs(resolved, other string) bool {
+	if resolved == "" || other == "" {
+		return false
+	}
+	rb := resolveLinks(other)
+	return insideDir(resolved, rb) && insideDir(rb, resolved)
+}
+
 // refuseOpenedSource is the same refusal made again on what was actually
 // opened, and it is the one that cannot be raced or spelled around (the
 // outside review of 2026-09-13, finding 3). The name-based check above

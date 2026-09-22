@@ -140,6 +140,20 @@ func (a *Archives) Open(id string) (app.ArchiveStat, error) {
 	return s, asErr(e)
 }
 
+// OpenPath opens the archive a file is, for Explorer (APP.md §14): the
+// file's plaintext envelope names the archive_id, and a record with that
+// id opens as if its row had been double-clicked, its last_path moved to
+// this file when it differs. vault.needs_unlock while the vault is locked
+// — the page draws the lock scene and asks again after the unlock —
+// archive.key_not_in_vault when no record holds that id, with *Import
+// records…* the way in, archive.forgotten for a forgotten record, and
+// archive.not_an_archive for a file whose envelope does not decode or
+// that cannot be read.
+func (a *Archives) OpenPath(path string) (app.OpenPathResult, error) {
+	r, e := a.c.OpenPath(path)
+	return r, asErr(e)
+}
+
 // Leave is the page leaving an open archive (APP.md §2.3): it closes at once
 // and its keys go, unless a preview reader still holds it — then it stays
 // open for the readers alone and closes with the last of them. An archive

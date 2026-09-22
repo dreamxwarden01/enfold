@@ -54,7 +54,22 @@ The close question (APP.md 2.4, ruled 2026-09-13) is played too: POST
 /mock/preview {"name": "close"} queues the shell.close the shell emits when
 it has cancelled a window close, so the page shows its close question here;
 Shell.CloseDecided records the answer in state["closeDecided"] and, with
-remember, writes closeAction into the settings the page reads back."""
+remember, writes closeAction into the settings the page reads back.
+
+Opening an archive from Explorer (APP.md 14) is played the same way: POST
+/mock/preview {"name": "open", "path": "D:/Archives/Holiday 2024.efd"} - or
+"paths" for several, the first opened and the rest counted - queues the
+shell.open a second launch emits. The launch's own argument, which the page
+asks for at boot rather than hearing, is staged with POST /mock/state
+{"pendingOpen": {"seq": 1, "path": "...", "rest": []}} and then a reload.
+Archives.OpenPath answers as the core does, as far as a mock without
+envelopes can: a path a record carries opens that archive; a path whose
+leaf a record carries at another folder opens it and moves the record
+(relocated, the write Locate... makes); any other .efd is
+archive.key_not_in_vault, since its keys are somewhere else; anything that
+is not an .efd is archive.not_an_archive; and a locked vault answers
+vault.needs_unlock, which sends the page to the lock scene with the path
+kept."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -207,6 +222,12 @@ state = {
     # checked against what the shell would have been told. There is no
     # window to close here, so the call records and answers.
     "closeDecided": [],
+    # The launch's "open this from Explorer" waiting in the shell (APP.md
+    # 14): the page takes it at boot with Shell.PendingOpen, so it is
+    # staged with POST /mock/state and then a reload. Seq 0 is none;
+    # openSeq numbers the requests the previews queue.
+    "pendingOpen": {"seq": 0, "path": "", "rest": []},
+    "openSeq": 0,
 }
 
 # Scenes the lock screen cannot reach on its own here (the mock dispatches
@@ -223,9 +244,15 @@ state = {
 # tells the two apart by name.
 # "close" is neither a vault state nor an operation but the one event the
 # pane cannot raise for itself: the shell's cancelled window close (APP.md
-# 2.4), which the page answers with its close question. It is queued like
-# every other event and drained by GET /mock/events.
-PREVIEW_OPS = {"reclaim": lambda: start_reclaim(), "close": lambda: emit("shell.close", None)}
+# 2.4), which the page answers with its close question. "open" is the other
+# one: the shell handing a second launch's file over (APP.md 14), which
+# takes "path" or "paths" from the same body. Both are queued like every
+# other event and drained by GET /mock/events.
+PREVIEW_OPS = {
+    "reclaim": lambda body: start_reclaim(),
+    "close": lambda body: emit("shell.close", None),
+    "open": lambda body: shell_open(body),
+}
 
 PREVIEWS = {
     "pin": {
@@ -309,10 +336,14 @@ def forget(args, at):
 
 class Err:
     """A coded refusal, answered the way the Wails runtime reads one: a
-    non-2xx JSON body whose `cause` carries the app's code (APP.md 3)."""
+    non-2xx JSON body whose `cause` carries the app's code (APP.md 3).
+    `extra` is the one datum a code's copy needs beside it - retries for
+    token.pin, path for archive.open_elsewhere - carried on `cause` as the
+    core's app.Error carries it."""
 
-    def __init__(self, code):
+    def __init__(self, code, **extra):
         self.code = code
+        self.extra = extra
 
 
 # ---- the archive's tree (APP.md 3, FORMAT.md R39) ----------------------
@@ -1220,6 +1251,118 @@ def open_archive(args):
     return stat()
 
 
+def leaf(p):
+    """The last segment of a path in either slash."""
+    return p.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def same_place(a, b):
+    """Two paths naming one file, as far as text can say: separators
+    unified and case ignored, which stands in for the core's own resolve
+    of links and short names (APP.md 14)."""
+    return bool(a) and bool(b) and a.replace("\\", "/").lower() == b.replace("\\", "/").lower()
+
+
+def open_path(args):
+    """Archives.OpenPath(path): the archive a *file* is, for Explorer -
+    a double-click, an Open with, a path on the command line (APP.md 14,
+    decision 4). The core reads the file's plaintext envelope and finds
+    the record by the archive_id in it, never by the name; the mock has no
+    envelopes, so the leaf stands in for the id and the extension for the
+    magic. What each answer plays:
+
+    - a path a record carries: that archive opens, as a double-click of
+      its row opens it;
+    - the same leaf at another folder: the record follows the file that
+      has just proved where it is (relocated - the write Locate... makes)
+      and the archive opens;
+    - any other .efd: archive.key_not_in_vault, the file untouched, and
+      the page offers Import records...;
+    - anything that is not an .efd: archive.not_an_archive, a toast;
+    - a locked vault: vault.needs_unlock, whereupon the page shows the
+      lock scene and keeps the path for after the unlock;
+    - a forgotten record: archive.forgotten;
+    - a copy of an archive that is already open, at another path:
+      archive.open_elsewhere, carrying the file the handle is on, which
+      the toast names. Nothing is opened and nothing is recorded."""
+    path = (list(args) + [""])[0]
+    if not path:
+        return Err("params")
+    if not path.lower().endswith(".efd"):
+        return Err("archive.not_an_archive")
+    if state["vault"]["state"] != "unlocked":
+        return Err("vault.needs_unlock")
+    relocated = False
+    a = next((x for x in state["archives"] if same_place(x["path"], path)), None)
+    if a is None:
+        a = next((x for x in state["archives"] if leaf(x["path"]) == leaf(path)), None)
+        relocated = a is not None
+    if a is None:
+        return Err("archive.key_not_in_vault")
+    if a.get("forgottenAt"):
+        return Err("archive.forgotten")
+    # One handle per archive (APP.md 2.3): a second copy of an archive
+    # that is already open cannot be opened, and recording it would leave
+    # the registry naming a file the page is not reading. The refusal
+    # names the file the handle is on; the same file is no refusal at all.
+    if state.get("mounted") == a["id"] and not same_place(a["path"], path):
+        return Err("archive.open_elsewhere", path=a["path"])
+    if relocated:
+        a["path"] = path
+        emit("archives.changed", {"purged": []})
+    out = open_archive([a["id"]])
+    if isinstance(out, Err):
+        return out
+    return {"archiveId": a["id"], "relocated": relocated}
+
+
+def note_open_seq():
+    """Raise the request high-water mark to anything staged (APP.md 14).
+    Called when a request is staged from outside and again when
+    PendingOpen consumes one - before it is cleared, or a preview fired
+    after a consumed staged seq would reuse it and the page, which opens
+    each numbered request once, would drop it in silence."""
+    state["openSeq"] = max(state.get("openSeq", 0), (state.get("pendingOpen") or {}).get("seq", 0))
+
+
+def next_open_seq():
+    """The number of the next request queued."""
+    note_open_seq()
+    state["openSeq"] += 1
+    return state["openSeq"]
+
+
+def pending_open(args=None):
+    """Shell.PendingOpen(): the launch's own "open this from Explorer",
+    which the page asks for at boot because there was no page to emit it
+    to (APP.md 14). The ask is the take, so it is handed over once; Seq 0
+    is nothing waiting. Stage one with POST /mock/state
+    {"pendingOpen": {"seq": 1, "path": "D:/Archives/x.efd", "rest": []}}
+    and reload."""
+    req = state.get("pendingOpen") or {"seq": 0, "path": "", "rest": []}
+    note_open_seq()
+    state["pendingOpen"] = {"seq": 0, "path": "", "rest": []}
+    return req
+
+
+def shell_open(body):
+    """The shell.open a second launch emits (APP.md 14): its page is
+    already up, so it is told rather than asked. "path" names one file,
+    "paths" several - the first is opened and the rest are counted in a
+    toast - and neither names the first archive of the list."""
+    paths = body.get("paths") or ([body["path"]] if body.get("path") else [])
+    if not paths:
+        paths = [state["archives"][0]["path"]]
+    req = {"seq": next_open_seq(), "path": paths[0], "rest": list(paths[1:])}
+    # Staged as well as emitted, exactly as the shell does it: a second
+    # launch may be the one recreating a window whose page is not
+    # listening yet, so the slot is the backstop and the event is the
+    # fast path. A page that hears the event empties the slot itself.
+    state["pendingOpen"] = dict(req)
+    emit("shell.open", req)
+    return req
+
+
 def leave_archive(args):
     """Archives.Leave(id): the page left it. Nothing new is admitted from
     this moment - the methods answer archive.not_open and the preview URL
@@ -1364,6 +1507,7 @@ METHODS = {
     2953146167: lambda a: None, 882388909: lambda a: None,
     4176692468: lambda a: listed(bool(a and a[0])),             # archives.List
     923201420: open_archive,                                    # archives.Open
+    2811090123: open_path,                                      # archives.OpenPath (APP.md 14)
     660127987: leave_archive,                                   # archives.Leave (the page left)
     1388822288: close_archive,                                  # archives.Close (the kill switch)
     2300343171: lambda a: [], 2169725132: lambda a: None, 474530495: lambda a: None,
@@ -1421,6 +1565,7 @@ METHODS = {
     842300112: lambda a: None, 1923582270: lambda a: "D:/new.efd", 3130426784: lambda a: None,
     945813141: drag_out,                                        # shell.DragOut (APP.md 3)
     2169987085: close_decided,                                  # shell.CloseDecided (APP.md 2.4)
+    1615108156: pending_open,                                   # shell.PendingOpen (APP.md 14)
 }
 
 class H(SimpleHTTPRequestHandler):
@@ -1475,7 +1620,7 @@ class H(SimpleHTTPRequestHandler):
         if self.path.startswith("/mock/preview"):
             name = body.get("name", "")
             if name in PREVIEW_OPS:
-                return self.reply({"ok": True, "op": PREVIEW_OPS[name]()})
+                return self.reply({"ok": True, "op": PREVIEW_OPS[name](body)})
             over = PREVIEWS.get(name)
             if over is None:
                 return self.reply({"ok": False, "names": sorted(list(PREVIEWS) + list(PREVIEW_OPS))})
@@ -1487,17 +1632,23 @@ class H(SimpleHTTPRequestHandler):
                     state[k].update(v)
                 else:
                     state[k] = v
+            # A request staged from outside raises the high-water mark at
+            # once, so a preview fired after it is newer than it whether
+            # or not the page has come for it yet (APP.md 14).
+            note_open_seq()
             return self.reply({"ok": True})
         args = body.get("args") or {}
         if isinstance(args, dict) and "methodID" in args:
             out = handle(args["methodID"], args.get("args") or [])
             if isinstance(out, Err):
-                return self.refuse(out.code)
+                return self.refuse(out.code, out.extra)
             return self.reply(out)
         return self.reply({})
 
-    def refuse(self, code):
-        data = json.dumps({"kind": "Error", "message": code, "cause": {"code": code}}).encode()
+    def refuse(self, code, extra=None):
+        cause = {"code": code}
+        cause.update(extra or {})
+        data = json.dumps({"kind": "Error", "message": code, "cause": cause}).encode()
         self.send_response(500)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))

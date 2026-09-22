@@ -445,6 +445,28 @@ type DragOutResult struct {
 	OpID      string `json:"opId"`
 }
 
+// OpenPathResult is what Archives.OpenPath answers for a file opened from
+// Explorer (APP.md §14): the archive the envelope said it is, so the page
+// goes to it as a double-click of its row would, and whether the record's
+// last_path was moved to this file on the way — the write *Locate…* makes,
+// the file having just proved where it is.
+type OpenPathResult struct {
+	ArchiveID string `json:"archiveId"`
+	Relocated bool   `json:"relocated"`
+}
+
+// OpenRequest is one "open this from Explorer" the shell hands the page
+// (APP.md §14): the launch's own argument, which waits in the shell until
+// the page asks for it at boot, and a second launch's, which arrives as
+// `shell.open`. Seq numbers them from one so that the page opens each
+// request once however it reached it; Rest names the paths a launch gave
+// beyond the first, which are not opened and are counted in a toast.
+type OpenRequest struct {
+	Seq  int      `json:"seq"`
+	Path string   `json:"path"`
+	Rest []string `json:"rest"`
+}
+
 // SlotBrief names one recovery slot of an incoming file, so that a dialog
 // can say which key it will want before the button is pressed (APP.md §13).
 type SlotBrief struct {

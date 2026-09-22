@@ -24,6 +24,8 @@ export type {
     FileRow,
     IncomingRecord,
     OpView,
+    OpenPathResult,
+    OpenRequest,
     Page,
     Reader,
     Settings,

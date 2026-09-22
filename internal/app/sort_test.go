@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -212,6 +213,7 @@ func TestPageOrderIsOneListAcrossOffsets(t *testing.T) {
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Sorted")
 	var paths []string
+	var whens []time.Time
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 1; i <= 12; i++ {
 		// Sizes that collide in pairs, so the name tie-break is exercised
@@ -222,6 +224,21 @@ func TestPageOrderIsOneListAcrossOffsets(t *testing.T) {
 			t.Fatal(err)
 		}
 		paths = append(paths, p)
+		whens = append(whens, when)
+	}
+	// The order below is the order of these times, read by the add from the
+	// files. On this machine a scanner in the temp folder has been seen to
+	// move a fresh file's time under a test (twice in one gate run,
+	// 2026-09-21, never in isolation): a time that did not stay is the
+	// machine's doing, not the sort's, and says so rather than failing.
+	for i, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.ModTime().Equal(whens[i]) {
+			t.Skipf("%s: the file's time moved under the test (%v, set %v) — the machine, not the sort", filepath.Base(p), st.ModTime(), whens[i])
+		}
 	}
 	h.add(t, id, rootID, PolicySkip, paths...)
 	for _, d := range []string{"Beta", "alpha"} {
@@ -275,7 +292,11 @@ func TestPageOrderIsOneListAcrossOffsets(t *testing.T) {
 	}
 	whole, _ = h.c.Page(id, rootID, "-modified", 0, 100)
 	if got := whole.Rows[2].Name + " " + whole.Rows[13].Name; got != "f01.txt f12.txt" {
-		t.Fatalf("-modified: %q", got)
+		var times []string
+		for _, r := range whole.Rows {
+			times = append(times, fmt.Sprintf("%s@%d", r.Name, r.ModifiedAt))
+		}
+		t.Fatalf("-modified: %q (recorded: %s)", got, strings.Join(times, " "))
 	}
 	whole, _ = h.c.Page(id, rootID, "-size", 0, 100)
 	if got := whole.Rows[2].Name + " " + whole.Rows[3].Name; got != "f11.txt f12.txt" {

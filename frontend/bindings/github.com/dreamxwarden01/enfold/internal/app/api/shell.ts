@@ -50,6 +50,19 @@ export function DragOut(archiveID: string, recordIDs: string[] | null): $Cancell
     return $Call.ByID(945813141, archiveID, recordIDs);
 }
 
+/**
+ * PendingOpen is the page asking, at boot, whether this launch was asked
+ * to open a file (APP.md §14). A launch argument cannot be delivered as an
+ * event — there is no page to hear it until the window has drawn one — so
+ * the shell keeps it and the page comes for it; a second launch, whose
+ * page is already up, is told by `shell.open` instead. The answer carries
+ * Seq 0 when there is nothing waiting, and the request is cleared by the
+ * asking, so it is opened once however it arrived.
+ */
+export function PendingOpen(): $CancellablePromise<app$0.OpenRequest> {
+    return $Call.ByID(1615108156);
+}
+
 export function PickFiles(title: string, multiple: boolean): $CancellablePromise<string[] | null> {
     return $Call.ByID(3229291943, title, multiple);
 }

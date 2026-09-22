@@ -99,6 +99,21 @@ export function Open(id: string): $CancellablePromise<app$0.ArchiveStat> {
 }
 
 /**
+ * OpenPath opens the archive a file is, for Explorer (APP.md §14): the
+ * file's plaintext envelope names the archive_id, and a record with that
+ * id opens as if its row had been double-clicked, its last_path moved to
+ * this file when it differs. vault.needs_unlock while the vault is locked
+ * — the page draws the lock scene and asks again after the unlock —
+ * archive.key_not_in_vault when no record holds that id, with *Import
+ * records…* the way in, archive.forgotten for a forgotten record, and
+ * archive.not_an_archive for a file whose envelope does not decode or
+ * that cannot be read.
+ */
+export function OpenPath(path: string): $CancellablePromise<app$0.OpenPathResult> {
+    return $Call.ByID(2811090123, path);
+}
+
+/**
  * Rename writes the registry's trusted name (FORMAT.md §7.4); no ceremony.
  */
 export function Rename(id: string, name: string): $CancellablePromise<void> {

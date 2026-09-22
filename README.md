@@ -11,12 +11,37 @@ application core (`internal/app`), the Wails shell (repository root) and the Sve
 (the full suite includes a 512 MiB Argon2id anchor; `-short` skips it) and the frontend's with
 `npm test` in `frontend/`.
 
+## Installing
+
+Download `enfold-amd64-installer.exe` from the releases page and check its SHA-256 against the one
+in the release notes. **The binaries are not code-signed.** SmartScreen will therefore stop the
+first run of each release with *"Windows protected your PC"* — click **More info**, then
+**Run anyway**. That is the whole of it: two clicks, once per release.
+
+The installer is per user and asks for no administrator rights, so there is no UAC prompt. It
+writes `%LOCALAPPDATA%\Programs\Enfold`, a Start-menu shortcut and the `.efd` file association, and
+it installs Microsoft's Edge WebView2 runtime if the machine does not already have it. There is no
+directory page: the one path Enfold lets you choose is the vault's, and you choose it inside the
+application. Running the installer again upgrades in place. If Enfold is running it says so and
+waits for you to quit it from the tray icon — it never kills the process.
+
+Your vault, `settings.json` and the log live in `%LOCALAPPDATA%\Enfold`, apart from the program.
+**Uninstalling keeps them.** It removes the program folder, the shortcut, the association, the
+uninstall entry and the WebView2 profile, and nothing else under `%LOCALAPPDATA%\Enfold` — the
+last page of the uninstaller says as much. Delete that folder yourself if you mean to.
+
 ## Building
 
 Windows, Go 1.26, Node 24 and the `wails3` CLI (v3.0.0-beta.16). `wails3 build` produces
-`bin/enfold.exe` (production: security headers on, no debug logging); `wails3 package` wraps it
-in an NSIS installer, the only installer — the executable also runs on its own from anywhere, and
-the vault never lives beside it (`docs/APP.md` §2.1). `wails3 dev` runs a development build with DevTools and debug logging on —
+`bin/enfold.exe` (production: security headers on, no debug logging); `wails3 task package` wraps
+it in an NSIS installer at `bin/enfold-amd64-installer.exe`, the only installer — it needs
+[NSIS](https://nsis.sourceforge.io) 3.x on `PATH`, and it is per user because
+`build/windows/Taskfile.yml` defaults `INSTALL_SCOPE` to `user`. The executable also runs on its
+own from anywhere, and the vault never lives beside it (`docs/APP.md` §2.1). The version the
+installer stamps into the uninstall entry is `info.version` in `build/config.yml`, which the
+release bumps; `build/config.yml` also declares the `.efd` association, and
+`wails3 task common:update:build-assets` is what carries it into
+`build/windows/nsis/wails_tools.nsh`. `wails3 dev` runs a development build with DevTools and debug logging on —
 point it only at a throwaway vault, and set `ENFOLD_DATA_DIR` to keep its settings and WebView2
 profile away from the real ones. The TypeScript bindings under `frontend/bindings` are generated
 and committed; a diff there is a change to the API the page can call.

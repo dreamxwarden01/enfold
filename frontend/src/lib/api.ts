@@ -18,6 +18,9 @@ export interface AppError {
   code: string;
   retries?: number;
   slot?: string;
+  // archive.open_elsewhere: the file the archive is already open from
+  // (APP.md §14).
+  path?: string;
 }
 
 // errorOf reads the coded error out of a rejected call. Wails attaches the

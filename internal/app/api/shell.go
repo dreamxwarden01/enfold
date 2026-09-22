@@ -29,6 +29,10 @@ type Hooks struct {
 	// window — on a thread of the drag's own — and returns when it has
 	// ended (APP.md §3); nil when the shell has no native drag.
 	DragOut func(archiveID string, recordIDs []string) (app.DragOutResult, *app.Error)
+	// PendingOpen takes the launch's "open this from Explorer" out of the
+	// shell, if one is waiting (APP.md §14). It is a take: the request is
+	// cleared, so the one that starts a window is opened once.
+	PendingOpen func() app.OpenRequest
 }
 
 // Shell is the window and the native dialogs.
@@ -58,6 +62,20 @@ func (s *Shell) CloseDecided(action string, remember bool) error {
 		return &app.Error{Code: app.CodeInternal}
 	}
 	return asErr(s.h.CloseDecided(action, remember))
+}
+
+// PendingOpen is the page asking, at boot, whether this launch was asked
+// to open a file (APP.md §14). A launch argument cannot be delivered as an
+// event — there is no page to hear it until the window has drawn one — so
+// the shell keeps it and the page comes for it; a second launch, whose
+// page is already up, is told by `shell.open` instead. The answer carries
+// Seq 0 when there is nothing waiting, and the request is cleared by the
+// asking, so it is opened once however it arrived.
+func (s *Shell) PendingOpen() app.OpenRequest {
+	if s.h.PendingOpen == nil {
+		return app.OpenRequest{}
+	}
+	return s.h.PendingOpen()
 }
 
 func (s *Shell) PickFiles(title string, multiple bool) ([]string, error) {

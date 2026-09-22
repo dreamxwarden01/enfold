@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -346,6 +347,318 @@ func (c *Core) OpenArchive(id string) (ArchiveStat, *Error) {
 	return c.openArchiveFor(id, true)
 }
 
+// OpenPath opens the archive a *file* is: a double-click in Explorer, an
+// *Open with*, a path on the command line (APP.md §14, decision 4). The
+// file is read for its plaintext envelope alone — a few hundred bytes at
+// the head, never an open of the archive — and the record is found by the
+// archive_id in it and never by the name, so a file that was renamed or
+// moved still opens and a file that took an archive's name does not.
+//
+// What it answers:
+//
+//   - a record with that id, the vault Unlocked → the record's last_path is
+//     moved to this path when it differs, exactly as *Locate…* writes it,
+//     and the archive is opened as a double-click of its row opens it. The
+//     id comes back and the page goes there.
+//   - the vault Locked → vault.needs_unlock, the code every other call of a
+//     locked vault answers. The page draws the lock scene and keeps the
+//     path, and asks again once the unlock lands.
+//   - no record with that id → archive.key_not_in_vault, the file untouched.
+//   - a forgotten record → archive.forgotten, as every other operation on
+//     one answers (§13): the keys are still there, and it is restored
+//     rather than found again.
+//   - the archive already open, or being opened, from another file of the
+//     same archive_id → archive.open_elsewhere, with that path named. One
+//     handle per archive is the rule (§2.3), so this call could not open
+//     the file it was given; moving last_path to it would leave the
+//     registry naming a copy the page is not reading. The same file,
+//     already open → the id, and the page goes there.
+//   - an envelope that does not decode, or a file that cannot be read →
+//     archive.not_an_archive.
+//
+// Enfold's own place is refused before any of that: the data folder and
+// the vault file are not paths a call of the user's may name (§3), and a
+// command line is as much the user's as a dialog is. The refusal is made
+// twice — on the name, and then on the handle that was opened, which is
+// the one a hard link to vault.eks cannot be spelled around (ops.go
+// refuseOpenedSource, the outside review of 2026-09-13).
+func (c *Core) OpenPath(path string) (OpenPathResult, *Error) {
+	if !filepath.IsAbs(path) {
+		// The shell resolves a relative argument against the launch's own
+		// working directory before it hands one over (APP.md §14); the
+		// core's own working directory is nobody's to guess from.
+		return OpenPathResult{}, coded(CodeParams)
+	}
+	if e := c.refuseVaultPlaces(path); e != nil {
+		return OpenPathResult{}, e
+	}
+	env, e := c.envelopeAt(path)
+	if e != nil {
+		return OpenPathResult{}, e
+	}
+	return c.openPathFor(env.ArchiveID, path)
+}
+
+// openPathFor is OpenPath once the envelope has named the archive: the
+// record, what already holds that archive, the move of last_path and the
+// open, in that order.
+//
+// **Why the reservation** (the second review's finding 1). Three things
+// have to agree, and they are decided in three different places: whether
+// a handle exists, whether an archive.Open is on its way to becoming one,
+// and which file last_path names. Reading the first two and then letting
+// the mutex go — with the move and the open still to come — leaves a
+// window in which an operation of the Archives page (a Verify, a Compact)
+// starts opening the archive at the path this call is about to replace.
+// This call would then move last_path to its own file and join that other
+// open, and answer success while the page reads the other copy.
+//
+// So the reservation this call takes before it releases the mutex covers
+// the move as well: an open starting inside that window waits for it, and
+// re-reads last_path afterwards, which by then names this file. A
+// reservation someone else holds is answered like a handle — the same
+// file is joined, another file is archive.open_elsewhere — and every wait
+// is followed by re-asking the whole question, since anything may have
+// happened while this call was not holding the mutex.
+func (c *Core) openPathFor(aid [16]byte, path string) (OpenPathResult, *Error) {
+	id := hexID(aid)
+	// The file this call was given, resolved once and outside the mutex:
+	// every comparison below is against this, so the only resolving done
+	// under the lock is of the one path that can only be read there — the
+	// path a handle or a reservation holds (samePlaceAs).
+	want := resolveLinks(path)
+	for {
+		c.mu.Lock()
+		sess, e := c.sessionLocked()
+		if e != nil {
+			c.mu.Unlock()
+			return OpenPathResult{}, e
+		}
+		rec := findRecord(sess.Registry(), aid)
+		if rec == nil {
+			c.mu.Unlock()
+			return OpenPathResult{}, coded(CodeKeyNotInVault)
+		}
+		if rec.Forgotten() {
+			c.mu.Unlock()
+			return OpenPathResult{}, coded(CodeArchiveForgotten)
+		}
+		last := rec.LastPath
+		// A handle for this archive already exists — held by the page, by
+		// an operation of the Archives page, or draining behind one — and
+		// it was opened on one particular file. A second copy of the same
+		// archive is not that file, and there is one handle per archive.
+		if oa := c.archives[aid]; oa != nil {
+			if oa.state == "closing" {
+				// The kill switch has it: it is gone in a moment, and what
+				// follows is a fresh open. Nothing is decided against a
+				// handle that is being closed under this call — and after
+				// the wait the whole question is asked again, since
+				// anything may have happened while the mutex was not held.
+				gone := oa.gone
+				c.mu.Unlock()
+				<-gone
+				if c.seams.redeciding != nil {
+					c.seams.redeciding() // a test, between the wait and the next turn
+				}
+				continue
+			}
+			if !samePlaceAs(want, oa.path) {
+				openPath := oa.path
+				c.mu.Unlock()
+				return OpenPathResult{}, &Error{Code: CodeOpenElsewhere, Path: openPath}
+			}
+			// The very file that is open, and it is mounted here rather
+			// than by a second call: comparing the path, letting the mutex
+			// go and then opening by id leaves a window in which a Leave
+			// or an operation's end closes this handle and another copy's
+			// OpenPath installs a handle on *its* file, which this call
+			// would then join and report success for (the fourth review's
+			// finding). Decided and acted on without the mutex going in
+			// between, there is no such window.
+			if c.seams.mounting != nil {
+				c.seams.mounting() // a test, holding the mutex
+			}
+			if _, e := c.mountOpenLocked(oa, true); e != nil {
+				c.mu.Unlock()
+				return OpenPathResult{}, e
+			}
+			c.mu.Unlock()
+			return OpenPathResult{ArchiveID: id}, nil
+		}
+		// No handle yet, but perhaps an open on its way to one. It knows
+		// which file it is opening, which is the whole question here.
+		if res := c.opening[aid]; res != nil {
+			openPath, done := res.path, res.done
+			if !samePlaceAs(want, openPath) {
+				c.mu.Unlock()
+				return OpenPathResult{}, &Error{Code: CodeOpenElsewhere, Path: openPath}
+			}
+			c.mu.Unlock()
+			<-done
+			if c.seams.redeciding != nil {
+				c.seams.redeciding() // a test, between the wait and the next turn
+			}
+			continue // joined: ask the whole question again
+		}
+		if c.deleting[aid] {
+			// A delete has claimed this record and its file is going.
+			c.mu.Unlock()
+			return OpenPathResult{}, coded(CodeArchiveBusy)
+		}
+		// Nothing holds this archive, and from here nothing else may start
+		// opening it without waiting: the reservation stands across the
+		// move of last_path, so no open reads the path this call is
+		// replacing.
+		res := c.reserveOpenLocked(aid, path)
+		c.mu.Unlock()
+		// The file has just proved where it is, so the record follows it —
+		// through Locate itself, which is the one place that write is made.
+		relocated := false
+		if !samePlaceAs(want, last) {
+			if e := c.Locate(id, path); e != nil {
+				c.releaseOpen(aid, res)
+				return OpenPathResult{}, e
+			}
+			relocated = true
+		}
+		if c.seams.relocated != nil {
+			c.seams.relocated() // a test, the move made and the open still to come
+		}
+		// And now the open, under the reservation this call still holds —
+		// not a release followed by an open by id, which would let another
+		// copy's OpenPath reserve, move last_path to itself and install a
+		// handle on it in between, leaving this call to join that handle
+		// and answer success for a file it was never given (the third
+		// review's finding 1). openReserved opens this path and releases
+		// the reservation once the handle is installed.
+		if _, e := c.openReserved(aid, true, res); e != nil {
+			return OpenPathResult{}, e
+		}
+		return OpenPathResult{ArchiveID: id, Relocated: relocated}, nil
+	}
+}
+
+// envelopeAt reads a file's plaintext envelope — the head of it, a few
+// hundred bytes of the 4 KiB block, never an open of the archive — from a
+// handle this opens itself, and judges that handle before it reads a byte
+// of it (APP.md §14, §3).
+//
+// The handle rather than the name, because the name has already been
+// judged and a name is not what a file is: a hard link to vault.eks, in a
+// folder of the caller's own and under a name of its own, is a path no
+// containment test can recognise, and only refuseOpenedSource — os.SameFile
+// on the handle, and the path Windows resolved it to — sees it. Without
+// that, a command line naming such a link would have the vault's first
+// 4 KiB read and answered about (the review's finding 6).
+//
+// Everything a read can fail with is one answer: a file that is not an
+// Enfold archive, or is not there, or will not be read. The cause goes to
+// the log, as every other lower-layer error does.
+func (c *Core) envelopeAt(path string) (*format.Envelope, *Error) {
+	f, err := os.Open(path)
+	if err != nil {
+		c.log("open path: %s: %v", path, err)
+		return nil, coded(CodeNotAnArchive)
+	}
+	defer f.Close()
+	if e := c.refuseOpenedSource(f); e != nil {
+		return nil, e
+	}
+	var b [format.SuperblockSize]byte
+	if _, err := f.ReadAt(b[:], int64(format.EnvelopeOff)); err != nil {
+		c.log("open path: %s: reading the envelope: %v", path, err)
+		return nil, coded(CodeNotAnArchive)
+	}
+	env, err := format.DecodeEnvelope(b[:])
+	if err != nil {
+		c.log("open path: %s: %v", path, err)
+		return nil, coded(CodeNotAnArchive)
+	}
+	return env, nil
+}
+
+// seams are the moments of an open and a close that a test can stand in.
+// What the orderings of §14 are for is what a *second* caller meets at
+// each of them, and that cannot be established from outside: every one of
+// these is a point a test holds a call at so that the interleaving is
+// ordered rather than raced.
+//
+//   - mounting: inside OpenPath's same-path branch, the state mutex
+//     **held**. The window of the fourth review's finding, which must no
+//     longer exist: a call held here proves the mutex cannot be taken.
+//   - redeciding: after one of OpenPath's waits — a closing handle, a
+//     reservation for the same file — and before the next turn of the
+//     decision. A call held here is one whose second turn is about to
+//     read a world the test has changed under it.
+//   - relocated: after OpenPath's move of last_path and before the open,
+//     the reservation held. The window the reservation exists for.
+//   - closing: inside CloseArchive, immediately before it takes the state
+//     mutex. A close held here is inside the core and cannot proceed, so
+//     what another caller sees meanwhile is not a matter of timing.
+//
+// Every field is nil in every build but a test's.
+type seams struct {
+	mounting   func()
+	redeciding func()
+	relocated  func()
+	closing    func()
+}
+
+// opening is one archive.Open on its way: the file it is opening, and the
+// channel closed once the handle is installed or the open has failed. It
+// stands in Core.opening for the whole of that window, so a second opener
+// waits for it instead of opening a second handle — and can ask which
+// file it is, which is what OpenPath answers about before any handle
+// exists (APP.md §2.3, §14).
+type opening struct {
+	path string
+	done chan struct{}
+}
+
+// reserveOpenLocked installs a reservation for aid. The caller holds the
+// state mutex and must release the reservation on every way out.
+func (c *Core) reserveOpenLocked(aid [16]byte, path string) *opening {
+	res := &opening{path: path, done: make(chan struct{})}
+	c.opening[aid] = res
+	return res
+}
+
+// mountOpenLocked is the whole of what an Open does to a handle that
+// already exists, in one place so that openArchiveFor and OpenPath do the
+// same thing (the fourth review's finding): the handle is mounted when
+// the page is what asks and does not hold it yet, and the stat is taken.
+// Nothing is emitted — an Open that found a handle changed no archive.
+//
+// Mounting a handle the page does not hold — one the core opened for an
+// Archives-page operation, or one draining after its page was left — is
+// an Open, and an Open needs the session (APP.md §2.3, "What stays usable
+// after a lock"): a lock preserves the page an archive already had and
+// never hands a page one it did not have. The handle then stays as it
+// was, unmounted.
+//
+// The caller holds the state mutex and has established that the handle is
+// not closing.
+func (c *Core) mountOpenLocked(oa *openArchive, mounted bool) (ArchiveStat, *Error) {
+	if mounted && !oa.mounted {
+		if _, e := c.sessionLocked(); e != nil {
+			return ArchiveStat{}, e
+		}
+		oa.mounted = true
+	}
+	return c.statLocked(oa), nil
+}
+
+// releaseOpen takes the reservation down and wakes whoever waited on it.
+func (c *Core) releaseOpen(aid [16]byte, res *opening) {
+	c.mu.Lock()
+	if c.opening[aid] == res {
+		delete(c.opening, aid)
+	}
+	c.mu.Unlock()
+	close(res.done)
+}
+
 // openArchiveFor is the open itself; mounted says whether the page is what
 // asks for it. An operation of the Archives page opens with mounted false —
 // nothing but the operation holds the handle, so it closes again when the
@@ -375,29 +688,16 @@ func (c *Core) openArchiveFor(id string, mounted bool) (ArchiveStat, *Error) {
 			<-gone
 			return c.openArchiveFor(id, mounted)
 		}
-		if mounted && !oa.mounted {
-			// Mounting a handle the page does not hold — one the core opened
-			// for an Archives-page operation, or one draining after its page
-			// was left — is an Open, and an Open needs the session (APP.md
-			// §2.3, "What stays usable after a lock"): a lock preserves the
-			// page an archive already had and never hands a page one it did
-			// not have. The handle stays as it was, unmounted.
-			if _, e := c.sessionLocked(); e != nil {
-				c.mu.Unlock()
-				return ArchiveStat{}, e
-			}
-			oa.mounted = true
-		}
-		st := c.statLocked(oa)
+		st, e := c.mountOpenLocked(oa, mounted)
 		c.mu.Unlock()
-		return st, nil
+		return st, e
 	}
-	if ch := c.opening[aid]; ch != nil {
+	if res := c.opening[aid]; res != nil {
 		// Someone else is opening this archive right now: wait for their
 		// handle and join it, so that the archive layer sees one Open per
 		// path (APP.md §2.3).
 		c.mu.Unlock()
-		<-ch
+		<-res.done
 		return c.openArchiveFor(id, mounted)
 	}
 	if c.deleting[aid] {
@@ -422,33 +722,64 @@ func (c *Core) openArchiveFor(id string, mounted bool) (ArchiveStat, *Error) {
 		c.mu.Unlock()
 		return ArchiveStat{}, coded(CodeArchiveForgotten)
 	}
-	keys, e := c.archiveKeysLocked(rec)
-	if e != nil {
-		c.mu.Unlock()
-		return ArchiveStat{}, e
-	}
-	opts := c.archiveOptionsLocked(rec)
-	path, name, kid, nv, method, lastAt, lastSeq := rec.LastPath, rec.Name, rec.CurrentKID, len(rec.Versions), methodOf(rec.Policy), rec.LastWrittenAt, rec.LastSeq
 	// The reservation: from here until the handle is installed or the open
 	// has failed, a second opener of this archive waits rather than opening
-	// a second handle. It is released on every way out.
-	opening := make(chan struct{})
-	c.opening[aid] = opening
+	// a second handle. It names the file this open is for, and openReserved
+	// releases it — never this function, and never before the handle is in.
+	res := c.reserveOpenLocked(aid, rec.LastPath)
 	c.mu.Unlock()
+	return c.openReserved(aid, mounted, res)
+}
+
+// openReserved is the open itself, run with the reservation already held:
+// openArchiveFor's own, taken over the file the record names, or the one
+// OpenPath holds across its move of last_path (APP.md §14). It opens
+// **res.path** — the file the reservation was taken for, not whatever the
+// record says by the time it runs — installs the handle, and releases the
+// reservation only then.
+//
+// That the release comes after the handle and not before is the whole
+// point (the third review's finding 1). Releasing first and reopening by
+// id leaves a gap in which another OpenPath, for another copy of the same
+// archive, reserves, moves last_path to its own file and installs a
+// handle on it; the first call then joins that handle and answers success
+// for a file nobody asked it about. Held through, there is no gap: the
+// second call meets the reservation, sees which file it is for, and
+// either waits for it or is refused.
+func (c *Core) openReserved(aid [16]byte, mounted bool, res *opening) (ArchiveStat, *Error) {
 	released := false
 	release := func() {
 		if released {
 			return
 		}
 		released = true
-		c.mu.Lock()
-		if c.opening[aid] == opening {
-			delete(c.opening, aid)
-		}
-		c.mu.Unlock()
-		close(opening)
+		c.releaseOpen(aid, res)
 	}
 	defer release()
+	id, path := hexID(aid), res.path
+	c.mu.Lock()
+	sess, e := c.sessionLocked()
+	if e != nil {
+		c.mu.Unlock()
+		return ArchiveStat{}, e
+	}
+	rec := findRecord(sess.Registry(), aid)
+	if rec == nil {
+		c.mu.Unlock()
+		return ArchiveStat{}, coded(CodeArchiveNotFound)
+	}
+	if rec.Forgotten() {
+		c.mu.Unlock()
+		return ArchiveStat{}, coded(CodeArchiveForgotten)
+	}
+	keys, e := c.archiveKeysLocked(rec)
+	if e != nil {
+		c.mu.Unlock()
+		return ArchiveStat{}, e
+	}
+	opts := c.archiveOptionsLocked(rec)
+	name, kid, nv, method, lastAt, lastSeq := rec.Name, rec.CurrentKID, len(rec.Versions), methodOf(rec.Policy), rec.LastWrittenAt, rec.LastSeq
+	c.mu.Unlock()
 
 	a, err := archive.Open(path, keys, opts)
 	zeroKeys(keys)
@@ -770,6 +1101,9 @@ func (c *Core) CloseArchive(id string) *Error {
 	aid, ok := parseID(id)
 	if !ok {
 		return coded(CodeParams)
+	}
+	if c.seams.closing != nil {
+		c.seams.closing() // a test, inside the core and not yet holding the mutex
 	}
 	c.mu.Lock()
 	oa := c.archives[aid]

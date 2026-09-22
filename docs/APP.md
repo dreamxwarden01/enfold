@@ -623,7 +623,7 @@ one way. The root is a directory only where a directory is *named* — `Page`'s 
 `params`, so the root is never renamed, moved, previewed or tombstoned. An id that is not 32 hex
 digits is `params`. A well-formed id that names nothing live in the merged view, or names a file
 where a directory is wanted, is `file.not_found`, and no call ever falls back to the root when an
-id does not resolve. Times are Unix seconds; sizes are `uint64`. **Every service method returns `*app.Error`** — `{Code, Retries?, Slot?}`
+id does not resolve. Times are Unix seconds; sizes are `uint64`. **Every service method returns `*app.Error`** — `{Code, Retries?, Slot?, Path?}` (`Path` only with `archive.open_elsewhere`, §14: the file the archive is open from)
 whose `Error()` is the code and nothing else, produced by one `classify(err)` over every
 sentinel of every package with a catch-all `internal` — and services are registered with a
 `MarshalError` that emits only that shape; the original error goes to the core-side log.
@@ -666,7 +666,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
   KeyVersion, Open, Dirty, ReceiptOwed, NoCompression, ForgottenAt, Note Code}` — hidden and
   forgotten records are filtered unless `showHidden`. `Open(id)`, `Leave(id)` (the page left: close, or drain while a body is in flight, §2.3), `Close(id)` (the kill switch), `Create(path,
   name, noCompression)`, `Hide(id)`, `Unhide(id)`, `Locate(id, newPath)`, `Compact(id) opID`,
-  `RotateKey(id) opID`, `Verify(id) opID`, `CloseAll()` — `Create(path, name, method)` takes the
+  `RotateKey(id) opID`, `Verify(id) opID`, `CloseAll()`, `OpenPath(path) OpenPathResult{ArchiveID, Relocated}` (§14: the archive whose envelope's `archive_id` names a record is opened as a double-click would, its `last_path` moved to this path when it differs — the same write as `Locate` — with `archive.key_not_in_vault` when no record has the id, `archive.not_an_archive` when the file is not one or is not there, `needs_unlock` while the vault is Locked) — `Create(path, name, method)` takes the
   compression method, `store` · `fastest` · `normal` · `better` · `best`, written into the
   record's policy (FORMAT §7.1 bits 2–5) and applied to every later open of the archive on any
   machine; `ArchiveSummary.Method` and `ArchiveDetails.Method` carry it back (they replace
@@ -1800,3 +1800,130 @@ registry keeps no copy of this recovery key — replace the slot; never a refusa
 Unlocked for it, so the lock screen cannot offer it — with a pointer from the Keys page's Backups
 card. The rotate dialog's pre-selected backup performs the export and then the rotation in one
 press; a Save dialog cancelled at the export rotates nothing.
+
+## 14. Install, upgrade, uninstall
+
+*Ruled 2026-09-21 (the user's "do it this way" on every point); the decisions are marked where
+they are taken.*
+
+**One installer, per user, no elevation.** The NSIS installer (`build/windows/nsis`, the only
+installer — DECISIONS 2026-09-06) installs for the current user alone: `%LOCALAPPDATA%\Programs\Enfold`,
+`REQUEST_EXECUTION_LEVEL user`, `WAILS_INSTALL_SCOPE user`, no UAC prompt (decision 1). An unsigned
+binary behind a UAC prompt is the worst first impression an unsigned binary can make; the vault
+is per user already (§2.1); and DESIGN §2 accepts the same-user attacker, so the write
+protection of Program Files buys nothing the design counts on. A machine-wide install is not
+offered in 1.0. The installer's pages are Welcome, the files, and Finish with *Run Enfold* — no
+directory page, since there is one place and the one path the product lets a user choose is
+the vault's, inside the application, and no licence page (decision 2). It writes `enfold.exe`,
+`uninstall.exe` and a Start-menu shortcut; no desktop shortcut — Enfold lives in the tray, and a
+shortcut is a right-click away for whoever wants one (decision 2). The uninstall entry (HKCU)
+carries the version from `build/config.yml`, which is the release's.
+
+**WebView2.** Before the files, the Evergreen runtime is looked for — the machine's key, then
+the user's — and Microsoft's bootstrapper is run silently when it is absent, online only, as
+SCOPE says; a bootstrapper that fails stops the installer with the sentence and Microsoft's
+download address, since the application cannot start without the runtime. Windows 11 ships
+it; a Windows 10 machine may not, and the clean-machine test below is that path.
+
+**A running Enfold.** The installer never kills the process: an operation may be running — a
+commit is crash-safe, a staged drag is nobody else's to end, and a kill is not an exit. Before it writes, it opens `enfold.exe` for appending — a write handle that changes nothing;
+a sharing violation means Enfold is running (the executable of a running process cannot be
+opened for writing), and the installer says "Enfold is running. Quit it from the tray icon, then
+Retry." with *Retry* and *Cancel*; an access denied is not that — a stopped executable the user
+cannot write is a permissions problem, and the installer says so ("Enfold's folder cannot be
+written. Check the permissions on <folder>.") and stops rather than asking for a quit that
+would change nothing. The uninstaller does the same
+before it removes anything.
+
+**Upgrade** is the installer run again: the files replaced in place, the shortcut and the
+association rewritten, the uninstall entry's version updated, and nothing under the data folder
+touched. A downgrade is the same run — nothing in the program folder is versioned data — except
+that a vault or an archive written by a newer format refuses to open under the older program,
+which is FORMAT.md's rule (§10), not the installer's.
+
+**`.efd` belongs to Enfold** (decision 3). The installer registers `.efd` for the user — the class `Enfold.efd` (a ProgID has no spaces),
+shown as "Enfold archive", the application's icon; the registry view the 64-bit Explorer reads,
+since the installer is a 32-bit image — and the uninstaller unregisters it, restoring what was there before — the association that was
+the user's before the first install, which an upgrade must not overwrite with Enfold's own (the
+backup is taken only when the current default is not `Enfold.efd`); the open command quotes the
+executable's path, since a per-user install path carries the user's name and its spaces; and a
+WebView2 version of `0.0.0.0` counts as absent, as Microsoft's detection rule says. Opening an archive from Explorer — a double-click, *Open with*, a path on the
+command line — reaches the one running instance (§2.4's single instance: a second launch hands
+its arguments over and exits) or starts one, shows the window, and asks the core to open the
+file **by its envelope's `archive_id`**, never by name: a record with that id opens as if its
+row had been double-clicked — the vault unlocked first when it is locked, the lock scene and
+then the archive — and the record's `last_path` moves to this path when it differs, the file
+having just proved where it is, the same write *Locate…* makes (decision 4); no record with
+that id → the page says "This archive's key is not in your vault." with *Import records…* as the
+way in, and the file is not touched; a file that is not an Enfold archive (the magic wrong) is a
+toast and nothing more. Several paths at once: the first is opened, the rest are counted and named in a toast ("2 more
+archives were not opened: spare.efd, other.efd. Enfold opens one at a time."). A forgotten
+record answers `archive.forgotten` as everywhere else (§13); a path that is not there answers
+`archive.not_an_archive`, there being no archive either way; a path inside the data folder is
+refused before anything is read, §3's vault-source rule holding for a command line as for a
+dialog. **How the path reaches the page** (built 2026-09-21): at launch the shell parses its
+arguments — flags skipped, a relative path resolved against the working directory, folders and
+missing files skipped, the first remaining file the request — and holds the request in a slot
+the page asks for at boot (`Shell.PendingOpen`, right after its first `Status()`), because an
+event emitted at launch has no page to hear it yet; a second launch hands its arguments to the
+running instance (`SecondInstanceData.Args`, which unlike `os.Args[1:]` still carries the
+program's own path first — dropped, with a test), which stages the same slot and also emits
+`shell.open`, so the request opens once whether the window was up (the event) or being
+recreated from the tray (the slot); a sequence number makes it once. The core's call is
+`Archives.OpenPath(path)` (§3), answering the archive's id and whether the record's path moved;
+a vault that is Locked answers `needs_unlock`, the page keeps the path across the lock scene
+and retries once after the unlock — or at once, when the refusal arrives after the status has
+already turned Unlocked. Two more rules the review of the build wrote (2026-09-21): an archive
+already open from another path is not moved — `archive.open_elsewhere`, the page naming the
+open path ("This archive is already open from <path>. Close it there first.") — while the same
+path simply shows it; a request staged while an earlier one is still waiting merges into it, the
+earlier first path staying first and the newcomer's joining the rest; the page serialises the
+requests and drops a result whose number is no longer the latest, leaves the archive it was
+showing before it opens another, and takes down the previous request's dialog when it accepts
+a new one; the envelope is read from a handle that has passed §3's opened-source check, so a
+hard link to the vault answers `archive.source_is_vault`.
+
+**Uninstall** removes the program folder, the shortcut, the association, the uninstall entry
+and the WebView2 profile at `%LOCALAPPDATA%\Enfold\WebView2` — recreatable, and holding nothing
+decrypted, caching being off (§7) — and **nothing else under `%LOCALAPPDATA%\Enfold`** (decision 5):
+the vault, the settings and the log stay, and the uninstaller's last page says so: "Your vault
+and settings stay in %LOCALAPPDATA%\Enfold. Delete that folder yourself if you mean to." — the path
+shown expanded, since it is a folder the reader may go and find. `%TEMP%\Enfold` is left to the
+temp folder's own life. Nothing is removed that the user could not recreate. The uninstaller removes itself too: an NSIS uninstaller copies itself to the temporary folder
+and runs from there by default — the manual's `_?=` switch exists to turn that off — so the file
+it deletes is never the running image, and the folder really is gone afterwards (verified
+2026-09-21 against the stub; the script must never pass `_?=`).
+
+**Distribution** (decision 6). GitHub Releases, one asset per release — `enfold-amd64-installer.exe` —
+with its SHA-256 in the release notes, and the notes saying that the binaries are unsigned
+(SCOPE, ruled 2026-09-13) and what SmartScreen shows: "Windows protected your PC" → *More
+info* → *Run anyway*. No portable archive in 1.0: the executable runs from anywhere with its data
+in `%LOCALAPPDATA%` regardless, and can be a second asset later. Not in 1.0 (decision 7): starting
+with Windows (a settings switch writing the user's Run key, later), a machine-wide install,
+languages other than English.
+
+**The clean-machine test** — a VMware guest with Windows 10 and no WebView2 runtime: install
+(the bootstrapper runs), first run and a vault created, an `.efd` double-clicked from Explorer,
+the installer run again over the running instance (refused, then accepted after a quit from
+the tray), uninstall with the vault still in place and the uninstaller saying so, reinstall
+opening the same vault. And, on the same guest, the broad test of the application itself.
+
+**Maintenance — the next release's, designed now** (the user's ask, 2026-09-21: "a mode that
+detects the installed version and offers update, repair and uninstall"). The same installer
+file serves all three, so nothing else has to be shipped or found. At start it reads the
+uninstall entry (HKCU, `DisplayVersion`) and, when one is there, opens on a maintenance page
+instead of the welcome: the installer newer than what is installed → *Update* (the ordinary
+run, the page saying which version becomes which); the same version → *Repair* (the ordinary
+run: the files written again, the shortcut, the association and the entry rewritten) or
+*Uninstall* (the installed `uninstall.exe` run and waited for, the installer then closing);
+the installer older → the page says so and offers to install this version over the newer one
+anyway, the caveat being FORMAT.md's — a file written by the newer program refuses to open —
+and nothing the installer does. The uninstall entry gains `ModifyPath` pointing at the
+installer's own place, so that *Apps & features* shows *Modify* beside *Uninstall* and opens the
+same page (the installer copies itself to the program folder for that; the copy is what the
+uninstaller removes). In 1.0 the installer over an existing install simply installs — the Update
+and Repair paths without the page — since there is no second version to tell apart; the page
+comes with the first release that has a predecessor. Checking for updates from inside the
+application — an outbound request to GitHub — is an online service by SCOPE's rule and waits
+with the rest of them.
+

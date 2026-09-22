@@ -111,13 +111,20 @@ type Core struct {
 	// extractFS is where an extract touches the destination (extract.go);
 	// the zero value is the platform's own, and a test sets a stand-in.
 	extractFS extractFS
+	// seams are the moments of an open and a close a test can stand in
+	// (archives.go, APP.md §14), so that an interleaving is ordered
+	// rather than raced. Nil in every build but a test's, and set before
+	// the core is used.
+	seams seams
 
 	archives map[[16]byte]*openArchive
-	// opening are the archives an openArchiveFor is opening right now, each
-	// with the channel it closes once the handle is installed or the open
-	// has failed: a second opener waits on it and joins the handle, so that
-	// the archive layer sees one Open per path (APP.md §2.3).
-	opening map[[16]byte]chan struct{}
+	// opening are the archives being opened right now — by openArchiveFor,
+	// and by OpenPath across the write that moves last_path: a second
+	// opener waits on the reservation and joins the handle, so that the
+	// archive layer sees one Open per path (APP.md §2.3). Each carries the
+	// file it is opening, which is what lets OpenPath answer for an
+	// archive whose handle does not exist yet (APP.md §14).
+	opening map[[16]byte]*opening
 	// deleting are the records a Delete has claimed: it releases the state
 	// mutex for the folder read and the removal, and nothing may open or
 	// forget the record while it does (APP.md §13).
@@ -169,7 +176,7 @@ func New(d Deps) (*Core, error) {
 	if d.DataDir == "" {
 		return nil, fmt.Errorf("app: DataDir is required")
 	}
-	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, opening: map[[16]byte]chan struct{}{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
+	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, opening: map[[16]byte]*opening{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
 	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare, budget: reclaimBudget}
 	c.lockWait = lockCloseBudget
 	c.names = newNameCollator()

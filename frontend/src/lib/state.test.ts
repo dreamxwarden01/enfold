@@ -16,8 +16,11 @@ const m = vi.hoisted(() => ({
   Status: vi.fn(),
   List: vi.fn(),
   Leave: vi.fn(),
+  Open: vi.fn(),
+  OpenPath: vi.fn(),
   DragOut: vi.fn(),
   CloseDecided: vi.fn(),
+  PendingOpen: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -38,8 +41,8 @@ vi.mock("./api", async () => {
   return {
     ...actual,
     Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children },
-    Archives: { List: m.List, Leave: m.Leave },
-    Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided },
+    Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath },
+    Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided, PendingOpen: m.PendingOpen },
     Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: never },
     Keys: { Slots: never, EntangledState: never },
     Settings: { Get: never },
@@ -91,8 +94,11 @@ beforeEach(async () => {
   m.Status.mockReset();
   m.List.mockReset().mockResolvedValue([]);
   m.Leave.mockReset().mockResolvedValue(undefined);
+  m.Open.mockReset().mockResolvedValue(stat(1));
+  m.OpenPath.mockReset();
   m.DragOut.mockReset();
   m.CloseDecided.mockReset().mockResolvedValue(undefined);
+  m.PendingOpen.mockReset().mockResolvedValue({ seq: 0, path: "", rest: null });
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -628,5 +634,427 @@ describe("the close the shell cancelled", () => {
     expect(store.closeAsked).toBe(true);
     expect(store.closeBusy).toBe(false);
     expect(store.toasts.length).toBe(1);
+  });
+});
+
+// Opening an archive from Explorer (APP.md §14, decision 4): the shell
+// hands the page a request — the launch's own, taken from the shell at
+// boot, or a second launch's, which arrives as `shell.open` — and the
+// page turns Archives.OpenPath's four answers into the archive's page,
+// the lock scene, the key's dialog, or a toast.
+describe("a file opened from Explorer (APP.md §14)", () => {
+  const FILE = "D:\\Archives\\holiday.efd";
+  const request = (seq: number, path = FILE, rest: string[] | null = null) => ({ seq, path, rest });
+  const refusal = (code: string) => Object.assign(new Error(code), { cause: { code } });
+
+  // A store booted on a vault in the state given, with the shell holding
+  // the pending request given. The refreshes after the list never settle
+  // in these mocks, which is as far as this needs to run.
+  async function booted(state = "unlocked", pending = { seq: 0, path: "", rest: null as string[] | null }) {
+    m.Status.mockResolvedValueOnce(status(1, state));
+    m.PendingOpen.mockResolvedValueOnce(pending);
+    m.Page.mockResolvedValue(reply(1, [], 0)); // an opened archive lists its empty root
+    store.boot();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  }
+
+  it("asks the shell at boot and opens what it was given", async () => {
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "a", relocated: true });
+    await booted("unlocked", { seq: 1, path: FILE, rest: null });
+    expect(m.PendingOpen).toHaveBeenCalledTimes(1);
+    expect(m.OpenPath).toHaveBeenCalledWith(FILE);
+    expect(m.Open).toHaveBeenCalledWith("a"); // the route a row's double-click takes
+    expect(store.route).toBe("archive");
+    expect(store.current).toBe("a");
+  });
+
+  it("opens a second launch's file off the event, and empties the slot it was staged in", async () => {
+    await booted();
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "b", relocated: false });
+    // The shell stages every request and emits this one too: a page that
+    // heard it takes the slot as well, or the next window would open the
+    // same file again.
+    m.PendingOpen.mockResolvedValueOnce({ seq: 1, path: FILE, rest: null });
+    await m.handlers["shell.open"]({ data: request(1) });
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(store.route).toBe("archive");
+    expect(store.current).toBe("b");
+    expect(m.PendingOpen).toHaveBeenCalledTimes(2); // the boot's, and this one
+    expect(m.OpenPath).toHaveBeenCalledTimes(1); // the numbered request, opened once
+  });
+
+  it("opens one request once, however many ways it reached the page", async () => {
+    m.OpenPath.mockResolvedValue({ archiveId: "a", relocated: false });
+    await booted("unlocked", { seq: 3, path: FILE, rest: null });
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+    // The same launch, arriving again as an event: a second launch that
+    // had to recreate a window fills both the slot and the event.
+    await store.openFromShell(request(3));
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+    // An older one is past, and the next launch is its own request.
+    await store.openFromShell(request(2, "D:\\Archives\\old.efd"));
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+    await store.openFromShell(request(4, "D:\\Archives\\next.efd"));
+    expect(m.OpenPath).toHaveBeenCalledTimes(2);
+    expect(m.OpenPath).toHaveBeenLastCalledWith("D:\\Archives\\next.efd");
+  });
+
+  it("opens the first of several and counts the rest", async () => {
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "a", relocated: false });
+    await booted();
+    await store.openFromShell(request(1, FILE, ["D:\\Archives\\b.efd", "D:\\Archives\\c.efd"]));
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+    expect(m.OpenPath).toHaveBeenCalledWith(FILE);
+    expect(store.toasts.length).toBe(1);
+    // Named, not only counted (APP.md §14), and by their leaves.
+    expect(store.toasts[0].text).toContain("2 more archives were not opened: b.efd, c.efd.");
+  });
+
+  it("goes to the lock scene with the path kept, and finishes the open on the unlock — once", async () => {
+    await booted("locked");
+    m.OpenPath.mockRejectedValueOnce(refusal("vault.needs_unlock"));
+    await store.openFromShell(request(1));
+    expect(store.route).toBe("lock");
+    expect(store.openWhenUnlocked).toBe(FILE);
+    expect(store.keyNotInVault).toBeNull();
+    // The unlock lands: the open is made again, and the path is let go.
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "a", relocated: false });
+    m.handlers["vault.state"]({ data: status(2, "unlocked") });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.OpenPath).toHaveBeenCalledTimes(2);
+    expect(store.openWhenUnlocked).toBe("");
+    expect(store.current).toBe("a");
+  });
+
+  // The unlock can land while the call that is about to be refused is
+  // still in flight: the refusal was decided before it, and there is no
+  // transition left to wait for (the review's finding 3).
+  it("retries at once when Unlocked landed while the call was still in flight", async () => {
+    await booted("locked");
+    const late = deferred<{ archiveId: string; relocated: boolean }>();
+    m.OpenPath.mockReturnValueOnce(late.promise);
+    const p = store.openFromShell(request(1));
+    m.handlers["vault.state"]({ data: status(2, "unlocked") }); // the unlock, first
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "a", relocated: false });
+    late.reject(refusal("vault.needs_unlock")); // the stale refusal, after it
+    await p;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.OpenPath).toHaveBeenCalledTimes(2); // asked again at once
+    expect(store.openWhenUnlocked).toBe(""); // not left waiting for an unlock that has been
+    expect(store.current).toBe("a");
+  });
+
+  // Opening one archive over another never changes route, so the handle
+  // the page held would stay mounted with nothing holding it (the
+  // review's finding 4).
+  it("leaves the archive already on the page before opening another", async () => {
+    await booted();
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "one", relocated: false });
+    await store.openFromShell(request(1));
+    expect(store.current).toBe("one");
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "two", relocated: false });
+    await store.openFromShell(request(2, "D:\\Archives\\two.efd"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.Leave).toHaveBeenCalledWith("one");
+    expect(store.current).toBe("two");
+    expect(store.route).toBe("archive");
+  });
+
+  it("does not leave the archive when the same one is opened again", async () => {
+    await booted();
+    m.OpenPath.mockResolvedValue({ archiveId: "one", relocated: false });
+    await store.openFromShell(request(1));
+    await store.openFromShell(request(2, "D:\\Archives\\same.efd"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.Leave).not.toHaveBeenCalled();
+    expect(store.current).toBe("one");
+  });
+
+  // Two requests in flight and the older one answering last: it must not
+  // land its route, or its dialog, over what the newer one put there (the
+  // review's finding 5).
+  it("serialises the opens and drops a result a newer request has overtaken", async () => {
+    await booted();
+    const slow = deferred<{ archiveId: string; relocated: boolean }>();
+    m.OpenPath.mockReturnValueOnce(slow.promise);
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "newer", relocated: false });
+    const first = store.openFromShell(request(1, "D:\\Archives\\slow.efd"));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+    const second = store.openFromShell(request(2, "D:\\Archives\\quick.efd"));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    // The newer one is queued behind the older one and has not been asked.
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+    slow.resolve({ archiveId: "older", relocated: false });
+    await first;
+    await second;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.Open).toHaveBeenCalledTimes(1); // the overtaken result opened nothing
+    expect(m.Open).toHaveBeenCalledWith("newer");
+    expect(store.current).toBe("newer");
+  });
+
+  // A superseded success has already mounted the archive in the core: a
+  // mount no page will show is an orphan, and the next open of that
+  // archive would meet archive.open_elsewhere against a handle nobody
+  // wanted (the second review's finding 2).
+  it("gives back the mount of a success a newer request overtook", async () => {
+    await booted();
+    const slow = deferred<{ archiveId: string; relocated: boolean }>();
+    m.OpenPath.mockReturnValueOnce(slow.promise);
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "newer", relocated: false });
+    const first = store.openFromShell(request(1, "D:\\Archives\\slow.efd"));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const second = store.openFromShell(request(2, "D:\\Archives\\quick.efd"));
+    slow.resolve({ archiveId: "stale", relocated: false }); // the core mounted it
+    await first;
+    await second;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.Leave).toHaveBeenCalledWith("stale");
+    expect(store.current).toBe("newer");
+  });
+
+  it("never asks the core for a request already overtaken in the queue", async () => {
+    await booted();
+    const slow = deferred<{ archiveId: string; relocated: boolean }>();
+    m.OpenPath.mockReturnValueOnce(slow.promise);
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "second", relocated: false });
+    const first = store.openFromShell(request(1, "D:\\Archives\\a.efd"));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const second = store.openFromShell(request(2, "D:\\Archives\\b.efd"));
+    const third = store.openFromShell(request(3, "D:\\Archives\\c.efd"));
+    slow.resolve({ archiveId: "first", relocated: false });
+    await first;
+    await second;
+    await third;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    // Three requests, and the middle one was overtaken before its turn
+    // came: it never reached the core, so it mounted nothing to give back.
+    expect(m.OpenPath).toHaveBeenCalledTimes(2);
+    expect(m.OpenPath).toHaveBeenLastCalledWith("D:\\Archives\\c.efd");
+    expect(m.Leave).toHaveBeenCalledWith("first"); // the one that did mount
+    expect(m.Leave).not.toHaveBeenCalledWith("second");
+  });
+
+  // The Open is a second call of its own, and the check before it is not
+  // the check after it (the second review's finding 3).
+  it("applies nothing of a request overtaken while the core's Open was in flight", async () => {
+    await booted();
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "stale", relocated: false });
+    const slowOpen = deferred<ArchiveStat>();
+    m.Open.mockReturnValueOnce(slowOpen.promise);
+    const first = store.openFromShell(request(1, "D:\\Archives\\a.efd"));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(m.Open).toHaveBeenCalledWith("stale");
+    // B is accepted while A's Open is still travelling.
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "fresh", relocated: false });
+    const second = store.openFromShell(request(2, "D:\\Archives\\b.efd"));
+    slowOpen.resolve(stat(9));
+    await first;
+    await second;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(store.current).toBe("fresh"); // not the stale one's id
+    expect(store.route).toBe("archive");
+    expect(store.toasts.length).toBe(0); // and it said nothing
+    expect(m.Leave).toHaveBeenCalledWith("stale"); // its mount went back
+  });
+
+  // A → B → A with the leave of the first A still travelling: it would
+  // reach the core after the second A had been opened and close the
+  // archive the page is showing (the second review's finding 4).
+  it("waits for the leave before the next open, so A → B → A leaves A open", async () => {
+    await booted();
+    const order: string[] = [];
+    const leaveA = deferred<void>();
+    m.Leave.mockImplementation((id: string) => {
+      order.push(`leave:${id}`);
+      return id === "A" ? leaveA.promise : Promise.resolve();
+    });
+    m.Open.mockImplementation((id: string) => {
+      order.push(`open:${id}`);
+      return Promise.resolve(stat(1));
+    });
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "A", relocated: false });
+    await store.openFromShell(request(1, "D:\\Archives\\a.efd"));
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "B", relocated: false });
+    const second = store.openFromShell(request(2, "D:\\Archives\\b.efd"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    // B cannot be opened while the leave of A is unanswered.
+    expect(order).toEqual(["open:A", "leave:A"]);
+    leaveA.resolve();
+    await second;
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "A", relocated: false });
+    await store.openFromShell(request(3, "D:\\Archives\\a.efd"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(order).toEqual(["open:A", "leave:A", "open:B", "leave:B", "open:A"]);
+    expect(store.current).toBe("A");
+  });
+
+  // The core mounts the archive before the page waits for the leave of
+  // the one it is showing: a request overtaken inside that wait must
+  // still give its mount back (the third review's finding 2).
+  it("gives back the mount of a request overtaken while the displayed archive was being left", async () => {
+    await booted();
+    const order: string[] = [];
+    const leaveA = deferred<void>();
+    m.Open.mockImplementation((id: string) => {
+      order.push(`open:${id}`);
+      return Promise.resolve(stat(1));
+    });
+    m.Leave.mockImplementation((id: string) => {
+      order.push(`leave:${id}`);
+      return id === "A" ? leaveA.promise : Promise.resolve();
+    });
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "A", relocated: false });
+    await store.openFromShell(request(1, "D:\\Archives\\a.efd"));
+    expect(store.current).toBe("A");
+    // B: the core mounts it, and then the leave of A is waited for.
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "B", relocated: false });
+    const second = store.openFromShell(request(2, "D:\\Archives\\b.efd"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(order).toEqual(["open:A", "leave:A"]);
+    // C arrives inside that wait.
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "C", relocated: false });
+    const third = store.openFromShell(request(3, "D:\\Archives\\c.efd"));
+    leaveA.resolve();
+    await second;
+    await third;
+    for (let i = 0; i < 15; i++) await Promise.resolve();
+    // B's mount went back before C was opened, and C is what is shown.
+    expect(order).toEqual(["open:A", "leave:A", "leave:B", "open:C"]);
+    expect(store.current).toBe("C");
+  });
+
+  // The stale cleanup's own leave is waited for in the chain, or a newer
+  // request opening the same archive could finish first and the leave
+  // arrive afterwards, closing what the page is showing (the third
+  // review's finding 3).
+  it("waits for the stale mount to go back before the next open of the same archive", async () => {
+    await booted();
+    const order: string[] = [];
+    const openA = deferred<ArchiveStat>();
+    const leaveA = deferred<void>();
+    let firstOpen = true;
+    m.Open.mockImplementation((id: string) => {
+      order.push(`open:${id}`);
+      if (id === "A" && firstOpen) {
+        firstOpen = false;
+        return openA.promise;
+      }
+      return Promise.resolve(stat(1));
+    });
+    m.Leave.mockImplementation((id: string) => {
+      order.push(`leave:${id}`);
+      return id === "A" ? leaveA.promise : Promise.resolve();
+    });
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "A", relocated: false });
+    const first = store.openFromShell(request(1, "D:\\Archives\\a.efd"));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual(["open:A"]); // with the core, unanswered
+    // A newer request — for the very same archive — is accepted while
+    // that Open is still in flight.
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "A", relocated: false });
+    const second = store.openFromShell(request(2, "D:\\Archives\\a-again.efd"));
+    openA.resolve(stat(1));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    // The stale mount is going back, and nothing has been opened again.
+    expect(order).toEqual(["open:A", "leave:A"]);
+    leaveA.resolve();
+    await first;
+    await second;
+    for (let i = 0; i < 15; i++) await Promise.resolve();
+    expect(order).toEqual(["open:A", "leave:A", "open:A"]);
+    expect(store.current).toBe("A");
+  });
+
+  it("drops an overtaken refusal too: no dialog from a request the page has moved past", async () => {
+    await booted();
+    const slow = deferred<{ archiveId: string; relocated: boolean }>();
+    m.OpenPath.mockReturnValueOnce(slow.promise);
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "newer", relocated: false });
+    const first = store.openFromShell(request(1, "D:\\Archives\\slow.efd"));
+    // The older request is with the core before the newer one is
+    // accepted: its refusal is on its way back, not still in the queue.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(m.OpenPath).toHaveBeenCalledWith("D:\\Archives\\slow.efd");
+    const second = store.openFromShell(request(2, "D:\\Archives\\quick.efd"));
+    slow.reject(refusal("archive.key_not_in_vault"));
+    await first;
+    await second;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(store.keyNotInVault).toBeNull();
+    expect(store.current).toBe("newer");
+  });
+
+  // A dialog is about the file it was raised for: a new request is the
+  // user asking for something else (the review's finding 8).
+  it("clears the dialog and the waiting path the previous request left", async () => {
+    await booted();
+    m.OpenPath.mockRejectedValueOnce(refusal("archive.key_not_in_vault"));
+    await store.openFromShell(request(1));
+    expect(store.keyNotInVault).toBe(FILE);
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "a", relocated: false });
+    await store.openFromShell(request(2, "D:\\Archives\\other.efd"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(store.keyNotInVault).toBeNull();
+    expect(store.openWhenUnlocked).toBe("");
+    expect(store.current).toBe("a");
+  });
+
+  // archive.open_elsewhere carries the file the handle is on, and the
+  // toast names it (APP.md §14, the review's finding 1).
+  it("names the open file when the archive is already open from another copy", async () => {
+    await booted();
+    const open = "D:\\Archives\\photos.efd";
+    m.OpenPath.mockRejectedValueOnce(Object.assign(new Error("archive.open_elsewhere"), { cause: { code: "archive.open_elsewhere", path: open } }));
+    await store.openFromShell(request(1, "D:\\Downloads\\photos (1).efd"));
+    expect(store.keyNotInVault).toBeNull();
+    expect(store.toasts.length).toBe(1);
+    expect(store.toasts[0].text).toBe(`This archive is already open from ${open}. Close it there first.`);
+  });
+
+  it("says so and stops when the retry after an unlock is refused again", async () => {
+    await booted("locked");
+    m.OpenPath.mockRejectedValueOnce(refusal("vault.needs_unlock"));
+    await store.openFromShell(request(1));
+    expect(store.openWhenUnlocked).toBe(FILE);
+    m.OpenPath.mockRejectedValueOnce(refusal("vault.needs_unlock"));
+    m.handlers["vault.state"]({ data: status(2, "unlocked") });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(store.openWhenUnlocked).toBe(""); // not armed for a second unlock
+    expect(store.toasts.length).toBe(1);
+  });
+
+  it("puts up the key's dialog when no record here holds the archive", async () => {
+    await booted();
+    m.OpenPath.mockRejectedValueOnce(refusal("archive.key_not_in_vault"));
+    await store.openFromShell(request(1));
+    expect(store.keyNotInVault).toBe(FILE);
+    expect(store.route).toBe("archives"); // nowhere new: nothing was opened
+    expect(store.toasts.length).toBe(0);
+    // Its one action hands Import records… to the Archives page.
+    store.askImportRecords();
+    expect(store.keyNotInVault).toBeNull();
+    expect(store.importRecordsAsked).toBe(true);
+    expect(store.route).toBe("archives");
+  });
+
+  it("toasts a file that is not an archive, and every other refusal", async () => {
+    await booted();
+    m.OpenPath.mockRejectedValueOnce(refusal("archive.not_an_archive"));
+    await store.openFromShell(request(1));
+    expect(store.keyNotInVault).toBeNull();
+    expect(store.toasts.length).toBe(1);
+    expect(store.toasts[0].kind).toBe("error");
+    m.OpenPath.mockRejectedValueOnce(refusal("archive.forgotten"));
+    await store.openFromShell(request(2));
+    expect(store.toasts.length).toBe(2);
+  });
+
+  it("asks for nothing when the launch carried no file", async () => {
+    await booted();
+    expect(m.PendingOpen).toHaveBeenCalledTimes(1);
+    expect(m.OpenPath).not.toHaveBeenCalled();
+    expect(store.route).toBe("archives");
   });
 });

@@ -4187,3 +4187,109 @@ hash unchanged, and it lands on the user's launch test (start, tray, close and r
 drop, a drag out) rather than on the green gates alone; the commit stands on its own so that
 a misbehaviour is one revert away.
 
+## 2026-09-21 — The installer's semantics, before it is built
+
+The user, after the day's pass and with VMware freshly installed: the installer now, the
+release later. Packaging is not polish — it decides where the program lives, what the
+uninstaller may touch, what `.efd` means to Windows and what happens to a running instance —
+and each of those was better decided before 1.1 than after. Ruled (APP §14, every point the
+user's "do it this way"): per-user, no elevation, `%LOCALAPPDATA%\Programs\Enfold` — an
+unsigned binary behind a UAC prompt is the worst first impression it can make, the vault is
+per user already, and the threat model gives Program Files' write protection nothing to
+protect; Welcome → files → Finish, no directory page, no licence page, no desktop shortcut;
+the WebView2 bootstrapper when the runtime is absent, the installer stopping if it fails;
+never a kill — `enfold.exe` opened for writing first, and "Enfold is running. Quit it from the
+tray icon, then Retry."; upgrade and downgrade both the installer run again, the format's
+version rule the only refusal; `.efd` registered, opened by the envelope's `archive_id`
+through the single instance, the record's `last_path` adopting the path, a key not in the
+vault named as such; the uninstaller removing the program, the shortcut, the association, the
+entry and the WebView2 profile, and nothing else under the data folder, saying so on its last
+page; GitHub Releases with one asset and its SHA-256, the notes saying unsigned and what
+SmartScreen shows; start-with-Windows, a machine-wide install and other languages not in 1.0.
+And the user's addition, designed now for the next release: a maintenance page — the installed
+version read from the uninstall entry, *Update*, *Repair* or *Uninstall* offered by comparison,
+*Modify* in *Apps & features* opening the same page — which 1.0 does not need, having no
+predecessor to tell apart. An in-application update check waits with the other online
+services.
+
+**The installer and the `.efd` opening, built** (2026-09-21). Two things the build taught.
+The checked-in `wails_tools.nsh` still carried the template's "My Company" / "My Product"
+defaults and `project.nsi` never overrode them — the installer would have been named *My
+Product* and installed to `Programs\My Product`; the file is the generator's output now, from
+`build/config.yml`, and the association with it (`Enfold.efd` the class — a ProgID takes no
+spaces — "Enfold archive" what Explorer shows). And `makensis` emits a 32-bit image, so a
+class key written without `SetRegView 64` lands in the WOW64 view where 64-bit Explorer never
+looks; it had only worked by the accident of the WebView2 macro's own `SetRegView` earlier in
+the section, and is explicit now. The running-Enfold check opens the executable for appending —
+a write handle Windows refuses for a running image, with nothing destroyed if the install then
+stops; the first cut used write mode, which truncates. The uninstaller needs no self-delete
+machinery: NSIS's uninstaller copies itself to the temporary folder and runs from there by
+default (the `_?=` switch exists to turn that off), so the folder really goes. The `.efd`
+opening: the first launch's argument waits in a slot the page asks for at boot, since an event
+emitted before the page exists is heard by nobody; a second launch's arguments arrive through
+the single instance with the program's own path first, unlike `os.Args[1:]`, and are trimmed;
+a sequence number makes a request open once whichever way it reached the page. The record's
+path moves through `Locate` itself, so that write has one home. The clean-machine test is the
+user's, on a VMware guest; the installer was compiled here (three pages, two for the
+uninstaller, no elevation in the manifest, the class keys in the 64-bit view) and never run.
+
+**The installer and the opening, reviewed** (2026-09-21, Codex Astra, twelve findings, all
+real). The installer: an upgrade would have overwritten the association's backup with Enfold's
+own class, so the uninstaller "restored" what it had just deleted — the backup is taken only
+when the current default is not `Enfold.efd`, restored only while `.efd` is still Enfold's
+(another program that took it since keeps it), and the stale backup value removed; the open
+command carried the executable unquoted, and a per-user path always holds the user's name —
+quoted now, the icon too; a WebView2 version of `0.0.0.0` passed as installed — absent, as
+Microsoft's rule says; and an access denied on a stopped executable would have looped "Enfold
+is running" for ever — the check is a `CreateFileW` through the System plug-in with the error
+taken inside the call (`?e`), 32 the retry loop, 5 a permissions sentence and a stop. To keep
+the fixes across a regeneration of `wails_tools.nsh`, `project.nsi` defines Enfold's own copies
+of the three macros and no longer inserts the template's; the association's constants are
+therefore in two places (`config.yml` and the script), and the script says so. The opening:
+a copy of an archive already open from another path would have moved the record while the page
+read the old file — refused now (`archive.open_elsewhere`, the open path named), the same path
+merely shown; a second launch before the page took the first's request replaced it — merged
+now, the first path first; a refusal for the lock arriving after the unlock retried never —
+at once now, once; another archive opened from Explorer over an archive page left the old one
+mounted — left first now; two requests could finish out of order — serialised, and a result
+the page has moved past is dropped, refusal included; the envelope was read past the name
+check alone — from a handle that passed the opened-source check now, a hard link to the vault
+being `archive.source_is_vault`; the mock's numbering and a dialog that outlived its request,
+fixed. The error carries a `Path` beside `Retries` and `Slot` for the one code that names a
+file.
+
+**The opening's second pass** (2026-09-21). Five more, all in the ordering: the "open from
+another path" check read the installed handles but not the opens in flight, and let go of the
+mutex before the record moved — so a copy could be recorded while another copy was being
+opened and the page joined that open; the decision is one critical section now (the record,
+the handles, the reservations, the deletions, then the reservation taken for this id — held
+across the `Locate`, released before the `Open`, which takes its own — a reservation on another
+file refused, on the same file waited for and the question asked again, a handle closing waited
+out). The page: a request overtaken while queued never reaches the core; a success that comes
+back overtaken gives its mount back unless it is the one displayed; the request's number is
+asked again after the second call, before any state is written or a word said; and the leave
+of the archive on the page is awaited before the next open, so A → B → A cannot have a late
+leave of A close the A being shown. The mock raises its high-water mark when a request is
+staged and when it is taken.
+
+**The opening's third pass** (2026-09-21). The reservation was let go before the handle was
+installed, and in that gap another copy's request could reserve, relocate and install its own
+handle — the first call then joined it and answered success for a file it had not opened. The
+open routine is split so that a caller holding a reservation opens the path it reserved and
+releases only once the handle stands (`openReserved`; `OpenArchive` is the same routine behind
+its own reservation), a failed relocation releasing and returning. On the page, a request
+overtaken while the displayed archive is being left now gives back the mount it already holds
+before it steps aside, and the cleanup of an overtaken open is awaited before the chain moves
+on — so a late leave can never close the archive a newer request has just shown. One
+test-only seam pauses `OpenPath` between the move and the open to prove the window is shut.
+
+**The opening's fourth pass** (2026-09-21). One window left: the archive already open at the
+same path was recognised under the mutex and then mounted through `OpenArchive` after the mutex
+was let go, so a close and another copy's open in between made the call join that copy. The
+decision is a loop now — session, record, forgotten, the handles, the reservations, the
+deletions read under one hold each turn, every wait sending the loop back to the top — and the
+same-path case mounts the handle it found in that same hold, through the one locked helper
+`OpenArchive`'s already-open path uses too; the file's own path is resolved once before the
+loop so the lock holds nothing slow. Sixteen `OpenPath` tests, one of which starts a close and
+a copy's open from inside the held mutex and requires both to be kept out.
+

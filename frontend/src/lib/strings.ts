@@ -132,6 +132,14 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeArchiveNotThisOne]: "The file there is not this archive — another archive, or a copy someone made. Nothing was removed.",
   [Code.CodeArchiveUnreachable]: "The folder that file is in could not be reached. Nothing was removed and nothing was forgotten.",
   [Code.CodeArchiveDeleteFailed]: "The file is this archive, and it could not be removed. The record is kept: its keys open a file that is still there.",
+  // The two refusals of a file opened from Explorer (APP.md §14): an
+  // archive whose keys are somewhere else — the page offers *Import
+  // records…* beside this line — and a file that is not one at all.
+  [Code.CodeKeyNotInVault]: "This archive's key is not in your vault.",
+  [Code.CodeNotAnArchive]: "That file is not an Enfold archive, or it could not be read.",
+  // The line without the path, for a list. What the toast says names the
+  // file the handle is on (openElsewhereText).
+  [Code.CodeOpenElsewhere]: "This archive is already open from another file. Close it there first.",
   [Code.CodeDescriptionLong]: "The description is too long: at most 1 024 bytes.",
   [Code.CodeArchiveName]: "That name cannot be used: a name is needed, and at most 1 024 bytes of text.",
   [Code.CodeFileExists]: "Something with that name is already there.",
@@ -358,6 +366,38 @@ export const closeCopy = {
   remember: "Remember my choice",
   inSettings: "You can change this in Settings.",
 };
+
+// Opening an archive from Explorer (APP.md §14, decision 4): a
+// double-click, an *Open with*, a path on the command line. Two of the
+// three answers are said in place — the archive opens, or a file that is
+// not one is a toast — and the third is this dialog: the file *is* an
+// Enfold archive and no record here holds its keys, so the one way in is
+// *Import records…*, and the file was not touched.
+export const openCopy = {
+  title: (name: string) => `Open ${name}`,
+  // The code's own line, said once: the dialog is where it is read.
+  keyNotInVault: codeCopy[Code.CodeKeyNotInVault],
+  how: "Bring its record in from a backup or another copy of this vault. Nothing in the file was changed.",
+  importRecords: "Import records…",
+  close: "Close",
+};
+
+// What a launch that named more than one file says about the rest: the
+// first is opened and the others are named, the way the purge names the
+// keys it dropped (APP.md §14, "the rest are named in a toast"). The
+// names are leaves: the folder they came from is the one the user was
+// standing in, and says nothing.
+// archive.open_elsewhere names the file the archive is already open from
+// (APP.md §14): two copies of one archive, and the handle is on the other
+// one. The whole path, not the leaf: the point is which of two files that
+// look alike is the one being read.
+export function openElsewhereText(path: string): string {
+  return `This archive is already open from ${path}. Close it there first.`;
+}
+
+export function moreNotOpened(names: string[]): string {
+  return `${plural(names.length, "more archive")} ${names.length === 1 ? "was" : "were"} not opened: ${names.join(", ")}. Enfold opens one at a time.`;
+}
 
 // The Archives list (APP.md §6, ruled 2026-09-10): its rows and header
 // carry the file list's checkboxes; the details pane shows one row or,

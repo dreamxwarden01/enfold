@@ -406,6 +406,34 @@ export enum Code {
     CodeArchiveDeleteFailed = "archive.delete_failed",
 
     /**
+     * The two refusals of a file opened from Explorer (APP.md §14, decision
+     * 4). CodeKeyNotInVault: the envelope decoded and no record in this
+     * vault holds that archive_id — the file is an Enfold archive and its
+     * keys are somewhere else, so the way in is *Import records…* and the
+     * file is not touched. Never archive.not_found, which is a record the
+     * page named and this is a file the user did.
+     */
+    CodeKeyNotInVault = "archive.key_not_in_vault",
+
+    /**
+     * CodeNotAnArchive: the envelope did not decode — the magic is wrong,
+     * the checksum failed, the format_version is one this reader refuses —
+     * or the file could not be read at all. A toast and nothing more: a
+     * double-click of the wrong file is not an error to dwell on.
+     */
+    CodeNotAnArchive = "archive.not_an_archive",
+
+    /**
+     * CodeOpenElsewhere: the file opened from Explorer is a second copy of
+     * an archive this vault already holds open from another path. One
+     * handle per archive is the rule (APP.md §2.3), and the handle that
+     * exists is on the other file: adopting last_path here would leave the
+     * registry naming a file the page is not reading. Nothing is written
+     * and nothing is opened; Error.Path names where it is open from.
+     */
+    CodeOpenElsewhere = "archive.open_elsewhere",
+
+    /**
      * CodeDescriptionLong: over MaxDescriptionLen bytes, or not UTF-8
      * (FORMAT.md §7.1).
      */
@@ -853,6 +881,32 @@ export interface OpView {
      * Done at Total, from the extraction's end until DoDragDrop returns.
      */
     "dragResult"?: string;
+}
+
+/**
+ * OpenPathResult is what Archives.OpenPath answers for a file opened from
+ * Explorer (APP.md §14): the archive the envelope said it is, so the page
+ * goes to it as a double-click of its row would, and whether the record's
+ * last_path was moved to this file on the way — the write *Locate…* makes,
+ * the file having just proved where it is.
+ */
+export interface OpenPathResult {
+    "archiveId": string;
+    "relocated": boolean;
+}
+
+/**
+ * OpenRequest is one "open this from Explorer" the shell hands the page
+ * (APP.md §14): the launch's own argument, which waits in the shell until
+ * the page asks for it at boot, and a second launch's, which arrives as
+ * `shell.open`. Seq numbers them from one so that the page opens each
+ * request once however it reached it; Rest names the paths a launch gave
+ * beyond the first, which are not opened and are counted in a toast.
+ */
+export interface OpenRequest {
+    "seq": number;
+    "path": string;
+    "rest": string[] | null;
 }
 
 /**

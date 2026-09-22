@@ -3,9 +3,9 @@
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
 import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code } from "./api";
-import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpView, SettingsView, SlotView, VaultStatus } from "./api";
+import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
-import { codeText, warningCopy } from "./strings";
+import { codeText, moreNotOpened, openElsewhereText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
@@ -20,7 +20,7 @@ import { PAGE_LIMIT, applyReply, hasMore, liveIds, nextOffset } from "./paging";
 import type { Listing } from "./paging";
 import { opErrorLine, opLabel, reclaimedLine } from "./ops";
 import type { Outcome } from "./outcome";
-import { answer as answerDrag, beginFlight, land, ownDrop } from "./dragout";
+import { answer as answerDrag, baseName, beginFlight, land, ownDrop } from "./dragout";
 import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
 import type { Decision } from "./closing";
 
@@ -158,6 +158,23 @@ class Store {
   // first (APP.md §13), which leaves that page, so the id is handed to the
   // Archives page, which opens the one delete dialog over its own list.
   deleteAfterClose = $state<string | null>(null);
+  // Opening an archive from Explorer (APP.md §14). Three fields:
+  //
+  //   - openWhenUnlocked: the path OpenPath answered vault.needs_unlock
+  //     for. The page shows the lock scene and finishes the open on the
+  //     Unlocked transition, once (applyStatus).
+  //   - keyNotInVault: the path of a file that *is* an Enfold archive and
+  //     whose keys no record here holds. The dialog over every route
+  //     offers Import records… and Close; the file is not touched.
+  //   - importRecordsAsked: that dialog's Import records… handed to the
+  //     Archives page, which owns the picker and the merge dialog — the
+  //     way deleteAfterClose is handed over.
+  openWhenUnlocked = $state("");
+  keyNotInVault = $state<string | null>(null);
+  importRecordsAsked = $state(false);
+  // The request openWhenUnlocked belongs to: the unlock's retry is that
+  // request's, and a newer one accepted meanwhile drops it.
+  private openWhenUnlockedSeq = 0;
   settings = $state<SettingsView | null>(null);
   toasts = $state<Toast[]>([]);
   // The last ceremony that ended with something to say on the lock screen
@@ -207,6 +224,11 @@ class Store {
 
   private seq = 0;
   private ceremonySeq = 0;
+  // The last shell open request acted on (APP.md §14): the shell numbers
+  // them from one, and a request is opened once whether it came from the
+  // slot at boot or from `shell.open` — a second launch fills both, since
+  // the window it recreates may have no page listening yet.
+  private lastOpenSeq = 0;
   private archiveSeq: Record<string, number> = {};
   private toastId = 0;
   private lastActivity = 0;
@@ -354,6 +376,22 @@ class Store {
     Events.On("shell.close", () => {
       this.closeAsked = true;
     });
+    // A second launch's file (APP.md §14): the page is already up, so it
+    // is told rather than asked. The first launch's own argument cannot
+    // travel this way — there was no page to hear it — and waits in the
+    // shell for the PendingOpen of refreshAll.
+    Events.On("shell.open", (e) => {
+      void (async () => {
+        await this.openFromShell(e.data as OpenRequest);
+        // The shell staged that same request in its slot as well, since
+        // a second launch may be the one recreating a window whose page
+        // is not listening yet. This page *was* listening, so the slot
+        // is emptied here rather than left for the next window to open
+        // all over again; the request is numbered, so this take opens
+        // nothing twice.
+        await this.takePendingOpen();
+      })();
+    });
     setInterval(() => {
       this.now = Date.now();
     }, 1000);
@@ -381,10 +419,182 @@ class Store {
     // a later event's (APP.md §2.4).
     this.booted = true;
     await this.refreshArchives();
+    // The file this launch was asked to open (APP.md §14). It is asked
+    // for and not waited for as an event, since a launch argument exists
+    // before there is any page to emit to: the shell keeps it, and this
+    // is the page coming for it. Here rather than last — after the first
+    // status, so the answer lands on the scene the vault's state names,
+    // and after the list, from which an opened archive takes its path —
+    // because a user who double-clicked a file is waiting for it, and the
+    // keys, the switch and the settings below are nobody's hurry.
+    await this.takePendingOpen();
     await this.refreshSlots();
     await this.refreshEntangled();
     await this.refreshLastExport();
     await this.refreshSettings();
+  }
+
+  // takePendingOpen asks the shell whether this launch carried a file
+  // (APP.md §14). The ask is the take: a request is handed over once.
+  async takePendingOpen(): Promise<void> {
+    try {
+      await this.openFromShell(await Shell.PendingOpen());
+    } catch {
+      // No shell to ask — the mock, a dev page — is no request.
+    }
+  }
+
+  // openFromShell opens what Explorer handed over: the first path, with
+  // the rest named in a toast, and nothing at all for a request already
+  // acted on.
+  //
+  // Accepting a request supersedes the one before it on the screen — the
+  // key dialog it left up, and the path it was waiting on an unlock for
+  // (the review's finding 8): the user has asked for something else, and
+  // an answer about the last file is no longer an answer about anything
+  // they are looking at.
+  async openFromShell(req: OpenRequest | null | undefined): Promise<void> {
+    if (!req || !req.seq || !req.path || req.seq <= this.lastOpenSeq) return;
+    this.lastOpenSeq = req.seq;
+    this.keyNotInVault = null;
+    this.openWhenUnlocked = "";
+    const rest = req.rest ?? [];
+    if (rest.length) this.toast(moreNotOpened(rest.map(baseName)));
+    await this.queueOpen(req.path, req.seq);
+  }
+
+  // The shell's opens run one at a time (the review's finding 5). Two can
+  // be in flight — a second launch while the boot's own take is still
+  // asking — and a slower older one finishing after a newer one would
+  // otherwise land its route, or its dialog, over what the newer one put
+  // there. The chain serialises them; openPath's own seq check drops a
+  // result the page has moved past, which is the half the chain cannot do
+  // (a request that was already awaiting its answer when the newer one
+  // was accepted).
+  private openChain: Promise<void> = Promise.resolve();
+
+  private queueOpen(path: string, seq: number, retried = false): Promise<void> {
+    const run = this.openChain.then(() => this.openPath(path, seq, retried));
+    this.openChain = run.catch(() => {});
+    return run;
+  }
+
+  // openPath is Archives.OpenPath and what each of its answers means
+  // (APP.md §14): the archive's page on success, by the same route a
+  // row's double-click takes; the lock scene with the path kept, to be
+  // finished on the unlock, while the vault is locked; the key's own
+  // dialog with Import records… when no record here holds the archive_id;
+  // and a toast for everything else — a file that is not an archive, a
+  // copy of one already open elsewhere, a forgotten record, Enfold's own
+  // folder.
+  //
+  // `seq` is the request this is acting on: a reply that lands once a
+  // newer request has been accepted is dropped, whatever it says.
+  // `retried` marks the one attempt made after an unlock: a second
+  // vault.needs_unlock is said and not waited on again, so an open cannot
+  // ride from unlock to unlock.
+  async openPath(path: string, seq: number, retried = false): Promise<void> {
+    // Superseded while it waited its turn in the chain: the core is never
+    // asked at all, so there is no mount to give back (the second
+    // review's finding 2).
+    if (seq !== this.lastOpenSeq) return;
+    try {
+      const r = await Archives.OpenPath(path);
+      if (seq !== this.lastOpenSeq) {
+        // The core mounted it. A mount no page is going to show is an
+        // orphan — nothing holds it and nothing will leave it, and the
+        // next open of that archive would meet archive.open_elsewhere
+        // against a handle nobody wanted. It goes back, exactly as
+        // leaving its page gives it back, unless the newer request has
+        // already put that very archive on the page.
+        if (r.archiveId && r.archiveId !== this.current) await this.releaseMount(r.archiveId);
+        return;
+      }
+      this.openWhenUnlocked = "";
+      await this.openForShell(r.archiveId, seq);
+    } catch (e) {
+      if (seq !== this.lastOpenSeq) return;
+      const err = errorOf(e);
+      if (!retried && (err.code === Code.CodeNeedsUnlock || err.code === Code.CodeVaultLocked)) {
+        // The vault may have been unlocked while this call was in flight
+        // — the refusal was decided before the unlock landed — and then
+        // there is no transition left to wait for (the review's finding
+        // 3). The state the page holds is the newer word: ask again at
+        // once, the one retry this open gets.
+        if (this.unlocked) {
+          await this.openPath(path, seq, true);
+          return;
+        }
+        this.openWhenUnlocked = path;
+        this.openWhenUnlockedSeq = seq;
+        this.setRoute("lock");
+        return;
+      }
+      this.openWhenUnlocked = "";
+      if (err.code === Code.CodeKeyNotInVault) {
+        this.keyNotInVault = path;
+        return;
+      }
+      // archive.open_elsewhere names the file the handle is on; every
+      // other code says the one thing it says.
+      this.toast(err.path ? openElsewhereText(err.path) : codeText(err.code), "error");
+    }
+  }
+
+  // openForShell opens an archive Explorer named. An archive already on
+  // the page is left first, exactly as leaving its page leaves it (APP.md
+  // §2.3): a route change does that on its own, but opening one archive
+  // over another never changes route, so the old handle would stay
+  // mounted with no page holding it (the review's finding 4). The same
+  // archive again is not a leave: it is the page it is already on.
+  //
+  // The leave is **waited for** before the open goes on (the second
+  // review's finding 4). A → B → A, with the leave of the first A still
+  // travelling, would otherwise reach the core after the second A had
+  // been opened and close the archive the page is showing. The shell's
+  // opens run one after another, so waiting here is enough to put them in
+  // order: leave, open, leave, open.
+  private async openForShell(id: string, seq: number): Promise<void> {
+    if (this.current && this.current !== id) await this.leaveForShell();
+    if (seq !== this.lastOpenSeq) {
+      // The core mounted this archive before the leave of the one on the
+      // page was waited for, and a newer request was accepted inside
+      // that wait. Returning here without giving the mount back would
+      // abandon it: nothing holds it and nothing will ever leave it (the
+      // third review's finding 2).
+      if (id !== this.current) await this.releaseMount(id);
+      return;
+    }
+    await this.openArchive(id, () => seq === this.lastOpenSeq);
+  }
+
+  // leaveForShell is leaveArchive with the core's Leave waited for.
+  private async leaveForShell(): Promise<void> {
+    const left = this.dropArchive(false);
+    if (this.route === "archive") this.setRoute("archives");
+    await left;
+  }
+
+  // releaseMount gives back a mount the page asked for and then had no
+  // use for: a shell open the user overtook with another (APP.md §14).
+  // The same call a page leaving makes, and it cannot fail in any way
+  // that matters — an archive that is not open was already given back.
+  private async releaseMount(id: string): Promise<void> {
+    try {
+      await Archives.Leave(id);
+    } catch {
+      /* a mount cannot fail to be left */
+    }
+    void this.refreshArchives();
+  }
+
+  // askImportRecords is the key dialog's one action: the Archives page
+  // owns *Import records…*, so the ask is handed to it and the route
+  // follows.
+  askImportRecords(): void {
+    this.keyNotInVault = null;
+    this.importRecordsAsked = true;
+    this.go("archives");
   }
 
   private applyStatus(s: VaultStatus, snapshot = false): void {
@@ -439,6 +649,15 @@ class Store {
         void this.refreshSettings();
         if (this.stat) void this.refreshArchive(); // the receipt it owed is paid
         if (this.route === "lock") this.setRoute(this.current ? "archive" : "archives");
+        // The file Explorer handed over while the vault was locked
+        // (APP.md §14): the unlock has landed, so the open is finished
+        // now — once, whatever that attempt answers.
+        if (this.openWhenUnlocked) {
+          const path = this.openWhenUnlocked;
+          const seq = this.openWhenUnlockedSeq;
+          this.openWhenUnlocked = "";
+          void this.queueOpen(path, seq, true);
+        }
       } else if (s.state === VaultState.StateLocked) {
         // The lock screen lists the vault's recovery slots while Locked —
         // Slots() is a cached fact (APP.md §2.1) — and CanEnable is false
@@ -620,24 +839,44 @@ class Store {
   }
 
   // openArchive opens (or shows) an archive and goes to it.
-  async openArchive(id: string): Promise<boolean> {
+  //
+  // `fresh`, when a caller gives one, is asked once the core has answered
+  // and before anything at all is written or said. The Open is a second
+  // call of its own, and a shell open the user has overtaken must not
+  // land its stat, its route or its toast over the request that overtook
+  // it (APP.md §14, the second review's finding 3). The mount it was
+  // given goes back, since no page is going to show it.
+  async openArchive(id: string, fresh?: () => boolean): Promise<boolean> {
+    let stat: ArchiveStat;
     try {
-      this.stat = await Archives.Open(id);
-      this.current = id;
-      this.currentPath = this.archives.find((a) => a.id === id)?.path ?? "";
-      this.dirId = ROOT_ID;
-      this.page = null;
-      this.results = null;
-      this.sort = DEFAULT_SORT; // an archive opens on name (APP.md §3)
-      this.sel = emptySelection();
-      this.focusAfter = null;
-      this.setRoute("archive");
-      await this.loadPage();
-      return true;
+      stat = await Archives.Open(id);
     } catch (e) {
+      if (fresh && !fresh()) return false;
       this.toast(codeText(errorOf(e).code), "error");
       return false;
     }
+    if (fresh && !fresh()) {
+      // Waited for, not fired off (the third review's finding 3): the
+      // shell's opens run one after another, and a chain that advanced
+      // while this leave was still travelling could open the same
+      // archive again and have the leave arrive afterwards and close the
+      // archive the page is showing. The same-id guard is asked here,
+      // when the cleanup runs.
+      if (id !== this.current) await this.releaseMount(id);
+      return false;
+    }
+    this.stat = stat;
+    this.current = id;
+    this.currentPath = this.archives.find((a) => a.id === id)?.path ?? "";
+    this.dirId = ROOT_ID;
+    this.page = null;
+    this.results = null;
+    this.sort = DEFAULT_SORT; // an archive opens on name (APP.md §3)
+    this.sel = emptySelection();
+    this.focusAfter = null;
+    this.setRoute("archive");
+    await this.loadPage();
+    return true;
   }
 
   private statToken = 0;
@@ -959,7 +1198,7 @@ class Store {
   // itself after the last one — where Close is the page's kill switch and
   // drops the readers too. `closed` says the caller has already closed it
   // (the kill switch, a Delete archive…), so there is nothing to leave.
-  private dropArchive(closed: boolean): void {
+  private dropArchive(closed: boolean): Promise<void> {
     const id = this.current;
     this.current = null;
     this.stat = null;
@@ -985,17 +1224,22 @@ class Store {
       if (this.asksAbout(o)) this.settleConflicts(o.id);
       if (this.asksRefused(o)) this.settleRefusals(o.id);
     }
+    // The leave is answered, and the answer is handed back: every caller
+    // but one ignores it, and the shell's own opens wait for it so that
+    // A → B → A cannot close the A the page has just put back (APP.md
+    // §14, leaveForShell).
     if (id && !closed) {
-      void Archives.Leave(id)
+      return Archives.Leave(id)
         .then(() => this.refreshArchives())
         .catch(() => {
           /* a page cannot fail to be left */
         });
     }
+    return Promise.resolve();
   }
 
   leaveArchive(closed = false): void {
-    this.dropArchive(closed);
+    void this.dropArchive(closed);
     if (this.route === "archive") this.setRoute("archives");
   }
 
@@ -1028,7 +1272,7 @@ class Store {
   // straight back to it (applyStatus), so the page was never left.
   private setRoute(route: Route): void {
     const from = this.route;
-    if (from === "archive" && route !== "archive" && route !== "lock" && this.current) this.dropArchive(false);
+    if (from === "archive" && route !== "archive" && route !== "lock" && this.current) void this.dropArchive(false);
     this.nav = from === "archives" && route === "archive" ? 1 : from === "archive" && route === "archives" ? -1 : 0;
     this.route = route;
   }

@@ -12,6 +12,7 @@
   import SettingsPage from "./components/SettingsPage.svelte";
   import RecoveryReveal from "./components/RecoveryReveal.svelte";
   import CloseDialog from "./components/CloseDialog.svelte";
+  import OpenKeyDialog from "./components/OpenKeyDialog.svelte";
   import LayerFoot from "./components/LayerFoot.svelte";
   import { fade, fly } from "svelte/transition";
   import { motion, delay, enter, GAP, OUT, MOVE } from "./lib/motion";
@@ -117,6 +118,14 @@
      deserves the same answer. -->
 {#if store.closeAsked}
   <CloseDialog busy={store.closeBusy} onclose={() => store.dismissClose()} ondecide={(a, r) => void store.decideClose(a, r)} />
+{/if}
+
+<!-- A file opened from Explorer whose key is not in this vault (APP.md
+     §14): above every route, since Explorer can reach the page on any of
+     them, and the lock scene included — the vault was unlocked to get
+     here. -->
+{#if store.keyNotInVault}
+  <OpenKeyDialog path={store.keyNotInVault} onclose={() => (store.keyNotInVault = null)} onimport={() => store.askImportRecords()} />
 {/if}
 
 <Toasts />

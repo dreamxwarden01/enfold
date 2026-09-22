@@ -55,6 +55,12 @@ const (
 	warnLockDetection app.Code = "shell.lock_detection_unavailable"
 )
 
+// eventShellOpen is the shell's "open this file" (APP.md §14): the payload
+// is an app.OpenRequest. Emitted for a second launch, whose page is
+// already listening; the first launch's own argument waits in the slot
+// instead (openarg.go).
+const eventShellOpen = "shell.open"
+
 // shell is the process: the core, the Wails app, the tray, the window.
 type shell struct {
 	core *app.Core
@@ -68,6 +74,10 @@ type shell struct {
 	quitMu   sync.Mutex
 	quitting bool
 	settings func() app.Settings
+	// open is the "open this from Explorer" a launch carried (APP.md §14,
+	// openarg.go): the page takes it at boot, and a second launch fills it
+	// again and says so with `shell.open`.
+	open pendingOpen
 	// ours marks a close the shell is performing itself — the page asking
 	// to go to the tray (CloseWindow), the close question answered *tray*,
 	// and the quit's own — so the WindowClosing gate lets it through
@@ -120,6 +130,7 @@ func main() {
 		Reveal:       s.reveal,
 		Quit:         s.quit,
 		DragOut:      s.dragOut,
+		PendingOpen:  s.open.take,
 	})
 
 	profile := filepath.Join(dataDir, "WebView2")
@@ -142,8 +153,19 @@ func main() {
 			Middleware: securityHeaders, // set once the preview port is known
 		},
 		SingleInstance: &application.SingleInstanceOptions{
-			UniqueID:               uniqueID,
-			OnSecondInstanceLaunch: func(application.SecondInstanceData) { s.ensureWindow() },
+			UniqueID: uniqueID,
+			// A second launch hands its arguments over and exits (APP.md
+			// §2.4, §14). The request is staged before the window is asked
+			// for, so that a launch which has to recreate a window closed
+			// to the tray is found by that fresh page's PendingOpen; the
+			// event is for the page that is already up and listening.
+			OnSecondInstanceLaunch: func(d application.SecondInstanceData) {
+				req := s.open.stage(openArguments(afterProgram(d.Args), d.WorkingDir))
+				s.ensureWindow()
+				if req != nil {
+					s.app.Event.Emit(eventShellOpen, *req)
+				}
+			},
 		},
 		Windows: application.WindowsOptions{
 			DisableQuitOnLastWindowClosed: true,
@@ -161,6 +183,14 @@ func main() {
 	// below touches the profile or the vault.
 	s.app = application.New(opts)
 	logger.printf("start: application created")
+
+	// The launch's own argument, staged before the window is asked for:
+	// there is no page to emit to until one has drawn, so this waits for
+	// the page's Shell.PendingOpen at boot (APP.md §14, openarg.go).
+	wd, _ := os.Getwd()
+	if req := s.open.stage(openArguments(os.Args[1:], wd)); req != nil {
+		logger.printf("start: launched to open a file (%d in all)", 1+len(req.Rest))
+	}
 
 	// No OleInitialize here any more (APP.md §3, ruled 2026-09-11): each
 	// drag takes its own apartment on its own thread, so the main thread

@@ -1820,10 +1820,33 @@ shortcut is a right-click away for whoever wants one (decision 2). The uninstall
 carries the version from `build/config.yml`, which is the release's.
 
 **WebView2.** Before the files, the Evergreen runtime is looked for — the machine's key, then
-the user's — and Microsoft's bootstrapper is run silently when it is absent, online only, as
-SCOPE says; a bootstrapper that fails stops the installer with the sentence and Microsoft's
-download address, since the application cannot start without the runtime. Windows 11 ships
-it; a Windows 10 machine may not, and the clean-machine test below is that path.
+the user's, a version of `0.0.0.0` counting as absent — and Microsoft's bootstrapper is run
+silently when it is absent, online only, as SCOPE says: first as the user (a per-user runtime,
+no prompt), its exit code written into the installer's details; and, when the runtime is
+still absent after that, once more **elevated** — the first clean-machine test (2026-09-30)
+found the per-user run failing on a machine that has Microsoft Edge, because Edge's machine-
+level updater takes over a per-user install and needs the machine's rights (Microsoft's
+distribution notes say so) — but only after asking (the user's ruling, 2026-09-30): "Enfold needs the Microsoft Edge
+WebView2 Runtime. Install it now? Windows will ask for permission — it is Microsoft's
+installer." with a message box's *Yes* and *No* (its buttons cannot be renamed, and the question reads as
+one); the elevated run is the one UAC prompt the install can show, and it is Microsoft's signed
+bootstrapper's, not Enfold's. *No*, or a runtime still absent after the elevated run (declined, or an installer that failed — its exit code shown),
+ends on a **cancelled page** rather than a vanished window or a progress page with nothing to
+do: the header says *Installation cancelled*, the text says that nothing was installed — which is
+true, the check running before any file, key or shortcut is written — and why, in the words of
+what happened: the permission declined in Windows' prompt (the elevated run never started —
+there is no exit code then), or an account that cannot grant it (Windows asks such an account
+for an administrator's credentials; without them the same page says that the runtime is
+machine-wide, that an administrator installs it once from Microsoft's address, and that any
+account can install Enfold after that), or Microsoft's installer ran and failed (the as-user run's exit code shown, in hexadecimal as
+Microsoft documents them; the elevated run's is not reported — NSIS's `ExecShellWait` throws it
+away — and the details say so); Microsoft's download address in every case, and the one
+button says *Close*. The cancelled page is the installer's own instfiles page, its header and
+button rewritten from a leave function before Modern UI's abort handling runs, and it appears
+only for a stop before the first file is written (a flag set just before the files); a stop
+after that gets Modern UI's own *Installation Aborted* page, which is then the truth. A silent
+install (`/S`) is not offered in 1.0. Windows 11 ships the runtime; a
+Windows 10 machine may not, and the clean-machine test below is that path.
 
 **A running Enfold.** The installer never kills the process: an operation may be running — a
 commit is crash-safe, a staged drag is nobody else's to end, and a kill is not an exit. Before it writes, it opens `enfold.exe` for appending — a write handle that changes nothing;

@@ -4293,3 +4293,40 @@ same-path case mounts the handle it found in that same hold, through the one loc
 loop so the lock holds nothing slow. Sixteen `OpenPath` tests, one of which starts a close and
 a copy's open from inside the held mutex and requires both to be kept out.
 
+## 2026-09-30 — The first clean-machine test: the bootstrapper needs the machine's rights
+
+The user's VMware guest — Windows 10 Enterprise LTSC 2021, updated, Microsoft Edge on it, the
+WebView2 runtime force-uninstalled to reach the bootstrapper's path. The installer ran the
+bootstrapper as the user, the runtime stayed absent, the sentence showed, and after *OK* the
+installer stood on its progress page. Two things. Microsoft's distribution notes say it
+outright: a bootstrapper run without elevation installs a per-user runtime, "however, a
+per-user install is automatically replaced by a per-machine install if a per-machine
+Microsoft Edge Updater is in place" — and Edge brings that updater, so on a machine that has
+Edge and lacks the runtime (not rare on Windows 10) the per-user run cannot succeed; ruled:
+the bootstrapper runs as the user first, its exit code in the details, and when the runtime is
+still absent runs once more elevated — the one UAC prompt the install can show, and it is
+Microsoft's signed bootstrapper asking, not Enfold's unsigned one — with the sentence and the
+exit code if that fails too. And `Abort` after the sentence only marked the install aborted,
+leaving a progress page with nothing to do but find the greyed *Cancel*. The user's ruling,
+over a bare quit: ask — "Install it now? Windows will ask for permission — it is Microsoft's
+installer" — and on *Cancel*, or on a failure after the elevated run, end on a page that says
+*Installation cancelled* and *Nothing was installed* (true: the check runs before any file, key
+or shortcut is written), with the reason, the download address and a *Close* button (APP §14).
+
+**The cancelled page, built** (2026-09-30). Three things NSIS made of the ruling. A message
+box's buttons are Win32's and cannot be renamed, so the question is answered *Yes* or *No*
+(the doc says so now). A *Close* set from the section is overwritten a moment later when the
+installer moves to its completed state, so the page is made in a leave function of the
+instfiles page — header, hidden *Next*, *Close* relabelled, enabled and focused, the title-bar
+X alive — before Modern UI's own abort handling, and only when a flag set just before the
+first file says nothing was written; a stop after that keeps Modern UI's *Installation
+Aborted*, which is then the truth. `ExecShellWait` throws the elevated run's exit code away,
+so the details show the as-user run's (in hexadecimal, as Microsoft documents them) and say
+that the elevated one is not reported. And a bug of the first build's, found on the way:
+`project.nsi` includes Modern UI **1**, whose finish page is an InstallOptions page that
+decodes `\r`, `\n` and `\t` in its text — the uninstaller's "Your vault and settings stay in
+C:\Users\rober\…" lost characters for any profile folder starting with a lowercase r, n or t,
+which Microsoft-account names often do; the text now goes through InstallOptions' own
+escaping. The audit that "Nothing was installed" is literally true stands: before the flag the
+section touches only the plug-ins folder, which NSIS removes on every exit.
+

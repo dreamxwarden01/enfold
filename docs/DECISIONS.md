@@ -4330,3 +4330,13 @@ which Microsoft-account names often do; the text now goes through InstallOptions
 escaping. The audit that "Nothing was installed" is literally true stands: before the flag the
 section touches only the plug-ins folder, which NSIS removes on every exit.
 
+**The second test, and the page's shape** (2026-09-30). The per-user bootstrapper run on the
+guest reported `0x80040719` — the code Microsoft's own feedback tracker lists for a silent
+Evergreen install that fails without elevation (WebView2Feedback #2204) — so the diagnosis
+holds and the elevated retry is the right remedy. And the cancelled page, built on the
+progress page with its header and button rewritten, was rejected on sight: a progress bar at a
+quarter and a log still read as a hang. Ruled: the stop ends on a page of the finish page's
+shape — *Enfold was not installed*, the reason and the way out in plain words, no *Run* box,
+*Close* — reached by letting the wizard run on past a section that wrote nothing; and the
+uninstaller's stops end the same way, *Enfold was not removed*.
+

@@ -117,8 +117,11 @@ Unicode true
 ##      the same bootstrapper elevated ("runas": the one UAC prompt this
 ##      install can show, and it is Microsoft's signed installer's, not ours).
 ##   3. Present after either run: on to the files.
-##   4. No, or still absent: the cancelled page (enfold.InstFilesLeave), with
-##      the reason in the details in the words of what happened.
+##   4. No, or still absent: a STOP. The case goes into $EnfoldStop (and the
+##      code, when there is one, into $EnfoldStopCode); the section writes
+##      nothing and lets the wizard run on to the finish page, which
+##      enfold.FinishPre turns into "Enfold was not installed" and the reason.
+##      The details keep a one-line trail for the log.
 ##
 ## What each run can report, from NSIS's own source (Source/exehead/exec.c):
 ## ExecWait (EW_EXECUTE) stores the exit code in its variable and sets the
@@ -131,10 +134,8 @@ Unicode true
 ## elevated run reports "did not start" or "ran", never a code; the one code
 ## there is to show is the run as the user's.
 ##
-## Long sentences are split over several DetailPrint lines: the details list
-## is one column exactly as wide as the list (Ui.c: lvc.cx = r.right -
-## SM_CXVSCROLL) and clips anything longer. ${U+2014} is an em dash: makensis
-## reads this file in the ANSI code page, so the source stays ASCII.
+## ${U+2014} is an em dash: makensis reads this file in the ANSI code page, so
+## the source stays ASCII.
 ##
 ## Inserted exactly once (in the install section), so plain labels are safe.
 ####
@@ -180,11 +181,9 @@ Unicode true
     MessageBox MB_YESNO|MB_ICONQUESTION "Enfold needs the Microsoft Edge WebView2 Runtime. Install it now? Windows will ask for permission ${U+2014} it is Microsoft's installer." IDYES enfold_wv2_elevate
 
     ; (c) No.
-    DetailPrint "Enfold needs the Microsoft Edge WebView2 Runtime."
-    DetailPrint "Get it from"
-    DetailPrint "${ENFOLD_WV2_URL}"
-    DetailPrint "and run this installer again. Nothing was installed."
-    Goto enfold_wv2_cancel
+    DetailPrint "Stopped: the WebView2 Runtime was not installed (No was chosen)."
+    StrCpy $EnfoldStop "wv2-no"
+    Goto enfold_wv2_stop
 
 enfold_wv2_elevate:
     SetDetailsPrint both
@@ -198,39 +197,23 @@ enfold_wv2_elevate:
     !insertmacro enfold.webview2.detect $R3
     StrCmp $R3 "1" enfold_wv2_installed
 
-    ; (b) It ran, and the runtime is still absent. The code shown is the run
-    ;     as the user's - the only one there is (see above).
-    DetailPrint "Enfold needs the Microsoft Edge WebView2 Runtime"
-    ${If} $R5 == ""
-        DetailPrint "and it was not installed."
-    ${Else}
-        DetailPrint "and it was not installed (Microsoft's installer"
-        DetailPrint "reported code $R5 when run as you)."
-    ${EndIf}
-    DetailPrint "Nothing was installed. Get it from"
-    DetailPrint "${ENFOLD_WV2_URL}"
-    DetailPrint "and run this installer again."
-    Goto enfold_wv2_cancel
+    ; (b) It ran, and the runtime is still absent. The code kept is the run as
+    ;     the user's - the only one there is (see above); "" if that run did
+    ;     not start.
+    DetailPrint "Stopped: the WebView2 Runtime is still absent after the elevated run."
+    StrCpy $EnfoldStop "wv2-failed"
+    StrCpy $EnfoldStopCode $R5
+    Goto enfold_wv2_stop
 
 enfold_wv2_notlaunched:
     ; (a) The elevated run never started: the permission was declined, or the
     ;     account could not supply an administrator's credentials.
-    DetailPrint "Windows did not allow Microsoft's installer to run:"
-    DetailPrint "the permission was declined."
-    DetailPrint "The WebView2 Runtime is installed for the whole machine,"
-    DetailPrint "so an administrator installs it once from"
-    DetailPrint "${ENFOLD_WV2_URL} ${U+2014}"
-    DetailPrint "after that any account can install Enfold."
-    DetailPrint "Nothing was installed."
+    DetailPrint "Stopped: Windows did not allow the elevated run (the permission was declined)."
+    StrCpy $EnfoldStop "wv2-notallowed"
 
-enfold_wv2_cancel:
-    ; Nothing has been written: $EnfoldWritten is still empty, so
-    ; enfold.InstFilesLeave turns this abort into the cancelled page. textonly:
-    ; the message goes to the status line, not as a blank row into the list
-    ; (a message-less Abort would add one - exec.c EW_ABORT, Ui.c
-    ; update_status_text).
-    SetDetailsPrint textonly
-    Abort "Installation cancelled."
+enfold_wv2_stop:
+    SetDetailsPrint both
+    Goto enfold_wv2_present
 
 enfold_wv2_installed:
     SetDetailsPrint both
@@ -261,10 +244,13 @@ enfold_wv2_present:
 ##
 ## ID makes the labels unique: this macro is inserted in both sections.
 ##
-## Each stop writes its reason into the details and a short status line
-## before Abort (SetDetailsPrint textonly + Abort "text": a message-less Abort
-## would leave a blank row in the list). In the installer these stops come
-## before anything is written, so they end on the cancelled page too.
+## A stop does not Abort: it records the case in $EnfoldStop (the Windows
+## error in $EnfoldStopCode) and returns; the section then skips everything
+## that writes or removes, and the finish page says why - "Enfold was not
+## installed" / "Enfold was not removed" (APP.md 14). The running case keeps
+## its Retry/Cancel box, since that is a choice; the permissions case has no
+## box of its own any more - the finish page says the same sentence, and
+## saying it twice in a row helps nobody.
 ####
 !macro enfold.checkNotRunning ID
 enfold_run_${ID}_retry:
@@ -281,27 +267,20 @@ enfold_run_${ID}_retry:
 enfold_run_${ID}_failed:
     IntCmp $1 32 0 enfold_run_${ID}_denied enfold_run_${ID}_denied
     MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Enfold is running. Quit it from the tray icon, then Retry." IDRETRY enfold_run_${ID}_retry
-    SetDetailsPrint listonly
-    DetailPrint "Enfold is running. Quit it from the tray icon first."
-    SetDetailsPrint textonly
-    Abort "Cancelled: Enfold is running."
+    DetailPrint "Stopped: Enfold is running, and Cancel was chosen."
+    StrCpy $EnfoldStop "running"
+    Goto enfold_run_${ID}_ok
 
 enfold_run_${ID}_denied:
     IntCmp $1 5 0 enfold_run_${ID}_other enfold_run_${ID}_other
-    MessageBox MB_OK|MB_ICONSTOP "Enfold's folder cannot be written. Check the permissions on $INSTDIR."
-    SetDetailsPrint listonly
-    DetailPrint "Enfold's folder cannot be written."
-    DetailPrint "Check the permissions on $INSTDIR."
-    SetDetailsPrint textonly
-    Abort "Stopped: Enfold's folder cannot be written."
+    DetailPrint "Stopped: $INSTDIR cannot be written (access denied)."
+    StrCpy $EnfoldStop "denied"
+    Goto enfold_run_${ID}_ok
 
 enfold_run_${ID}_other:
-    MessageBox MB_OK|MB_ICONSTOP "Enfold's folder cannot be written. Check the permissions on $INSTDIR. (Windows error $1.)"
-    SetDetailsPrint listonly
-    DetailPrint "Enfold's folder cannot be written (Windows error $1)."
-    DetailPrint "Check the permissions on $INSTDIR."
-    SetDetailsPrint textonly
-    Abort "Stopped: Enfold's folder cannot be written."
+    DetailPrint "Stopped: $INSTDIR cannot be written (Windows error $1)."
+    StrCpy $EnfoldStop "error"
+    StrCpy $EnfoldStopCode $1
 
 enfold_run_${ID}_ok:
 !macroend
@@ -401,16 +380,17 @@ ManifestDPIAware true
 ## number cited in this file is System.nsh's.
 ####
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
-# The cancelled page: see enfold.InstFilesLeave. MUI calls a custom leave
-# function first from its own instfiles leave (System.nsh 1494) and !undefs the
-# define after one page, so it applies to this page only.
-!define MUI_PAGE_CUSTOMFUNCTION_LEAVE enfold.InstFilesLeave
 !insertmacro MUI_PAGE_INSTFILES # Installing page.
 # MUI_FINISHPAGE_RUN gives the finish page its checkbox; its label defaults to
 # MUI_TEXT_FINISH_RUN, "&Run $(^NameDA)" - "Run Enfold", Name being the
 # product's. MUI unsets the FINISHPAGE defines once a finish page is declared
 # (System.nsh 1062-1070), so this one does not leak into the uninstaller's.
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXECUTABLE}"
+# A stop before the first file ends on THIS page, rewritten by enfold.FinishPre
+# into "Enfold was not installed" (APP.md 14). MUI !undefs the custom-function
+# define after one page (System.nsh 1227), so it applies to the installer's
+# finish page only.
+!define MUI_PAGE_CUSTOMFUNCTION_PRE enfold.FinishPre
 !insertmacro MUI_PAGE_FINISH # Finished installation page.
 
 !insertmacro MUI_UNPAGE_INSTFILES # Uninstalling page
@@ -454,90 +434,141 @@ OutFile "..\..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" # Name of the i
 ShowInstDetails show # This will always show the installation details.
 
 ####
+## THE STOP (APP.md 14, "WebView2" and "A running Enfold"). A stop before the
+## first file does not Abort - an aborted install stands on its progress page,
+## which reads as a hang. Instead:
+##
+##   * the macro that stops records the case in $EnfoldStop ("wv2-no",
+##     "wv2-failed", "wv2-notallowed", "running", "denied", "error") and the
+##     code, when there is one, in $EnfoldStopCode;
+##   * the section skips everything that writes or removes, calls SetAutoClose
+##     true - the progress page then moves on by itself (Ui.c: at the page
+##     after instfiles, "if (!g_exec_flags.abort && g_exec_flags.autoclose)
+##     goto nextPage") - and SetErrorLevel 2, so the process still exits with
+##     "aborted by script" (NSIS Appendix D.1; Main.c: a set error level
+##     replaces the exit code);
+##   * the finish page's PRE function (enfold.FinishPre / un.enfold.UnFinishPre)
+##     rewrites the page's InstallOptions fields: the title, the text, the Run
+##     box gone, the one button "Close".
+##
 ## "1" once the install section has started writing (set just before
-## SetOutPath $INSTDIR). Until then nothing - no file, key, shortcut or
-## uninstaller - exists, which is what lets the cancelled page say "Nothing was
-## installed." and mean it.
+## SetOutPath $INSTDIR). Every stop is recorded before that point; the finish
+## page checks it anyway before it says "Nothing was installed". An abort after
+## writing - a file error's - is not a stop: it keeps Modern UI's own
+## "Installation Aborted" page, which is then the truth.
 ####
 Var EnfoldWritten
-
-!define ENFOLD_DM_SETDEFID 0x0401 ; DM_SETDEFID = WM_USER + 1; not in WinMessages.nsh
+Var EnfoldStop
+Var EnfoldStopCode
 
 ####
-## THE CANCELLED PAGE (APP.md 14, "WebView2"): an install that stopped before
-## writing anything ends on this page - header "Installation cancelled",
-## "Nothing was installed.", the reason in the details, and one button, Close.
-##
-## Why it is done here and not in the section. After a section Aborts, NSIS
-## moves to the hidden "completed" page that follows every instfiles page, and
-## sets the buttons' text for it from the page's own strings (Ui.c:
-## SetDlgItemTextFromLang(hwndDlg, IDCANCEL, this_page->cancel)) - which is
-## always "Cancel" (build.cpp: every page's cancel defaults to NLF_BTN_CANCEL;
-## no script command sets it per page). A WM_SETTEXT sent from the section
-## would be overwritten a moment later. That transition runs only if this
-## page's leave function lets it: "The leave-function allows you to force the
-## user to stay on the current page using Abort" (NSIS manual 4.5.3), and Ui.c
-## returns before the completed page when it does. So the leave function sets
-## the header, relabels and enables Cancel as Close, hides the disabled Next
-## (Back is already hidden on this page), makes Close the default and focused
-## button, enables the title bar's close box - everything NSIS itself does for
-## an aborted install (Ui.c, the abort branch) - and stays.
-##
-## The header is set here too, not with MUI_INSTFILESPAGE_ABORTHEADER_TEXT/
-## _SUBTEXT: MUI's own header code runs only when this function returns, and
-## those defines would (a) put "Nothing was installed." on an install aborted
-## AFTER writing - a file error's Abort - and (b) leak into the uninstaller's
-## instfiles page, since MUI does not unset them (System.nsh unsets only the
-## FINISHHEADER and ABORTWARNING texts). An abort after writing gets MUI's own
-## "Installation Aborted" page, unchanged.
-##
-## Close ends the installer through NSIS's aborted-install path: Cancel with
-## the abort flag set runs .onInstFailed and exits with code 2 ("aborted by
-## script", NSIS Appendix D.1) - never .onUserAbort, so MUI_ABORTWARNING's "Are
-## you sure?" cannot appear (Ui.c, the IDCANCEL branch).
+## The failure page's words. The text goes through InstallOptions' Nsis2Io
+## (INSTALLOPTIONS_WRITE_CONVERT / _UNCONVERT): a label decodes \r \n \t \\
+## (see ENFOLD_UNFINISH_TEXT below), and these texts carry $INSTDIR; Nsis2Io
+## also turns $\r$\n into the "\r\n" a label shows as a line break. The
+## paragraphs follow Modern UI's own finish text ("...installed on your
+## computer.$\r$\n$\r$\nClick Finish..."); the address stands on a line of its
+## own so the label never breaks it.
 ####
-Function enfold.InstFilesLeave
-    IfAbort 0 enfold_leave_done
-    StrCmp $EnfoldWritten "1" enfold_leave_done
+!define ENFOLD_PARA "$\r$\n$\r$\n"
+!define ENFOLD_WV2_NEEDS "Enfold needs the Microsoft Edge WebView2 Runtime, and it was not installed: "
+!define ENFOLD_WV2_FIX "Install the runtime from$\r$\n${ENFOLD_WV2_URL}$\r$\nand run this installer again."
+!define ENFOLD_NOTHING_INSTALLED "Nothing was installed on this computer."
+!define ENFOLD_NOTHING_CHANGED "Nothing was changed on this computer."
+!define ENFOLD_NOTHING_REMOVED "Nothing was removed from this computer."
 
-    !insertmacro MUI_HEADER_TEXT "Installation cancelled" "Nothing was installed."
+####
+## The installer's finish page when the install STOPPED (see above); on success
+## it leaves the page exactly as Modern UI built it - "Run Enfold" ticked,
+## "Finish".
+##
+## Order, in System.nsh's finish-page PRE: MUI writes ioSpecial.ini -
+## NextButtonText "Finish" (1509), the title as Field 2 (1523), the text as
+## Field 3 (1615), the Run box as Field 4 (1617-1640), NumFields (1737) - then
+## calls this function (1744), and only then builds the dialog from the ini
+## (INSTALLOPTIONS_INITDIALOG, 1769; the custom SHOW is later, 1848). So what
+## this function writes is what the page shows:
+##
+##   Field 2 Text         the title, "Enfold was not installed"
+##   Field 3 Text/Bottom  the reason (escaped), the full height MUI gives the
+##                        text when there is no box (1541)
+##   NumFields 3          the Run box (Field 4) is not created at all
+##   Field 4 State 0      and MUI's LEAVE, which runs the program when Field 4
+##                        reads "1" (1904-1915), does not
+##   NextButtonText       "&Close" - InstallOptions sets the Next button's text
+##                        from it when it builds the page (InstallerOptions.cpp,
+##                        mySetWindowText(hNextButton, pszNextButtonText)), the
+##                        same way MUI's "Finish" gets there
+##   CancelShow 0         the disabled Cancel is hidden: one button
+####
+Function enfold.FinishPre
+    StrCmp $EnfoldStop "" enfold_finish_done
+    StrCmp $EnfoldWritten "1" enfold_finish_done
 
-    GetDlgItem $0 $HWNDPARENT 1 ; Next
-    ShowWindow $0 ${SW_HIDE}
-    GetDlgItem $0 $HWNDPARENT 3 ; Back
-    ShowWindow $0 ${SW_HIDE}
+    ${If} $EnfoldStop == "wv2-no"
+        StrCpy $R0 "${ENFOLD_WV2_NEEDS}you chose not to install it.${ENFOLD_PARA}${ENFOLD_WV2_FIX}${ENFOLD_PARA}${ENFOLD_NOTHING_INSTALLED}"
+    ${ElseIf} $EnfoldStop == "wv2-failed"
+        ${If} $EnfoldStopCode == ""
+            StrCpy $R0 "${ENFOLD_WV2_NEEDS}Microsoft's installer did not install it.${ENFOLD_PARA}${ENFOLD_WV2_FIX}${ENFOLD_PARA}${ENFOLD_NOTHING_INSTALLED}"
+        ${Else}
+            StrCpy $R0 "${ENFOLD_WV2_NEEDS}Microsoft's installer reported code $EnfoldStopCode when run as you.${ENFOLD_PARA}${ENFOLD_WV2_FIX}${ENFOLD_PARA}${ENFOLD_NOTHING_INSTALLED}"
+        ${EndIf}
+    ${ElseIf} $EnfoldStop == "wv2-notallowed"
+        StrCpy $R0 "${ENFOLD_WV2_NEEDS}Windows did not allow Microsoft's installer to run (the permission was declined).${ENFOLD_PARA}The runtime is installed for the whole machine, so an administrator installs it once from$\r$\n${ENFOLD_WV2_URL}$\r$\nand after that any account can install Enfold.${ENFOLD_PARA}${ENFOLD_NOTHING_INSTALLED}"
+    ${ElseIf} $EnfoldStop == "running"
+        StrCpy $R0 "Enfold is running, and Cancel was chosen.${ENFOLD_PARA}Quit Enfold from the tray icon, then run this installer again.${ENFOLD_PARA}${ENFOLD_NOTHING_CHANGED}"
+    ${ElseIf} $EnfoldStop == "denied"
+        StrCpy $R0 "Enfold's folder cannot be written:$\r$\n$INSTDIR${ENFOLD_PARA}Check the permissions on that folder, then run this installer again.${ENFOLD_PARA}${ENFOLD_NOTHING_CHANGED}"
+    ${Else}
+        StrCpy $R0 "Enfold's folder cannot be written (Windows error $EnfoldStopCode):$\r$\n$INSTDIR${ENFOLD_PARA}Check the permissions on that folder, then run this installer again.${ENFOLD_PARA}${ENFOLD_NOTHING_CHANGED}"
+    ${EndIf}
 
-    GetDlgItem $0 $HWNDPARENT 2 ; Cancel -> Close
-    SendMessage $0 ${WM_SETTEXT} 0 "STR:Close"
-    EnableWindow $0 1
-    SendMessage $HWNDPARENT ${ENFOLD_DM_SETDEFID} 2 0
-    SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $0 1
-
-    ; SC_CLOSE 0xF060, MF_BYCOMMAND|MF_ENABLED 0 - as Ui.c does on abort.
-    System::Call 'user32::GetSystemMenu(p$HWNDPARENT, i0)p.r1'
-    System::Call 'user32::EnableMenuItem(pr1, i0xF060, i0)'
-
-    ; Abort updates the status line wherever it runs (exec.c EW_ABORT calls
-    ; update_status_text); "none" (script.cpp: none=6, both bits set) keeps
-    ; the section's "Installation cancelled." and adds no blank row.
-    SetDetailsPrint none
-    Abort ; stay on this page
-enfold_leave_done:
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Field 2" "Text" "Enfold was not installed"
+    !insertmacro INSTALLOPTIONS_WRITE_CONVERT "ioSpecial.ini" "Field 3" "Text" "$R0"
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Field 3" "Bottom" "185"
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Settings" "NumFields" "3"
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Field 4" "State" "0"
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Settings" "NextButtonText" "&Close"
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Settings" "CancelShow" "0"
+enfold_finish_done:
 FunctionEnd
 
 ####
-## The uninstaller's finish text, written again in InstallOptions' escaped
-## form (see ENFOLD_UNFINISH_TEXT above). MUI has written Field 3 raw by the
-## time it calls this (System.nsh 1615, then the custom PRE at 1744) and shows
-## the page after it. un.Nsis2Io exists because MUI includes InstallOptions'
-## uninstaller conversion functions whenever it uses one of its own default
-## texts (System.nsh 55-56), as this page's default title does. On a reboot
-## the field holds MUI's reboot text instead, which is left alone - this
-## uninstaller never asks for one.
+## The uninstaller's finish page, both ways.
+##
+## Removed: the text says what was kept, written again in InstallOptions'
+## escaped form (see ENFOLD_UNFINISH_TEXT above). MUI has written Field 3 raw
+## by the time it calls this (System.nsh 1615, then the custom PRE at 1744) and
+## builds the page after it. un.Nsis2Io exists because MUI includes
+## InstallOptions' uninstaller conversion functions whenever it uses one of its
+## own default texts (System.nsh 55-56), as this page's default title does.
+##
+## Stopped (Enfold running and Cancel chosen, or a folder it cannot write):
+## "Enfold was not removed", the reason, "Close" - the same rewrite as
+## enfold.FinishPre, less the Run box this page never had.
+##
+## On a reboot the field holds MUI's reboot text instead, which is left alone -
+## this uninstaller never asks for one.
 ####
 Function un.enfold.UnFinishPre
     IfRebootFlag enfold_unfinish_done
+    StrCmp $EnfoldStop "" 0 enfold_unfinish_stop
     !insertmacro INSTALLOPTIONS_WRITE_UNCONVERT "ioSpecial.ini" "Field 3" "Text" "${ENFOLD_UNFINISH_TEXT}"
+    Goto enfold_unfinish_done
+
+enfold_unfinish_stop:
+    ${If} $EnfoldStop == "running"
+        StrCpy $R0 "Enfold is running, and Cancel was chosen.${ENFOLD_PARA}Quit Enfold from the tray icon, then run the uninstaller again.${ENFOLD_PARA}${ENFOLD_NOTHING_REMOVED}"
+    ${ElseIf} $EnfoldStop == "denied"
+        StrCpy $R0 "Enfold's folder cannot be written:$\r$\n$INSTDIR${ENFOLD_PARA}Check the permissions on that folder, then run the uninstaller again.${ENFOLD_PARA}${ENFOLD_NOTHING_REMOVED}"
+    ${Else}
+        StrCpy $R0 "Enfold's folder cannot be written (Windows error $EnfoldStopCode):$\r$\n$INSTDIR${ENFOLD_PARA}Check the permissions on that folder, then run the uninstaller again.${ENFOLD_PARA}${ENFOLD_NOTHING_REMOVED}"
+    ${EndIf}
+
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Field 2" "Text" "Enfold was not removed"
+    !insertmacro INSTALLOPTIONS_WRITE_UNCONVERT "ioSpecial.ini" "Field 3" "Text" "$R0"
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Settings" "NextButtonText" "&Close"
+    !insertmacro INSTALLOPTIONS_WRITE "ioSpecial.ini" "Settings" "CancelShow" "0"
 enfold_unfinish_done:
 FunctionEnd
 
@@ -564,16 +595,18 @@ Section
     # only into $PLUGINSDIR, which NSIS deletes on every exit (Main.c,
     # CleanUp); the running check opens with OPEN_EXISTING and writes nothing.
 
-    # WebView2: as the user, then - asked - elevated; the cancelled page if it
-    # is still absent (APP.md 14). See the note above enfold.webview2runtime.
+    # WebView2: as the user, then - asked - elevated; a stop if it is still
+    # absent (APP.md 14). See the note above enfold.webview2runtime.
     !insertmacro enfold.webview2runtime
+    StrCmp $EnfoldStop "" 0 enfold_inst_stop
 
     # A running Enfold is asked to quit, never killed (APP.md 14). Last before
-    # the files, so nothing that could abort the install comes after it.
+    # the files, so nothing that could stop the install comes after it.
     !insertmacro enfold.checkNotRunning "inst"
+    StrCmp $EnfoldStop "" 0 enfold_inst_stop
 
-    # From here on the install writes; an abort after this is not "nothing was
-    # installed" and gets MUI's own aborted page (see enfold.InstFilesLeave).
+    # From here on the install writes; an abort after this is not a stop and
+    # gets Modern UI's own "Installation Aborted" page (see THE STOP above).
     StrCpy $EnfoldWritten "1"
     SetOutPath $INSTDIR
 
@@ -593,13 +626,25 @@ Section
     !insertmacro wails.associateCustomProtocols
 
     !insertmacro wails.writeUninstaller
+    Goto enfold_inst_end
+
+enfold_inst_stop:
+    # Nothing has been written (see THE STOP above). The progress page moves on
+    # by itself to the finish page, which enfold.FinishPre rewrites; the exit
+    # code still says the install did not happen.
+    SetAutoClose true
+    SetErrorLevel 2
+
+enfold_inst_end:
 SectionEnd
 
 Section "uninstall"
     !insertmacro wails.setShellContext
 
-    # A running Enfold, again - nothing is removed until it has quit (14).
+    # A running Enfold, again - nothing is removed until it has quit (14). A
+    # stop skips every removal below and ends on "Enfold was not removed".
     !insertmacro enfold.checkNotRunning "uninst"
+    StrCmp $EnfoldStop "" 0 enfold_uninst_stop
 
     # The association, given back to whatever held .efd before (14, decision 3).
     SetRegView 64
@@ -632,4 +677,15 @@ Section "uninstall"
     ## that makes this line work.
     ####
     RMDir /r "$INSTDIR"
+    Goto enfold_uninst_end
+
+enfold_uninst_stop:
+    # Nothing has been removed. The uninstaller's progress page already moves
+    # on by itself (Modern UI sets SetAutoClose true unless
+    # MUI_UNFINISHPAGE_NOAUTOCLOSE, System.nsh 406); said again here so the
+    # stop does not depend on it. un.enfold.UnFinishPre rewrites the page.
+    SetAutoClose true
+    SetErrorLevel 2
+
+enfold_uninst_end:
 SectionEnd

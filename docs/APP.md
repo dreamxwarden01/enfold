@@ -1831,20 +1831,24 @@ WebView2 Runtime. Install it now? Windows will ask for permission — it is Micr
 installer." with a message box's *Yes* and *No* (its buttons cannot be renamed, and the question reads as
 one); the elevated run is the one UAC prompt the install can show, and it is Microsoft's signed
 bootstrapper's, not Enfold's. *No*, or a runtime still absent after the elevated run (declined, or an installer that failed — its exit code shown),
-ends on a **cancelled page** rather than a vanished window or a progress page with nothing to
-do: the header says *Installation cancelled*, the text says that nothing was installed — which is
-true, the check running before any file, key or shortcut is written — and why, in the words of
-what happened: the permission declined in Windows' prompt (the elevated run never started —
+ends on a **page of its own, the finish page's shape** — no progress bar, no log, since a
+progress page left standing reads as a hang (the user's second test, 2026-09-30) — titled
+*Enfold was not installed*: the text says that nothing was installed — which is true, the
+check running before any file, key or shortcut is written — and why, in the words of what
+happened: the permission declined in Windows' prompt (the elevated run never started —
 there is no exit code then), or an account that cannot grant it (Windows asks such an account
 for an administrator's credentials; without them the same page says that the runtime is
 machine-wide, that an administrator installs it once from Microsoft's address, and that any
 account can install Enfold after that), or Microsoft's installer ran and failed (the as-user run's exit code shown, in hexadecimal as
 Microsoft documents them; the elevated run's is not reported — NSIS's `ExecShellWait` throws it
-away — and the details say so); Microsoft's download address in every case, and the one
-button says *Close*. The cancelled page is the installer's own instfiles page, its header and
-button rewritten from a leave function before Modern UI's abort handling runs, and it appears
-only for a stop before the first file is written (a flag set just before the files); a stop
-after that gets Modern UI's own *Installation Aborted* page, which is then the truth. A silent
+away — and the details say so); Microsoft's download address in every case, no *Run Enfold* box, and the one button says
+*Close*. It is the finish page with its fields rewritten: the section, stopping before the
+first file, writes nothing and lets the wizard run on (the progress page closes itself), and
+the finish page's pre-function swaps the title, the text and the box when the stop is
+recorded — a stop after the first file is written keeps Modern UI's own *Installation Aborted*,
+which is then the truth. The uninstaller ends the same way when it cannot proceed (Enfold
+running and *Cancel* chosen; a folder it cannot write): its finish page titled *Enfold was not
+removed*, the reason, *Close*. A silent
 install (`/S`) is not offered in 1.0. Windows 11 ships the runtime; a
 Windows 10 machine may not, and the clean-machine test below is that path.
 

@@ -4357,3 +4357,14 @@ Microsoft says it cannot succeed there — and the install goes straight to the 
 the one elevated run; the run as the user stays for machines without Edge, where it needs no
 prompt at all.
 
+**The clean-machine test passes** (2026-09-30, the user, a VMware guest with Windows 10
+Enterprise LTSC 2021 x64, updated, Microsoft Edge present). With the fourth build of the
+installer (`371b96d`): the WebView2 runtime removed, the install met one question and one
+prompt, Microsoft's window showed the runtime's progress, and Enfold followed; the install,
+the uninstall that keeps the vault, the reinstall that finds it, and the application itself
+all behaved as the development build on the host does. One thing the guest could not show:
+SmartScreen never appeared, because the installer reached the guest by a VMware copy, which
+carries no mark of the web — a browser download does, and only such a file is what
+SmartScreen judges; the README's sentence about it is to be checked against a file that
+carries the mark (writing the `Zone.Identifier` stream by hand reproduces it).
+

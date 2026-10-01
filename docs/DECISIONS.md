@@ -4368,3 +4368,11 @@ carries no mark of the web — a browser download does, and only such a file is 
 SmartScreen judges; the README's sentence about it is to be checked against a file that
 carries the mark (writing the `Zone.Identifier` stream by hand reproduces it).
 
+**SmartScreen seen, and 1.0 held** (2026-09-30). With the mark of the web written by hand on
+the guest, SmartScreen stopped the installer as expected — *Windows protected your PC*, *More
+info*, the file's name and *Unknown publisher*, *Run anyway* — and the README says exactly
+that now. The user's ruling on the release: not yet. The test passed, but "there is a lot
+still to polish, more than a few rough details"; they use the application day to day and
+collect them, and the cut of 1.0 waits for that pass. The guest has done what it was for —
+the path without a WebView2 runtime, the install and the uninstall.
+

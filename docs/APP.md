@@ -1824,9 +1824,13 @@ the user's, a version of `0.0.0.0` counting as absent — and Microsoft's bootst
 own window**, not silently: the first VM test watched tens of seconds of an installer that
 showed nothing while the runtime downloaded, so the bootstrapper's own window, with its
 progress bar and its *Cancel*, is what the user sees (a cancel there is a failed run, and ends
-as one), and the installer's details say that the window is Microsoft's — first as the user (a
-per-user runtime, no prompt), its exit code written into the installer's details; and, when the runtime is
-still absent after that, once more **elevated** — the first clean-machine test (2026-09-30)
+as one), and the installer's details say that the window is Microsoft's — first as the user (a per-user runtime, no prompt), its exit code written into the
+installer's details, **unless Microsoft Edge's machine-level updater is on the computer**
+(its `path` under `HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate`): then the run as the user
+is skipped, since it cannot succeed and, run with its window, the bootstrapper asks for the
+machine's rights by itself — the fourth VM test saw Microsoft's prompt, then Enfold's
+question, then the prompt again — so the user meets one question and one prompt; and, when
+the runtime is still absent after a run as the user, once more **elevated** — the first clean-machine test (2026-09-30)
 found the per-user run failing on a machine that has Microsoft Edge, because Edge's machine-
 level updater takes over a per-user install and needs the machine's rights (Microsoft's
 distribution notes say so) — but only after asking (the user's ruling, 2026-09-30): "Enfold needs the Microsoft Edge

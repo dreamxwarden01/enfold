@@ -157,6 +157,21 @@ Unicode true
     SetOutPath "$pluginsdir\webview2bootstrapper"
     File "MicrosoftEdgeWebview2Setup.exe"
 
+    ; 0. A machine-level Microsoft Edge Updater - Edge's own - takes a
+    ;    per-user install over and needs the machine's rights (Microsoft,
+    ;    "Installing the Runtime as per-machine or per-user"), and run with
+    ;    its window the bootstrapper then asks for that permission by itself:
+    ;    the fourth VM test saw its prompt, then ours, then ours again. With
+    ;    one present the run as the user is skipped - one question, one
+    ;    prompt. The updater registers its path under this key (seen on a
+    ;    Windows 11 machine with Edge: path = MicrosoftEdgeUpdate.exe).
+    ReadRegStr $R6 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate" "path"
+    ${If} $R6 != ""
+        DetailPrint "Microsoft Edge's machine-level updater is on this computer: the runtime installs for the whole machine, which needs permission."
+        StrCpy $R5 ""
+        Goto enfold_wv2_ask
+    ${EndIf}
+
     ; 1. As the user.
     ClearErrors
     ExecWait '"${ENFOLD_WV2_SETUP}" /install' $R4
@@ -180,6 +195,7 @@ Unicode true
 
     ; 2. Ask. MessageBox is Win32's MessageBoxW, whose button sets are fixed:
     ;    plain NSIS cannot relabel Yes/No as Install/Cancel.
+enfold_wv2_ask:
     MessageBox MB_YESNO|MB_ICONQUESTION "Enfold needs the Microsoft Edge WebView2 Runtime. Install it now? Windows will ask for permission ${U+2014} it is Microsoft's installer." IDYES enfold_wv2_elevate
 
     ; (c) No.

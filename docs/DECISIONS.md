@@ -4348,3 +4348,12 @@ of its own, with a progress bar and a *Cancel*, that `/silent` had been hiding. 
 runs, as the user and elevated, run without `/silent`; the details say the window is
 Microsoft's; a cancel there is a failed run and ends on the *not installed* page.
 
+**The fourth test: one question, one prompt** (2026-09-30). With its window, the bootstrapper
+run as the user on a machine with Edge asked for the machine's rights by itself — Microsoft's
+prompt, then Enfold's question, then the prompt again (its code that time `0x80040716`, not in
+any public listing). Ruled: a machine-level Edge Updater present (Edge's own; its `path` under
+the EdgeUpdate key, seen on this Windows 11 machine) means the run as the user is skipped —
+Microsoft says it cannot succeed there — and the install goes straight to the question and
+the one elevated run; the run as the user stays for machines without Edge, where it needs no
+prompt at all.
+

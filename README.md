@@ -15,8 +15,9 @@ application core (`internal/app`), the Wails shell (repository root) and the Sve
 
 Download `enfold-amd64-installer.exe` from the releases page and check its SHA-256 against the one
 in the release notes. **The binaries are not code-signed.** SmartScreen will therefore stop the
-first run of each release with *"Windows protected your PC"* — click **More info**, then
-**Run anyway**. That is the whole of it: two clicks, once per release.
+first run of each release with *"Windows protected your PC"* — click **More info** (the dialog
+then names the file and says *Unknown publisher*), then **Run anyway**. That is the whole of
+it: two clicks, once per release.
 
 The installer is per user and asks for no administrator rights, so there is no UAC prompt. It
 writes `%LOCALAPPDATA%\Programs\Enfold`, a Start-menu shortcut and the `.efd` file association, and

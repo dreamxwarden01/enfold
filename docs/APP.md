@@ -1820,9 +1820,12 @@ shortcut is a right-click away for whoever wants one (decision 2). The uninstall
 carries the version from `build/config.yml`, which is the release's.
 
 **WebView2.** Before the files, the Evergreen runtime is looked for — the machine's key, then
-the user's, a version of `0.0.0.0` counting as absent — and Microsoft's bootstrapper is run
-silently when it is absent, online only, as SCOPE says: first as the user (a per-user runtime,
-no prompt), its exit code written into the installer's details; and, when the runtime is
+the user's, a version of `0.0.0.0` counting as absent — and Microsoft's bootstrapper is run when it is absent, online only, as SCOPE says — **with its
+own window**, not silently: the first VM test watched tens of seconds of an installer that
+showed nothing while the runtime downloaded, so the bootstrapper's own window, with its
+progress bar and its *Cancel*, is what the user sees (a cancel there is a failed run, and ends
+as one), and the installer's details say that the window is Microsoft's — first as the user (a
+per-user runtime, no prompt), its exit code written into the installer's details; and, when the runtime is
 still absent after that, once more **elevated** — the first clean-machine test (2026-09-30)
 found the per-user run failing on a machine that has Microsoft Edge, because Edge's machine-
 level updater takes over a per-user install and needs the machine's rights (Microsoft's

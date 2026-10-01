@@ -4340,3 +4340,11 @@ shape — *Enfold was not installed*, the reason and the way out in plain words,
 *Close* — reached by letting the wizard run on past a section that wrote nothing; and the
 uninstaller's stops end the same way, *Enfold was not removed*.
 
+**The third test: the runtime installs, in silence** (2026-09-30). The elevated path worked
+on the guest — and for tens of seconds the installer showed nothing while Microsoft's
+bootstrapper downloaded and installed, which reads as a hang. The user's suggestion was a
+console window to watch; the better answer was already in the bootstrapper: it has a window
+of its own, with a progress bar and a *Cancel*, that `/silent` had been hiding. Ruled: both
+runs, as the user and elevated, run without `/silent`; the details say the window is
+Microsoft's; a cancel there is a failed run and ends on the *not installed* page.
+

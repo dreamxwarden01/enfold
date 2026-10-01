@@ -107,8 +107,10 @@ Unicode true
 ## clean-machine test, a Windows 10 guest with Microsoft Edge installed and
 ## the runtime removed):
 ##
-##   1. Absent: Microsoft's bootstrapper, silently, AS THE USER - a per-user
-##      runtime, no prompt. Its exit code goes into the details.
+##   1. Absent: Microsoft's bootstrapper, AS THE USER - a per-user runtime,
+##      no prompt - with its own window showing (no /silent: the first VM test
+##      watched tens of seconds of nothing while it worked; its window has a
+##      progress bar and a Cancel). Its exit code goes into the details.
 ##   2. Still absent: that is Edge's machine-level updater taking the install
 ##      over - Microsoft, "Installing the Runtime as per-machine or per-user":
 ##      "a per-user install is automatically replaced by a per-machine
@@ -147,7 +149,7 @@ Unicode true
     StrCmp $R3 "1" enfold_wv2_present
 
     SetDetailsPrint both
-    DetailPrint "Installing: WebView2 Runtime"
+    DetailPrint "Installing: WebView2 Runtime (Microsoft's installer shows its progress in its own window)"
     SetDetailsPrint listonly
 
     InitPluginsDir
@@ -157,7 +159,7 @@ Unicode true
 
     ; 1. As the user.
     ClearErrors
-    ExecWait '"${ENFOLD_WV2_SETUP}" /silent /install' $R4
+    ExecWait '"${ENFOLD_WV2_SETUP}" /install' $R4
     ${If} ${Errors}
         ; The variable is undefined when the process did not start (NSIS
         ; manual, ExecWait), so it is not shown as a code.
@@ -187,10 +189,10 @@ Unicode true
 
 enfold_wv2_elevate:
     SetDetailsPrint both
-    DetailPrint "Installing: WebView2 Runtime (elevated)"
+    DetailPrint "Installing: WebView2 Runtime (elevated; Microsoft's window shows the progress)"
     SetDetailsPrint listonly
     ClearErrors
-    ExecShellWait "runas" "${ENFOLD_WV2_SETUP}" "/silent /install" SW_SHOWNORMAL
+    ExecShellWait "runas" "${ENFOLD_WV2_SETUP}" "/install" SW_SHOWNORMAL
     IfErrors enfold_wv2_notlaunched
     DetailPrint "WebView2 bootstrapper (elevated) ran; Windows does not report its exit code to this installer."
 

@@ -782,6 +782,22 @@ export interface FileRow {
 }
 
 /**
+ * IncomingFile is what a merge handle offers (APP.md §13): the checklist's
+ * rows and one fact about the file they came from, which belongs to the set
+ * rather than to any row. Tampered is that file's own R25 verdict — its slot
+ * region does not match the hash its authenticated registry carries
+ * (FORMAT.md R25). The rows stand: every field of them comes from that
+ * registry, which its own AEAD vouched for, and what R25 guards — the slot
+ * records' public keys, which a rotation wraps the next VMK to — is nothing a
+ * merge reads or writes. The file itself is not fit to be kept or trusted as
+ * a backup, and the dialog says so above the list.
+ */
+export interface IncomingFile {
+    "records": IncomingRecord[] | null;
+    "tampered": boolean;
+}
+
+/**
  * IncomingRecord is one row of a merge's checklist (APP.md §13). Action is
  * what ticking it would do; Ticked is the default.
  */

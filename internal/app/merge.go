@@ -26,6 +26,9 @@ type incomingSet struct {
 	openedAt   uint64
 	recs       map[[16]byte]format.ArchiveRecord
 	rows       []IncomingRecord
+	// tampered is the incoming file's own R25 verdict, carried to the
+	// dialog as IncomingFile.Tampered.
+	tampered bool
 }
 
 // InspectRecords opens another keystore file's registry for a merge (APP.md
@@ -82,12 +85,19 @@ func (c *Core) InspectRecords(path string) *Error {
 			}
 			return err
 		}
-		if fr.Tampered != nil {
-			// Reported, never a refusal: nothing in that file is unlocked
-			// and every field comes from its authenticated registry.
-			c.log("inspect records: %s fails its own region hash: %v", path, fr.Tampered)
-		}
 		set := c.buildIncomingSet(path, fr)
+		if fr.Tampered != nil {
+			// Reported, never a refusal: every field of a row comes from
+			// its authenticated registry, and what R25 guards — the slot
+			// records' public keys — is nothing a merge uses (a recovery
+			// slot it was opened through is checked by its own AAD). The
+			// dialog says it above the list (IncomingFile.Tampered): the file
+			// was picked as a backup or a copy, and one whose slot region
+			// was altered is not fit to be kept as either (APP.md §13,
+			// FORMAT.md R25).
+			c.log("inspect records: %s fails its own region hash: %v", path, fr.Tampered)
+			set.tampered = true
+		}
 		handle := newToken()
 		c.mu.Lock()
 		if c.vault.incoming == nil {
@@ -354,19 +364,20 @@ func policyText(p uint32) string {
 	return s
 }
 
-// IncomingRecords is the record list behind a merge handle. A handle that was
-// consumed, discarded or dropped by a lock trigger is ceremony.stale_prompt,
-// as a dead reveal handle is.
-func (c *Core) IncomingRecords(handle string) ([]IncomingRecord, *Error) {
+// IncomingRecords is the record list behind a merge handle and the one fact
+// about the file it came from. A handle that was consumed, discarded or
+// dropped by a lock trigger is ceremony.stale_prompt, as a dead reveal handle
+// is.
+func (c *Core) IncomingRecords(handle string) (IncomingFile, *Error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	set := c.vault.incoming[handle]
 	if set == nil {
-		return nil, coded(CodeStalePrompt)
+		return IncomingFile{}, coded(CodeStalePrompt)
 	}
 	out := make([]IncomingRecord, len(set.rows))
 	copy(out, set.rows)
-	return out, nil
+	return IncomingFile{Records: out, Tampered: set.tampered}, nil
 }
 
 // DiscardRecords ends a merge handle: the dialog closed.

@@ -3,7 +3,26 @@
 // ticked when the dialog opens. The core classified the row — running the
 // merge itself on a copy, so the row and the write cannot disagree — and
 // this module only words it and decides the ticks the page starts with.
-import type { Difference, IncomingRecord } from "./api";
+import type { Difference, IncomingFile, IncomingRecord } from "./api";
+
+// incomingOf reads what IncomingRecords answered: the rows, never null, and
+// whether that file fails its own slot-region hash (FORMAT.md R25) — a fact
+// about the file, so the set carries it rather than any row.
+export function incomingOf(f: IncomingFile | null | undefined): { records: IncomingRecord[]; tampered: boolean } {
+  return { records: f?.records ?? [], tampered: !!f?.tampered };
+}
+
+// tamperedNote is the bar above the list for such a file, or "" for one that
+// verifies. Its records are still offered: every field of a row comes from
+// the file's registry, which its own AEAD vouched for, and what R25 guards —
+// the slot records' public keys, which a rotation wraps the next VMK to — is
+// nothing a merge uses (a recovery slot the file is opened through by its own
+// key is checked by its own AAD). The file itself is what is not to be relied
+// on: Import and Verify backup refuse it (APP.md §13).
+export function tamperedNote(tampered: boolean): string {
+  if (!tampered) return "";
+  return "That file's slot region does not match its registry: something changed it after it was written. The records below come from its registry, which was proved when it opened, and can be merged — but do not keep that file as a backup or trust it as one: Import would refuse it.";
+}
 
 // The four actions the core reports.
 export type RowAction = "skip" | "version" | "add" | "forgotten";

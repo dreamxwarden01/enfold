@@ -16,7 +16,7 @@
   import { store } from "../lib/state.svelte";
   import { codeText } from "../lib/strings";
   import { date, dateTime, keyId, leaf } from "../lib/format";
-  import { actionLabel, actionNote, actionOf, defaultTicks, differLine, summarise, tickable, tickedIds } from "../lib/merge";
+  import { actionLabel, actionNote, actionOf, defaultTicks, differLine, incomingOf, summarise, tamperedNote, tickable, tickedIds } from "../lib/merge";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
 
@@ -40,6 +40,7 @@
   const cer = $derived(store.ceremony && store.ceremony.kind === "records" ? store.ceremony : null);
   const rows = $derived<IncomingRecord[]>(store.merge?.records ?? []);
   const listed = $derived(!!store.merge);
+  const tamperedBar = $derived(tamperedNote(!!store.merge?.tampered));
   const sum = $derived(summarise(rows, ticks));
 
   function fail(e: unknown) {
@@ -71,9 +72,9 @@
     fetched = handle;
     void (async () => {
       try {
-        const recs = (await Vault.IncomingRecords(handle)) ?? [];
-        store.merge = { handle, records: recs };
-        ticks = defaultTicks(recs);
+        const { records, tampered } = incomingOf(await Vault.IncomingRecords(handle));
+        store.merge = { handle, records, tampered };
+        ticks = defaultTicks(records);
         store.dismissCeremony();
       } catch (e) {
         fail(e);
@@ -142,6 +143,12 @@
 <Dialog title="Import records" wide onclose={merging ? undefined : close}>
   {#if listed}
     <p class="t-sub">Ticked records are written into this vault's registry. Nothing of that file is installed, and this vault's own values are kept wherever the two differ.</p>
+    <!-- The file failed its own R25 check: a fact about the file, not about
+         any row, so it stands above the list and the ticks still work
+         (APP.md §13). -->
+    {#if tamperedBar}
+      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{tamperedBar}</span></div>
+    {/if}
     <div class="merge-list" role="group" aria-label="Incoming records">
       {#each rows as r (r.archiveId)}
         <div class="mrow" class:skip={!tickable(r)}>

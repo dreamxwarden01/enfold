@@ -1728,7 +1728,13 @@ under this vault's `KWK` and returns a handle with the record list; the handle l
 drops it with every held key (§2.1). `Vault.MergeRecords(handle, ids)` is then an ordinary
 registry write on the session, refused with `vault.archives_open` while any archive is open,
 `ceremony.in_progress` while a ceremony runs and `op.in_progress` while a save, verify, compact
-or rotation runs.
+or rotation runs. A file that opens but fails its own slot-region hash (FORMAT R25) is listed
+all the same: every field of a row comes from its authenticated registry, and what R25 guards —
+the slot records' public keys, which a rotation wraps the next VMK to — is nothing a merge uses
+(a recovery slot the file is opened through by its own key is checked by its own AAD).
+`IncomingRecords` says so beside the rows (`IncomingFile.Tampered`, ruled 2026-10-13): the
+dialog warns above the list that the records can be merged but the file itself is not to be kept
+or trusted as a backup — Import and Verify backup refuse it.
 
 The records are listed with checkboxes, ticked by default: a record whose `archive_id`, KID and
 key the vault already has is skipped and listed greyed as "already here"; a known archive with
@@ -1786,9 +1792,10 @@ for ids and hashes, Unix seconds for times, the policy as named booleans, and no
 `wrapped_archive_key`, no nonce and no offset, so §1's boundary holds; refused with
 `vault.locked` outside Unlocked — `Archives.CheckFiles()`, `Vault.InspectRecords(path)` (a
 ceremony of kind `records` that ends at `StepRecords` with the handle in `SlotLabel`, as the
-reveal ends with its URL), `Vault.IncomingRecords(handle) []IncomingRecord{ArchiveID, Name,
-Description, CreatedAt, Versions, Action skip · version · add · forgotten, ForgottenAt, Differs
-[]{Field, Theirs}, Ticked}`, `Vault.MergeRecords(handle, ids)` (a registry write on the session)
+reveal ends with its URL), `Vault.IncomingRecords(handle) IncomingFile{Records
+[]IncomingRecord{ArchiveID, Name, Description, CreatedAt, Versions, Action skip · version · add ·
+forgotten, ForgottenAt, Differs []{Field, Theirs}, Ticked}, Tampered}` (Tampered: that file fails
+its own R25 hash), `Vault.MergeRecords(handle, ids)` (a registry write on the session)
 and `Vault.DiscardRecords(handle)`, `Keys.EntangledState()`, `Keys.SetEntangled(on)` and
 `Keys.ChangeEntangledPassword()` (ceremonies of kind `entangle`; the standalone password and the
 first way in are the only `Choose` prompts, confirmed on the page in a second field under the one

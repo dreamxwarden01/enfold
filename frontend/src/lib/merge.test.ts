@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IncomingRecord } from "./api";
-import { actionLabel, actionNote, actionOf, defaultTicks, differLine, differText, summarise, tickable, tickedIds } from "./merge";
+import { actionLabel, actionNote, actionOf, defaultTicks, differLine, differText, incomingOf, summarise, tamperedNote, tickable, tickedIds } from "./merge";
 
 function row(over: Partial<IncomingRecord>): IncomingRecord {
   return { archiveId: "a1", name: "Photos 2024", description: "", createdAt: 0, versions: 1, action: "add", forgottenAt: 0, differs: null, ticked: true, ...over } as IncomingRecord;
@@ -81,5 +81,28 @@ describe("what differed", () => {
     expect(differLine([])).toBe("");
     expect(differLine([{ field: "name", theirs: "Photos 2023" }])).toMatch(/this vault's value is kept$/);
     expect(differLine([{ field: "name", theirs: "A" }, { field: "policy", theirs: "hidden" }])).toContain("; ");
+  });
+});
+
+describe("a file that fails its own region hash (FORMAT.md R25)", () => {
+  it("carries the set-level fact beside the rows, and reads a null answer as nothing", () => {
+    const rows = [row({ archiveId: "a1" })];
+    expect(incomingOf({ records: rows, tampered: true })).toEqual({ records: rows, tampered: true });
+    expect(incomingOf({ records: null, tampered: false })).toEqual({ records: [], tampered: false });
+    expect(incomingOf(null)).toEqual({ records: [], tampered: false });
+  });
+
+  it("says the records can be merged and the file is not to be kept as a backup", () => {
+    expect(tamperedNote(false)).toBe("");
+    const note = tamperedNote(true);
+    expect(note).toMatch(/slot region does not match its registry/);
+    expect(note).toMatch(/can be merged/);
+    expect(note).toMatch(/do not keep that file as a backup/);
+  });
+
+  it("leaves the tick-list as it is: the rows of a tampered file tick by the same rules", () => {
+    const { records } = incomingOf({ records: [row({ archiveId: "a1", action: "add" }), row({ archiveId: "a3", action: "skip", ticked: false })], tampered: true });
+    expect(defaultTicks(records)).toEqual({ a1: true, a3: false });
+    expect(tickedIds(records, defaultTicks(records))).toEqual(["a1"]);
   });
 });

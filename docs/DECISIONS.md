@@ -4394,3 +4394,21 @@ measured — a verified card stays so until Windows powers it down, ten seconds 
 program lets go of it (DESIGN.md §11 trap 14), and whoever won the gap holds it for as long as
 they please — and says what ends it: remove the key and plug it back in. APP.md §2.2 says the
 lifetime.
+
+**A merge source that fails its own region hash says so** (2026-10-13). *Import records…* proves
+the file it opens, and the keystore already computed that file's own R25 verdict
+(`ForeignRegistry.Tampered`: its slot region does not match the hash its registry
+authenticates); `InspectRecords` only logged it, as Revision 2's implementation recorded
+(2026-09-08: no view type carried it, a 1.1 item), so the dialog listed the records of an
+altered file exactly as those of a sound one, and nothing told the user that the backup they had
+just picked is not one to keep. Ruled: the dialog says it. Still never a refusal — every field
+of a row comes from the file's authenticated registry, and what R25 guards (the slot records'
+public keys, which a rotation wraps the next VMK to) is nothing a merge uses: the proof step
+only lists the file's slots as plaintext claims, and a recovery slot the file is opened through
+by its own key is checked by its own AAD. Refusing would only close a way back. The fact is
+about the file, not about any record, so it travels as one: `IncomingRecords` answers
+`IncomingFile{Records, Tampered}` rather than a bare list — not a flag repeated on every row,
+and not a toast that is gone before the list is read. The dialog shows an attention bar above
+the list saying that the records can be merged but the file itself is not to be kept or trusted
+as a backup — this app's Import and Verify backup already refuse such a file (`vault.tampered`),
+so merge was the only path that stayed silent; the ticks work as before. APP.md §13 says it.

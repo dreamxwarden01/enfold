@@ -22,7 +22,7 @@ func TestBoundSurface(t *testing.T) {
 			"DiscardRecords(string) error",
 			"FinishSetup(string, string, bool) error",
 			"ImportFile(string, string, string, string, string, bool, bool) error",
-			"IncomingRecords(string) ([]app.IncomingRecord, error)",
+			"IncomingRecords(string) (app.IncomingFile, error)",
 			"InspectFile(string) (app.FileInfo, error)",
 			"InspectRecords(string) error",
 			"LastExportAt() int64",

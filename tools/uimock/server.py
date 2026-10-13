@@ -120,7 +120,8 @@ state = {
     ],
     # One incoming set behind a merge handle, one row per action the core
     # reports (APP.md 13). The mock dispatches no events, so the ceremony
-    # itself is driven from the page; this is what IncomingRecords answers.
+    # itself is driven from the page; these are the records half of what
+    # IncomingRecords answers.
     "incoming": [
         {"archiveId": "a1" * 16, "name": "Photos 2024", "description": "Iceland, the Dolomites, and everything off the phone.",
          "createdAt": NOW - 40_000_000, "versions": 3, "action": "skip", "forgottenAt": 0, "differs": [], "ticked": False},
@@ -133,6 +134,10 @@ state = {
          "createdAt": NOW - 44_000_000, "versions": 1, "action": "forgotten", "forgottenAt": NOW - 400_000,
          "differs": [{"field": "name", "theirs": "Laptop 2019"}], "ticked": False},
     ],
+    # Whether that file fails its own slot-region hash (FORMAT.md R25):
+    # IncomingRecords answers {records, tampered}, the set-level fact beside
+    # the rows. POST /mock/state {"incomingTampered": true} shows the bar.
+    "incomingTampered": False,
     # ArchiveStat lost Dirty, CapAt and SessionAlive on 2026-09-09 and
     # gained Records: an archive is clean between operations, and Extract
     # all is greyed on a record count of zero (APP.md 2.3, 3). It lost
@@ -1556,7 +1561,7 @@ METHODS = {
     2185012391: lambda a: forget(a, NOW),                       # archives.Delete
     118112595: lambda a: None,                                  # archives.CheckFiles
     1148297629: lambda a: None,                                 # vault.InspectRecords (a ceremony)
-    2398325755: lambda a: state["incoming"],                    # vault.IncomingRecords
+    2398325755: lambda a: {"records": state["incoming"], "tampered": state["incomingTampered"]},  # vault.IncomingRecords
     1344102321: lambda a: None,                                 # vault.MergeRecords
     3468826983: lambda a: None,                                 # vault.DiscardRecords
     18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: lambda a: None,  # ImportFile, FinishSetup, VerifyBackup

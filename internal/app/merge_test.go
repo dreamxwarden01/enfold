@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"crypto/rand"
 	"os"
 	"path/filepath"
@@ -165,7 +166,8 @@ func TestInspectRecordsOpensWithTheCurrentVMK(t *testing.T) {
 			t.Fatalf("a recovery key was asked for a backup of this vault: %+v", s)
 		}
 	}
-	rows, e := h.c.IncomingRecords(handle)
+	incoming, e := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -174,6 +176,55 @@ func TestInspectRecordsOpensWithTheCurrentVMK(t *testing.T) {
 	}
 	if rows[0].Action != "skip" || rows[0].Ticked {
 		t.Fatalf("a record the vault already has whole: %+v", rows[0])
+	}
+	if incoming.Tampered {
+		t.Fatal("a backup whose slot region verifies was reported as tampered")
+	}
+}
+
+// A file that fails its own region hash (FORMAT.md R25) is listed — every
+// field of a row comes from its authenticated registry, and nothing in its
+// slot region is used to read it — and the set says so, so the dialog can warn
+// that the file is not to be kept as a backup (APP.md §13). The edit is one
+// byte of a slot's label: the region still decodes, no slot is used to open a
+// backup of this vault, and only the registry's hash notices.
+func TestInspectRecordsReportsATamperedSource(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id, _ := h.newArchive("A")
+	backup := filepath.Join(h.dir, "backup.eks")
+	if e := h.exportBackup(backup); e != nil {
+		t.Fatal(e)
+	}
+	b, err := os.ReadFile(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb, _, _, err := format.PickKeystoreSuperblock(
+		b[format.KeystoreSuperblockAOff:format.KeystoreSuperblockAOff+format.SuperblockSize],
+		b[format.KeystoreSuperblockBOff:format.KeystoreSuperblockBOff+format.SuperblockSize])
+	if err != nil {
+		t.Fatal(err)
+	}
+	region := b[sb.SlotRegionOff : sb.SlotRegionOff+sb.SlotRegionLen]
+	at := bytes.Index(region, []byte("Recovery key"))
+	if at < 0 {
+		t.Fatal("the backup's slot region carries no label to edit")
+	}
+	region[at] = 'r'
+	if err := os.WriteFile(backup, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handle := h.inspectRecords(backup)
+	incoming, e := h.c.IncomingRecords(handle)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !incoming.Tampered {
+		t.Fatal("a file that fails its own region hash was not reported")
+	}
+	if len(incoming.Records) != 1 || incoming.Records[0].ArchiveID != id {
+		t.Fatalf("the records were not listed: %+v", incoming.Records)
 	}
 }
 
@@ -201,7 +252,8 @@ func TestInspectRecordsOpensWithAHistoryVMK(t *testing.T) {
 			t.Fatalf("a recovery key was asked for a backup from a generation this vault keeps: %+v", s)
 		}
 	}
-	rows, _ := h.c.IncomingRecords(handle)
+	incoming, _ := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if len(rows) != 1 || rows[0].ArchiveID != id {
 		t.Fatalf("rows: %+v", rows)
 	}
@@ -251,7 +303,8 @@ func TestInspectRecordsAsksTheRecoveryKeyForALaterGeneration(t *testing.T) {
 		t.Fatal(e)
 	}
 	st := h.rec.waitCeremony(t, StepRecords, false)
-	rows, e := h.c.IncomingRecords(st.SlotLabel)
+	incoming, e := h.c.IncomingRecords(st.SlotLabel)
+	rows := incoming.Records
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -301,7 +354,8 @@ func TestInspectRecordsIgnoresTheFilesGenerationForTheVerdict(t *testing.T) {
 			t.Fatalf("the doctored generation changed which candidate was tried: %+v", s)
 		}
 	}
-	rows, _ := h.c.IncomingRecords(handle)
+	incoming, _ := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if len(rows) != 1 || rows[0].ArchiveID != id {
 		t.Fatalf("rows: %+v", rows)
 	}
@@ -349,7 +403,8 @@ func TestMergeKeepsLocalValuesAndSaysWhatDiffered(t *testing.T) {
 	})
 	f.commit()
 	handle := h.inspectForeign(f)
-	rows, _ := h.c.IncomingRecords(handle)
+	incoming, _ := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	row := rowFor(rows, id)
 	fields := map[string]string{}
 	for _, d := range row.Differs {
@@ -391,7 +446,8 @@ func TestMergeUnionsAlwaysRequireFullAuth(t *testing.T) {
 	})
 	f.commit()
 	handle := h.inspectForeign(f)
-	rows, _ := h.c.IncomingRecords(handle)
+	incoming, _ := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if r := rowFor(rows, off); r.Action != "version" || !r.Ticked {
 		t.Fatalf("a record that gains the flag: %+v", r)
 	}
@@ -466,7 +522,8 @@ func TestMergeUnionsVersionListsAndFillsEmptyFields(t *testing.T) {
 	})
 	f.commit()
 	handle := h.inspectForeign(f)
-	rows, _ := h.c.IncomingRecords(handle)
+	incoming, _ := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if r := rowFor(rows, id); r.Action != "version" || !r.Ticked || r.Versions != 2 {
 		t.Fatalf("row: %+v", r)
 	}
@@ -536,7 +593,8 @@ func TestMergeBumpsRevisionAndLastWriter(t *testing.T) {
 	})
 	f.commit()
 	handle := h.inspectForeign(f)
-	rows, _ := h.c.IncomingRecords(handle)
+	incoming, _ := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if r := rowFor(rows, hexID(kid(0x61))); r.Action != "add" || !r.Ticked {
 		t.Fatalf("a new archive_id: %+v", r)
 	}
@@ -582,7 +640,8 @@ func TestMergeOfAForgottenRecordIsAnExplicitRestore(t *testing.T) {
 	})
 	f.commit()
 	handle := h.inspectForeign(f)
-	rows, _ := h.c.IncomingRecords(handle)
+	incoming, _ := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	r := rowFor(rows, id)
 	if r.Action != "forgotten" || r.Ticked || r.ForgottenAt != forgottenAt {
 		t.Fatalf("row: %+v", r)
@@ -708,7 +767,8 @@ func TestMergeOfARecordWhoseKIDIsHeldHereTakesTheRest(t *testing.T) {
 	f.commit()
 
 	handle := h.inspectForeign(f)
-	rows, e := h.c.IncomingRecords(handle)
+	incoming, e := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -767,7 +827,8 @@ func TestInspectRecordsRunsOnATamperedVault(t *testing.T) {
 		t.Fatalf("status: %+v", st)
 	}
 	handle := h.inspectRecords(backup)
-	rows, e := h.c.IncomingRecords(handle)
+	incoming, e := h.c.IncomingRecords(handle)
+	rows := incoming.Records
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -67,9 +67,10 @@ export function ImportFile(path: string, displayName: string, method: string, ki
 }
 
 /**
- * IncomingRecords is the record list behind a merge handle.
+ * IncomingRecords is the record list behind a merge handle, with whether
+ * that file fails its own slot-region hash.
  */
-export function IncomingRecords(handle: string): $CancellablePromise<app$0.IncomingRecord[] | null> {
+export function IncomingRecords(handle: string): $CancellablePromise<app$0.IncomingFile> {
     return $Call.ByID(2398325755, handle);
 }
 

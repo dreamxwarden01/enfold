@@ -151,9 +151,10 @@ class Store {
   // applied the four checks (APP.md §13). It chooses wording and
   // pre-selects the rotate dialog's tick; it gates nothing.
   lastExportAt = $state(0);
-  // A merge handle and the records it read, until MergeRecords consumes
-  // it, the dialog discards it, or a lock trigger drops it.
-  merge = $state<{ handle: string; records: IncomingRecord[] } | null>(null);
+  // A merge handle, the records it read and whether that file fails its
+  // own slot-region hash, until MergeRecords consumes it, the dialog
+  // discards it, or a lock trigger drops it.
+  merge = $state<{ handle: string; records: IncomingRecord[]; tampered: boolean } | null>(null);
   // Delete archive… asked for on the Archive page: the archive is closed
   // first (APP.md §13), which leaves that page, so the id is handed to the
   // Archives page, which opens the one delete dialog over its own list.

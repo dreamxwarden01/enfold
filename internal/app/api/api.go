@@ -101,8 +101,9 @@ func (v *Vault) InspectRecords(path string) error {
 	return asErr(v.c.InspectRecords(path))
 }
 
-// IncomingRecords is the record list behind a merge handle.
-func (v *Vault) IncomingRecords(handle string) ([]app.IncomingRecord, error) {
+// IncomingRecords is the record list behind a merge handle, with whether
+// that file fails its own slot-region hash.
+func (v *Vault) IncomingRecords(handle string) (app.IncomingFile, error) {
 	r, e := v.c.IncomingRecords(handle)
 	return r, asErr(e)
 }

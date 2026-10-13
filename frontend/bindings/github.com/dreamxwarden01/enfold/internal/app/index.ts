@@ -22,6 +22,7 @@ export type {
     FileInfo,
     FileOutcome,
     FileRow,
+    IncomingFile,
     IncomingRecord,
     OpView,
     OpenPathResult,

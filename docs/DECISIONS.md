@@ -4445,3 +4445,21 @@ had been completed; the press's mark now goes once all 48 digits are in, while a
 still turns red at once by its checksum, which needs no press. The delete dialog changes
 visibly: its typed-name line used to drop on any keystroke, and now stays while the name is
 still wrong and goes when it matches, as §6 already said. APP.md §6 says it.
+
+**The polish review** (2026-10-13). The user, using the application day to day, felt "a
+roughness I cannot name" and asked for directions rather than fixes, with everything on screen
+open to change and past rulings read as context, not constraint. An eight-lens panel
+(information architecture, typographic craft, motion and states, copy, Windows 11 fidelity,
+drift from the approved mockup, security communication, task flows; Opus 5.5, each lens's
+findings verified by a second agent) read the spec, this log and the mockup, looked at 122
+screenshots of the mock backend taken with headless Edge, and kept 123 findings; a synthesis
+ranked them into ten directions and four larger forks, with a demo page that puts numbered
+markers on the current screens beside before/after mocks drawn from the app's own tokens. The
+report is `docs/research/polish-directions.md`; the demo is the artifact
+https://claude.ai/artifact/PX9sqcChxcgK3T2TNjHgWk; the same day's audit of what remains unbuilt,
+and of the documents that have drifted from the code, is
+`docs/research/remaining-work-2026-10-13.md`. Nothing in them is ruled: the directions are the
+user's to pick, and each says which earlier ruling it would reopen. One plain bug the review
+turned up is recorded here so it is not lost: Settings says the vault's name shows in the tray,
+and the tray only ever says "Enfold".
+

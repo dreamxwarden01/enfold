@@ -1398,11 +1398,22 @@ key" says the password is chosen first, before the key is set up.
 **Forms and their errors.** A field that holds something wrong is marked once the user leaves it
 — the underline turns red and, beneath it, either the requirement already shown there turns red
 ("At least 8 characters.") or a line says what is missing — and the mark goes the moment the
-value is right, to return only after the field is left again with something wrong. Pressing the
-form's button marks every field that would refuse, an empty required one with "This field is
-required."; the button is never disabled for an empty field, only for a consent not yet given
-(a replacement's tick) or a state that forbids the action (archives open). The lines fade in and
-out like everything else. Every typed secret is judged before it is sent — a chosen password's
+value is right, to return only after the field is left again with something wrong. Typing never
+marks in a form with a button (the recovery key's checksum, below, is judged as each group is
+finished; the save bar's fields, below, as they are edited), so a field left right and then
+emptied says nothing until it is left again; and leaving is focus moving to something else in
+the page — the window losing focus (a switch to a password manager, a click on another window) is
+not, so an untouched field focused for a prompt comes back unmarked, and neither is a field taken
+out of the page from under the focus (the merged card turning into the password alone once the
+PIN is right). Pressing the form's button marks every field that would refuse, an empty required
+one with "This field is required.", and only those. A new prompt clears every mark the form made
+itself, even where a field keeps its value (the merged card's password across a refused PIN);
+the core's refusal under the new prompt ("Wrong PIN.", a wrong password) is said as before, and
+a password the page would refuse when the accepted PIN would send it is marked as if the button
+had been pressed, and waits for *Continue* (ruled 2026-10-13). The button is never disabled for
+an empty field, only for a consent not yet given (a replacement's tick) or a state that forbids
+the action (archives open). The lines fade in and out like everything else. Every typed secret
+is judged before it is sent — a chosen password's
 minimum of 8 characters (BitLocker's rule; the core refuses a shorter one at submit with
 `vault.password_short` and keeps the prompt), the recovery key's 48 digits with any whitespace or
 dash between them (the set the core ignores), the management key's hex with the whitespace the

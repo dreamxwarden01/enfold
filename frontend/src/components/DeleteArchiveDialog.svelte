@@ -18,6 +18,7 @@
   import { codeText } from "../lib/strings";
   import { date } from "../lib/format";
   import { RETENTION_SECONDS } from "../lib/retention";
+  import { nextMark, onLeave } from "../lib/forms";
   import { CONFIRM_NAME, confirmNameProblem } from "../lib/validate";
   import Dialog from "./Dialog.svelte";
 
@@ -40,15 +41,17 @@
   let phase = $state<Phase>("consent");
   let problem = $state("");
   let typed = $state("");
-  let pressed = $state(false);
-  let left = $state(false);
+  // mark: the typed name is marked under the form rule (APP.md §6,
+  // lib/forms.ts) — left or pressed wrong, and not corrected since.
+  let mark = $state(false);
   // Locate… moves the record's path under us; until it does, the path is
   // the record's own.
   let located = $state("");
   const here = $derived(located || path);
   let forgottenAt = $state(0);
 
-  const nameSaid = $derived((left || pressed) && confirmNameProblem(typed, name) ? confirmNameProblem(typed, name) : "");
+  const nameSaid = $derived(mark && confirmNameProblem(typed, name) ? confirmNameProblem(typed, name) : "");
+  const leave = onLeave(() => (mark = nextMark("leave", mark, confirmNameProblem(typed, name))));
 
   // The backup sentence (APP.md §13): a backup of this vault taken at or
   // after the record's own creation holds this archive's key. lastExportAt
@@ -109,7 +112,7 @@
   }
 
   function go() {
-    pressed = true;
+    mark = nextMark("press", mark, confirmNameProblem(typed, name));
     if (confirmNameProblem(typed, name)) return;
     void (mode === "forget" ? forget() : remove());
   }
@@ -160,7 +163,7 @@
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
     <div class="field">
       <div class="field-top"><label for="del-name">Type the archive's name to confirm</label><span class="hint">{name}</span></div>
-      <input id="del-name" class="input" class:invalid={!!nameSaid} aria-invalid={nameSaid ? "true" : undefined} bind:value={typed} onblur={() => (left = true)} oninput={() => (left = false)} placeholder={name} disabled={phase === "busy"} />
+      <input id="del-name" class="input" class:invalid={!!nameSaid} aria-invalid={nameSaid ? "true" : undefined} bind:value={typed} onblur={leave} oninput={() => (mark = nextMark("change", mark, confirmNameProblem(typed, name)))} placeholder={name} disabled={phase === "busy"} />
       {#if nameSaid}<div class="field-error">{nameSaid === CONFIRM_NAME ? CONFIRM_NAME : nameSaid}</div>{/if}
     </div>
   {:else if phase === "done"}

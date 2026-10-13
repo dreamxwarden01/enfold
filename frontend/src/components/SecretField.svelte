@@ -23,7 +23,7 @@
     invalid?: boolean;
     value: string;
     el?: HTMLInputElement;
-    onblur?: () => void;
+    onblur?: (e: FocusEvent) => void;
     oninput?: () => void;
   }
   let {
@@ -62,7 +62,7 @@
   aria-label={label}
   aria-invalid={invalid}
   aria-describedby={[rule ? `${id}-rule` : "", said ? `${id}-said` : ""].filter(Boolean).join(" ") || undefined}
-  onblur={() => onblur?.()}
+  onblur={(e) => onblur?.(e)}
   oninput={() => oninput?.()}
 />
 {#if rule}<div id="{id}-rule" class="pin-note" class:danger={ruleBroken}>{rule}</div>{/if}

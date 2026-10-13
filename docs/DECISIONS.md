@@ -4412,3 +4412,36 @@ and not a toast that is gone before the list is read. The dialog shows an attent
 the list saying that the records can be merged but the file itself is not to be kept or trusted
 as a backup — this app's Import and Verify backup already refuse such a file (`vault.tampered`),
 so merge was the only path that stayed silent; the ticks work as before. APP.md §13 says it.
+
+**A form marks a field the user left, not a window the user left** (2026-10-13). The user
+reported "This field is required." under a secret field before anything had been typed or
+pressed. The code had three ways to it. `SecretInput` focuses the field on every new prompt and
+marked on any blur, and a window losing focus blurs its focused element — so a switch to a
+password manager, or a click on another window, came back to an untouched field saying it was
+required; `TextField` and the delete dialog's typed name did the same. A blur also marked
+whatever the field held, so a field left right and later emptied to retype was marked on the
+keystroke. And a press set its flag on every field, wrong or not, and the merged card's new
+prompt reset only the PIN's flags: after a PIN refused with the password right, clearing the
+password marked it at once, with neither a leave nor a press since it went wrong. Ruled: a leave
+is focus moving to something else in the page — the blur names its target, or names none while
+the page keeps focus, read a task later because the element's blur is dispatched before the
+window's; the window losing focus is not one, and neither is a field taken out of the page from
+under the focus. That last case was found in review, on the merged card's commonest keyboard
+path: PIN, Tab, password, Enter; the PIN is accepted, the card turns into the password alone,
+and the focused password input is removed — Chromium blurs it with no target while the page
+keeps focus, and a task later, after the new prompt had already cleared every mark, the deferred
+leave marked the fresh, empty password as required. So the deferred test also asks whether the
+field is still in the page, and a form counts its prompts so that a leave begun under one prompt
+is dropped under the next. A leave or a press marks a field only when it holds something wrong,
+typing only ever takes a mark away, and a new prompt clears every mark the form made itself,
+after the form's own focus move, while the values stay where the ruling of 2026-09-08 keeps them
+(the merged card's password across a refused PIN); the core's refusal under the new prompt is
+said as before, and a password the accepted PIN would send but the page would refuse is marked
+as the press it answers would mark it. The decision lives in `lib/forms.ts` — one flag per field
+and the blur test, tested in the node environment — and `SecretInput`, `TextField`, the delete
+dialog and the recovery key's cells use it. The cells had the same carried press: "All 48 digits
+are needed." came back on the first keystroke into a group selected for retyping after the key
+had been completed; the press's mark now goes once all 48 digits are in, while a mistyped group
+still turns red at once by its checksum, which needs no press. The delete dialog changes
+visibly: its typed-name line used to drop on any keystroke, and now stays while the name is
+still wrong and goes when it matches, as §6 already said. APP.md §6 says it.

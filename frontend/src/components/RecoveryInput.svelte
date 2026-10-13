@@ -13,6 +13,7 @@
   import { submitSecret } from "../lib/api";
   import { motion } from "../lib/motion";
   import { store } from "../lib/state.svelte";
+  import { nextMark } from "../lib/forms";
   import { date } from "../lib/format";
   import { RECOVERY_GROUPS, RECOVERY_GROUP_LEN, RECOVERY_SEPARATORS, recoveryGroupProblem } from "../lib/validate";
 
@@ -46,8 +47,14 @@
   const open = $derived(groups.findIndex((g) => g.length < RECOVERY_GROUP_LEN));
   const mistyped = $derived(groups.map(recoveryGroupProblem));
   const anyMistyped = $derived(mistyped.some(Boolean));
+  // missing: what the press's mark says ("" once all 48 digits are in).
+  // The mark follows the form rule (APP.md §6, lib/forms.ts): set by a
+  // press with digits missing, gone the moment the eighth group is in,
+  // and not brought back by a group selected for retyping. A mistyped
+  // group needs no press: its checksum is judged as it is finished.
+  const missing = $derived(complete ? "" : "All 48 digits are needed.");
   const refused = $derived(!!error && !typedSince);
-  const said = $derived(anyMistyped ? "A group is mistyped: each is six digits, and the last digit checks the other five." : pressed && !complete ? "All 48 digits are needed." : refused ? error : "");
+  const said = $derived(anyMistyped ? "A group is mistyped: each is six digits, and the last digit checks the other five." : pressed && missing ? missing : refused ? error : "");
 
   $effect(() => {
     // A prompt that says the key was refused brings the typed groups back
@@ -70,6 +77,7 @@
   function remember() {
     store.recoveryDraft = [...groups];
     typedSince = true;
+    pressed = nextMark("change", pressed, missing);
   }
 
   function focusOpen() {
@@ -143,7 +151,7 @@
 
   function submit(e?: Event) {
     e?.preventDefault();
-    pressed = true;
+    pressed = nextMark("press", pressed, missing);
     if (!complete || anyMistyped) {
       focusOpen();
       return;

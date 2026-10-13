@@ -409,7 +409,11 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   (ruled 2026-09-08). `MaxOperations` exhausted → "remove and reinsert the key" (WaitingForKey).
 - Deriving: `keystore.Unlock(HardwareCredential{Token, Password})` → `Unlocked` → `Session()` →
   `Unlocked.Close()`. Then the ceremony goroutine's deferred `Card.Close()` runs (Releasing);
-  `ErrResetFailed` is a warning event, never a failure. The publish point checks the lock latch.
+  `ErrResetFailed` is a warning event, never a failure, and a moment rather than a standing state
+  (ruled 2026-10-13): the toast says it once, and `VaultStatus.Warnings` carries
+  `token.reset_failed` only until the next successful open of a card — which resets it — or the
+  next lock trigger, whichever comes first, so the lock screen shows it only when the failed
+  release just happened there. The publish point checks the lock latch.
 - Recovery key and standalone password skip the token states. `Vault.SubmitPassword` serves
   both the standalone slot and the entangled password; there is one submit per secret kind.
 - No rotation is deferred (FORMAT §8), so there is no rewrap loop and no `SwapKey` between

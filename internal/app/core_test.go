@@ -471,6 +471,107 @@ func TestTokenResetFailedWarns(t *testing.T) {
 	if !found {
 		t.Fatal("warning not in status")
 	}
+
+	// The warning is a moment, not a standing state (APP.md §2.2): the
+	// lock ends it, so the lock screen after this session does not say it.
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	if hasWarning(h.status(), CodeTokenReset) {
+		t.Fatalf("the lock left the warning standing: %v", h.status().Warnings)
+	}
+}
+
+func hasWarning(st VaultStatus, code Code) bool {
+	for _, w := range st.Warnings {
+		if w == code {
+			return true
+		}
+	}
+	return false
+}
+
+// A failed reset at the lock screen is said there, and stands until the next
+// open of a card (which resets it) or the next lock trigger — never through
+// a ceremony that does not touch the key (APP.md §2.2).
+func TestTokenResetFailedClearsOnNextOpenOrLock(t *testing.T) {
+	card := newFakeCard("123456")
+	pub := card.addKey(0x9d, true)
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	h := newHarnessEntangled(t, cards, pub, "vault password")
+
+	// fail raises the warning at the lock screen: a wrong entangled password
+	// gives the key back before asking again (DESIGN.md §11 trap 25), that
+	// release cannot reset the card, and the ceremony is then cancelled.
+	fail := func() {
+		t.Helper()
+		card.mu.Lock()
+		card.closeErr = ErrTokenResetFailed
+		card.mu.Unlock()
+		if e := h.c.BeginUnlock(MethodToken); e != nil {
+			t.Fatal(e)
+		}
+		pin := h.rec.waitCeremony(t, StepPIN, true)
+		if e := h.c.SubmitSecret("pin", pin.PromptID, "123456"); e != nil {
+			t.Fatal(e)
+		}
+		pw := h.rec.waitCeremony(t, StepPassword, true)
+		if e := h.c.SubmitSecret("password", pw.PromptID, "not the password"); e != nil {
+			t.Fatal(e)
+		}
+		h.rec.waitFor(t, EventVaultWarning, func(p any) bool {
+			w, ok := p.(Warning)
+			return ok && w.Code == CodeTokenReset
+		})
+		h.rec.waitCeremony(t, StepPassword, true)
+		h.c.CancelUnlock()
+		h.rec.waitFor(t, EventVaultState, func(p any) bool {
+			s, ok := p.(VaultStatus)
+			return ok && s.State == StateLocked && hasWarning(s, CodeTokenReset)
+		})
+		card.mu.Lock()
+		card.closeErr = nil
+		card.mu.Unlock()
+	}
+
+	fail()
+	// A recovery-key ceremony opens no card: the warning is still true.
+	if e := h.c.BeginUnlock(MethodRecovery); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitCeremony(t, StepRecovery, true)
+	if !hasWarning(h.status(), CodeTokenReset) {
+		t.Fatal("a ceremony that opens no card cleared the warning")
+	}
+	h.c.CancelUnlock()
+	h.rec.waitState(t, StateLocked)
+
+	// The next open of a card resets it: the warning goes, and the state
+	// says so.
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitFor(t, EventVaultState, func(p any) bool {
+		s, ok := p.(VaultStatus)
+		return ok && s.State == StateUnlocking && !hasWarning(s, CodeTokenReset)
+	})
+	h.rec.waitCeremony(t, StepPIN, true)
+	if hasWarning(h.status(), CodeTokenReset) {
+		t.Fatalf("the next open left the warning standing: %v", h.status().Warnings)
+	}
+	h.c.CancelUnlock()
+	h.rec.waitState(t, StateLocked)
+
+	// A lock trigger at the lock screen ends it too, and says so.
+	fail()
+	h.c.LockNow(ReasonDisplayOff)
+	if hasWarning(h.status(), CodeTokenReset) {
+		t.Fatalf("the lock trigger left the warning standing: %v", h.status().Warnings)
+	}
+	h.rec.waitFor(t, EventVaultState, func(p any) bool {
+		s, ok := p.(VaultStatus)
+		return ok && s.State == StateLocked && !hasWarning(s, CodeTokenReset)
+	})
 }
 
 func TestPromptDeadline(t *testing.T) {

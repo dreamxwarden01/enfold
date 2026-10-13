@@ -555,6 +555,12 @@ func (c *Core) lockLocked(reason LockReason) func() {
 	// A merge's converted records hold this vault's archive keys: dropped in
 	// every state, like the recovery key a reveal holds (APP.md §13).
 	c.vault.incoming = nil
+	// A failed reset is said once, by its toast; the status carries it only
+	// until the next lock, so that a later lock screen never says it hours
+	// after it stopped being true (APP.md §2.2). A release this trigger's
+	// cancel causes comes after, and is said on this lock screen.
+	_, resetWarned := v.warnings[CodeTokenReset]
+	delete(v.warnings, CodeTokenReset)
 	// A recovery key held for a reveal (APP.md §3 Keys) is dropped in every
 	// state: nothing decrypted outlives a trigger.
 	preview := c.preview
@@ -562,6 +568,9 @@ func (c *Core) lockLocked(reason LockReason) func() {
 		return func() {
 			if preview != nil {
 				preview.dropAllSecrets()
+			}
+			if resetWarned {
+				c.emitState()
 			}
 		}
 	}

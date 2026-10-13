@@ -772,9 +772,18 @@ func (cer *ceremony) openCard(reader string) (Card, error) {
 		}
 		return nil, err // a key gone is the caller's to wait for again
 	}
-	cer.c.mu.Lock()
+	c := cer.c
+	c.mu.Lock()
 	cer.held = card
-	cer.c.mu.Unlock()
+	// The open resets the card (piv.Open's probe disconnects with a reset),
+	// so a token.reset_failed an earlier release raised is false from here:
+	// the warning is a moment, not a standing state (APP.md §2.2).
+	_, stale := c.vault.warnings[CodeTokenReset]
+	delete(c.vault.warnings, CodeTokenReset)
+	c.mu.Unlock()
+	if stale {
+		c.emitState()
+	}
 	return card, nil
 }
 

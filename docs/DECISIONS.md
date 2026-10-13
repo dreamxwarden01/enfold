@@ -4376,3 +4376,21 @@ still to polish, more than a few rough details"; they use the application day to
 collect them, and the cut of 1.0 waits for that pass. The guest has done what it was for —
 the path without a WebView2 runtime, the install and the uninstall.
 
+## 2026-10-13 — Polish, round one: three things that outlived their truth
+
+**A failed reset is a moment, not a standing state** (2026-10-13). A release whose reset meets a
+sharing violation (DESIGN.md §11 trap 27, the fallback's `token.reset_failed`) toasted the
+warning and put it in the status's warnings, from which nothing ever removed it: only the core's
+start began with the map empty. The lock screen's foot lists those warnings, so after one failed
+release every later lock screen said the key "may stay PIN-verified for a few seconds" — hours
+later, when the next open of a card had long since reset it (`piv.Open`'s probe disconnects with
+a reset). Ruled: the toast says it once; the status carries it only until the next successful
+open of a card — the ceremony that connects next has reset it — or the next lock trigger, in any
+state, whichever comes first; each clears it under the state mutex and emits the state. A
+ceremony that opens no card (a password, the recovery key) leaves it standing, since nothing has
+reset the card; a release that a lock's own cancel causes comes after the trigger and is said on
+that lock screen, which is where it happened. The copy loses its "few seconds", which nothing
+measured — a verified card stays so until Windows powers it down, ten seconds after the last
+program lets go of it (DESIGN.md §11 trap 14), and whoever won the gap holds it for as long as
+they please — and says what ends it: remove the key and plug it back in. APP.md §2.2 says the
+lifetime.

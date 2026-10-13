@@ -103,7 +103,7 @@ export const codeCopy: Record<CodeKey, string> = {
   // lock screen carries this line (APP.md §2.2, the ruling of 2026-09-08).
   [Code.CodePasswordDeadline]: "The password was not given within five minutes; unlock again from the key.",
   [Code.CodeTokenTooMany]: "Too many operations on one key handle. Start again.",
-  [Code.CodeTokenReset]: "The key was released but may still be PIN-verified for a few seconds.",
+  [Code.CodeTokenReset]: "The key was released but could not be reset, so it may still be PIN-verified.",
   [Code.CodeTokenOccupied]: "That slot on the key holds something already.",
   [Code.CodeTokenFull]: "Every slot on the key is occupied. Nothing is overwritten.",
   [Code.CodeTokenNoMgmtKey]: "The key stores no PIN-protected management key.",
@@ -313,7 +313,10 @@ export function warningCopy(code: string, reason?: string): string {
     case Code.CodeVaultStale:
       return "One of the vault file's two superblock copies is damaged. Enfold opened the good one and repairs the other on the next write.";
     case Code.CodeTokenReset:
-      return "Your YubiKey may stay PIN-verified for a few seconds after release.";
+      // Said only just after the failed release: the status drops it at the
+      // next open of a card, which resets it, or at the next lock (APP.md
+      // §2.2). How long it stays verified is not known, so no time is named.
+      return "Your YubiKey could not be reset after release and may still be PIN-verified; remove it and plug it back in to be sure.";
   }
   return codeText(code);
 }

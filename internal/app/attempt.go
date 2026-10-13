@@ -625,5 +625,8 @@ func (c *Core) releaseCard(card Card, kind string) {
 		c.vault.warnings[CodeTokenReset] = true
 		c.mu.Unlock()
 		c.emit(EventVaultWarning, Warning{Code: CodeTokenReset})
+		// And the status: a lock screen already shown lists it from the
+		// state, not from the toast (APP.md §2.2).
+		c.emitState()
 	}
 }

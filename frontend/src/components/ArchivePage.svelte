@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { tick } from "svelte";
-  import { Archive, Archives, Shell, errorOf } from "../lib/api";
+  import { tick, untrack } from "svelte";
+  import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { Collision, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { archivePageCopy, codeText, columnLabels, conflictCopy, conflictTitle, listCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind, storageLabel } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
   import { statusNote } from "../lib/status";
-  import { fileNameProblem, newNameProblem } from "../lib/validate";
+  import { newNameProblem } from "../lib/validate";
+  import { renameSelection } from "../lib/paths";
   import { ROOT_ID, canDrop, countPhrase, deleteBody, deleteCounts, deleteTitle } from "../lib/tree";
   import type { DropTarget, Kinded } from "../lib/tree";
   import { ownNames, pastThreshold } from "../lib/dragout";
@@ -25,6 +26,7 @@
   import { dialogIsUp } from "../lib/dialogs";
   import Dialog from "./Dialog.svelte";
   import ConflictDialog from "./ConflictDialog.svelte";
+  import DeleteArchiveDialog from "./DeleteArchiveDialog.svelte";
   import ExtractDialog from "./ExtractDialog.svelte";
   import RefusedDialog from "./RefusedDialog.svelte";
   import MenuButton from "./MenuButton.svelte";
@@ -47,6 +49,9 @@
   // In a folder — anywhere but the root — the parent is the crumb before
   // the last, and `..` is a row.
   const parentId = $derived(crumbs.length > 1 ? crumbs[crumbs.length - 2].id : null);
+  // The folder shown, by name — the archive's at the root — for the empty
+  // folder's line: "Trips is empty. Drop files here, or use Add."
+  const folderName = $derived(crumbs[crumbs.length - 1]?.name ?? "");
   const sort = $derived(store.sort);
   // Everything on this page except *Delete archive...* stays usable after
   // a lock (APP.md §2.3): Page, Stat, the previews, Extract and every
@@ -68,9 +73,12 @@
   let previewUrl = $state("");
   let previewText = $state<{ text: string; truncated: boolean } | null>(null);
   let kind = $state<PreviewKind>("none");
+  let previewFailed = $state(false);
 
   let renaming = $state<FileRow | null>(null);
   let renameTo = $state("");
+  let renameValid = $state(true);
+  let renameAttempt = $state(0);
   let creating = $state(false);
   let newFolder = $state("");
   let newFolderValid = $state(true);
@@ -80,6 +88,14 @@
   // now, so every one of them holds its name (FORMAT.md R39).
   const taken = $derived(rows.map((r) => r.name));
   const judgeFolder = $derived((v: string) => newNameProblem(v, taken));
+  // *Rename* is judged by the same rule, against every name here but the
+  // row's own — the core leaves the record out of its siblings, so a
+  // change of case alone is a rename (APP.md §6, Forms).
+  // The name the row already has is never judged: R20 lets a stored name
+  // begin with a space, which the trimmed judgement would otherwise lose.
+  const judgeRename = $derived((v: string) =>
+    v === renaming?.name ? "" : newNameProblem(v, rows.filter((r) => r.id !== renaming?.id).map((r) => r.name)),
+  );
   // The delete question: the ids it is about and their kinds, counted
   // from the whole selection (askDelete).
   let deleting = $state<{ ids: string[]; rows: Kinded[] } | null>(null);
@@ -305,16 +321,30 @@
     const r = one;
     previewUrl = "";
     previewText = null;
+    previewFailed = false;
     kind = "none";
     if (!r || r.isDir) return;
     const k = previewKind(r.name);
     kind = k;
+    const failed = (e: unknown) => {
+      if (one === r) previewFailed = true;
+      fail(e);
+    };
     if (k === "text") {
-      Archive.PreviewText(id, r.id, 64 * 1024).then((t) => { if (one === r) previewText = t; }).catch(fail);
+      Archive.PreviewText(id, r.id, 64 * 1024).then((t) => { if (one === r) previewText = t; }).catch(failed);
     } else if (k !== "none") {
-      Archive.PreviewURL(id, r.id).then((u) => { if (one === r) previewUrl = u; }).catch(fail);
+      Archive.PreviewURL(id, r.id).then((u) => { if (one === r) previewUrl = u; }).catch(failed);
     }
   });
+
+  // The kind comes from the name at once (format.ts previewKind); what
+  // waits is the URL or the text. While it does, the art box keeps its
+  // size and shows nothing — "No preview for this type" is said only of a
+  // kind the pane cannot show, never of one still on its way — and a 14 px
+  // ring appears only once the wait passes 300 ms, so a quick preview
+  // never flashes it (the polish review's direction 4, ruled 2026-10-14).
+  // A call that failed stops the wait; its toast says why.
+  const previewLoading = $derived(!!one && !one.isDir && kind !== "none" && !previewUrl && !previewText && !previewFailed);
 
   // A change of folder or of archive leaves no refusal standing against a
   // target that is no longer on screen. The selection is the store's and
@@ -376,11 +406,28 @@
 
   // One *Add* button, three ways to add (APP.md §6): the two pickers, and
   // a folder made here, which is a record from the moment it is made.
+  // Each opens a picker or a dialog, so each ends with an ellipsis, as
+  // every command on this page that asks something first does.
   const addItems: MenuItem[] = $derived([
-    { label: "Add files", icon: "i-plus", run: () => void pickFiles() },
-    { label: "Add folder", icon: "i-folder-add", run: () => void pickFolder() },
-    { label: "Create folder", icon: "i-folder", run: askFolder },
+    { label: "Add files…", icon: "i-plus", run: () => void pickFiles() },
+    { label: "Add folder…", icon: "i-folder-add", run: () => void pickFolder() },
+    { label: "Create folder…", icon: "i-folder", run: askFolder },
   ]);
+
+  // New archive… ends here, on the new archive's empty root with the Add
+  // menu open (APP.md §13, ruled 2026-10-14): the store names the archive
+  // it was asked for, and this page takes the ask once as it mounts. The
+  // menu is opened by the press it answers anyway — the button focused
+  // and clicked — so it is the menu the user would have opened: the arrows
+  // walk it, and Escape or a click elsewhere closes it.
+  let cmdbar = $state<HTMLDivElement | undefined>();
+  $effect(() => {
+    const bar = cmdbar;
+    if (!bar || !untrack(() => store.takeAddAsked(id))) return;
+    const add = bar.querySelector<HTMLButtonElement>("#add");
+    add?.focus();
+    add?.click();
+  });
 
   function askFolder() {
     newFolder = "";
@@ -548,11 +595,30 @@
     }
   }
 
+  // *Rename…* opens on the row's name with its stem selected, as Explorer
+  // does (lib/paths.ts renameSelection); the field is judged under the
+  // form rule and the button is never disabled — pressing it, or Enter,
+  // marks what would refuse (APP.md §6, Forms).
+  function askRename(r: FileRow) {
+    renameTo = r.name;
+    renameValid = true;
+    renameAttempt = 0;
+    renaming = r;
+  }
+
   async function doRename() {
     const r = renaming;
     if (!r) return;
+    // An untouched field renames nothing, so nothing is sent — and a name
+    // with a leading space keeps it (judgeRename).
+    if (renameTo === r.name) {
+      renaming = null;
+      return;
+    }
+    renameAttempt++;
+    if (!renameValid) return;
     try {
-      await Archive.Rename(id, r.id, renameTo);
+      await Archive.Rename(id, r.id, renameTo.trim());
       renaming = null;
       await store.refreshArchive();
     } catch (e) {
@@ -603,15 +669,16 @@
 
   // Both ways in open the same dialog (APP.md §3): the destination lives
   // in it, prefilled by the rule of §3 from the archive's own folder —
-  // *Extract all* one level deeper, in a folder named after the archive —
-  // rather than in a native picker the page opens first. Nothing is kept
-  // from the last time (ruled 2026-09-10).
+  // *Extract all…* one level deeper, in a folder named after the archive —
+  // rather than in a native picker the page opens first. The destination is
+  // never kept from the last time (ruled 2026-09-10); the policy is, while
+  // Enfold runs (lib/extract.ts startingPolicy, ruled 2026-10-14).
   function startExtract(ids: string[], label: string, all = false) {
     if (ids.length === 0) return;
     extracting = { ids, label, all };
   }
 
-  // *Extract all* is the archive's, not the selection's (APP.md §6): the
+  // *Extract all…* is the archive's, not the selection's (APP.md §6): the
   // root id alone means everything, so the page sends that one id and
   // walks nothing.
   function extractAll() {
@@ -713,29 +780,71 @@
   }
 
   // Delete archive… is the same act as the Archives page's, on the archive
-  // this page shows (APP.md §13). It leaves this page, so it is a Leave
-  // and not the kill switch (§2.3, ruled 2026-09-10): the archive closes
-  // at once, and the id is handed to the Archives page, which opens the
-  // one dialog — where the record is closed first in its own turn if a
-  // preview body kept this one draining. It is disabled while the vault is
-  // locked (§2.3): the registry write needs the session's key. Nothing is
-  // asked about unfinished changes — there are none between operations —
-  // and a running one is cancelled when the handle goes.
-  async function closeThenDelete() {
+  // this page shows, in the same dialog (APP.md §13) — asked here, over
+  // this page, and the archive is left only on consent (ruled 2026-10-14,
+  // refining 2026-09-07's close first): a Cancel leaves the user exactly
+  // where they were, in their folder, with its sort and selection. The
+  // record is read first, so the backup sentence has the created_at it is
+  // chosen against; unread, the sentence says the harder thing. It is
+  // disabled while the vault is locked (§2.3): the registry write needs the
+  // session's key. Nothing is asked about unfinished changes — there are
+  // none between operations — and a running one is cancelled when the
+  // handle goes.
+  let deletingArchive = $state<{ id: string; name: string; path: string; createdAt: number } | null>(null);
+  // released: the consent was given and the archive let go of, so this
+  // page has nothing left to show once the dialog closes.
+  let released = false;
+
+  async function askDeleteArchive() {
     const archiveId = id;
+    let createdAt = 0;
     try {
-      await Archives.Leave(archiveId);
-    } catch (e) {
-      fail(e);
-      return;
+      createdAt = (await Archives.Details(archiveId)).createdAt;
+    } catch {
+      /* unknown: the backup sentence then says the harder thing */
     }
-    // The list is re-read before the hand-over, so the Archives page reads
-    // whether the archive is still open off a fresh row and not off the
-    // one this page was showing.
-    await store.refreshArchives();
-    store.deleteAfterClose = archiveId;
-    store.leaveArchive(true);
+    released = false;
+    deletingArchive = { id: archiveId, name: archiveName || (stat?.name ?? ""), path: store.currentPath, createdAt };
   }
+
+  // letGo is the dialog's release, run once the name is typed and the act
+  // confirmed and never before. It is the leave the rail performs —
+  // Archives.Leave, not the kill switch (§2.3, ruled 2026-09-10) — waited
+  // for, with this page kept under the dialog until it closes
+  // (store.releasedForDelete); then, as on the Archives page, the record's
+  // own close when a preview body or an operation still holds the archive,
+  // since the delete is refused while either does. It throws what the core
+  // refused the close with, which ends the dialog with nothing removed.
+  async function letGo(archiveId: string): Promise<void> {
+    store.releasedForDelete = archiveId;
+    released = true;
+    await Archives.Leave(archiveId);
+    await store.refreshArchives();
+    if (!store.archives.find((x) => x.id === archiveId)?.open) return;
+    try {
+      await Archives.Close(archiveId);
+    } catch (e) {
+      // Closed by itself meanwhile — the last reader ended — which is
+      // where this wanted it (§2.3).
+      if (errorOf(e).code !== Code.CodeArchiveNotOpen) throw e;
+    }
+  }
+
+  // The dialog's close: before the consent nothing was touched and the
+  // page stays as it was; after it, whatever the act came to, the archive
+  // is no longer open here and the page goes back to the list — the
+  // store's own leave, which reads the list again.
+  function closeDeleteArchive() {
+    deletingArchive = null;
+    if (released) store.go("archives");
+  }
+
+  // This page gone with the dialog still up — a lock scene drawn over it
+  // takes both — the archive it let go of is read like any other again,
+  // and the Stat's archive.not_open then leaves it (refreshArchive).
+  $effect(() => () => {
+    if (released) store.releasedForDelete = null;
+  });
 
   // What a batch reported when something was left out (lib/results.ts):
   // the counts — folders created and entered beside the files added — and
@@ -782,21 +891,21 @@
   {#if moveError && refusedAt(ROOT_ID, "head")}
     <div class="move-note">Not moved: {moveError.text}</div>
   {/if}
-  <div class="cmdbar">
+  <div class="cmdbar" bind:this={cmdbar}>
     <MenuButton id="add" label="Add" icon="i-plus" items={addItems} />
     <!-- Greyed on Records, never on Files: a record count is the only
          thing that can say whether the tree holds anything, since a
          folder occupies no data region and an archive of folders alone
          reports 0 files while holding real records (APP.md §3). -->
-    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} onclick={extractAll}><svg class="i i-14"><use href="#i-extract" /></svg>Extract all</button>
-    <button type="button" class="btn subtle" disabled={!one} onclick={() => { if (one) { renaming = one; renameTo = one.name; } }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename</button>
-    <button type="button" class="btn subtle danger" disabled={selected.size === 0} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete</button>
+    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} onclick={extractAll}><svg class="i i-14"><use href="#i-extract" /></svg>Extract all…</button>
+    <button type="button" class="btn subtle" disabled={!one} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename…</button>
+    <button type="button" class="btn subtle danger" disabled={selected.size === 0} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete…</button>
     <div class="grow"></div>
     <!-- Tampered disables it here as it does on the Archives page (APP.md
          §13, R25): the flow closes the archive before the write is even
          attempted, so a refusal at the end would have shut the user's
          archive for nothing. -->
-    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined} onclick={() => void closeThenDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
+    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined} onclick={() => void askDeleteArchive()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
   </div>
 
   {#if !store.unlocked}
@@ -833,7 +942,7 @@
       role="region" aria-label="Files" bind:this={listEl} onclick={blank} onscroll={scrolled}
       ondragenter={() => { if (!store.dragOut) dropping = true; }} ondragover={overBlank} ondragleave={() => (dropping = false)} ondrop={() => (dropping = false)}>
       {#if rows.length === 0 && !parentId}
-        <div class="empty">{listCopy.emptyRoot}</div>
+        <div class="empty">{listCopy.empty(folderName)}</div>
       {:else}
         <!-- Four columns (APP.md §6, ruled 2026-09-10): Name, Size, Type,
              Modified, a checkbox heading every row and the header row.
@@ -846,7 +955,7 @@
             <tr>
               <th scope="col" class="chk"><input type="checkbox" checked={allTicked} disabled={total === 0} aria-label={listCopy.tickAll} onclick={tickAll} /></th>
               {#each SORT_KEYS as key (key)}
-                <th scope="col" class="col-{key}" aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : undefined}>
+                <th scope="col" class="col-{key}" class:num={key === "size"} aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : undefined}>
                   <button type="button" class="sorter" title={listCopy.sortBy(columnLabels[key])} onclick={() => sortBy(key)}>{columnLabels[key]}{#if arrow(key)}<span class="arrow">{arrow(key)}</span>{/if}</button>
                   {#if key === "name" && sort.key !== "name"}
                     <span class="hidden-sort k-{sort.key}">· {columnLabels[sort.key]} <span class="arrow">{arrow(sort.key)}</span></span>
@@ -911,16 +1020,20 @@
                 <!-- A folder shows no size and the type *Folder*; a file
                      its plaintext size and a type drawn from its
                      extension (APP.md §6). The folder's sum beneath it
-                     and a file's *Stored as* stay in the preview. -->
+                     and a file's *Stored as* stay in the preview. The
+                     Size cell, and its header, are .num: right-aligned,
+                     so magnitudes line up (the polish review's small
+                     fix 16). A date is not a magnitude: it keeps the
+                     left edge and only its figures' one width. -->
                 <td class="num">{r.isDir ? "" : bytes(r.size)}</td>
                 <td class="type" title={typeLabel(r.name, r.isDir)}>{typeLabel(r.name, r.isDir)}</td>
-                <td class="num">{dateTime(r.modifiedAt)}</td>
+                <td><span class="num">{dateTime(r.modifiedAt)}</span></td>
               </tr>
             {/each}
           </tbody>
         </table>
         {#if rows.length === 0}
-          <div class="empty">{listCopy.emptyFolder}</div>
+          <div class="empty">{listCopy.empty(folderName)}</div>
         {/if}
         <!-- One row's height of empty space under the last row, scrolled
              or not, so the last row can be brought clear of the pane's
@@ -940,8 +1053,16 @@
           <audio src={previewUrl} controls controlslist="nodownload"></audio>
         {:else if one && kind === "text" && previewText}
           <pre>{previewText.text}{previewText.truncated ? "\n…" : ""}</pre>
+        {:else if previewLoading}
+          <!-- Keyed on the row, so a move from one loading preview to the
+               next waits its own 300 ms again. -->
+          {#key one?.id}
+            <span class="wait" aria-hidden="true"></span>
+          {/key}
         {:else if one && one.isDir}
           <span class="none">Folder · {bytes(one.size)} inside</span>
+        {:else if one && previewFailed}
+          <span class="none">The preview could not be loaded — extract it</span>
         {:else if one}
           <span class="none">No preview for this type — extract it</span>
         {:else}
@@ -968,12 +1089,15 @@
 </div>
 
 
+<!-- Rename and Create folder are forms (APP.md §6, ruled 2026-10-14):
+     Enter presses the accent button, Esc cancels, the field has the focus
+     as the dialog opens — Rename's with the stem selected. -->
 {#if renaming}
-  <Dialog title="Rename" onclose={() => (renaming = null)}>
-    <div class="field"><div class="field-top"><label for="rn">New name</label></div><input id="rn" class="input" bind:value={renameTo} /></div>
+  <Dialog title="Rename" onclose={() => (renaming = null)} onsubmit={doRename} select={(v) => renameSelection(v, renaming?.isDir ?? false)}>
+    <TextField id="rn" label="New name" bind:value={renameTo} bind:valid={renameValid} attempt={renameAttempt} judge={judgeRename} />
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (renaming = null)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!!fileNameProblem(renameTo)} onclick={doRename}>Rename</button>
+      <button type="submit" class="btn accent">Rename</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -982,12 +1106,12 @@
      rule, and against the names this folder already holds. The button is
      never disabled for an empty field — pressing it marks the field. -->
 {#if creating}
-  <Dialog title="Create folder" onclose={() => (creating = false)}>
+  <Dialog title="Create folder" onclose={() => (creating = false)} onsubmit={makeFolder}>
     <TextField id="cf-name" label="Name" bind:value={newFolder} bind:valid={newFolderValid} attempt={newFolderAttempt} judge={judgeFolder} placeholder="Receipts" />
     <p>A folder is a record of its own: it is written now, and it stays whether or not anything is put into it.</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (creating = false)}>Cancel</button>
-      <button type="button" class="btn accent" onclick={makeFolder}>Create</button>
+      <button type="submit" class="btn accent">Create</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1005,6 +1129,20 @@
   </Dialog>
 {/if}
 
+<!-- Delete archive… (APP.md §13): the Archives page's one dialog, over
+     this page; the archive is let go of only on consent (letGo). -->
+{#if deletingArchive}
+  <DeleteArchiveDialog
+    id={deletingArchive.id}
+    name={deletingArchive.name}
+    path={deletingArchive.path}
+    createdAt={deletingArchive.createdAt}
+    mode="delete"
+    onclose={closeDeleteArchive}
+    release={() => letGo(deletingArchive?.id ?? "")}
+  />
+{/if}
+
 {#if extracting}
   <ExtractDialog
     label={extracting.label}
@@ -1020,7 +1158,9 @@
      (§7). -->
 {#if question && conflicts.length > 0 && !comparing}
   <!-- Esc is Skip, or Skip all — never Replace — and the backdrop is
-       nothing: the dialog has a choice (APP.md §7, "Dialogs stay put"). -->
+       nothing: the dialog has a choice (APP.md §6, "Dialogs stay put").
+       No button wears the accent, so the one that looks like the default
+       is never the mass overwrite (ruled 2026-10-14). -->
   <Dialog title={conflictTitle(conflicts.length, conflicts[0].name)} onclose={() => decide("skip")}>
     {#if conflicts.length === 1}
       <p>{conflictCopy.oneBody}</p>
@@ -1033,7 +1173,7 @@
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (comparing = true)}>{conflictCopy.compare(conflicts.length)}</button>
       <button type="button" class="btn" onclick={() => decide("skip")}>{conflictCopy.skip(conflicts.length)}</button>
-      <button type="button" class="btn accent" onclick={() => decide("replace")}>{conflictCopy.replace(conflicts.length)}</button>
+      <button type="button" class="btn" onclick={() => decide("replace")}>{conflictCopy.replace(conflicts.length)}</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1059,7 +1199,9 @@
 
 <!-- The collision dialog says the kind on both sides — "Photos is a file
      here" — and greys *Replace* whenever the two differ: kinds that differ
-     never replace one another, in either direction (APP.md §3). -->
+     never replace one another, in either direction (APP.md §3). Every
+     button is a standard one: the accent never sits on Replace (ruled
+     2026-10-14). -->
 {#if collisions}
   <Dialog title="Some names already exist" onclose={() => (collisions = null)}>
     <ul class="plain">
@@ -1073,7 +1215,7 @@
       <button type="button" class="btn" onclick={() => (collisions = null)}>Cancel</button>
       <button type="button" class="btn" onclick={() => collisions && void addWith(collisions.at, collisions.plan, "skip")}>Skip those</button>
       <button type="button" class="btn" onclick={() => collisions && void addWith(collisions.at, collisions.plan, "keep-both")}>Keep both</button>
-      <button type="button" class="btn accent" disabled={kindsDiffer} onclick={() => collisions && void addWith(collisions.at, collisions.plan, "replace")}>Replace</button>
+      <button type="button" class="btn" disabled={kindsDiffer} onclick={() => collisions && void addWith(collisions.at, collisions.plan, "replace")}>Replace</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1096,3 +1238,23 @@
     {/snippet}
   </Dialog>
 {/if}
+
+<style>
+  /* The preview's wait (APP.md §6, ruled 2026-10-14): a 14 px ring, 2 px,
+     the accent, one turn a second — shown only after 300 ms, so a quick
+     preview never flashes it. Under reduced motion it stands still. */
+  .wait {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--accent-line);
+    border-top-color: var(--accent);
+    opacity: 0;
+    animation: wait-show 0s linear 300ms forwards, wait-turn 1s linear infinite;
+  }
+  @keyframes wait-show { to { opacity: 1; } }
+  @keyframes wait-turn { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .wait { animation: wait-show 0s linear 300ms forwards; }
+  }
+</style>

@@ -49,23 +49,50 @@ describe("the running operation's name", () => {
   it("says a kind it does not know rather than nothing at all", () => {
     expect(opLabel("something-new", 4)).toBe("something-new");
   });
+
+  // The strip shows every running operation, on the Archives page too,
+  // where the verb alone does not say whose it is (ruled 2026-10-14).
+  it("names the archive it is working on, when the name is known", () => {
+    expect(opLabel("add", 3, "", "Photos 2024")).toBe("Adding 3 files to Photos 2024");
+    expect(opLabel("add", 0, "", "Photos 2024")).toBe("Adding to Photos 2024");
+    expect(opLabel("replace", 1, "", "Photos 2024")).toBe("Replacing 1 file in Photos 2024");
+    expect(opLabel("extract", 12, "extracting", "Photos 2024")).toBe("Extracting 12 files from Photos 2024");
+    expect(opLabel("verify", 0, "hashing", "Photos 2024")).toBe("Verifying Photos 2024");
+    expect(opLabel("compact", 0, "", "Photos 2024")).toBe("Compacting Photos 2024");
+    expect(opLabel("reclaim", 0, "moving", "Photos 2024")).toBe("Reclaiming space in Photos 2024");
+    expect(opLabel("rotate", 0, "", "Photos 2024")).toBe("Rotating the key of Photos 2024");
+    expect(opLabel("dragout", 2, "dragging", "Photos 2024")).toBe("Dragging 2 items from Photos 2024");
+    expect(opLabel("dragout", 2, "preparing", "Photos 2024")).toBe("Extracting 2 items from Photos 2024");
+  });
+
+  it("is the verb alone when the archive's name is not known", () => {
+    expect(opLabel("verify", 0, "", "")).toBe("Verifying");
+    expect(opLabel("rotate", 0, "")).toBe("Rotating key");
+  });
 });
 
 // The drag out on the strip (APP.md §3, ruled 2026-09-11 after the first
-// real drag, whose staging was over before the strip appeared): one label,
-// *Extracting N items*, from the moment the drag starts and through all
-// three of its phases — the hover (the label alone), the staging (the byte
-// bar with *Cancel*) and the wait on Explorer (that same bar, standing
-// full, with nothing to cancel and no words of its own). The operation ends
-// when DoDragDrop returns, and the strip goes with it.
+// real drag, whose staging was over before the strip appeared): on the
+// strip from the moment the drag starts. The hover (the label alone) says
+// *Dragging N items*, since nothing is chosen yet (ruled 2026-10-14); the
+// staging (the byte bar with *Cancel*) and the wait on Explorer (that same
+// bar, standing full, with nothing to cancel and no words of its own) say
+// *Extracting N items*. The operation ends when DoDragDrop returns, and
+// the strip goes with it.
 describe("the drag out on the strip", () => {
   it("counts what the gesture named, folders included, singular at one", () => {
-    expect(opLabel("dragout", 2, "dragging")).toBe("Extracting 2 items");
+    expect(opLabel("dragout", 2, "dragging")).toBe("Dragging 2 items");
     expect(opLabel("dragout", 2, "preparing")).toBe("Extracting 2 items");
     expect(opLabel("dragout", 2, "awaiting")).toBe("Extracting 2 items");
-    expect(opLabel("dragout", 1, "dragging")).toBe("Extracting 1 item");
+    expect(opLabel("dragout", 1, "dragging")).toBe("Dragging 1 item");
     expect(opLabel("dragout", 1, "awaiting")).toBe("Extracting 1 item");
+    expect(dragOutCopy.dragging).toBe("Dragging");
     expect(dragOutCopy.extracting).toBe("Extracting");
+  });
+
+  it("states no outcome while the drag hovers: nothing is chosen yet", () => {
+    // The user may still drop it back on the window or press Escape.
+    expect(opLabel("dragout", 4, "dragging")).not.toMatch(/Extracting/);
   });
 
   it("counts the records the drag named, not the files beneath them", () => {
@@ -77,7 +104,7 @@ describe("the drag out on the strip", () => {
     // Before the core has said — an older event, a mock that says nothing —
     // the bare verb stands rather than a wrong number.
     expect(stripCount({ kind: "dragout", items: 40 })).toBe(0);
-    expect(opLabel("dragout", 0, "dragging")).toBe("Extracting");
+    expect(opLabel("dragout", 0, "dragging")).toBe("Dragging");
   });
 
   it("is the label alone during the hover: no bar, nothing to cancel", () => {
@@ -216,7 +243,13 @@ describe("when a finished reclaim says what came back", () => {
 describe("a finished operation's error line", () => {
   it("names the operation before the copy", () => {
     expect(opErrorLine("add", 3, "io", "A file could not be read or written.")).toBe("Adding 3 files: A file could not be read or written.");
-    expect(opErrorLine("reclaim", 0, "op.cancelled", "Cancelled.")).toBe("Reclaiming space: Cancelled.");
+  });
+
+  it("says the user's own Cancel as a neutral stop, not a failure", () => {
+    // The toast it makes is an info toast (state.svelte.ts applyOp, ruled
+    // 2026-10-14); the line is the operation's name and "Stopped.".
+    expect(opErrorLine("reclaim", 0, "op.cancelled", "Cancelled.")).toBe("Reclaiming space: Stopped.");
+    expect(opErrorLine("add", 3, "op.cancelled", "Cancelled.")).toBe("Adding 3 files: Stopped.");
   });
 
   it("lets the reclaim's own outcome stand alone", () => {

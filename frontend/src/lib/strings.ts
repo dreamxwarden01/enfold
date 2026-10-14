@@ -67,7 +67,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeAuth]: "That did not open the vault.",
   [Code.CodeNoSlot]: "No way in matches.",
   [Code.CodePasswordNeeded]: "This key also needs its password.",
-  [Code.CodeInvariant]: "At least two independent ways in are always kept.",
+  [Code.CodeInvariant]: "At least 2 independent ways in are always kept.",
   [Code.CodeSlotPolicy]: "A standalone password cannot share a vault with a hardware key.",
   [Code.CodeDuplicateSlot]: "This key is already enrolled.",
   [Code.CodeNoRecoverySlot]: "A vault always keeps a recovery key.",
@@ -101,7 +101,7 @@ export const codeCopy: Record<CodeKey, string> = {
   // The touch is kept for five minutes so that a wrong password costs no
   // second one; past that the ceremony ends where a cancel ends it and the
   // lock screen carries this line (APP.md §2.2, the ruling of 2026-09-08).
-  [Code.CodePasswordDeadline]: "The password was not given within five minutes; unlock again from the key.",
+  [Code.CodePasswordDeadline]: "The password was not given within 5 minutes; unlock again from the key.",
   [Code.CodeTokenTooMany]: "Too many operations on one key handle. Start again.",
   [Code.CodeTokenReset]: "The key was released but could not be reset, so it may still be PIN-verified.",
   [Code.CodeTokenOccupied]: "That slot on the key holds something already.",
@@ -128,7 +128,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeArchiveExists]: "A file is already there. Enfold never overwrites; choose another name.",
   [Code.CodeArchiveMissing]: "The archive file is not where the vault last saw it.",
   [Code.CodeArchiveCopyMismatch]: "This file is not the copy the vault last saved: an older backup, or one written elsewhere. Saving records this copy.",
-  [Code.CodeArchiveForgotten]: "This archive was forgotten. Restore it to use it again; its key is dropped thirty days after it was forgotten.",
+  [Code.CodeArchiveForgotten]: "This archive was forgotten. Restore it to use it again; its key is dropped 30 days after it was forgotten.",
   [Code.CodeArchiveNotThisOne]: "The file there is not this archive — another archive, or a copy someone made. Nothing was removed.",
   [Code.CodeArchiveUnreachable]: "The folder that file is in could not be reached. Nothing was removed and nothing was forgotten.",
   [Code.CodeArchiveDeleteFailed]: "The file is this archive, and it could not be removed. The record is kept: its keys open a file that is still there.",
@@ -185,9 +185,30 @@ const extraCodes: Record<string, string> = {
   "archive.envelope_stale": "An archive's envelope was left behind by a rotation; rotating its key again repairs it.",
 };
 
+// codeText is a code's copy. A code with none — one the core gained
+// before its words were written — is never shown raw as "Error: <code>":
+// the line says something went wrong, keeps the code for whoever reads
+// the log, and says where the log is (ruled 2026-10-14).
 export function codeText(code: string | undefined): string {
   if (!code) return "";
-  return (codeCopy as Record<string, string>)[code] ?? extraCodes[code] ?? `Error: ${code}`;
+  return (codeCopy as Record<string, string>)[code] ?? extraCodes[code] ?? unknownCodeText(code);
+}
+
+export function unknownCodeText(code: string): string {
+  return `Something went wrong (${code}). The log in the data folder has the details.`;
+}
+
+// unknownCodeParts splits a line that carries the fallback around its
+// code — before, the code, after — so the place that renders it can set
+// the code in muted mono (Toasts.svelte); null for every other line. The
+// fallback may stand after a prefix, as an operation's name does in its
+// toast (ops.ts opErrorLine).
+export function unknownCodeParts(text: string): [string, string, string] | null {
+  const lead = "Something went wrong (";
+  const m = /Something went wrong \(([^()\s]+)\)\. The log in the data folder has the details\./.exec(text);
+  if (!m) return null;
+  const at = m.index + lead.length;
+  return [text.slice(0, at), m[1], text.slice(at + m[1].length)];
 }
 
 // ---- The archive page's own lines (APP.md §2.3, §6, ruled 2026-09-10) --
@@ -213,17 +234,19 @@ export function reclaimedText(returned: number): string {
 }
 
 // The drag out of the window on the operation strip (APP.md §3, ruled
-// 2026-09-11 after the first real drag): one label, *Extracting 2 items*,
-// from the moment the drag starts and through all three of its phases, so
-// that a staging over in an instant is a change inside a strip already on
-// the screen and never a strip that flashes. The hover shows the label
-// alone; the staging adds the bar, which moves by bytes and offers
+// 2026-09-11 after the first real drag): on the strip from the moment the
+// drag starts, so that a staging over in an instant is a change inside a
+// strip already on the screen and never a strip that flashes. The hover
+// shows the label alone, *Dragging 2 items*, since nothing is chosen yet
+// (ruled 2026-10-14); from the drop on it is *Extracting 2 items*, and
+// the staging adds the bar, which moves by bytes and offers
 // *Cancel*; and when the bytes are written the bar simply stays full, with
 // no *Cancel* and no words of its own — from then on Explorer's own window
 // is in front and the only control there is — until DoDragDrop returns and
 // the strip goes. A finished drag out that failed is named by the verb its
 // toast counts with (ops.ts opLabel).
 export const dragOutCopy = {
+  dragging: "Dragging",
   extracting: "Extracting",
   name: "Dragging out",
 };
@@ -339,8 +362,9 @@ export const listCopy = {
   upLabel: "Up one level",
   tickAll: "Select everything in this folder",
   tickRow: (name: string): string => `Select ${name}`,
-  emptyRoot: "Nothing here yet. Add files, or drop them here.",
-  emptyFolder: "This folder is empty.",
+  // An empty folder names itself, and the root the archive (the polish
+  // review's small fix 30), with both ways to fill it.
+  empty: (folder: string): string => `${folder || "This folder"} is empty. Drop files here, or use Add.`,
   toRoot: "Back to the top of the archive",
   // the header cell's tooltip says what the first click will do
   sortBy: (column: string): string => `Sort by ${column}`,
@@ -420,6 +444,13 @@ export const archivesCopy = {
   panelShow: (name: string): string => `${name} — show the details`,
   panelHide: (name: string): string => `${name} — hide the details`,
   panelNone: "No archive selected",
+  // Open file… (Ctrl+O) and the empty page's buttons (APP.md §13, §14,
+  // ruled 2026-10-14): an .efd from anywhere, opened the way Explorer's
+  // double-click opens it.
+  openFile: "Open file…",
+  openFileTitle: "Open an archive",
+  emptyVault: "No archives in this vault yet.",
+  emptyOpen: "Open an .efd file…",
 };
 
 // The Type column (APP.md §6): a folder is *Folder*, a file's type is
@@ -553,7 +584,7 @@ export const refusedCopy = {
   progress: (at: number, of: number): string => (of > 1 ? `${at} of ${of}` : ""),
   shorten: "Shorten",
   shortenTo: (to: string): string => `Shorten to ${to}`,
-  nothingShorter: "The name is down to one character and cannot be shortened further.",
+  nothingShorter: "The name is down to 1 character and cannot be shortened further.",
   rename: "Rename…",
   renameLabel: "Name for this extract",
   renameBack: "Back",

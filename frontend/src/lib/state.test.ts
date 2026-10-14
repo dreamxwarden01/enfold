@@ -1058,3 +1058,79 @@ describe("a file opened from Explorer (APP.md §14)", () => {
     expect(store.route).toBe("archives");
   });
 });
+
+// New archive… ends on the new archive's empty root with the Add menu open
+// (APP.md §13, ruled 2026-10-14): the store holds the ask, and the page of
+// that archive takes it once as it mounts.
+describe("a created archive opened with the Add menu asked for (openNew)", () => {
+  const refusal = (code: string) => Object.assign(new Error(code), { cause: { code } });
+
+  it("opens it on its root and asks for the menu once — a later visit opens nothing", async () => {
+    m.Page.mockResolvedValueOnce(reply(1, [], 0));
+    expect(await store.openNew("a")).toBe(true);
+    expect(m.Open).toHaveBeenCalledWith("a");
+    expect(store.route).toBe("archive");
+    expect(store.current).toBe("a");
+    expect(store.dirId).toBe(ROOT);
+    expect(store.takeAddAsked("a")).toBe(true);
+    expect(store.takeAddAsked("a")).toBe(false);
+  });
+
+  it("asks for nothing when the open is refused", async () => {
+    m.Open.mockRejectedValueOnce(refusal("vault.locked"));
+    expect(await store.openNew("a")).toBe(false);
+    expect(store.route).toBe("archives");
+    expect(store.addAsked).toBeNull();
+    expect(store.takeAddAsked("a")).toBe(false);
+  });
+
+  it("is spent by any page that takes it, so another archive never inherits it", async () => {
+    m.Page.mockResolvedValueOnce(reply(1, [], 0));
+    await store.openNew("a");
+    expect(store.takeAddAsked("b")).toBe(false);
+    expect(store.takeAddAsked("a")).toBe(false);
+    expect(store.takeAddAsked("")).toBe(false);
+  });
+});
+
+// Delete archive… on the Archive page is asked over that page, and the
+// archive is let go of only on consent (APP.md §13, ruled 2026-10-14). Its
+// dialog stands over the page until it closes, so nothing more is read of
+// the archive meanwhile: a Stat would answer archive.not_open and drop the
+// page, and the dialog with it, mid-act.
+describe("an archive let go of for Delete archive… (releasedForDelete)", () => {
+  const cancelled = { id: "op1", archiveId: "a", kind: "add", items: 1, finished: true, error: "op.cancelled", results: [] } as unknown as OpView;
+
+  it("reads nothing more of it while the dialog is up — not an op's end, not archive.changed", async () => {
+    vi.useFakeTimers();
+    m.Status.mockReturnValue(new Promise(() => {}));
+    store.boot();
+    await open(["x"]);
+    store.route = "archive";
+    store.releasedForDelete = "a";
+    m.handlers["archive.changed"]({ data: { id: "a", seq: 5 } });
+    m.handlers["op.done"]({ data: cancelled }); // the op the close cancelled
+    await store.refreshArchive();
+    expect(m.Stat).not.toHaveBeenCalled();
+    expect(store.current).toBe("a"); // the page, and the dialog over it, stay
+    expect(store.route).toBe("archive");
+  });
+
+  it("is over when the page is left: the rail's leave, a fresh list, and the archive read again on its next visit", async () => {
+    await open(["x"]);
+    store.route = "archive";
+    store.releasedForDelete = "a";
+    m.List.mockClear();
+    store.go("archives"); // the dialog's close
+    expect(store.current).toBeNull();
+    expect(store.releasedForDelete).toBeNull();
+    expect(m.Leave).toHaveBeenCalledWith("a");
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(m.List).toHaveBeenCalled();
+    await open(["x"]);
+    m.Stat.mockResolvedValueOnce(stat(2));
+    m.Page.mockResolvedValueOnce(reply(2, ["x"], 1));
+    await store.refreshArchive();
+    expect(m.Stat).toHaveBeenCalledWith("a");
+  });
+});

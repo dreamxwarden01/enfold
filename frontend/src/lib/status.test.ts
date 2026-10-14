@@ -57,16 +57,22 @@ describe("the free space on the strip", () => {
   it("says nothing below it, whatever the archive", () => {
     expect(freeWorthShowing(0)).toBe(false);
     expect(freeWorthShowing(undefined)).toBe(false);
-    expect(statusNote(stat({ freeSpace: 12_000_000 }))).not.toMatch(/free/);
+    expect(statusNote(stat({ freeSpace: 12_000_000 }))).not.toMatch(/unused/);
+  });
+
+  // The figure is inside the archive's file: "free" read as the disk's
+  // free space (the polish review's small fix 17).
+  it("says unused, never free, which reads as the disk's", () => {
+    expect(statusNote(stat({ freeSpace: 3_100_000_000 }))).not.toMatch(/free/);
   });
 
   it("is appended to the line above it", () => {
-    expect(statusNote(stat({ freeSpace: 3_100_000_000 }))).toBe("1 file · 1.5 GB · key v1 · 2.9 GB free");
+    expect(statusNote(stat({ freeSpace: 3_100_000_000 }))).toBe("1 file · 1.5 GB · key v1 · 2.9 GB unused");
   });
 
   it("comes after the last save, so the figures the file has always had come first", () => {
     expect(statusNote(stat({ files: 2, lastSavedAt: 1_757_000_000, freeSpace: 3_100_000_000 }))).toMatch(
-      /^2 files · 1\.5 GB · key v1 · last saved .* · 2\.9 GB free$/,
+      /^2 files · 1\.5 GB · key v1 · last saved .* · 2\.9 GB unused$/,
     );
   });
 });

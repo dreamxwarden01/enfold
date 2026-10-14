@@ -102,19 +102,44 @@ export function nameProblem(text: string): string {
   return new TextEncoder().encode(text).length > NAME_MAX ? NAME_RULE : "";
 }
 
-// A name inside an archive — a file renamed, a folder created (APP.md §6,
-// the Archive page). The stored name is a path whose separator is "/", so
-// a leaf that carries one would be two segments and not the name it looks
-// like; a leaf is required, and that is the whole rule. The archive's own
-// name is a different thing and has its own (nameProblem).
-export const LEAF_RULE = "A name cannot contain a slash.";
+// A name inside an archive — a file renamed, a folder created, a refused
+// name renamed for one extract (APP.md §6, Forms). The core holds every
+// such name to R20 (format.ValidateName) and answers a breach with the
+// generic file.name, "That name cannot be stored.", so the page mirrors the
+// rule exactly and says which part of it the name breaks, in the core's
+// own order: at most 255 UTF-16 code units — what a JS string's length
+// counts, so an emoji is two — none of the forbidden characters, no
+// control character (Go's unicode.IsControl: C0, DEL and the C1 block),
+// no trailing space or dot ("." and ".." among them), and no Windows
+// device name, with or without an extension (the part before the first
+// dot; COM0 and LPT0 are not reserved, COM1–9 and LPT1–9 are). The name is
+// judged trimmed, as every caller sends it. The archive's own name is a
+// different thing and has its own (nameProblem).
+export const NAME_UNITS_MAX = 255;
+export const NAME_LONG = `At most ${NAME_UNITS_MAX} characters.`;
+export const LEAF_RULE = 'A name cannot contain < > : " / \\ | ? *';
+export const NAME_CONTROL = "A name cannot contain a tab or another control character.";
+export const NAME_TRAILING = "A name cannot end in a dot or a space.";
+export const NAME_RESERVED = "That name is reserved by Windows.";
+const FORBIDDEN = /[<>:"/\\|?*]/;
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 export function fileNameProblem(name: string): string {
-  if (!name.trim()) return REQUIRED;
-  return name.includes("/") ? LEAF_RULE : "";
+  const leaf = name.trim();
+  if (!leaf) return REQUIRED;
+  if (leaf.length > NAME_UNITS_MAX) return NAME_LONG;
+  if (FORBIDDEN.test(leaf)) return LEAF_RULE;
+  if (CONTROL.test(leaf)) return NAME_CONTROL;
+  if (/[. ]$/.test(leaf)) return NAME_TRAILING;
+  const dot = leaf.indexOf(".");
+  return DEVICE.test(dot < 0 ? leaf : leaf.slice(0, dot)) ? NAME_RESERVED : "";
 }
 
 // newNameProblem judges a name typed for something new inside the archive
-// — *Create folder* — against the rule above and then against the names
+// — *Create folder*, and *Rename*, whose own row the caller leaves out of
+// `taken` as the core leaves it out of the siblings, so a change of case
+// alone is a rename — against the rule above and then against the names
 // the folder already holds, compared the way the core compares them (case
 // folded among live children, FORMAT.md R39): two rows of one name are one
 // folder with two rows. A row staged for deletion is not a live sibling

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CeremonyStep, Code } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
-import { codeCopy, codeText, extensionNames, reclaimedText, retriesText, stepCopy, typeLabel } from "./strings";
+import { codeCopy, codeText, extensionNames, reclaimedText, retriesText, stepCopy, typeLabel, unknownCodeParts } from "./strings";
 
 describe("copy table", () => {
   it("covers every ceremony step", () => {
@@ -13,11 +13,16 @@ describe("copy table", () => {
     for (const code of Object.values(Code)) {
       if (!code) continue;
       expect(codeCopy[code as keyof typeof codeCopy], code).toBeTruthy();
-      expect(codeText(code)).not.toMatch(/^Error:/);
+      expect(unknownCodeParts(codeText(code)), code).toBeNull();
     }
   });
-  it("names an unknown code rather than inventing", () => {
-    expect(codeText("something.new")).toBe("Error: something.new");
+  it("names an unknown code rather than inventing, and says where the log is", () => {
+    expect(codeText("something.new")).toBe("Something went wrong (something.new). The log in the data folder has the details.");
+  });
+  it("splits the fallback around its code, wherever it stands in the line", () => {
+    expect(unknownCodeParts(codeText("something.new"))).toEqual(["Something went wrong (", "something.new", "). The log in the data folder has the details."]);
+    expect(unknownCodeParts(`Adding 3 files: ${codeText("x.y")}`)).toEqual(["Adding 3 files: Something went wrong (", "x.y", "). The log in the data folder has the details."]);
+    expect(unknownCodeParts(codeText(Code.CodeArchiveDirty))).toBeNull();
   });
 });
 

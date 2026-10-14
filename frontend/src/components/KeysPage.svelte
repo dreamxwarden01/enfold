@@ -166,27 +166,30 @@
           </div>
         </button>
       {/each}
-      <div class="rule"><svg class="i i-14"><use href="#i-info" /></svg>At least two independent ways in are always kept; a recovery key is one of them.</div>
+      <div class="rule"><svg class="i i-14"><use href="#i-info" /></svg>At least 2 independent ways in are always kept; a recovery key is one of them.</div>
       <div class="ks-actions">
-        <button type="button" class="btn accent" disabled={!unlocked || tampered} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Add a key</button>
-        <button type="button" class="btn" disabled={!sel || !sel.removable || !unlocked || tampered} title={sel && !sel.removable ? "At least two independent ways in are always kept." : undefined} onclick={() => (removing = true)}>Remove</button>
+        <button type="button" class="btn accent" disabled={!unlocked || tampered} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Add a key…</button>
+        <button type="button" class="btn" disabled={!sel || !sel.removable || !unlocked || tampered} title={sel && !sel.removable ? "At least 2 independent ways in are always kept." : undefined} onclick={() => (removing = true)}>Remove…</button>
         {#if sel?.type === "recovery"}
           <button type="button" class="btn" disabled={!unlocked} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>Show recovery key…</button>
         {/if}
-        <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openRotate}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate now</button>
+        <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openRotate}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate now…</button>
       </div>
 
       <div class="ks-head top"><h2 class="t-section">Backups</h2></div>
       <div class="card backup">
         <p class="t-sub">A backup is the vault file without the archive keys' history it does not need: the registry and the recovery slots. It carries its own date, so Enfold can tell an old one from a new one.</p>
         <div class="ks-actions">
-          <button type="button" class="btn" disabled={!unlocked || tampered} onclick={() => void exportBackup()}><svg class="i i-14"><use href="#i-backup" /></svg>Export backup</button>
+          <button type="button" class="btn" disabled={!unlocked || tampered} onclick={() => void exportBackup()}><svg class="i i-14"><use href="#i-backup" /></svg>Export backup…</button>
           <button type="button" class="btn" onclick={checkBackup}>Check a backup…</button>
         </div>
         <div class="setrow"><div class="lab"><b>Last backup</b><span>{store.lastExportAt ? `${dateTime(store.lastExportAt)} — recorded here, not proof the file is still there` : "none recorded here"}</span></div></div>
         <!-- Import records… lives in the Archives page's command bar; this
-             is the pointer to it (APP.md §13). -->
-        <p class="t-quiet">To take archive records out of a backup or another copy of this vault without replacing the vault kept here, use <em>Import records…</em> on the Archives page. <button type="button" class="btn link" onclick={() => store.go("archives")}>Go there</button></p>
+             is the pointer to it (APP.md §13), and it hands the ask over
+             the way the key dialog does — the page opens its picker on
+             arrival — whenever that command could run; otherwise it only
+             goes there, where the command shows why it is greyed. -->
+        <p class="t-quiet">To take archive records out of a backup or another copy of this vault without replacing the vault kept here, {#if unlocked && !tampered}use <button type="button" class="btn link" onclick={() => store.askImportRecords()}>Import records…</button> on the Archives page.{:else}use <em>Import records…</em> on the Archives page. <button type="button" class="btn link" onclick={() => store.go("archives")}>Go there</button>{/if}</p>
         {#if backup}
           <dl class="facts">
             <div class="fact"><dt>File</dt><dd title={backup.path}>{leaf(backup.path)}</dd></div>
@@ -264,8 +267,12 @@
       <p>You choose the password once the current way in is checked.</p>
     {:else}
       <div class="field">
-        <div class="field-top"><label for="ak-label">{addKind === "token" ? "Name this key" : "Name this recovery key"}</label><span class="hint">{addKind === "token" ? "Left empty, its serial number names it." : "Shown in the list of ways in."}</span></div>
-        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? "YubiKey 5 NFC — travel" : "Printed, in the safe"} />
+        <!-- The placeholder says what an empty field produces — a key is
+             named after its serial number by the core — and a recovery
+             key, which must be named, has none: an invented name there
+             read as a default already filled in. -->
+        <div class="field-top"><label for="ak-label">{addKind === "token" ? "Name this key" : "Name this recovery key"}</label><span class="hint">{addKind === "token" ? "Optional" : "Shown in the list of ways in."}</span></div>
+        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? "Named after its serial number" : undefined} />
       </div>
     {/if}
     {#if addKind === "token" && ent?.on}
@@ -282,7 +289,7 @@
 
 {#if removing && sel}
   <Dialog title="Remove {sel.label}?" onclose={() => (removing = false)}>
-    <p>This way in stops working here at once, but a copy of the vault made earlier still opens with it, and what it opens there reaches this vault too until every recovery key that copy held is replaced and the vault key is then rotated. The vault refuses if fewer than two independent ways in would remain.</p>
+    <p>This way in stops working here at once, but a copy of the vault made earlier still opens with it, and what it opens there reaches this vault too until every recovery key that copy held is replaced and the vault key is then rotated. The vault refuses if fewer than 2 independent ways in would remain.</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (removing = false)}>Cancel</button>
       <button type="button" class="btn danger-fill" onclick={() => { removing = false; void begin(Keys.RemoveSlot(sel.recipientId)); }}>Remove</button>

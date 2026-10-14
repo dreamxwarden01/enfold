@@ -37,3 +37,14 @@ export function clean(p: string): string {
   }
   return out.join("\\").toLowerCase();
 }
+
+// renameSelection is what *Rename* selects as its field opens (APP.md §6,
+// after Explorer): a file's stem, the part before the last dot, so typing
+// replaces the name and keeps the type; the whole name when there is no
+// dot or the dot is the first character (".env" has no extension, by the
+// Type column's own rule, format.ts ext), and always the whole name for a
+// folder, whose dot is part of its name.
+export function renameSelection(name: string, isDir: boolean): [number, number] {
+  const dot = isDir ? -1 : name.lastIndexOf(".");
+  return [0, dot > 0 ? dot : name.length];
+}

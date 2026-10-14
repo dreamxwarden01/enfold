@@ -1,17 +1,20 @@
 <script lang="ts">
   // The extract dialog (APP.md §3, the extract dialog, ruled 2026-09-10),
-  // for the pane's *Extract…* and the toolbar's *Extract all* alike: an
-  // editable destination prefilled by one rule — *Extract all* to the
+  // for the pane's *Extract…* and the toolbar's *Extract all…* alike: an
+  // editable destination prefilled by one rule — *Extract all…* to the
   // archive's own folder plus a folder named after the archive, a
   // selection to the archive's own folder, with no extra level — *Browse…*
-  // opening the native picker into it, the four policies with *Replace*
-  // the default, and *Extract*. No folder is kept from the last time and
-  // there is no action that appends a folder: the prefill is the rule. The
-  // destination need not exist: the core creates it.
+  // opening the native picker into it, the four policies with *Ask me
+  // about each conflict* the default (ruled 2026-10-14), and *Extract*. No
+  // folder is kept from the last time and there is no action that appends
+  // a folder: the prefill is the rule; the policy last chosen is kept while
+  // Enfold runs (lib/extract.ts). The destination need not exist: the core
+  // creates it. The dialog is a form: Enter in the field extracts, and the
+  // field has the focus as it opens.
   import { untrack } from "svelte";
   import Dialog from "./Dialog.svelte";
   import { Shell } from "../lib/api";
-  import { DEFAULT_POLICY, POLICIES, destinationEmpty } from "../lib/extract";
+  import { POLICIES, destinationEmpty, rememberPolicy, startingPolicy } from "../lib/extract";
   import { extractCopy } from "../lib/strings";
 
   interface Props {
@@ -29,7 +32,7 @@
   // The field is the user's from the moment the dialog opens: the
   // prefill is where it starts, not what it follows.
   let dir = $state(untrack(() => initial));
-  let policy = $state(DEFAULT_POLICY);
+  let policy = $state(startingPolicy());
   // The field is marked once the user has asked for an extract it cannot
   // do — never while they are still typing into an empty field.
   let attempted = $state(false);
@@ -46,11 +49,12 @@
   function go() {
     attempted = true;
     if (empty) return;
+    rememberPolicy(policy);
     onextract(dir.trim(), policy);
   }
 </script>
 
-<Dialog title="Extract {label}" onclose={oncancel}>
+<Dialog title="Extract {label}" onclose={oncancel} onsubmit={go}>
   <div class="field">
     <div class="field-top"><label for="xd">Destination folder</label><span class="hint">created if it is not there yet</span></div>
     <div class="row">
@@ -66,9 +70,10 @@
     {#if attempted && empty}<div id="xd-said" class="field-error">This field is required.</div>{/if}
   </div>
 
-  <!-- Replace is the default (APP.md §3): the wizard default of every
-       archiver, and the case the first design forgot. *Ask me about each
-       conflict* is the one that comes back with a question. -->
+  <!-- *Ask me about each conflict* is the default (APP.md §3, ruled
+       2026-10-14): the one that comes back with a question, so nothing
+       already there is overwritten unasked. The last choice is kept while
+       Enfold runs. -->
   <fieldset class="field policies">
     <legend class="lbl">{extractCopy.policyLegend}</legend>
     {#each POLICIES as p (p.value)}
@@ -78,7 +83,7 @@
 
   {#snippet actions()}
     <button type="button" class="btn" onclick={oncancel}>Cancel</button>
-    <button type="button" class="btn accent" onclick={go}>Extract</button>
+    <button type="submit" class="btn accent">Extract</button>
   {/snippet}
 </Dialog>
 

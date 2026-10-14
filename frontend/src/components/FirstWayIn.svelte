@@ -26,8 +26,11 @@
 </div>
 {#if kind === "token"}
   <div class="field">
-    <div class="field-top"><label for="{idPrefix}-label">Name this key</label><span class="hint">Left empty, its serial number names it.</span></div>
-    <input id="{idPrefix}-label" class="input" bind:value={label} placeholder="YubiKey 5C — desk" />
+    <!-- The placeholder is what an empty field produces — the core names
+         the key "YubiKey <serial>" — never an invented name that would
+         read as a default already filled in. -->
+    <div class="field-top"><label for="{idPrefix}-label">Name this key</label><span class="hint">Optional</span></div>
+    <input id="{idPrefix}-label" class="input" bind:value={label} placeholder="Named after its serial number" />
   </div>
   <label class="check"><input type="checkbox" bind:checked={entangle} />Also require a password with every YubiKey in this vault</label>
   {#if entangle}

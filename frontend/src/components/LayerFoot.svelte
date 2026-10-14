@@ -2,13 +2,13 @@
   // The layer's one foot, below the pages and outside their crossfade
   // (APP.md §6): the page's note on the left, which fades in when the page
   // changes and updates in place otherwise; the lock state on the right,
-  // always — the open padlock, the time to the lock and Lock now while
+  // always — the open padlock, when the vault locks and Lock now while
   // unlocked, the closed padlock and Unlock while locked with archives
   // still open.
   import { fade } from "svelte/transition";
   import { Vault } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { countdown, nearerDeadline } from "../lib/format";
+  import { idleMinutes, lockLine } from "../lib/format";
   import { motion } from "../lib/motion";
 
   interface Props {
@@ -16,6 +16,10 @@
   }
   let { pageKey }: Props = $props();
   const st = $derived(store.status);
+  // The idle timeout is the vault's, so only settings read while it was
+  // unlocked know it; until then the chip names no number.
+  const idle = $derived(store.settings?.timeoutsFromVault ? idleMinutes(store.settings.idleMinutes) : undefined);
+  const line = $derived(st ? lockLine(st.locksAt, st.absoluteAt, idle, store.now) : null);
 </script>
 
 <div class="layer-foot">
@@ -23,8 +27,11 @@
   {#if store.unlocked && st}
     <!-- The nearer of the idle deadline and the absolute one (APP.md §6,
          ruled 2026-09-12): the absolute cap locks regardless of activity,
-         so the idle one alone would promise time the vault does not have. -->
-    <span class="lockchip"><svg class="i i-14"><use href="#i-unlock" /></svg>Locks in {countdown(nearerDeadline(st.locksAt, st.absoluteAt), store.now)}<button type="button" class="btn link" onclick={() => void Vault.Lock()}>Lock now</button></span>
+         so the idle one alone would promise time the vault does not have.
+         Quiet until the last minute (ruled 2026-10-14, lib/format.ts
+         lockLine): the idle rule or the cap's clock time, then a count in
+         the attention colour. -->
+    <span class="lockchip" class:urgent={line?.urgent}><svg class="i i-14"><use href="#i-unlock" /></svg>{line?.text}<button type="button" class="btn link" onclick={() => void Vault.Lock()}>Lock now</button></span>
   {:else}
     <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>Keystore locked<button type="button" class="btn link" onclick={() => store.go("lock")}>Unlock</button></span>
   {/if}
@@ -32,4 +39,5 @@
 
 <style>
   .note { min-width: 0; }
+  .lockchip.urgent, .lockchip.urgent .i { color: var(--attention); }
 </style>

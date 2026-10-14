@@ -66,9 +66,10 @@ export function skipSameLabel(rows: ConflictRow[]): string {
   return skipSameText(rows.filter(sameDateAndSize).length);
 }
 
-// startingDecisions: replace by default — the policy the dialog's own
-// default is — with the copies that match already skipped, which is what
-// the foot's pre-ticked box means.
+// startingDecisions: every row starts on replace — the extract dialog's
+// default until 2026-10-14, when it became ask; whether the compare list
+// should follow is open — with the copies that match already skipped,
+// which is what the foot's pre-ticked box means.
 export function startingDecisions(rows: ConflictRow[]): Record<string, Decision> {
   const out: Record<string, Decision> = {};
   for (const r of rows) out[r.path] = sameDateAndSize(r) ? "skip" : "replace";

@@ -84,7 +84,7 @@
       savedTo = p;
     } catch (e) {
       const code = errorOf(e).code;
-      store.toast(code === "ceremony.stale_prompt" ? "The key is no longer held. Show it again from the Keys page." : codeText(code), "error");
+      store.toast(code === "ceremony.stale_prompt" ? "The key is no longer held. Show it again from the Keystore page." : codeText(code), "error");
     }
   }
 
@@ -131,7 +131,7 @@
 <Dialog title={kind === "reveal" ? "Recovery key" : "Your recovery key"} onclose={() => {}} covered={ask !== ""}>
   {#if failed}
     <p>The key could not be shown here: its one-time link was already used.</p>
-    <div class="bar attention"><svg class="i i-14"><use href="#i-info" /></svg><span>Show it again from the Keys page: unlock, then prove a YubiKey or a password once more.</span></div>
+    <div class="bar attention"><svg class="i i-14"><use href="#i-info" /></svg><span>Show it again from the Keystore page: unlock, then prove a YubiKey or a password once more.</span></div>
   {:else}
     <p>These digits open the vault without a YubiKey or a password. Keep them somewhere safe: anyone who has them can open every archive.</p>
     {#if !digits}
@@ -141,7 +141,9 @@
       <div class="digits">
         {#each groups as g, i (i)}<span>{g}</span>{/each}
       </div>
-      <p class="t-quiet">{digits.length} digits{recoveryId ? `, key ID ${recoveryId}` : ""}. They can be shown again from the Keys page — unlock, then prove a YubiKey or a password once more.</p>
+      <!-- The key ID is said once, above the digits; this line does not
+           repeat it. The page is named as the rail names it. -->
+      <p class="t-quiet">{digits.length} digits. They can be shown again from the Keystore page — unlock, then prove a YubiKey or a password once more.</p>
       {#if savedTo}
         <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Saved to {savedTo}.</span></div>
       {/if}

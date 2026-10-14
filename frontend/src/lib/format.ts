@@ -62,6 +62,51 @@ export function nearerDeadline(a: number, b: number): number {
   return Math.min(a, b);
 }
 
+// clockTime renders a Unix deadline as the local "16:42" the foot shows
+// for the session's end — the same 24-hour clock dateTime writes.
+export function clockTime(unix: number): string {
+  const d = new Date(unix * 1000);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// idleMinutes is the idle timeout the session actually runs on, from the
+// registry's stored minutes: 0 is the default, and a stored value outside
+// the permitted range is replaced by the default as the core's reader
+// replaces it (internal/app/settings.go timeouts: 10 minutes, 1 to 30).
+// Undefined is not known yet — settings read while the vault was locked
+// carry no vault's values — and says no number at all.
+export function idleMinutes(stored: number | undefined): number | undefined {
+  if (stored === undefined) return undefined;
+  return stored >= 1 && stored <= 30 ? stored : 10;
+}
+
+// LockLine is what the foot's lock chip says while the vault is unlocked.
+export interface LockLine {
+  text: string;
+  // urgent: the last minute, counted, in the attention colour.
+  urgent: boolean;
+}
+
+// lockLine is the quiet countdown (APP.md §6, ruled 2026-10-14, refining
+// 2026-09-12): the nearer of the two deadlines still decides, but it
+// changes form rather than ticking all day. With the idle deadline nearer
+// it is the rule — *Locks after 10 min idle* — since any input resets that
+// timer and a ticking number was only noise; with the absolute cap nearer
+// (or equal: no input moves it) it is the clock time it ends at —
+// *Session ends 16:42* — which never needs to tick. Only in the last 60
+// seconds is it a count, m:ss, marked urgent. The page's clock still
+// moves once a second (store.now); the text it makes here changes only
+// when its form or the count does.
+export function lockLine(locksAt: number, absoluteAt: number, idle: number | undefined, nowMs: number): LockLine {
+  const at = nearerDeadline(locksAt, absoluteAt);
+  const cap = absoluteAt > 0 && (locksAt <= 0 || absoluteAt <= locksAt);
+  if (at - nowMs / 1000 <= 60) {
+    return { text: `${cap ? "Session ends in" : "Locks in"} ${countdown(at, nowMs)}`, urgent: true };
+  }
+  if (cap) return { text: `Session ends ${clockTime(absoluteAt)}`, urgent: false };
+  return { text: idle ? `Locks after ${idle} min idle` : "Locks when idle", urgent: false };
+}
+
 // minutesLabel renders a timeout in minutes as the settings show it.
 export function minutesLabel(min: number): string {
   if (min === 0) return "default";

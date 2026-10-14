@@ -1,12 +1,15 @@
 <script lang="ts">
   // The Archives page is the vault's inspector (APP.md §13): it lists
   // registry records, not files. Name carries the description as its
-  // muted second line; Status carries what the row is — open, file
-  // missing, hidden, forgotten — and *file missing* is only ever the
-  // core's own note, so the cell is blank until a presence pass has run
-  // and never says "missing" about a path nobody has measured. The header
-  // line sums the rows shown and says so, beside the vault file's own size
-  // and the registry's date (§2.1).
+  // muted second line; Size is right-aligned so magnitudes line up; there
+  // is no Files column and no Key column since 2026-10-14 — a count the
+  // core has only for an open archive read "—" on every row, and the key
+  // version is the Details dialog's. Status carries what the row is —
+  // open, compacting, file missing, hidden, forgotten — and *file
+  // missing* is only ever the core's own note, so the cell is blank until
+  // a presence pass has run and never says "missing" about a path nobody
+  // has measured. The header line sums the rows shown and says so, beside
+  // the vault file's own size and the registry's date (§2.1).
   import { tick, untrack } from "svelte";
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
@@ -15,7 +18,7 @@
   import { bytes, count, date, dateTime, plural } from "../lib/format";
   import { clickRow, emptySelection, selectAll, survive, toggleRow } from "../lib/selection";
   import type { Selection } from "../lib/selection";
-  import { clickShownHeader, paneRow, shownTicked } from "../lib/archlist";
+  import { clickShownHeader, compacting, paneRow, rowRefusal, shownTicked } from "../lib/archlist";
   import { CLOSED, canExpand, collapse, edgeY, escape, inContact, naturalEnd, openHeight, overScroll, picked, pushScroll, reveals, rideReachesHome, rideScroll, springScroll, toggle } from "../lib/archbar";
   import type { BarState, ListMetrics } from "../lib/archbar";
   import { MOVE, enter, motion } from "../lib/motion";
@@ -97,7 +100,7 @@
 
   // The table: a filter over name, description and file name, then one
   // sortable column.
-  type SortKey = "name" | "size" | "files" | "saved" | "key" | "status";
+  type SortKey = "name" | "size" | "saved" | "status";
   let filter = $state("");
   let sortKey = $state<SortKey>("name");
   let sortAsc = $state(true);
@@ -126,7 +129,10 @@
     if (a.forgottenAt > 0) out.push({ label: "forgotten", tone: "forgotten", title: `Forgotten on ${date(a.forgottenAt)}` });
     // Nothing is "dirty" since 2026-09-09: an archive is clean between
     // operations, each of them its own transaction (APP.md §2.3).
-    if (a.open) out.push({ label: "open", tone: "open" });
+    // A compaction refuses the open and every operation until it ends, so
+    // the row says so beside the greyed commands (ruled 2026-10-14).
+    if (compacting(a, store.runningOps)) out.push({ label: "compacting", tone: "busy", title: codeText(Code.CodeArchiveCompacting) });
+    else if (a.open) out.push({ label: "open", tone: "open" });
     // Never computed here: the core keeps a presence per record and the
     // note is the only thing that says a file is gone (APP.md §13).
     if (a.note === "archive.file_missing") out.push({ label: "file missing", tone: "missing", title: codeText(a.note) });
@@ -137,6 +143,7 @@
   function statusRank(a: ArchiveSummary): number {
     if (a.forgottenAt > 0) return 5;
     if (a.note === "archive.file_missing") return 4;
+    if (compacting(a, store.runningOps)) return 3;
     if (a.open) return 2;
     if (a.hidden) return 1;
     return 0;
@@ -150,17 +157,40 @@
       switch (sortKey) {
         case "size":
           return dir * (a.storedSize - b.storedSize);
-        case "files":
-          return dir * ((a.open ? a.files : -1) - (b.open ? b.files : -1));
         case "saved":
           return dir * (a.lastWrittenAt - b.lastWrittenAt);
-        case "key":
-          return dir * (a.keyVersion - b.keyVersion);
         case "status":
           return dir * (statusRank(a) - statusRank(b) || a.name.localeCompare(b.name));
       }
       return dir * a.name.localeCompare(b.name);
     });
+  });
+
+  // vaultEmpty: the vault holds no record at all, hidden and forgotten
+  // ones included — what the empty page's buttons are for (ruled
+  // 2026-10-14). The list itself cannot say so while Show hidden is off,
+  // so the registry is asked once more, only while that list is empty.
+  // null is "not known yet": the empty list says nothing until the answer
+  // comes, rather than flashing a line about Show hidden that may be
+  // untrue, and a refused question leaves it saying nothing.
+  let vaultEmpty = $state<boolean | null>(false);
+  $effect(() => {
+    const none = unlocked && store.archives.length === 0;
+    const all = store.showHidden;
+    if (!none || all) {
+      vaultEmpty = none;
+      return;
+    }
+    vaultEmpty = null;
+    let live = true;
+    Archives.List(true)
+      .then((every) => {
+        if (live) vaultEmpty = (every ?? []).length === 0;
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
   });
 
   // Summed by the page over the rows shown, and labelled so: a total that
@@ -230,6 +260,14 @@
       if (next === bar) return;
       e.preventDefault();
       moveBar(next);
+      return;
+    }
+    // Ctrl+O is Open file… from anywhere on the page, the filter included
+    // — it edits no text (ruled 2026-10-14).
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "o" || e.key === "O")) {
+      if (dialogIsUp()) return;
+      e.preventDefault();
+      void openFile();
       return;
     }
     if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || (e.key !== "a" && e.key !== "A")) return;
@@ -772,7 +810,9 @@
   // create asks for the name and the method here and for the place in the
   // native save dialog, prefilled with <name>.efd in the folder last used
   // (APP.md §6). A cancelled dialog creates nothing and leaves this one
-  // standing; only a create that succeeded closes it.
+  // standing; only a create that succeeded closes it, and the new archive
+  // is then opened on its empty root, where the next thing to do is to
+  // add to it (ruled 2026-10-14) — not left as a ticked row.
   async function create() {
     newAttempt++;
     if (!newNameValid) return;
@@ -784,8 +824,10 @@
       creating = false;
       newExists = "";
       await store.refreshArchives();
-      pick(id); // once the row is in the list, or the prune would drop the tick
       await store.refreshSettings(); // the folder this create remembered
+      // A refused open (the vault locked meanwhile) leaves the row ticked
+      // here instead, once it is in the list, or the prune would drop it.
+      if (!(await store.openNew(id))) pick(id);
     } catch (e) {
       const code = errorOf(e).code;
       // Said in place, with the name field to correct: Enfold never
@@ -808,6 +850,16 @@
     }
   }
 
+  // Open file… (Ctrl+O, APP.md §14, ruled 2026-10-14): an .efd from
+  // anywhere, through the picker Import records… uses, opened by the
+  // chain Explorer's double-click takes — the envelope's archive_id, the
+  // lock scene first while locked, the key's own dialog when no record
+  // here holds it.
+  async function openFile() {
+    const p = (await Shell.PickFiles(archivesCopy.openFileTitle, false)) ?? [];
+    if (p.length) await store.openFiles(p);
+  }
+
   async function importRecords() {
     const p = (await Shell.PickFiles("Import records from a backup or a copy of this vault", false)) ?? [];
     if (p.length) merging = p[0];
@@ -815,7 +867,7 @@
 
   // Import records… asked for from the dialog a file opened from Explorer
   // put up (APP.md §14): its key is not in this vault, and the picker and
-  // the merge dialog live here. Handed over the way deleteAfterClose is.
+  // the merge dialog live here.
   $effect(() => {
     if (!store.importRecordsAsked) return;
     store.importRecordsAsked = false;
@@ -823,63 +875,40 @@
   });
 
   // ---- Forget key… and Delete archive… -----------------------------------
-  // Both close the archive first (APP.md §13); the core refuses either
-  // with archive.busy while a preview reader is live, and a refusal on
-  // the consent screen would offer neither the close nor a reason.
+  // Both need the archive closed (APP.md §13), and the close is the
+  // dialog's release: run once the name is typed and the act confirmed,
+  // never before (ruled 2026-10-14), so a Cancel leaves an archive that is
+  // still draining a preview exactly as it was. A close the core refuses
+  // ends the dialog with its reason and nothing removed.
   function ask(mode: "delete" | "forget"): DeleteAsk | null {
     const a = one;
     if (!a) return null;
     return { id: a.id, name: a.name, path: a.path, createdAt: det?.createdAt ?? 0, mode };
   }
 
-  async function startDelete(mode: "delete" | "forget") {
-    const a = one;
+  function startDelete(mode: "delete" | "forget") {
     const snap = ask(mode);
-    if (!a || !snap) return;
-    if (a.open && !(await closeFirst(snap.id))) return;
-    del = snap;
+    if (snap) del = snap;
   }
 
-  async function closeFirst(id: string): Promise<boolean> {
+  // letGo: the close, when the row is open at the moment of consent —
+  // read off the list then, not when the dialog opened. It throws what
+  // the core refused it with.
+  async function letGo(id: string): Promise<void> {
+    if (!store.archives.find((x) => x.id === id)?.open) return;
     try {
       await Archives.Close(id);
     } catch (e) {
       // An archive that has closed itself since the row was read — a page
       // left it, and nothing was holding it — is already where this wanted
       // it (APP.md §2.3).
-      if (errorOf(e).code !== Code.CodeArchiveNotOpen) {
-        fail(e);
-        return false;
-      }
+      if (errorOf(e).code !== Code.CodeArchiveNotOpen) throw e;
     }
     // The Archive page may still be holding this one as its current
     // archive: it has no handle any more, so there is nothing to leave.
     if (store.current === id) store.leaveArchive(true);
     await store.refreshArchives();
-    return true;
   }
-
-  // A Delete archive… begun on the Archive page: the archive was closed
-  // there, which left that page, and the dialog opens here (APP.md §13).
-  // The record is read first, so the backup sentence has the created_at it
-  // is chosen against.
-  $effect(() => {
-    const want = store.deleteAfterClose;
-    if (!want) return;
-    store.deleteAfterClose = null;
-    pick(want);
-    void (async () => {
-      await store.loadDetails(want);
-      const a = store.archives.find((x) => x.id === want);
-      if (!a) return;
-      // The Archive page left it, which closes it; a preview body still in
-      // flight leaves it draining, and the record's own close is what ends
-      // that before the consent screen (APP.md §2.3, §13).
-      if (a.open && !(await closeFirst(want))) return;
-      const d = store.details;
-      del = { id: a.id, name: a.name, path: a.path, createdAt: d && d.archiveId === want ? d.createdAt : 0, mode: "delete" };
-    })();
-  });
 
   // The keyboard path: Space selects, Enter selects and opens, the arrows
   // move focus.
@@ -895,7 +924,7 @@
         e.preventDefault();
         sel = clickRow(sel, order, id);
         lastClicked = id;
-        void store.openArchive(id);
+        openRow(id);
         break;
       case "ArrowDown":
         e.preventDefault();
@@ -906,6 +935,15 @@
         (el.previousElementSibling as HTMLElement | null)?.focus();
         break;
     }
+  }
+
+  // openRow is a row's double-click and Enter: nothing for a row whose
+  // Open is greyed — forgotten, or being compacted — since the command
+  // already says why (ruled 2026-10-14) and the core would only refuse.
+  function openRow(id: string) {
+    const a = store.archives.find((x) => x.id === id);
+    if (!a || rowRefusal(a, store.runningOps) || (!unlocked && !a.open)) return;
+    void store.openArchive(id);
   }
 
   // What stops a record-level operation, said on the button itself. The
@@ -921,6 +959,20 @@
         ? warningCopy(Code.CodeVaultTampered, st?.tamperedReason)
         : undefined,
   );
+
+  // What the row itself stops (lib/archlist.ts): a forgotten record, or a
+  // compaction under way. Hide, Locate and the name and description are
+  // registry writes and are stopped by the first alone; Open, Compact,
+  // Rotate key and Verify by either. Close, Forget key and Delete archive
+  // by the second alone: the close the last two need is refused while a
+  // compaction holds the handle, and asking for the name first would only
+  // end in that refusal (APP.md §2.3, §13).
+  const rowStop = $derived(one ? rowRefusal(one, store.runningOps) : "");
+  const rowWhy = $derived(rowStop ? codeText(rowStop) : undefined);
+  const hideStop = $derived(!!one && one.forgottenAt > 0);
+  const forgotWhy = $derived(hideStop ? codeText(Code.CodeArchiveForgotten) : undefined);
+  const compactStop = $derived(!!one && compacting(one, store.runningOps));
+  const compactWhy = $derived(compactStop ? codeText(Code.CodeArchiveCompacting) : undefined);
 
   const foreign = $derived(!!pane && foreignPath(pane.path));
   const purge = $derived(pane ? purgeAfter(pane.forgottenAt) : 0);
@@ -941,26 +993,35 @@
   {#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>Locked</span>{/if}
 </div>
 
-<div class="layer-body" bind:this={bodyEl}>
+<!-- The page is a drop target with no data-archive-id: Wails emits a drop
+     only over an element marked data-file-drop-target, so without it an
+     .efd dropped here never reaches the store, which opens it (APP.md §3,
+     §14; ruled 2026-10-14). The file list's own target, on the Archive
+     page, carries the ids. -->
+<div class="layer-body" bind:this={bodyEl} data-file-drop-target="true">
   <div class="cmdbar">
     <!-- Every action that takes one archive works on the pane's row and is
          greyed unless exactly one is ticked (APP.md §6, ruled 2026-09-10). -->
-    <button type="button" class="btn accent" disabled={!one || (!unlocked && !one.open)} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
-    <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive</button>
+    <button type="button" class="btn accent" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
+    <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive…</button>
+    <!-- Never greyed: the chain answers a locked vault with the lock
+         scene, and a file whose key is not here with its own dialog, as
+         for a double-click in Explorer (APP.md §14). -->
+    <button type="button" class="btn subtle" title="Ctrl+O" onclick={() => void openFile()}><svg class="i i-14"><use href="#i-folder" /></svg>{archivesCopy.openFile}</button>
     <div class="sep"></div>
     <!-- Never gated on the archive being open (APP.md §2.3, ruled
          2026-09-10): the core opens it for the operation and closes it
          again, so there is no "open the archive first". -->
-    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered} title={opReason} onclick={() => one && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(one.id) })}>Compact</button>
-    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered} title={opReason} onclick={() => one && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(one.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key</button>
-    <button type="button" class="btn subtle" disabled={!one || !unlocked} title={!unlocked ? codeText(Code.CodeVaultLocked) : undefined} onclick={() => one && run(Archives.Verify(one.id))}><svg class="i i-14"><use href="#i-check" /></svg>Verify</button>
-    <button type="button" class="btn subtle" disabled={!one || !unlocked} onclick={() => one && run(one.hidden ? Archives.Unhide(one.id) : Archives.Hide(one.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{one?.hidden ? "Unhide" : "Hide"}</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(one.id) })}>Compact…</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(one.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key…</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || !!rowStop} title={!unlocked ? codeText(Code.CodeVaultLocked) : rowWhy} onclick={() => one && run(Archives.Verify(one.id))}><svg class="i i-14"><use href="#i-check" /></svg>Verify</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && run(one.hidden ? Archives.Unhide(one.id) : Archives.Hide(one.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{one?.hidden ? "Unhide" : "Hide"}</button>
     <div class="sep"></div>
     <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => run(Archives.CheckFiles())}>Check files</button>
     <button type="button" class="btn subtle" disabled={!unlocked || tampered} onclick={importRecords}><svg class="i i-14"><use href="#i-backup" /></svg>Import records…</button>
     <div class="sep"></div>
-    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || one.forgottenAt > 0} onclick={() => void startDelete("forget")}>Forget key…</button>
-    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
+    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || one.forgottenAt > 0 || compactStop} title={compactWhy} onclick={() => void startDelete("forget")}>Forget key…</button>
+    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || compactStop} title={compactWhy} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
     <div class="grow"></div>
     <label class="filterbox"><span class="vh">Filter</span><input class="input" type="search" placeholder="Filter" bind:value={filter} /></label>
     <label class="check"><input type="checkbox" bind:checked={store.showHidden} onchange={() => store.refreshArchives()} />Show hidden</label>
@@ -987,22 +1048,36 @@
            header cell sorts. -->
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
       <div class="tablewrap" role="region" aria-label={archivesCopy.listLabel} bind:this={listEl} onclick={blank}>
-        {#if rows.length === 0}
-          <div class="empty">{filter.trim() ? "No archive matches that." : unlocked ? "No archives yet. Create one, or open a file you already have." : "No archives are open."}</div>
+        {#if rows.length === 0 && !filter.trim() && vaultEmpty}
+          <!-- A vault with no archives yet says what to do, with the
+               buttons that do it (ruled 2026-10-14), not greyed verbs over
+               an empty line. Import records… is the bar's own command:
+               its picker and its proof step come before any key is
+               asked for. -->
+          <div class="empty first">
+            <p>{archivesCopy.emptyVault}</p>
+            <div class="row">
+              <button type="button" class="btn accent" disabled={tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive…</button>
+              <button type="button" class="btn" onclick={() => void openFile()}><svg class="i i-14"><use href="#i-folder" /></svg>{archivesCopy.emptyOpen}</button>
+            </div>
+            <button type="button" class="btn link" disabled={tampered} onclick={importRecords}>Import records…</button>
+          </div>
+        {:else if rows.length === 0 && !filter.trim() && vaultEmpty === null}
+          <div class="empty"></div>
+        {:else if rows.length === 0}
+          <div class="empty">{filter.trim() ? "No archive matches that." : unlocked ? "No archives are shown. Hidden and forgotten ones are listed under Show hidden." : "No archives are open."}</div>
         {:else}
           <!-- The same checkboxes as the file list's, under the same rules:
                the header ticks the rows the filter shows and is ticked
                exactly when all of them are, never a third state. -->
           <table>
-            <colgroup><col class="w-check" /><col /><col class="w-size" /><col class="w-files" /><col class="w-date" /><col class="w-key" /><col class="w-status" /></colgroup>
+            <colgroup><col class="w-check" /><col /><col class="w-size" /><col class="w-date" /><col class="w-status" /></colgroup>
             <thead>
               <tr>
                 <th scope="col" class="chk"><input type="checkbox" checked={allTicked} aria-label={archivesCopy.tickAll} onclick={tickAll} /></th>
                 <th scope="col" aria-sort={ariaSort("name")}><button type="button" onclick={() => sortOn("name")}>Name<svg class="i i-14 caret" class:on={sortKey === "name"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
-                <th scope="col" aria-sort={ariaSort("size")}><button type="button" onclick={() => sortOn("size")}>Size<svg class="i i-14 caret" class:on={sortKey === "size"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
-                <th scope="col" aria-sort={ariaSort("files")}><button type="button" onclick={() => sortOn("files")}>Files<svg class="i i-14 caret" class:on={sortKey === "files"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
+                <th scope="col" class="num" aria-sort={ariaSort("size")}><button type="button" onclick={() => sortOn("size")}>Size<svg class="i i-14 caret" class:on={sortKey === "size"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
                 <th scope="col" aria-sort={ariaSort("saved")}><button type="button" onclick={() => sortOn("saved")}>Last saved<svg class="i i-14 caret" class:on={sortKey === "saved"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
-                <th scope="col" aria-sort={ariaSort("key")}><button type="button" onclick={() => sortOn("key")}>Key<svg class="i i-14 caret" class:on={sortKey === "key"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
                 <th scope="col" aria-sort={ariaSort("status")}><button type="button" onclick={() => sortOn("status")}>Status<svg class="i i-14 caret" class:on={sortKey === "status"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
               </tr>
             </thead>
@@ -1011,7 +1086,7 @@
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
                 <!-- data-id: how the panel finds the row it must bring to
                      the list's first line (lib/archbar.ts). -->
-                <tr data-id={a.id} tabindex={paneId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={sel.ids.has(a.id)} class:forgotten={a.forgottenAt > 0} onclick={(e) => click(e, a.id)} ondblclick={() => store.openArchive(a.id)} onkeydown={(e) => rowKey(e, a.id)}>
+                <tr data-id={a.id} tabindex={paneId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={sel.ids.has(a.id)} class:forgotten={a.forgottenAt > 0} onclick={(e) => click(e, a.id)} ondblclick={() => openRow(a.id)} onkeydown={(e) => rowKey(e, a.id)}>
                   <td class="chk"><input type="checkbox" checked={sel.ids.has(a.id)} tabindex="-1" aria-label={listCopy.tickRow(a.name)} onclick={(e) => tick1(e, a.id)} ondblclick={(e) => e.stopPropagation()} /></td>
                   <td class="sel-mark">
                     <div class="fname">
@@ -1019,10 +1094,10 @@
                       <div class="two-line"><b>{a.name}</b><small title={a.description}>{a.description || ""}</small></div>
                     </div>
                   </td>
+                  <!-- Size alone is a .num cell, right-aligned (APP.md §6);
+                       the date keeps its tabular digits on the left. -->
                   <td class="num">{a.storedSize ? bytes(a.storedSize) : "—"}</td>
-                  <td class="num">{a.open ? count(a.files) : "—"}</td>
-                  <td class="num">{dateTime(a.lastWrittenAt)}</td>
-                  <td><span class="chip key">v{a.keyVersion}</span></td>
+                  <td><span class="num">{dateTime(a.lastWrittenAt)}</span></td>
                   <td>
                     <div class="status-cell">
                       {#each statuses(a) as s (s.label)}<span class="st {s.tone}" title={s.title}>{s.label}</span>{/each}
@@ -1115,11 +1190,11 @@
               <div class="pad fields">
                 <div class="field">
                   <div class="field-top"><label for="ar-name">Name</label></div>
-                  <input id="ar-name" class="input" class:invalid={nameChanged && !!nameProblem(draft.name)} aria-invalid={nameChanged && nameProblem(draft.name) ? "true" : undefined} bind:value={store.recordDraft[pane.id].name} disabled={!editable} />
+                  <input id="ar-name" class="input" class:invalid={nameChanged && !!nameProblem(draft.name)} aria-invalid={nameChanged && nameProblem(draft.name) ? "true" : undefined} bind:value={store.recordDraft[pane.id].name} disabled={!editable} title={forgotWhy} />
                 </div>
                 <div class="field">
                   <div class="field-top"><label for="ar-desc">Description</label><span class="hint">a second line in the list</span></div>
-                  <textarea id="ar-desc" class="input area" class:invalid={descChanged && !!descriptionProblem(draft.description)} aria-invalid={descChanged && descriptionProblem(draft.description) ? "true" : undefined} rows="2" bind:value={store.recordDraft[pane.id].description} disabled={!editable}></textarea>
+                  <textarea id="ar-desc" class="input area" class:invalid={descChanged && !!descriptionProblem(draft.description)} aria-invalid={descChanged && descriptionProblem(draft.description) ? "true" : undefined} rows="2" bind:value={store.recordDraft[pane.id].description} disabled={!editable} title={forgotWhy}></textarea>
                 </div>
               </div>
             {/if}
@@ -1148,7 +1223,7 @@
               <div class="ppath" title={pane.path}>{pane.path || "—"}</div>
               <div class="row">
                 {#if !foreign}<button type="button" class="btn link" disabled={!one} onclick={() => one && void Shell.Reveal(one.path)}>Show in Explorer</button>{/if}
-                <button type="button" class="btn link" disabled={!one || !unlocked} onclick={() => one && locate(one)}>Locate…</button>
+                <button type="button" class="btn link" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && locate(one)}>Locate…</button>
               </div>
             </div>
 
@@ -1157,9 +1232,11 @@
             {/if}
 
             <div class="details-actions">
-              <button type="button" class="btn accent wide" disabled={!one || (!unlocked && !one.open)} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
+              <!-- A standard button: the bar's Open is the one accent on
+                   screen (ruled 2026-10-14). -->
+              <button type="button" class="btn wide" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
               <div class="row2">
-                {#if pane.open}<button type="button" class="btn" disabled={!one} onclick={() => one && run(Archives.Close(one.id)).then(() => store.refreshArchives())}>Close</button>{/if}
+                {#if pane.open}<button type="button" class="btn" disabled={!one || compactStop} title={compactWhy} onclick={() => one && run(Archives.Close(one.id)).then(() => store.refreshArchives())}>Close</button>{/if}
                 <button type="button" class="btn" disabled={!det || !one} onclick={() => (showDetails = true)}>Details…</button>
               </div>
             </div>
@@ -1214,7 +1291,7 @@
 {/if}
 
 {#if showDetails && det}
-  <ArchiveDetailsDialog d={det} onclose={() => (showDetails = false)} />
+  <ArchiveDetailsDialog d={det} keyVersion={pane?.keyVersion ?? 0} onclose={() => (showDetails = false)} />
 {/if}
 
 {#if del}
@@ -1226,6 +1303,7 @@
     mode={del.mode}
     onclose={() => (del = null)}
     ondone={() => { void store.refreshArchives(); void store.loadDetails(paneId); }}
+    release={() => letGo(del?.id ?? "")}
   />
 {/if}
 
@@ -1235,10 +1313,15 @@
 
 <style>
   .w-size { width: 84px; }
-  .w-files { width: 70px; }
   .w-date { width: 130px; }
-  .w-key { width: 56px; }
   .w-status { width: 148px; }
+  /* The compacting badge: the open badge's shape in the attention tone. */
+  .status-cell .st.busy { background: var(--attention-wash); border-color: var(--attention-line); color: var(--attention); }
+  /* The empty vault's block: centred, the two buttons on one line and the
+     import a link under them. */
+  .empty.first { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .empty.first p { margin: 0; color: var(--ink-2); }
+  .empty.first .row { display: flex; gap: 8px; }
   .lbl { font-size: 12.5px; font-weight: 600; color: var(--ink); }
   .pad { padding: 0 16px 12px; }
   .fields { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }

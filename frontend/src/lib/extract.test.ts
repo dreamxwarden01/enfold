@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_POLICY, POLICIES, appendArchiveFolder, archiveFolderName, destinationEmpty,
-  destinationFor, parentFolder,
+  destinationFor, parentFolder, rememberPolicy, startingPolicy,
 } from "./extract";
 
 // The extract dialog's destination field (APP.md §3, ruled 2026-09-10):
@@ -101,20 +101,31 @@ describe("the destination the dialog opens with", () => {
   it("adds the folder named after the archive even when the archive already sits in one", () => {
     // D:\Archives\Photos\Photos.efd extracts into D:\Archives\Photos\Photos:
     // the rule has no exception, so the extracted files never land beside
-    // the archive file with *Replace* the default (APP.md §3).
+    // the archive file, whatever the policy (APP.md §3).
     expect(destinationFor("D:\\Archives\\Photos\\Photos.efd", "Photos", true)).toBe("D:\\Archives\\Photos\\Photos");
   });
 });
 
-// The four policies of APP.md §3, ruled 2026-09-10.
+// The four policies of APP.md §3, ruled 2026-09-10; the default ruled
+// 2026-10-14.
 describe("the policy for a file already there", () => {
-  it("is replace by default", () => {
-    expect(DEFAULT_POLICY).toBe("replace");
-    expect(POLICIES[0].value).toBe("replace");
+  it("is ask by default, offered first: nothing is overwritten unasked", () => {
+    expect(DEFAULT_POLICY).toBe("ask");
+    expect(POLICIES[0].value).toBe("ask");
   });
 
-  it("offers exactly the four words the core takes", () => {
-    expect(POLICIES.map((p) => p.value)).toEqual(["replace", "skip", "rename", "ask"]);
+  it("offers exactly the four words the core takes, in WinRAR's order", () => {
+    expect(POLICIES.map((p) => p.value)).toEqual(["ask", "replace", "skip", "rename"]);
+  });
+
+  it("opens on the last one chosen while Enfold runs, and keeps no word the core does not take", () => {
+    expect(startingPolicy()).toBe(DEFAULT_POLICY);
+    rememberPolicy("skip");
+    expect(startingPolicy()).toBe("skip");
+    rememberPolicy("overwrite");
+    expect(startingPolicy()).toBe("skip");
+    rememberPolicy(DEFAULT_POLICY);
+    expect(startingPolicy()).toBe(DEFAULT_POLICY);
   });
 
   it("says keep both rather than rename, which is what it does", () => {

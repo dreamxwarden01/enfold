@@ -50,26 +50,6 @@
   );
   const secretError = $derived(form.shows === "pin" ? (form.pinError ? "Wrong PIN." : "") : form.passwordError ? "Wrong password." : "");
 
-  // The act, not the mechanism (APP.md §6): what the user asked for.
-  function kindTitle(kind: string): string {
-    switch (kind) {
-      case "enroll": return "Add a key";
-      case "remove": return "Remove a key";
-      case "rotate": return "Rotate the vault key";
-      case "export": return "Export a backup";
-      case "create": return "Create the vault";
-      case "import": return "Import";
-      case "setup": return "Finish setting up";
-      case "verify": return "Check a backup";
-      case "reveal": return "Show the recovery key";
-      // One kind for the three entangle acts; which one is being done is
-      // the dialog's title, not the ceremony's (APP.md §13).
-      case "entangle": return "The vault's password";
-      case "records": return "Import records";
-    }
-    return "Unlock";
-  }
-
   // The note above the eight cells: which sheet the digits come from.
   function recoveryNote(kind: string): string {
     switch (kind) {
@@ -97,8 +77,10 @@
   }
 </script>
 
+<!-- No title of its own: the panel always sits in a Dialog, whose title
+     already names the act (KeysPage, MergeDialog), and a second line saying
+     it again was the title printed twice. -->
 <div class="panel">
-  <div class="t-quiet">{kindTitle(c.kind)}</div>
   {#key k}
   <div class="stepbox" in:fade={motion()}>
   {#if c.step === CeremonyStep.StepTouch}
@@ -169,6 +151,10 @@
   .panel, .stepbox { display: flex; flex-direction: column; gap: 12px; }
   .touchbox { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 10px 0; background: linear-gradient(160deg, var(--touch-bg) 0%, var(--touch-bg-2) 100%); color: var(--touch-ink); border-radius: var(--r-card); }
   .touchbox .touch-lead { font-size: 21px; }
+  /* The dialog's own `.dialog p` outranks the stylesheet's .touch-sub and
+     painted the line in --ink-2 on the green, where it was not seen; its
+     size is the stylesheet's too, as on the lock screen. */
+  .touchbox .touch-sub { color: var(--touch-soft); font-size: 13px; }
   .acts { display: flex; justify-content: flex-end; gap: 8px; }
   .u-meta { margin: 0; }
 </style>

@@ -106,7 +106,8 @@
     return (e.currentTarget as HTMLSelectElement | HTMLInputElement).value;
   }
 
-  // The foot's note (LayerFoot).
+  // The foot's note (LayerFoot): the one place the page says which
+  // settings are this machine's and which the vault's.
   $effect(() => {
     store.footNote = "Settings are machine-local; the session timeouts live in the vault.";
   });
@@ -118,7 +119,9 @@
   {#if s}
     <div class="ks-cols">
       <div class="ks-col">
-        <div class="ks-head"><h2 class="t-section">Session</h2><span class="t-quiet">{unlocked ? "stored in the vault" : "unlock to change"}</span></div>
+        <!-- Which settings live where is the foot's to say, once; the head
+             says only what stands in the way of changing these. -->
+        <div class="ks-head"><h2 class="t-section">Session</h2>{#if !unlocked}<span class="t-quiet">unlock to change</span>{/if}</div>
         <div class="card setcard">
           <div class="setrow">
             <div class="lab"><b>Idle lock</b><span>No mouse or keyboard. Never off; at most 30 minutes.</span></div>
@@ -143,7 +146,7 @@
         <div class="ks-head top"><h2 class="t-section">Exports</h2></div>
         <div class="card setcard">
           <div class="setrow">
-            <div class="lab"><label for="recovery-pct"><b>Recovery record</b></label><span>Parity kept beside an exported volume, so damage in storage can be repaired without a key. Costs the same share of space. Recommended: 3%; 0% is off. Exported volumes arrive in a later version; until then this is only remembered, and Export a backup carries no parity.</span></div>
+            <div class="lab"><label for="recovery-pct"><b>Recovery record</b></label><span>Parity kept beside an exported volume, so damage in storage can be repaired without a key. Costs the same share of space. Recommended: 3%; 0% is off. Exported volumes arrive in a later version; until then this is only remembered, and an exported backup carries no parity.</span></div>
             <div class="ctl row slider"><input id="recovery-pct" type="range" min="0" max="20" value={draft.recoveryRecordPct} oninput={(e) => edit("recoveryRecordPct", num(e))} /><span class="num pct">{draft.recoveryRecordPct}%</span></div>
           </div>
           <div class="setrow">

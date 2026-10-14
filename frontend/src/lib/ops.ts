@@ -14,41 +14,60 @@ import { dragOutCopy, reclaimedText } from "./strings";
 // until it arrives. There is no "save": nothing is staged between
 // operations any more.
 //
-// A drag out is named by what it carries and not by where it has got to
-// (APP.md §3, ruled 2026-09-11 after the first real drag, whose staging was
-// over before the strip appeared): *Extracting 2 items* from the moment the
-// drag starts and through all three of its phases — the hover, the staging
-// and the wait on Explorer — so that a fast staging is a change inside a
-// strip already on the screen and never a strip that flashes. Its count is
-// the records the gesture named, folders included (OpView.DragItems,
-// stripCount), not the files the extraction writes. With no phase given it
-// is the finished operation's name, as its toast counts it.
-export function opLabel(kind: string, items = 0, phase = ""): string {
+// With the archive's name given, the label says which archive as well —
+// *Adding 3 files to Photos 2024*, *Verifying Photos 2024* — since the
+// strip shows every running operation, on the Archives page and on
+// another archive's page too, where the verb alone does not say whose it
+// is (ruled 2026-10-14). The name is the registry row's (OpView carries
+// only the id); without one the label is the verb and its count, as the
+// finished operation's toast still says it.
+//
+// A drag out is named by what it carries (APP.md §3, ruled 2026-09-11
+// after the first real drag, whose staging was over before the strip
+// appeared): the strip is there from the moment the drag starts. During
+// the hover nothing is chosen yet — the user may still drop it back or
+// press Escape — so it says *Dragging 2 items*; from the drop on, while
+// the staging writes and Explorer takes the paths, it says *Extracting 2
+// items* (ruled 2026-10-14: "Extracting" over the hover stated an outcome
+// nobody had chosen). A fast staging is still a change inside a strip
+// already on the screen, never a strip that flashes. Its count is the
+// records the gesture named, folders included (OpView.DragItems,
+// stripCount), not the files the extraction writes. With no phase given
+// it is the finished operation's name, as its toast counts it.
+export function opLabel(kind: string, items = 0, phase = "", archive = ""): string {
   switch (kind) {
     case "dragout":
-      if (phase !== "") return counted(dragOutCopy.extracting, items, "item");
+      if (phase === "dragging") return named(counted(dragOutCopy.dragging, items, "item"), "from", archive);
+      if (phase !== "") return named(counted(dragOutCopy.extracting, items, "item"), "from", archive);
       return counted(dragOutCopy.name, items);
     case "add":
-      return counted("Adding", items);
+      return named(counted("Adding", items), "to", archive);
     case "replace":
-      return counted("Replacing", items);
+      return named(counted("Replacing", items), "in", archive);
     case "extract":
-      return counted("Extracting", items);
+      return named(counted("Extracting", items), "from", archive);
     case "verify":
-      return "Verifying";
+      return named("Verifying", "", archive);
     case "compact":
-      return "Compacting";
+      return named("Compacting", "", archive);
     // The in-place compaction the core runs itself after a commit, or after
     // the last reader closes, when moving live data down into the holes
     // would give the file system enough of the tail back (APP.md §2.3,
     // FORMAT.md R40). It is named for what the user gets, not for the
     // machinery: *Reclaiming space*.
     case "reclaim":
-      return "Reclaiming space";
+      return named("Reclaiming space", "in", archive);
     case "rotate":
-      return "Rotating key";
+      return archive ? `Rotating the key of ${archive}` : "Rotating key";
   }
   return kind;
+}
+
+// named puts the archive after the label with the word that joins them —
+// *to*, *in*, *from*, or none for a verb that takes the archive itself.
+function named(label: string, joint: string, archive: string): string {
+  if (!archive) return label;
+  return joint ? `${label} ${joint} ${archive}` : `${label} ${archive}`;
 }
 
 function counted(verb: string, items: number, unit = "file"): string {
@@ -154,8 +173,11 @@ export function reclaimedLine(o: { kind: string; error?: string; returned?: numb
 // operation's name, then the code's copy — except where the copy already
 // names the operation and its outcome in full, as the reclaim's does
 // ("Saved. Reclaiming space did not finish."), where a name in front would
-// say "Reclaiming space" twice.
+// say "Reclaiming space" twice. A cancel is the user's own ending, not a
+// failure: *Adding 3 files: Stopped.*, said as a neutral toast rather than
+// a red one (state.svelte.ts applyOp, ruled 2026-10-14).
 export function opErrorLine(kind: string, items: number, code: string, text: string): string {
   if (code === "archive.reclaim_incomplete") return text;
+  if (code === "op.cancelled") return `${opLabel(kind, items)}: Stopped.`;
   return `${opLabel(kind, items)}: ${text}`;
 }

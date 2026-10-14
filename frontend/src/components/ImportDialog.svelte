@@ -81,7 +81,7 @@
     onclose();
     store.dismissCeremony();
     try {
-      await Vault.ImportFile(path, name, method, kind, kind === "token" ? label || "YubiKey" : "Password", kind === "token" && entangle, kept && confirm);
+      await Vault.ImportFile(path, name, method, kind, kind === "token" ? label : "Password", kind === "token" && entangle, kept && confirm);
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }

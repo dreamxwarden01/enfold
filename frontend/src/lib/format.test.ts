@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ext, fileIcon, hashText, keyId, nearerDeadline, plural } from "./format";
+import { clockTime, ext, fileIcon, hashText, idleMinutes, keyId, lockLine, nearerDeadline, plural } from "./format";
 
 // The foot's countdown (APP.md §6, ruled 2026-09-12 after a review found
 // the foot reading the idle deadline alone): the absolute cap locks the
@@ -18,6 +18,56 @@ describe("nearerDeadline", () => {
 
   it("is none when neither is set, which is what a locked vault reports", () => {
     expect(nearerDeadline(0, 0)).toBe(0);
+  });
+});
+
+// The quiet countdown (APP.md §6, ruled 2026-10-14): the nearer deadline
+// still decides, but the chip says the rule or the clock time and counts
+// only in the last minute.
+describe("lockLine", () => {
+  // 2026-10-14 16:00:00 local, in Unix seconds and in milliseconds.
+  const t0 = new Date(2026, 9, 14, 16, 0, 0).getTime() / 1000;
+  const now = t0 * 1000;
+
+  it("says the idle rule, never a number, while more than a minute is left", () => {
+    expect(lockLine(t0 + 600, t0 + 3600, 10, now)).toEqual({ text: "Locks after 10 min idle", urgent: false });
+    // 1:30 left: still the rule, nothing between 2:00 and 1:00 changes.
+    expect(lockLine(t0 + 90, t0 + 3600, 10, now)).toEqual({ text: "Locks after 10 min idle", urgent: false });
+  });
+
+  it("counts the last minute of the idle deadline, urgent", () => {
+    expect(lockLine(t0 + 60, t0 + 3600, 10, now)).toEqual({ text: "Locks in 1:00", urgent: true });
+    expect(lockLine(t0 + 5, t0 + 3600, 10, now)).toEqual({ text: "Locks in 0:05", urgent: true });
+  });
+
+  it("says when the session ends when the absolute cap is nearer, as a clock time", () => {
+    expect(lockLine(t0 + 600, t0 + 300, 10, now)).toEqual({ text: `Session ends ${clockTime(t0 + 300)}`, urgent: false });
+    expect(clockTime(t0 + 42 * 60)).toBe("16:42");
+    // Equal deadlines are the cap's: no input moves it.
+    expect(lockLine(t0 + 600, t0 + 600, 10, now).text).toBe(`Session ends ${clockTime(t0 + 600)}`);
+  });
+
+  it("counts the cap's last minute too", () => {
+    expect(lockLine(t0 + 600, t0 + 42, 10, now)).toEqual({ text: "Session ends in 0:42", urgent: true });
+  });
+
+  it("is the same text from one second to the next until the last minute", () => {
+    expect(lockLine(t0 + 600, t0 + 3600, 10, now + 1000).text).toBe(lockLine(t0 + 600, t0 + 3600, 10, now).text);
+    expect(lockLine(t0 + 600, t0 + 300, 10, now + 1000).text).toBe(lockLine(t0 + 600, t0 + 300, 10, now).text);
+  });
+
+  it("names no number while the idle timeout is not known", () => {
+    expect(lockLine(t0 + 600, t0 + 3600, undefined, now).text).toBe("Locks when idle");
+  });
+});
+
+describe("idleMinutes", () => {
+  it("is the stored value, or the default for 0 and for a value out of range", () => {
+    expect(idleMinutes(5)).toBe(5);
+    expect(idleMinutes(30)).toBe(30);
+    expect(idleMinutes(0)).toBe(10);
+    expect(idleMinutes(45)).toBe(10);
+    expect(idleMinutes(undefined)).toBeUndefined();
   });
 });
 

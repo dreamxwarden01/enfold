@@ -1,7 +1,8 @@
 // The archive's status strip (APP.md §3, §6): what the open archive holds,
 // how big its file is, which key version writes it, when it was last
-// saved, and — when it is worth knowing — how much of the file is free
-// space. Nothing here reads the store, so the whole line can be tested.
+// saved, and — when it is worth knowing — how much of the file is unused
+// space inside it. Nothing here reads the store, so the whole line can be
+// tested.
 import type { ArchiveStat } from "./api";
 import { bytes, dateTime, plural } from "./format";
 
@@ -26,14 +27,17 @@ export function freeWorthShowing(freeSpace: number | undefined): boolean {
 }
 
 // statusNote is the whole strip: "12,406 files · 48.1 GB · key v1 · last
-// saved 2026-09-05 21:14 · 2.9 GB free". Nothing is appended to it any
-// more — an open archive has no timeout of its own, locked vault or not,
-// so there is no deadline to count down (APP.md §2.3, ruled 2026-09-10).
+// saved 2026-09-05 21:14 · 2.9 GB unused". The figure is space inside the
+// archive's file, never free space on the disk, so it is not called
+// "free", which reads as the disk's (ruled 2026-10-14, the polish review's
+// small fix 17). Nothing is appended to it any more — an open archive has
+// no timeout of its own, locked vault or not, so there is no deadline to
+// count down (APP.md §2.3, ruled 2026-09-10).
 // A count of one is singular — "1 file" (ruled 2026-09-09).
 export function statusNote(stat: ArchiveStat | null | undefined): string {
   if (!stat) return "";
   const parts = [plural(stat.files, "file"), bytes(stat.size), `key v${stat.keyVersion}`];
   if (stat.lastSavedAt) parts.push(`last saved ${dateTime(stat.lastSavedAt)}`);
-  if (freeWorthShowing(stat.freeSpace)) parts.push(`${bytes(stat.freeSpace)} free`);
+  if (freeWorthShowing(stat.freeSpace)) parts.push(`${bytes(stat.freeSpace)} unused`);
   return parts.join(" · ");
 }

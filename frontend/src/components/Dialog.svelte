@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { Snippet } from "svelte";
   import { fade, scale } from "svelte/transition";
   import { FAST, LEAVE, motion } from "../lib/motion";
@@ -6,7 +7,7 @@
 
   interface Props {
     title: string;
-    // onclose is what Escape does (APP.md §7, "Dialogs stay put"): Cancel
+    // onclose is what Escape does (APP.md §6, "Dialogs stay put"): Cancel
     // where there is one, Close where the one action is Close, Skip — or
     // Skip all — in the conflict and refused-name dialogs, never Replace.
     // Left out, Escape does nothing: a dialog busy with the work it asked
@@ -23,15 +24,44 @@
     // covered: another dialog stands over this one — it answers no key or
     // click and leaves the tab order until that one closes.
     covered?: boolean;
+    // onsubmit makes the dialog a form (APP.md §6, ruled 2026-10-14): its
+    // accent action is the type="submit" button, so Enter in a field
+    // presses it — which, under the form rule, marks what would refuse
+    // (lib/forms.ts) — and Escape still cancels. A form dialog opens with
+    // the focus in its first field, the caret at the end, or over what
+    // `select` picks from the field's value (Rename's stem).
+    onsubmit?: () => void;
+    select?: (value: string) => [number, number];
   }
-  let { title, onclose, dismissable = false, children, actions, wide = false, covered = false }: Props = $props();
+  let { title, onclose, dismissable = false, children, actions, wide = false, covered = false, onsubmit, select }: Props = $props();
 
   // Focus moves into a dialog as it opens, so that a keyboard user is in
-  // it and not still on the button that opened it.
+  // it and not still on the button that opened it: into the first field
+  // of a form, else onto the box.
   let box: HTMLDivElement | undefined = $state();
   $effect(() => {
-    box?.focus();
+    if (!box) return;
+    const field = untrack(() => onsubmit) ? firstField(box) : null;
+    if (!field) {
+      box.focus();
+      return;
+    }
+    field.focus();
+    const end = field.value.length;
+    const [from, to] = untrack(() => select?.(field.value)) ?? [end, end];
+    field.setSelectionRange(from, to);
   });
+
+  function firstField(root: HTMLElement): HTMLInputElement | HTMLTextAreaElement | null {
+    return root.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([disabled]), textarea:not([disabled])',
+    );
+  }
+
+  function submit(e: SubmitEvent) {
+    e.preventDefault();
+    if (topmost()) onsubmit?.();
+  }
 
   // Once the dialog is closed it answers nothing while it fades out: the
   // window listener lives until the fade ends, and a second Escape in
@@ -53,12 +83,12 @@
 
   // Escape is this dialog's unless a popover inside it took the key first
   // — a menu closes on Escape and prevents it, so the dialog under it
-  // stays (APP.md §7: Esc closes only the menu).
+  // stays (APP.md §6: Esc closes only the menu).
   function key(e: KeyboardEvent) {
     if (e.key === "Escape" && !e.defaultPrevented && onclose && topmost()) onclose();
   }
 
-  // While a dialog is up the page behind it is inert (APP.md §7): the
+  // While a dialog is up the page behind it is inert (APP.md §6): the
   // dialog is drawn inside the page's own tree, so the attribute cannot go
   // on the shell without taking the dialog with it, and the dialog holds
   // the page's place itself. A key aimed at anything outside this dialog
@@ -113,13 +143,25 @@
 <div class="backdrop" role="presentation" bind:this={backdrop} in:fade|global={motion()} out:fade|global={motion(LEAVE)} onmousedown={backdropDown} onclick={backdropClick}>
   <div class="dialog" class:wide role="dialog" aria-modal={covered ? undefined : true} aria-label={title} tabindex="-1" bind:this={box} inert={covered || undefined} in:scale|global={motion(FAST, { start: 0.97 })} out:fade|global={motion(LEAVE)}>
     <h2>{title}</h2>
-    {@render children()}
-    {#if actions}
-      <div class="actions">{@render actions()}</div>
+    {#if onsubmit}
+      <!-- display: contents keeps the box's own flex gaps between the
+           form's children, as if the form were not there. -->
+      <form class="dialog-form" novalidate onsubmit={submit}>
+        {@render children()}
+        {#if actions}
+          <div class="actions">{@render actions()}</div>
+        {/if}
+      </form>
+    {:else}
+      {@render children()}
+      {#if actions}
+        <div class="actions">{@render actions()}</div>
+      {/if}
     {/if}
   </div>
 </div>
 
 <style>
   .dialog.wide { width: 640px; }
+  .dialog-form { display: contents; }
 </style>

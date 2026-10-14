@@ -1,6 +1,6 @@
 // The extract dialog's destination field (APP.md §3, the extract dialog,
 // ruled 2026-09-10). The core keeps no folder from the last time, so the
-// field is prefilled by one rule: *Extract all* goes to the archive's own
+// field is prefilled by one rule: *Extract all…* goes to the archive's own
 // folder plus a folder named after the archive, a selection to the
 // archive's own folder with no extra level. Everything the field does to a
 // string is here, so it can be tested without a DOM.
@@ -40,7 +40,7 @@ export function parentFolder(path: string): string {
 // in a folder of its own name — D:\Archives\Photos\Photos.efd — still
 // extracts into D:\Archives\Photos\Photos and never into the folder beside
 // itself, which is what the rule of APP.md §3 says and what keeps the
-// extracted files apart from the archive file with *Replace* the default.
+// extracted files apart from the archive file, whatever the policy.
 // (The "not twice" exception belonged to the old "+ a folder" button,
 // which could be pressed twice; the prefill runs once.)
 export function appendArchiveFolder(dest: string, archiveName: string): string {
@@ -51,7 +51,7 @@ export function appendArchiveFolder(dest: string, archiveName: string): string {
   return `${base}\\${folder}`;
 }
 
-// destinationFor is the prefill rule of APP.md §3 whole: *Extract all* goes
+// destinationFor is the prefill rule of APP.md §3 whole: *Extract all…* goes
 // to the archive's folder plus a folder named after the archive
 // ("D:\Archives\ECON 280" for "D:\Archives\ECON 280.efd"), a selection to
 // the archive's folder itself. An archive whose path is not known leaves
@@ -61,16 +61,36 @@ export function destinationFor(archivePath: string, archiveName: string, all: bo
   return all ? appendArchiveFolder(folder, archiveName) : folder;
 }
 
-// The four policies of APP.md §3, in the order the dialog offers them.
-// Replace is the default — the wizard default of every archiver — and
-// *Ask me about each conflict* is the one that comes back with a question.
-// The words are the strings table's (APP.md §7).
-export const POLICIES: { value: string; label: string }[] = ["replace", "skip", "rename", "ask"].map((value) => ({
+// The four policies of APP.md §3, in the order the dialog offers them —
+// WinRAR's own order, the default first. *Ask me about each conflict* is
+// the default (ruled 2026-10-14, reversing the 2026-09-10 "Replace, the
+// wizard default of every archiver": WinRAR's help marks *Ask before
+// overwrite* as its default, and Explorer's Extract All asks per
+// conflict), and it is the one that comes back with a question, so a
+// file already there is never overwritten unless the user says so. The
+// words are the strings table's (APP.md §7).
+export const POLICIES: { value: string; label: string }[] = ["ask", "replace", "skip", "rename"].map((value) => ({
   value,
   label: policyLabels[value],
 }));
 
-export const DEFAULT_POLICY = "replace";
+export const DEFAULT_POLICY = "ask";
+
+// The policy the dialog opens on: the last one chosen in an extract the
+// user went ahead with, for as long as Enfold runs, else the default. It
+// is kept in memory only — no setting holds it and nothing is written to
+// the vault for it — and the destination is still never kept (2026-09-10).
+let lastPolicy = DEFAULT_POLICY;
+
+export function startingPolicy(): string {
+  return lastPolicy;
+}
+
+// rememberPolicy keeps the policy of an extract the user went ahead with;
+// a word the core does not take is not kept.
+export function rememberPolicy(policy: string): void {
+  if (POLICIES.some((p) => p.value === policy)) lastPolicy = policy;
+}
 
 // destinationEmpty: an empty destination marks the field and *Extract*
 // does nothing. The destination need not exist — the core creates it —

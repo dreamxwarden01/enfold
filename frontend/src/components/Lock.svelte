@@ -137,7 +137,10 @@
     setup = false;
     store.dismissCeremony();
     try {
-      await Vault.FinishSetup(setupKind, setupKind === "token" ? setupLabel || "YubiKey" : "Password", setupKind === "token" && setupEntangle);
+      // A key's label left empty goes as empty: the core names it after
+      // its serial number ("YubiKey 12345678"), which is what the field
+      // promises (FirstWayIn) — never a bare "YubiKey".
+      await Vault.FinishSetup(setupKind, setupKind === "token" ? setupLabel : "Password", setupKind === "token" && setupEntangle);
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }
@@ -476,7 +479,10 @@
       </article>
 
       <!-- 3: the touch -->
-      <article class="step" class:touch={live === 3 && (c?.step === CeremonyStep.StepTouch || c?.step === CeremonyStep.StepDone)} class:dim={live !== 3}>
+      <!-- Live, the third card is the touch's green whatever its step —
+           the touch, the derivation, the release and Done — so it never
+           flashes back to white between them (APP.md §6, Motion). -->
+      <article class="step" class:touch={live === 3} class:dim={live !== 3}>
         <div class="step-label"><b>3</b>{c?.step === CeremonyStep.StepTouch ? "Touch" : tokenOnly ? "Touch" : "Unlock"}</div>
         {#key k3}
         <div class="fill" in:fade={motion()}>
@@ -494,8 +500,8 @@
               <div class="touch-slot"><svg class="i i-14"><use href="#i-unlock" /></svg>{st?.displayName || leaf(st?.path ?? "")}</div>
             {:else}
               <div class="rings" aria-hidden="true"><span></span><span></span><span></span><div class="core"></div></div>
-              <h2 class="touch-lead quiet">{stepText(c.step).title}</h2>
-              <p class="touch-sub quiet">{stepText(c.step).body}</p>
+              <h2 class="touch-lead">{stepText(c.step).title}</h2>
+              <p class="touch-sub">{stepText(c.step).body}</p>
               {#if c.error && c.step === CeremonyStep.StepDeriving}<p class="touch-sub">{codeText(c.error)}</p>{/if}
             {/if}
           </div>
@@ -566,8 +572,6 @@
   .gap { margin-top: 10px; margin-bottom: 14px; }
   .u-links.tight { margin-top: 0; }
   .u-bar { margin-top: 12px; }
-  .touch-lead.quiet, .touch-sub.quiet { color: var(--ink); }
-  .touch-sub.quiet { color: var(--ink-2); }
   .step-label.bare { height: auto; border: none; background: none; padding: 0; }
   .k-port { fill: var(--surface-alt); stroke: var(--stroke-strong); }
   .k-slot { fill: var(--ground); stroke: var(--stroke-strong); }

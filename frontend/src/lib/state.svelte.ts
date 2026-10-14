@@ -23,6 +23,8 @@ import type { Outcome } from "./outcome";
 import { answer as answerDrag, baseName, beginFlight, land, ownDrop } from "./dragout";
 import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
 import type { Decision } from "./closing";
+import { droppedArchives } from "./archlist";
+import { dialogIsUp } from "./dialogs";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
 
@@ -155,10 +157,18 @@ class Store {
   // own slot-region hash, until MergeRecords consumes it, the dialog
   // discards it, or a lock trigger drops it.
   merge = $state<{ handle: string; records: IncomingRecord[]; tampered: boolean } | null>(null);
-  // Delete archive… asked for on the Archive page: the archive is closed
-  // first (APP.md §13), which leaves that page, so the id is handed to the
-  // Archives page, which opens the one delete dialog over its own list.
-  deleteAfterClose = $state<string | null>(null);
+  // New archive… ends on the new archive's empty root with the Add menu
+  // open (APP.md §13, ruled 2026-10-14): openNew names the archive just
+  // before the open, and that archive's page takes it once as it mounts
+  // (takeAddAsked). A refused open asks for nothing.
+  addAsked: string | null = null;
+  // The archive the Archive page let go of on the consent of its own
+  // Delete archive… (APP.md §13, ruled 2026-10-14), while that dialog still
+  // stands over the page to say how the act ended: nothing more is read of
+  // it — a Stat would answer archive.not_open and drop the page, and the
+  // dialog with it, mid-act. The dialog's close leaves the page, and
+  // dropArchive clears this.
+  releasedForDelete: string | null = null;
   // Opening an archive from Explorer (APP.md §14). Three fields:
   //
   //   - openWhenUnlocked: the path OpenPath answered vault.needs_unlock
@@ -168,8 +178,7 @@ class Store {
   //     whose keys no record here holds. The dialog over every route
   //     offers Import records… and Close; the file is not touched.
   //   - importRecordsAsked: that dialog's Import records… handed to the
-  //     Archives page, which owns the picker and the merge dialog — the
-  //     way deleteAfterClose is handed over.
+  //     Archives page, which owns the picker and the merge dialog.
   openWhenUnlocked = $state("");
   keyNotInVault = $state<string | null>(null);
   importRecordsAsked = $state(false);
@@ -229,6 +238,11 @@ class Store {
   // them from one, and a request is opened once whether it came from the
   // slot at boot or from `shell.open` — a second launch fills both, since
   // the window it recreates may have no page listening yet.
+  private lastShellSeq = 0;
+  // The newest open asked for, from the shell or from the page's own Open
+  // file… and .efd drop (ruled 2026-10-14): numbered here and not by the
+  // shell, whose numbers the page's own opens cannot share, and what an
+  // older open's answer is dropped against.
   private lastOpenSeq = 0;
   private archiveSeq: Record<string, number> = {};
   private toastId = 0;
@@ -335,7 +349,7 @@ class Store {
       // other change carries an empty list (APP.md §13).
       const purged = (e.data as ArchivesChanged | undefined)?.purged ?? [];
       if (purged.length) {
-        this.toast(purged.length === 1 ? `The key of "${purged[0]}" was dropped: it was forgotten more than thirty days ago.` : `${purged.length} forgotten archives' keys were dropped: ${purged.join(", ")}.`);
+        this.toast(purged.length === 1 ? `The key of "${purged[0]}" was dropped: it was forgotten more than 30 days ago.` : `${purged.length} forgotten archives' keys were dropped: ${purged.join(", ")}.`);
       }
       void this.refreshArchives();
     });
@@ -359,6 +373,14 @@ class Store {
       // add of §3 — a flight still waiting for its landing included
       // (lib/dragout.ts ownDrop).
       if (ownDrop(d.paths ?? [], this.dragOut, this.lastDragFolder)) return;
+      // On the Archives page an .efd is opened as Explorer's double-click
+      // opens it, and nothing else dropped there does anything (APP.md
+      // §14, ruled 2026-10-14) — nor does any drop while a dialog holds
+      // the page (§7).
+      if (!d.archiveId && this.route === "archives") {
+        if (!dialogIsUp()) void this.openFiles(droppedArchives(d.paths ?? [], d.isDir ?? []));
+        return;
+      }
       if (!d.archiveId) {
         this.toast("Drop files onto an open archive's file list.", "error");
         return;
@@ -455,13 +477,23 @@ class Store {
   // an answer about the last file is no longer an answer about anything
   // they are looking at.
   async openFromShell(req: OpenRequest | null | undefined): Promise<void> {
-    if (!req || !req.seq || !req.path || req.seq <= this.lastOpenSeq) return;
-    this.lastOpenSeq = req.seq;
+    if (!req || !req.seq || !req.path || req.seq <= this.lastShellSeq) return;
+    this.lastShellSeq = req.seq;
+    await this.openFiles([req.path, ...(req.rest ?? [])]);
+  }
+
+  // openFiles is an open the page itself was asked for — Open file… on
+  // the Archives page, or .efd files dropped there (APP.md §14, ruled
+  // 2026-10-14) — and the tail of Explorer's: the same chain, the same
+  // answers, the first path opened and the rest named in a toast.
+  async openFiles(paths: readonly string[]): Promise<void> {
+    if (!paths.length) return;
+    const seq = ++this.lastOpenSeq;
     this.keyNotInVault = null;
     this.openWhenUnlocked = "";
-    const rest = req.rest ?? [];
+    const rest = paths.slice(1);
     if (rest.length) this.toast(moreNotOpened(rest.map(baseName)));
-    await this.queueOpen(req.path, req.seq);
+    await this.queueOpen(paths[0], seq);
   }
 
   // The shell's opens run one at a time (the review's finding 5). Two can
@@ -672,7 +704,6 @@ class Store {
         // of the registry stands behind (APP.md §6).
         this.recordDraft = {};
         this.merge = null; // the core dropped the handle with every held key
-        this.deleteAfterClose = null;
         if (before === VaultState.StateUnlocked) {
           void this.refreshArchives();
           if (this.stat) void this.refreshArchive();
@@ -708,7 +739,10 @@ class Store {
     this.ops[o.id] = o;
     if (!done) return;
     if (o.error) {
-      this.toast(opErrorLine(o.kind, o.items, o.error, codeText(o.error)), "error");
+      // The user's own Cancel is an ending they chose, not a failure: a
+      // neutral "Stopped." line (ops.ts opErrorLine), never the red toast
+      // an error gets (ruled 2026-10-14).
+      this.toast(opErrorLine(o.kind, o.items, o.error, codeText(o.error)), o.error === Code.CodeOpCancelled ? "info" : "error");
     } else if (reclaimedLine(o)) {
       // A reclaim reports what came back, on whichever page is up: the
       // strip that showed it running has gone with it.
@@ -880,6 +914,26 @@ class Store {
     return true;
   }
 
+  // openNew opens an archive New archive… has just made (APP.md §13, ruled
+  // 2026-10-14): on its empty root, as any archive opens, with the Add menu
+  // asked for — filling it is the next thing to do. A refused open (the
+  // vault locked meanwhile) asks for nothing.
+  async openNew(id: string): Promise<boolean> {
+    this.addAsked = id;
+    const opened = await this.openArchive(id);
+    if (!opened) this.addAsked = null;
+    return opened;
+  }
+
+  // takeAddAsked is the Archive page's one read of addAsked as it mounts:
+  // whether the Add menu was asked for this archive. Asked or not, the ask
+  // is spent, so the menu opens once and never on a later visit.
+  takeAddAsked(id: string): boolean {
+    const asked = id !== "" && this.addAsked === id;
+    this.addAsked = null;
+    return asked;
+  }
+
   private statToken = 0;
 
   // refreshArchive re-reads the archive's Stat and then its listing. The
@@ -890,7 +944,7 @@ class Store {
   // review's finding 9).
   async refreshArchive(): Promise<void> {
     const id = this.current;
-    if (!id) return;
+    if (!id || id === this.releasedForDelete) return; // let go of, its dialog still up
     const t = ++this.statToken;
     try {
       const stat = await Archive.Stat(id);
@@ -1202,6 +1256,7 @@ class Store {
   private dropArchive(closed: boolean): Promise<void> {
     const id = this.current;
     this.current = null;
+    this.releasedForDelete = null;
     this.stat = null;
     this.currentPath = "";
     this.page = null;

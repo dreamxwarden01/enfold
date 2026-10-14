@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clickShownHeader, paneRow, shownTicked } from "./archlist";
+import { clickShownHeader, compacting, droppedArchives, paneRow, rowRefusal, shownTicked } from "./archlist";
 import { clickRow, emptySelection, toggleRow } from "./selection";
 
 // The Archives list's ticks (APP.md §6, ruled 2026-09-10): the header
@@ -65,5 +65,42 @@ describe("the details pane's row", () => {
   it("is nothing with nothing ticked", () => {
     expect(paneRow(emptySelection(), "a")).toBe(null);
     expect(paneRow(emptySelection(), null)).toBe(null);
+  });
+});
+
+describe("what stops an action on a row", () => {
+  const row = { id: "a", forgottenAt: 0 };
+  const compact = { kind: "compact", archiveId: "a", finished: false };
+
+  it("is nothing for a plain record", () => {
+    expect(rowRefusal(row, [])).toBe("");
+    expect(compacting(row, [])).toBe(false);
+  });
+
+  it("is the core's own forgotten code for a forgotten record, ahead of a compaction", () => {
+    expect(rowRefusal({ ...row, forgottenAt: 1_700_000_000 }, [compact])).toBe("archive.forgotten");
+  });
+
+  it("reads a compaction off the handle's state or off a running Compact of that archive", () => {
+    expect(rowRefusal({ ...row, state: "compacting" }, [])).toBe("archive.compacting");
+    expect(rowRefusal(row, [compact])).toBe("archive.compacting");
+  });
+
+  it("ignores a finished Compact, another archive's, and another kind of operation", () => {
+    expect(compacting(row, [{ ...compact, finished: true }])).toBe(false);
+    expect(compacting(row, [{ ...compact, archiveId: "b" }])).toBe(false);
+    expect(compacting(row, [{ ...compact, kind: "verify" }])).toBe(false);
+    expect(compacting({ ...row, state: "open" }, [])).toBe(false);
+  });
+});
+
+describe("an .efd dropped on the Archives page", () => {
+  it("keeps the archives, in the drop's order, whatever the extension's case", () => {
+    expect(droppedArchives(["C:\\a\\one.efd", "C:\\a\\notes.txt", "D:\\b\\Two.EFD"])).toEqual(["C:\\a\\one.efd", "D:\\b\\Two.EFD"]);
+  });
+
+  it("never takes a folder named like an archive, and nothing else at all", () => {
+    expect(droppedArchives(["C:\\a\\odd.efd"], [true])).toEqual([]);
+    expect(droppedArchives(["C:\\a\\photo.jpg", "C:\\a\\efd"])).toEqual([]);
   });
 });

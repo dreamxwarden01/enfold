@@ -43,7 +43,7 @@ describe("what a batch reported", () => {
     expect(t).toHaveLength(3);
     expect(t[0]).toEqual({ name: "Photos", isDir: true, outcome: "failed", text: codeText(Code.CodeKindMismatch) });
     expect(t[1].text).toBe(codeText(Code.CodeTreeBounds));
-    expect(t[1].text).not.toMatch(/^Error:/);
+    expect(t[1].text).not.toMatch(/Something went wrong/); // a known code has its own copy, never the fallback
     // A skipped item carries no code; it is named from its path.
     expect(t[2].name).toBe("notes.md");
     expect(t[2].text).toBeTruthy();

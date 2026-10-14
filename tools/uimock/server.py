@@ -31,7 +31,8 @@ false); Archives.Close is the kill switch and cancels that operation.
 
 The drag out of the window (APP.md 3, ruled 2026-09-10/11) is played as
 far as a browser can play it: Shell.DragOut answers a fake dragout
-operation labelled *Extracting N items* throughout - the label alone while
+operation labelled *Dragging N items* while it hovers and *Extracting N items* from
+the drop on - the label alone while
 it hovers, then the byte bar with Cancel while it stages, then that bar
 standing full while the target copies inside its own Drop - and ends moved
 when the fake DoDragDrop returns, which is when the call answers.
@@ -1073,7 +1074,7 @@ def drag_out(args):
     target copies, and op.done with dragResult saying how it ended -
     moved, copied, cancelled, refused, self_drop or failed. DragItems is
     what the gesture named, folders included, which is what the strip
-    counts ("Extracting 2 items"); Items is the files the extraction
+    counts ("Dragging 2 items", then "Extracting 2 items"); Items is the files the extraction
     writes, which is what the bar measures. An empty selection or the root
     is params, an id that is not live file.not_found, two records that
     would take one name at the top file.exists, and a second drag while the

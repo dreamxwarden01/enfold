@@ -34,8 +34,14 @@
     // ondone: the record changed — the list and the details want reading
     // again. Not called where nothing was touched.
     ondone?: () => void;
+    // release: what has to let go of the archive before either act can run
+    // — its close — run once the name is typed and the act confirmed, and
+    // never before (APP.md §13, ruled 2026-10-14): a Cancel must leave the
+    // archive exactly as it was. It throws the coded error that stopped
+    // it, which ends the dialog with nothing removed.
+    release?: () => Promise<void>;
   }
-  let { id, name, path, createdAt, mode, onclose, ondone }: Props = $props();
+  let { id, name, path, createdAt, mode, onclose, ondone, release }: Props = $props();
 
   type Phase = "consent" | "busy" | "done" | "mismatch" | "mismatch-confirm" | "unreachable" | "unreadable" | "failed" | "error";
   let phase = $state<Phase>("consent");
@@ -111,10 +117,29 @@
     }
   }
 
-  function go() {
+  // released: the consent is given, so the archive is let go of now. A
+  // close the core refused — archive.compacting, a compaction that began
+  // while the dialog was up (Close is the kill switch for everything
+  // else, readers included) — is said here with its own words, and
+  // nothing is removed.
+  async function released(): Promise<boolean> {
+    if (!release) return true;
+    phase = "busy";
+    try {
+      await release();
+      return true;
+    } catch (e) {
+      problem = fail(e);
+      phase = "error";
+      return false;
+    }
+  }
+
+  async function go() {
     mark = nextMark("press", mark, confirmNameProblem(typed, name));
     if (confirmNameProblem(typed, name)) return;
-    void (mode === "forget" ? forget() : remove());
+    if (!(await released())) return;
+    await (mode === "forget" ? forget() : remove());
   }
 
   async function locate() {
@@ -152,7 +177,7 @@
 <Dialog {title} onclose={phase === "busy" ? undefined : phase === "mismatch-confirm" ? () => (phase = "mismatch") : onclose} dismissable={phase === "done" || phase === "error"}>
   {#if phase === "consent" || phase === "busy"}
     {#if mode === "forget"}
-      <p>The record is dropped softly: it keeps its keys for thirty days, shows under <em>Show hidden</em> as forgotten, and <em>Restore</em> brings it back. The file at the path below is left exactly as it is.</p>
+      <p>The record is dropped softly: it keeps its keys for 30 days, shows under <em>Show hidden</em> as forgotten, and <em>Restore</em> brings it back. The file at the path below is left exactly as it is.</p>
     {:else}
       <p>The file is removed first and only then is the record forgotten. Nothing is deleted unless the file at the path below proves to be this archive.</p>
     {/if}
@@ -176,7 +201,7 @@
     <p>That file is not this archive: the folder was read and either the file is not in it, or the one there holds another archive. <strong>Nothing was removed and nothing was forgotten.</strong></p>
     <p class="t-sub">Locate the archive if it moved, or forget the key on its own and leave whatever is at that path alone.</p>
   {:else if phase === "mismatch-confirm"}
-    <p>The file at that path is left exactly as it is. Only the record and its keys are dropped, softly: they are kept for thirty days and <em>Restore</em> brings them back.</p>
+    <p>The file at that path is left exactly as it is. Only the record and its keys are dropped, softly: they are kept for 30 days and <em>Restore</em> brings them back.</p>
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
   {:else if phase === "unreachable"}
     <p>The path could not be reached — the volume, share or folder is not there. <strong>Nothing was removed and nothing was forgotten.</strong></p>
@@ -195,7 +220,7 @@
       <button type="button" class="btn" disabled={phase === "busy"} onclick={onclose}>Cancel</button>
       <!-- The button that carries the destructive act out is filled red
            (APP.md §6, ruled 2026-09-10), here and in every confirmation. -->
-      <button type="button" class="btn danger-fill" disabled={phase === "busy"} onclick={go}>{phase === "busy" ? "Working…" : mode === "forget" ? "Forget the key" : "Delete archive"}</button>
+      <button type="button" class="btn danger-fill" disabled={phase === "busy"} onclick={() => void go()}>{phase === "busy" ? "Working…" : mode === "forget" ? "Forget the key" : "Delete archive"}</button>
     {:else if phase === "done"}
       <button type="button" class="btn accent" onclick={onclose}>Close</button>
     {:else if phase === "mismatch"}

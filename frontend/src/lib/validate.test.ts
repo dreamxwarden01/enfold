@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem, NAME_TAKEN, newNameProblem } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem, NAME_TAKEN, newNameProblem, NAME_LONG, NAME_CONTROL, NAME_TRAILING, NAME_RESERVED } from "./validate";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -129,6 +129,55 @@ describe("fileNameProblem", () => {
     expect(fileNameProblem("   ")).toBe(REQUIRED);
     expect(fileNameProblem("2024/notes.md")).toBe(LEAF_RULE);
     expect(fileNameProblem("/notes.md")).toBe(LEAF_RULE);
+  });
+
+  // The core's own vectors (internal/format/format_test.go,
+  // TestValidateName): what R20 takes, the page takes, and what it refuses
+  // the page refuses with the part of the rule that is broken.
+  it("takes every name R20 takes", () => {
+    for (const n of ["a", "file.txt", "目录.mp4", "COM", "COM10", "LPT0", "config.txt", "a b.e", "..a",
+      "世".repeat(255), "a".repeat(255), "\u{1F600}".repeat(127) + "a", "café.txt", "naïve"]) {
+      expect(fileNameProblem(n), n).toBe("");
+    }
+  });
+
+  it("counts UTF-16 code units, as the core does: an emoji is two", () => {
+    expect(fileNameProblem("世".repeat(256))).toBe(NAME_LONG);
+    expect(fileNameProblem("a".repeat(256))).toBe(NAME_LONG);
+    expect(fileNameProblem("\u{1F600}" + "a".repeat(254))).toBe(NAME_LONG);
+    expect(fileNameProblem("\u{1F600}".repeat(128))).toBe(NAME_LONG);
+    expect(NAME_LONG).toBe("At most 255 characters.");
+  });
+
+  it("refuses the forbidden characters", () => {
+    for (const n of ["/", "a/b", "dir/file.txt", "/abs", "a/", "a\\b", "C:x", "a:b", "a*", "q?", "<", ">", "|", '"']) {
+      expect(fileNameProblem(n), n).toBe(LEAF_RULE);
+    }
+    expect(LEAF_RULE).toBe('A name cannot contain < > : " / \\ | ? *');
+  });
+
+  it("refuses a control character, C1 included", () => {
+    for (const n of ["a\x00b", "a\tb", "a\x7fb", "a\u0085b", "a\u0080b", "a\u009fb", "\u0085"]) {
+      expect(fileNameProblem(n), JSON.stringify(n)).toBe(NAME_CONTROL);
+    }
+  });
+
+  it("refuses a trailing dot, the relative elements with it", () => {
+    for (const n of [".", "..", "x.", "prn."]) expect(fileNameProblem(n), n).toBe(NAME_TRAILING);
+  });
+
+  it("refuses a device name, with or without an extension", () => {
+    for (const n of ["nul", "NUL.txt", "con", "Com1", "LPT9.log", "aux", "PRN", "lpt1.tar.gz"]) {
+      expect(fileNameProblem(n), n).toBe(NAME_RESERVED);
+    }
+  });
+
+  // Every caller sends the name trimmed, so a trailing space typed is
+  // not the core's "x " — it never reaches the core.
+  it("judges the name trimmed, as it is sent", () => {
+    expect(fileNameProblem("x ")).toBe("");
+    expect(fileNameProblem(" notes.md ")).toBe("");
+    expect(fileNameProblem("x. ")).toBe(NAME_TRAILING);
   });
 });
 

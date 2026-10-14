@@ -22,9 +22,13 @@
 
   interface Props {
     d: ArchiveDetails;
+    // The key version the list's row carries: the list has no Key column
+    // since 2026-10-14, and the number matters only around a rotation, so
+    // it is read here, beside the KID it names. 0 when there is no row.
+    keyVersion: number;
     onclose: () => void;
   }
-  let { d, onclose }: Props = $props();
+  let { d, keyVersion, onclose }: Props = $props();
 
   // The menu the right-click opened: where it is, and what it copies.
   let menu = $state<{ x: number; y: number; text: string } | null>(null);
@@ -64,6 +68,7 @@
   const rows = $derived<Row[]>([
     { key: "id", label: "Archive ID", value: d.archiveId, mono: true, long: true },
     { key: "kid", label: "Current KID", value: d.currentKid || "—", mono: true, long: true },
+    { key: "keyv", label: "Key version", value: keyVersion > 0 ? `v${keyVersion}` : "—" },
     { key: "created", label: "Created", value: dateTime(d.createdAt) },
     { key: "path", label: "Last path", value: d.lastPath || "—", long: true },
     { key: "size", label: "Last stored size", value: d.lastStoredSize ? bytes(d.lastStoredSize) : "—" },

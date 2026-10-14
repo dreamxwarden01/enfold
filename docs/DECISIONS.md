@@ -4528,3 +4528,54 @@ typed into since the prompt" refinement declined; the `wails3` CLI is aligned to
 beta.20 (its bindings differ from beta.16's in nothing but a comment); the bare closes are fixed
 at the orchestrator's discretion (above); the drifted documents are cleaned (above).
 
+**Phase 0 of the polish review: the small exact fixes and the S-sized wins** (2026-10-14). The
+user asked for phase 0 as the review defines it — section (c)'s thirty one-liners and the
+S-sized pieces that need no foundation; the pieces that belong to directions 5, 8 and 9 wait for
+phases 1 and 2, and the crumbs of direction 3 wait for their fold rule. Four Opus 5.5 groups,
+each owning its files, each reviewed and three repaired; one more agent took the two halves that
+fell between groups. Done: the touch sub-line and the danger underline drawn as meant (a marked
+field keeps its red underline and nothing else); disabled buttons keep the pointer so their
+title says why they are greyed; the Keystore's Backups card hands *Import records…* over instead
+of only going there; the ceremony panel no longer prints its title under the dialog's; the step
+cards ease opacity and shadow, not a gradient, and the third card stays green from the touch to
+Done; the rail's hover is visible and the tick is 160 ms in the spec as in the code; every page
+head is one height (62 px); size columns are right-aligned by their header; every command that
+opens a dialog or picker ends with an ellipsis; the key-name placeholder says what an empty
+field produces (the serial, on import too); the recovery reveal names the key ID once and "the
+Keystore page"; the brand mark sits at one point on the lock screen and in the rail; Settings
+explains the vault/machine split once; compacting and forgotten rows grey the commands the core
+would refuse, with its words; the details pane's Open is a standard button; *New archive…* opens
+the new archive on its root with the Add menu open; *Delete archive…* and *Forget key…* ask
+first and let the archive go only on consent, on both pages; the Files and Key columns leave the
+Archives list (Files was "—" for every row not open) and the key version lives in Details; an
+empty vault shows real buttons; *Open file…* (Ctrl+O) and an `.efd` dropped on the Archives page
+open by §14's chain; "unused", not "free", for an archive's slack; the empty-folder line names
+the folder; the conflict questions put the accent on no button; Extract defaults to *Ask* and
+remembers the last policy for the run; Rename, New folder and Extract are forms (Enter submits,
+the field has focus, Rename selects the stem); the preview pane keeps its size and shows a ring
+only after 300 ms; the page's name fields mirror R20 exactly (255 UTF-16 units, forbidden and
+control characters, reserved names, trailing dot); the user's own Cancel ends in a neutral
+"Stopped.", the strip's Cancel reads *Cancelling…*, the drag-out hover says *Dragging N items*,
+the strip names the archive; quantities are figures; an unknown code says "Something went wrong
+(code)" with the code in mono; the foot's countdown is the rule as static text until the last
+minute, a clock time when the cap is nearer; the tray names the vault and its state in a greyed
+header and the tooltip, and offers *Unlock…* where the window would show the lock screen.
+
+Rulings reversed or refined by it, each marked in APP.md: Extract's default `ask` reverses
+2026-09-10's `replace` ("the wizard default of every archiver" — WinRAR's own help marks *Ask
+before overwrite* as its default, Explorer's Extract All asks per conflict) and the remembered
+policy refines that day's "nothing is kept from the last time"; the Archives list's columns
+reverse 2026-09-07 Revision 2's set; the quiet countdown refines 2026-09-12's always-on seconds;
+*Dragging N items* refines 2026-09-11's one label throughout; the tray's header and *Unlock…*
+refine APP §2.4; the delete asked first refines §13's close-first; the third card's green
+through Deriving refines §6 Motion; the Backups card's pointer refines §13; disabled buttons
+taking the pointer and the 62 px heads are new rules. Left, named here so they are not lost: the
+compare list of the conflict dialog still starts every differing row on *replace* (direction 7's
+question now that Extract asks); the tray stays *Open* while the vault is locked with archives
+open, since a ceremony begun under the archive page would run unseen; the idle clamp is mirrored
+in the page and the tray because the core does not expose the effective minutes — a
+`VaultStatus` field would be one truth; the empty vault's line flashes for one List round trip;
+the Archives page's own `letGo` closes with the kill switch where the core says a delete cancels
+nothing; direction 4's *Stay unlocked* and InfoBar and direction 10's running-operation tray
+line wait for their phases. Nothing of this phase was looked at in a real window: the gates and
+a few uimock checks only — the user's eye is the next gate.

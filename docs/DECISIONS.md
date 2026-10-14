@@ -4463,3 +4463,22 @@ user's to pick, and each says which earlier ruling it would reopen. One plain bu
 turned up is recorded here so it is not lost: Settings says the vault's name shows in the tray,
 and the tray only ever says "Enfold".
 
+## 2026-10-14 — Polish, round two: the release paths, the documents, the first reactions
+
+**Every close of a card goes through a named release** (2026-10-14). The main path released a
+card through `closeCard` → `releaseCard`, which logs a failed reset and a degraded fallback and
+raises `token.reset_failed`; six early exits in `tokenCredentialFor`, the probe that reads a
+key's slots, and the key-gone exits closed with a bare `card.Close()` whose error went nowhere,
+so a failed reset after a cancelled entangled-password prompt or a failed `Token` was neither
+logged nor warned of. Ruled: no bare close of a card this process opened. Before the PIN step —
+no slot matched, the key not usable, the probe — the card was never asked for its PIN, so a
+failed reset is logged and not warned of (`releaseUnverified`): the warning says the key may
+still be PIN-verified, which such a card cannot be. From the PIN step on — a VERIFY sent and its
+answer lost, a PIN state that found the card verified and a cancel after it, the entangled
+password refused, `Token` failing — the release step runs and a failed reset warns
+(`verifiedExit`); review moved the boundary here from "after a successful verify", since `piv`
+marks the card dirty before the VERIFY goes out. A key pulled meanwhile keeps its plain close,
+now said at each site: the pull took the verified state with it, and a Releasing state while the
+flow goes back to waiting would be false. Three tests pin the three cases; APP.md §2.2 says the
+rule. Visible: a cancel at the PIN or password prompt now passes through the Releasing step, as
+the main path does.

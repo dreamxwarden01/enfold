@@ -572,6 +572,8 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 			return nil, err // the pending touch holds the file and the card
 		}
 		if err != nil && hc != nil && keyGone(err) {
+			// The plain close is deliberate: the pull took the verified
+			// state with it, so there is no reset to report.
 			cer.unhold(card)
 			card.Close()
 			if err := cer.away(err); err != nil {

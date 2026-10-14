@@ -605,9 +605,34 @@ func (c *Core) dropPendingLocked() {
 	}
 }
 
-// releaseCard closes a card and turns a failed reset into the warning
-// the state carries (token.reset_failed): a warning, never a failure.
+// releaseCard closes a card the PIN may have been verified on and turns a
+// failed reset into the warning the state carries (token.reset_failed): a
+// warning, never a failure.
 func (c *Core) releaseCard(card Card, kind string) {
+	err := c.closeLogged(card, kind)
+	if err != nil && errors.Is(err, ErrTokenResetFailed) {
+		c.mu.Lock()
+		c.vault.warnings[CodeTokenReset] = true
+		c.mu.Unlock()
+		c.emit(EventVaultWarning, Warning{Code: CodeTokenReset})
+		// And the status: a lock screen already shown lists it from the
+		// state, not from the toast (APP.md §2.2).
+		c.emitState()
+	}
+}
+
+// releaseUnverified closes a card nothing has asked for its PIN: a failed
+// reset is logged and nothing more. The warning says the key may still be
+// PIN-verified (APP.md §2.2), which a card closed before the PIN step
+// cannot have been left by this process.
+func (c *Core) releaseUnverified(card Card, kind string) {
+	c.closeLogged(card, kind)
+}
+
+// closeLogged closes a card and says in the log what went wrong: every
+// release but a pulled key's goes through it, so a failed reset or a
+// degraded release is never dropped.
+func (c *Core) closeLogged(card Card, kind string) error {
 	err := card.Close()
 	if err != nil {
 		c.log("ceremony %s: releasing the key: %v", kind, err)
@@ -620,13 +645,5 @@ func (c *Core) releaseCard(card Card, kind string) {
 			c.log("ceremony %s: the key was released the long way: %v", kind, why)
 		}
 	}
-	if err != nil && errors.Is(err, ErrTokenResetFailed) {
-		c.mu.Lock()
-		c.vault.warnings[CodeTokenReset] = true
-		c.mu.Unlock()
-		c.emit(EventVaultWarning, Warning{Code: CodeTokenReset})
-		// And the status: a lock screen already shown lists it from the
-		// state, not from the toast (APP.md §2.2).
-		c.emitState()
-	}
+	return err
 }

@@ -308,7 +308,9 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 				return nil, nil, err // the pending touch holds the card now
 			}
 			if keyGone(err) {
-				// Pulled during the PIN or the touch: back to waiting.
+				// Pulled during the PIN or the touch: back to waiting. The
+				// plain close is deliberate: the pull took the verified
+				// state with it, so there is no reset to report.
 				cer.unhold(card)
 				card.Close()
 				if err := cer.away(err); err != nil {

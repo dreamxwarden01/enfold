@@ -574,6 +574,104 @@ func TestTokenResetFailedClearsOnNextOpenOrLock(t *testing.T) {
 	})
 }
 
+// Every release of a card the ceremony opened says a failed reset: after
+// the PIN was verified, an early exit goes through the release step and
+// warns, since the key may still be PIN-verified (APP.md §2.2) — here the
+// vault's password is cancelled after the PIN.
+func TestTokenResetFailedWarnsOnAnExitAfterThePIN(t *testing.T) {
+	h, card, _ := entangledHarness(t, "the vault password")
+	card.mu.Lock()
+	card.closeErr = ErrTokenResetFailed
+	card.mu.Unlock()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	if e := h.c.SubmitSecret("pin", pin.PromptID, "123456"); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitCeremony(t, StepPassword, true)
+	h.c.CancelUnlock()
+	h.rec.waitFor(t, EventVaultWarning, func(p any) bool {
+		w, ok := p.(Warning)
+		return ok && w.Code == CodeTokenReset
+	})
+	h.rec.waitFor(t, EventVaultState, func(p any) bool {
+		s, ok := p.(VaultStatus)
+		return ok && s.State == StateLocked && hasWarning(s, CodeTokenReset)
+	})
+	if n := card.closeCount(); n != 1 {
+		t.Fatalf("the card was closed %d times, want once", n)
+	}
+}
+
+// The PIN step counts as touched although no PIN was verified: a VERIFY
+// reached the card, so a failed reset when the prompt is then cancelled
+// warns like any release of a verified card.
+func TestTokenResetFailedWarnsOnACancelAfterAWrongPIN(t *testing.T) {
+	h, card, _ := entangledHarness(t, "the vault password")
+	card.mu.Lock()
+	card.closeErr = ErrTokenResetFailed
+	card.mu.Unlock()
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	pin := h.rec.waitCeremony(t, StepPIN, true)
+	if e := h.c.SubmitSecret("pin", pin.PromptID, "000000"); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitFor(t, EventVaultCeremony, func(p any) bool {
+		s, ok := p.(CeremonyState)
+		return ok && s.Step == StepPIN && s.PromptID != "" && s.PromptID != pin.PromptID
+	})
+	h.c.CancelUnlock()
+	h.rec.waitFor(t, EventVaultWarning, func(p any) bool {
+		w, ok := p.(Warning)
+		return ok && w.Code == CodeTokenReset
+	})
+	h.rec.waitFor(t, EventVaultState, func(p any) bool {
+		s, ok := p.(VaultStatus)
+		return ok && s.State == StateLocked && hasWarning(s, CodeTokenReset)
+	})
+	if n := card.closeCount(); n != 1 {
+		t.Fatalf("the card was closed %d times, want once", n)
+	}
+}
+
+// Before the PIN step nothing has asked the card for its PIN, so there is
+// nothing verified to warn of: a failed reset on an early exit is logged
+// and raises nothing — here no slot matches the keys on the token.
+func TestTokenResetFailedBeforeThePINIsLoggedNotWarned(t *testing.T) {
+	card := newFakeCard("123456")
+	card.closeErr = ErrTokenResetFailed
+	other := newFakeCard("123456")
+	pub := other.addKey(0x9d, true) // the enrolled key lives on another token
+	card.addKey(0x9d, true)
+	cards := &fakeCards{card: card}
+	cards.setReaders("Yubico A")
+	h := newHarness(t, cards, pub)
+	if e := h.c.BeginUnlock(MethodToken); e != nil {
+		t.Fatal(e)
+	}
+	h.rec.waitCeremony(t, StepNoMatch, false) // the card is closed before the park
+	h.c.CancelUnlock()
+	h.rec.waitState(t, StateLocked)
+	if n := card.closeCount(); n != 1 {
+		t.Fatalf("the card was closed %d times, want once", n)
+	}
+	if !h.logged("releasing the key") {
+		t.Fatal("the failed reset was not logged")
+	}
+	for _, e := range h.rec.snapshot() {
+		if w, ok := e.payload.(Warning); ok && w.Code == CodeTokenReset {
+			t.Fatal("a card closed before its PIN was verified warned of a failed reset")
+		}
+	}
+	if hasWarning(h.status(), CodeTokenReset) {
+		t.Fatalf("the status carries the warning: %v", h.status().Warnings)
+	}
+}
+
 func TestPromptDeadline(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	if e := h.c.BeginUnlock(MethodPassword); e != nil {

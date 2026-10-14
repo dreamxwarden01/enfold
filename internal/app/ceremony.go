@@ -677,15 +677,14 @@ func (cer *ceremony) waitForOtherKey(unlockPub []byte) error {
 }
 
 // holdsKey opens the reader long enough to see whether its card holds
-// pub. Nothing is verified, so the close has no reset to report.
+// pub. Nothing is verified, so a failed reset is logged, never warned of.
 func (cer *ceremony) holdsKey(reader string, pub []byte) (bool, error) {
 	card, err := cer.openCard(reader)
 	if err != nil {
 		return false, err
 	}
 	keys, err := card.Keys()
-	cer.unhold(card)
-	card.Close()
+	cer.closeUnverified(card)
 	if err != nil {
 		return false, err
 	}
@@ -839,17 +838,20 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled boo
 	if err != nil {
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
+	// The exits before the PIN step close a card nothing has asked for its
+	// PIN: a failed reset there is logged, never warned of
+	// (closeUnverified). From the PIN step on, the card may have been sent
+	// a VERIFY or found verified already, so the exits go through
+	// verifiedExit: the release step, or a plain close when the key went.
 	slot, key, keys, ok, err := cer.matchSlot(card, slots)
 	if err != nil {
 		cer.c.log("ceremony %s: reading the keys: %v", cer.kind, err)
-		cer.unhold(card)
-		card.Close()
+		cer.closeUnverified(card)
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
 	if !ok {
 		cer.c.log("ceremony %s: no slot matches the keys on the token (%s)", cer.kind, describeKeys(keys))
-		cer.unhold(card)
-		card.Close()
+		cer.closeUnverified(card)
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepNoMatch, CodeTokenNoKey)
 	}
 	if !key.Usable {
@@ -857,22 +859,22 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled boo
 		// PIN and no touch — so it is refused before anything is typed
 		// (APP.md §2.2 Probing). Card.Token refuses it again below.
 		cer.c.log("ceremony %s: the matched key is not usable: %s", cer.kind, key.WhyNot)
-		cer.unhold(card)
-		card.Close()
+		cer.closeUnverified(card)
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepFailed, CodeTokenNotUsable)
 	}
 	cer.set(func(s *CeremonyState) { s.SlotLabel = slot.Label })
 	if err := cer.verifyPIN(card); err != nil {
-		cer.unhold(card)
-		card.Close()
+		// Not verified by this ceremony, but not untouched either: a
+		// VERIFY whose answer was lost, or a PIN state that found the card
+		// verified, leaves a state a failed reset must warn of.
+		cer.verifiedExit(card, err)
 		return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 	}
 	cred := keystore.HardwareCredential{}
 	if entangled {
 		pw, err := cer.ask("password", StepPassword, PINStatus{})
 		if err != nil {
-			cer.unhold(card)
-			card.Close()
+			cer.verifiedExit(card, err)
 			return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
 		}
 		cred.Password = pw
@@ -880,8 +882,7 @@ func (cer *ceremony) tokenCredentialFor(slots []keystore.SlotInfo, entangled boo
 	p := &ceremonyPrompter{cer: cer, label: slot.Label, pinAccepted: true}
 	tok, err := card.Token(key.PublicKey, p)
 	if err != nil {
-		cer.unhold(card)
-		card.Close()
+		cer.verifiedExit(card, err)
 		if errors.Is(err, ErrTokenNotUsable) {
 			return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, cer.park(StepFailed, CodeTokenNotUsable)
 		}
@@ -948,6 +949,28 @@ func describeKeys(keys []KeyInfo) string {
 		return "no keys"
 	}
 	return strings.Join(parts, "; ")
+}
+
+// closeUnverified closes by hand a card nothing has asked for its PIN:
+// logged like any release, never warned of, and no release step — the
+// flow parks, waits on or returns, with nothing verified to give back.
+func (cer *ceremony) closeUnverified(card Card) {
+	cer.unhold(card)
+	cer.c.releaseUnverified(card, cer.kind)
+}
+
+// verifiedExit closes a card the PIN step has touched, on an exit before
+// the credential is handed on: through the release step, so that a failed
+// reset warns (APP.md §2.2) — unless the key went away, which took the
+// verified state with it, so that a close has nothing to report and the
+// flow goes back to waiting, where a Releasing state would be false.
+func (cer *ceremony) verifiedExit(card Card, err error) {
+	if keyGone(err) {
+		cer.unhold(card)
+		card.Close()
+		return
+	}
+	cer.closeCard(card)
 }
 
 // closeCard runs the release step; a failed reset is a warning.
@@ -1120,6 +1143,8 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 			ks.Close() // the file is held open only while Unlocked; a park is not that
 			if hc != nil && keyGone(err) {
 				// The key went during the PIN or the touch: back to waiting.
+				// The plain close is deliberate: the pull took the verified
+				// state with it, so there is no reset to report.
 				cer.unhold(card)
 				card.Close()
 				if err := cer.away(err); err != nil {

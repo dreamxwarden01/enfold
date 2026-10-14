@@ -4505,3 +4505,26 @@ v0.56.0. Left for the user: SCOPE:44 and DESIGN:383 (rotation pre-selected on ev
 not built); FORMAT §17's superblock size and the retention of retired archive-key versions; APP
 §12's timeout range; APP §14's silent install. Left for the next pass: DESIGN §14's "Why Go"
 argument still reasons with memguard where `secmem` is what shipped.
+
+**The user's first reactions to the review, and four rulings** (2026-10-14). On the three fixes:
+agreed. On direction 3 (the open archive as a place): the head and the rail are the two parts to
+think hardest about, and nothing is ruled on the rail. On the head's crumbs, first rulings: the
+leading *Archives* crumb goes; the archive's name is the root and never collapses; the folders
+below it may; what collapses becomes an ellipsis button whose menu lists the collapsed folders,
+each cut to a width with the full name in a tooltip of the app's own style and no long delay,
+the menu capped in height with a scrollbar and a few rows of slack; and the way back to the list
+stays until the rail carries the open archive — Explorer's conventions come with Explorer's
+obligations. Still to design: how a very long archive or folder name is cut (a fixed cap, the
+window's width, or both) and how many middle folders fold; the proposal on the table is both — a
+per-crumb width cap with an end ellipsis and a tooltip, plus a fit-to-width fold that keeps the
+root and the current folder and adds parents from the current one outward while they fit,
+re-measured once per resize. The user also asked that names never exceed NTFS's and SMB's common
+limits and that over-long names fail gracefully — which R20 (255 UTF-16 units per element,
+reserved names, forbidden characters) and the `name_refused` / `path_refused` flow already do;
+the one gap is that the page's own name fields check only the slash, so an over-long name is
+refused by the core with a generic line — a small item for the next batch. Rulings: the form
+rule stays as written — leaving an untouched empty field marks it, the reviewer's "only a field
+typed into since the prompt" refinement declined; the `wails3` CLI is aligned to the pinned
+beta.20 (its bindings differ from beta.16's in nothing but a comment); the bare closes are fixed
+at the orchestrator's discretion (above); the drifted documents are cleaned (above).
+

@@ -165,8 +165,10 @@ ephemeral key →  fresh per session, provides forward secrecy
 ```
 
 In memory the identity private key is needed only for the moment of the handshake: unwrap, use,
-zeroize. It lives in a `memguard` buffer like every other secret, and its window should be
-milliseconds, not the session.
+zeroize. It lives where every other retained secret does — `internal/secmem`'s pages, allocated
+outside the Go heap with `VirtualAlloc`, `VirtualLock`ed and erased explicitly (this draft first
+said a `memguard` buffer; `memguard` was not adopted, 2026-09-13, `DESIGN.md` §14) — and its
+window should be milliseconds, not the session.
 
 ### Rotation and unpairing
 
@@ -594,10 +596,10 @@ Still open:
   carries a **TTL and a level**, distinct from identity; expiry means the full pairing ceremony,
   never a shortened one — a persisted identity must not buy familiarity. Whether a temporary
   session persists its identity is then a privacy choice (default: no), not a security one.
-- Whether `SetProcessMitigationPolicy` with `ProcessSignaturePolicy` (Microsoft-signed DLLs only)
-  is worth enabling. It blocks a class of injection, but can conflict with anti-malware products
-  and shell extensions, so it needs testing rather than a decision on paper. Note that it is
-  hardening, not a boundary — see `DESIGN.md` §2 on same-user isolation.
+
+`SetProcessMitigationPolicy` with `ProcessSignaturePolicy` (Microsoft-signed DLLs only), once
+listed here, moved to `DESIGN.md` §10 ("Process hardening still open") on 2026-10-14: it is
+desktop hardening, open with or without sync.
 
 Two items previously listed here are now closed. **Whether a temporary device's pin should expire
 by timer or use count** — there is no such pin (§2). **Whether resuming a pinned session needs a

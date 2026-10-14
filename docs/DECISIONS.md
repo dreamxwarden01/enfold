@@ -4482,3 +4482,26 @@ now said at each site: the pull took the verified state with it, and a Releasing
 flow goes back to waiting would be false. Three tests pin the three cases; APP.md §2.2 says the
 rule. Visible: a cancel at the PIN or password prompt now passes through the Releasing step, as
 the main path does.
+
+**The documents brought back to the code** (2026-10-14). The audit of 2026-10-13 listed what the
+documents still said that the code no longer did, and the user asked for the cleanup. Done, each
+passage rewritten as history where the file is one: overwrite on extraction is no longer
+deferred (it shipped as replace, skip, rename and ask); `RestoreArchiveRecord` points at *Import
+records…*; APP §9 and DESIGN §10 say the BitLocker checks were struck on 2026-09-13 and what
+advice remains, and `SetWarning`'s comment no longer names them; destroy-on-close is no longer
+provisional in APP §2.4 and DESIGN; the pdf.js sentence says no renderer comes into the window;
+every beta.16 reads beta.20, with facts measured on beta.16 kept as measured; the WebView2
+profile is "every response no-store, swept at start, removed at exit, inspected as a release
+gate", not "caching off"; SCOPE's DPAPI bullet binds the sync release; SCOPE says no sync merge;
+the `policy` field's bits 1–5 are in use and only bit 0 is unenforced, in SCOPE, DESIGN trap 10
+and the Details dialog ("reserved, not enforced"); SCOPE's fuzz item says harnesses written and
+no campaign run, and the external review is closed by Astra's; FORMAT's status is "implemented,
+not yet frozen", and §17's window and PQ bullets are closed; SYNC says `secmem`, not memguard,
+and its mitigation-policy bullet moved to DESIGN §10 as desktop hardening; the Keys page's
+remove dialog says the truth of revocation (a copy made earlier still opens until its recovery
+keys are replaced and the vault key rotated); Settings' recovery-record sentence says the
+volumes arrive later; README names the beta.20 CLI; DESIGN's dependency table pins x/crypto at
+v0.56.0. Left for the user: SCOPE:44 and DESIGN:383 (rotation pre-selected on every removal —
+not built); FORMAT §17's superblock size and the retention of retired archive-key versions; APP
+§12's timeout range; APP §14's silent install. Left for the next pass: DESIGN §14's "Why Go"
+argument still reasons with memguard where `secmem` is what shipped.

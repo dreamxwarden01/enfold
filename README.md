@@ -33,10 +33,10 @@ last page of the uninstaller says as much. Delete that folder yourself if you me
 
 ## Building
 
-Windows, Go 1.26, Node 24 and the `wails3` CLI (v3.0.0-beta.16). `wails3 build` produces
-`bin/enfold.exe` (production: security headers on, no debug logging); `wails3 task package` wraps
-it in an NSIS installer at `bin/enfold-amd64-installer.exe`, the only installer — it needs
-[NSIS](https://nsis.sourceforge.io) 3.x on `PATH`, and it is per user because
+Windows, Go 1.26, Node 24 and the `wails3` CLI (v3.0.0-beta.20, the version `go.mod` pins).
+`wails3 build` produces `bin/enfold.exe` (production: security headers on, no debug logging);
+`wails3 task package` wraps it in an NSIS installer at `bin/enfold-amd64-installer.exe`, the only
+installer — it needs [NSIS](https://nsis.sourceforge.io) 3.x on `PATH`, and it is per user because
 `build/windows/Taskfile.yml` defaults `INSTALL_SCOPE` to `user`. The executable also runs on its
 own from anywhere, and the vault never lives beside it (`docs/APP.md` §2.1). The version the
 installer stamps into the uninstall entry is `info.version` in `build/config.yml`, which the

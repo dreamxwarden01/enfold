@@ -3,7 +3,9 @@
 Byte-level specification. Read `DESIGN.md` first — this document assumes the key hierarchy and
 the reasoning behind it, and specifies only serialisation.
 
-Status: **draft, no implementation yet.** Nothing is frozen until v1 ships; after that, every
+Status: **implemented, not yet frozen.** `internal/format`, `internal/kdf`, `internal/stream`,
+`internal/compress`, `internal/keystore` and `internal/archive` implement this text as it stands,
+Revision 2 (§18) included since 2026-09-08. Nothing is frozen until v1 ships; after that, every
 change needs a format version bump. The semantic changes ruled on 2026-09-13 — `seq` in the index
 and registry AADs (§7, §11), `seq` continued across compaction (R33), an intact envelope of an
 unsupported `format_version` refused (§10, R33) — are made under that rule, as Revision 2's were
@@ -1720,18 +1722,20 @@ number of archives, their sizes and their filenames disappear along with everyth
 ## 17. Open
 
 - Retention policy for retired archive versions: a default count, a size budget, or manual only.
-- Whether to reserve space for a post-quantum KEM in the slot record. Current answer: no — slot
+- ~~Whether to reserve space for a post-quantum KEM in the slot record.~~ **Closed: no** — slot
   records are variable-length and carry an algorithm ID, so a new `slot_type` and `curve_id` value
   is all a future KEM would need.
 - Whether the archive superblock needs the full 4 KiB or can be smaller for archives holding one
   small file.
-- **Compression parameters** (`SCOPE.md`, `DECISIONS.md` 2026-09-05). The pure-Go zstd
-  (`klauspost/compress`) exposes four speed presets rather than zstd's 22 levels, a match window of
-  1 KiB–512 MiB (default 4–8 MiB by level; the reference implementation's `--long` reaches 2 GiB),
-  and dictionaries built from caller-chosen samples rather than COVER-trained ones. The window
-  used to write a file is not recorded in the file record; a reader caps the decoder at the
-  largest window this program writes (`DESIGN.md` trap 16). Whether to record the window per
-  file, so that a future larger default does not orphan old readers, is open.
+- ~~**Compression parameters**: whether to record the zstd window per file.~~ **Closed by R27**
+  (`SCOPE.md`, `DECISIONS.md` 2026-09-05). The pure-Go zstd (`klauspost/compress`) exposes four
+  speed presets rather than zstd's 22 levels, a match window of 1 KiB–512 MiB (default 4–8 MiB by
+  level; the reference implementation's `--long` reaches 2 GiB), and dictionaries built from
+  caller-chosen samples rather than COVER-trained ones. The window used to write a frame is not
+  recorded, and R27 makes the 512 MiB ceiling part of the format (`internal/compress` pins it as
+  `MaxWindow`): a writer that wants more needs a new `storage` value, so no future default can
+  orphan an old reader. A reader caps the decoder by the record's `orig_size`, never by the frame
+  (`DESIGN.md` trap 16); the preset an archive is written with travels in `policy` (§7.1).
 - **Volumes and recovery records** are planned as forms *beside* the archive — a split export
   with per-part headers, and Reed–Solomon parity over ciphertext as a sidecar or per part — so
   that the live format is untouched. Their layouts are not specified yet.

@@ -579,8 +579,10 @@ which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the sh
 
 ### 2.4 Window and tray
 
-`None ⇄ Open`. The window is destroyed on close (the provisional default,
-`DisableQuitOnLastWindowClosed`) — its destruction leaving every archive page, `Core.LeaveAll`
+`None ⇄ Open`. The window is destroyed on close (`DisableQuitOnLastWindowClosed`; decided by use
+on 2026-09-13 — destroy, not hide: a reopened window shows nothing worth ~130 MB resident — and
+the close reaches the tray only when the close question of §2.3 says so; the `closeToTray`
+destroy/hide setting is gone) — its destruction leaving every archive page, `Core.LeaveAll`
 (§2.3) — and recreated from the tray or a second launch through one
 `ensureWindow()` in the shell (`app.Window.GetByName` then `NewWithOptions`); the tray's
 `AttachWindow`/`ShowWindow`/`ToggleWindow` helpers are not used — they assume a window that
@@ -1056,8 +1058,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `ExportBackup(path)` (which records `lastExportAt`, §13; the "Export" of earlier drafts),
   `VerifyBackup(path)` (§2.1: a staged copy opened with the
   recovery key, nothing kept). What a backup is and whether it is this vault is
-  `Vault.InspectFile`; restoring a single archive record from a backup (`RestoreArchiveRecord`,
-  re-wrap under the current KWK) is deferred (§12).
+  `Vault.InspectFile`; restoring archive records from a backup — the `RestoreArchiveRecord` of
+  earlier drafts, re-wrap under the current KWK — is *Import records…*:
+  `Vault.InspectRecords`, `MergeRecords` and `DiscardRecords` (§13, "Merge records").
 - **Slot changes and registry writes never share the handle.** While a slot-change ceremony
   runs, a registry write is refused with `ceremony.in_progress` — a Save still commits its
   archive and owes the receipt, paid when the ceremony ends — and a slot change does not start
@@ -1162,12 +1165,16 @@ and its `window.print()` over a stylesheet that prints the key's sheet and nothi
 around it is the one browser output the page invokes (§3 Keys): the window is created with
 `DefaultContextMenuDisabled`, every WebView2 permission kind is set to Deny
 (`WindowsWindow.Permissions`, autoplay excepted if it breaks click-to-play), and the `<iframe>`
-PDF viewer is not used (its toolbar cannot be hidden in beta.16 and there is no download hook):
-PDFs offer Extract only in 1.0; pdf.js rendered to canvas is the later option.
+PDF viewer is not used (its toolbar cannot be hidden and there is no download hook — measured on
+beta.16; beta.20, pinned since 2026-09-13, exposes no toolbar setting either): PDFs offer
+Extract only in 1.0. No PDF renderer comes into the window later either — ruled 2026-09-13:
+pdf.js in the page would inherit every bound service — and the later route is a temporary copy
+opened in a browser (§12; DECISIONS "Before the phone").
 
-**WebView2 disk cache (DESIGN trap 13), honestly:** beta.16 exposes no cache-disable or
-in-private option, and Chromium flags are not supported in production, so `no-store` on every
-preview response is the whole defence. The user-data folder is `%LOCALAPPDATA%\Enfold\WebView2`,
+**WebView2 disk cache (DESIGN trap 13), honestly:** Wails exposes no cache-disable or
+in-private option (measured on beta.16; still so on beta.20, pinned since 2026-09-13), and
+Chromium flags are not supported in production, so `no-store` on every response — the preview's
+and the page's own — is the whole defence. The user-data folder is `%LOCALAPPDATA%\Enfold\WebView2`,
 swept and recreated at startup before the first window and deleted best-effort at exit;
 nothing clears it at lock. Inspecting that directory after a preview is a release gate.
 
@@ -1216,7 +1223,8 @@ asked again (§2.2's cached `H`). The button reads *Unlock with YubiKey* whateve
 the card's dim line says both are needed. The same two-field form serves every token ceremony on
 the Keys page. Secondary: recovery key, password, open a
 backup — never a second vault; the
-"workstation-lock detection unavailable" and BitLocker warnings; while the status says
+"workstation-lock detection unavailable" warning (the BitLocker warnings went with §9's checks,
+2026-09-13); while the status says
 `pendingTouch` from a cancelled unlock, one quiet line under the key card: the key is still
 waiting for the touch that was cancelled — unlock again to pick it up, or touch it or pull it
 out to end it; that line is the lock screen's only: on the Keys page the pending touch left by a
@@ -1573,13 +1581,16 @@ Destroying the window on close destroys the renderer's copy of what was on scree
 
 ## 9. BitLocker
 
-Two checks — the system volume and the vault's volume — each tri-state (Protected /
-Unprotected / Unknown); only Unprotected warns (`system-volume-unprotected`,
-`vault-volume-unprotected`); Unknown is a quiet line. The predicate is *protection status*
-(suspended BitLocker counts as unprotected). **The unelevated mechanism is unverified**: the WMI
-`Win32_EncryptableVolume` class is documented admin-only, and the least-privilege ruling forbids
-elevation. The candidate is the shell property `System.Volume.BitLockerProtection`; it is
-measured before the feature is promised (`SCOPE.md` keeps the bullet provisionally).
+**No detection: the checks were struck on 2026-09-13** (DECISIONS "Before the phone"). This
+section once planned two tri-state checks — the system volume and the vault's volume, warning
+on *Unprotected* — but no unelevated mechanism was ever measured: the WMI
+`Win32_EncryptableVolume` class is documented admin-only, the shell property
+`System.Volume.BitLockerProtection` stayed an unmeasured candidate, and the least-privilege
+ruling forbids elevation. Nothing in the core or the shell reads a volume's protection status,
+and the only warning the shell raises is lock-trigger detection's (§5). What remains is advice:
+the import dialog's in-place choice says the file must stay on a BitLocker-protected fixed drive
+and that removable media and network shares are outside Enfold's protection
+(`ImportDialog.svelte`).
 
 ## 10. Testing
 
@@ -1607,12 +1618,14 @@ ceremony states and the "never 0 attempts" rule.
 
 ## 12. Deferred, and open for the user
 
-pdf.js preview (ruled 2026-09-13: not in the window — a temporary copy opened by a browser,
-designed with the future "open a temporary copy, edit, put it back"; DECISIONS); an entropy
-estimate for a chosen password (ruled out 2026-09-13: the minimum of 8 is the rule; SCOPE);
+PDF preview (ruled 2026-09-13: no renderer in the window, pdf.js included — a temporary copy
+opened by a browser, designed with the future "open a temporary copy, edit, put it back";
+DECISIONS); an entropy estimate for a chosen password (ruled out 2026-09-13: the minimum of 8
+is the rule; SCOPE);
 (folder move is `Move` since the tree, §3);
-`overwrite` on extraction (an archive-layer change); the permitted range of the timeouts beyond the clamps. (The BitLocker check was struck
-2026-09-13, SCOPE.)
+the permitted range of the timeouts beyond the clamps. (The BitLocker check was struck
+2026-09-13, §9; overwrite on extraction shipped — `replace` by default, with `skip`, `rename`
+and `ask`, §3.)
 
 ## 13. Ruled 2026-09-07, critiqued the same day, to implement (with FORMAT.md Revision 2)
 
@@ -1944,8 +1957,10 @@ a new one; the envelope is read from a handle that has passed §3's opened-sourc
 hard link to the vault answers `archive.source_is_vault`.
 
 **Uninstall** removes the program folder, the shortcut, the association, the uninstall entry
-and the WebView2 profile at `%LOCALAPPDATA%\Enfold\WebView2` — recreatable, and holding nothing
-decrypted, caching being off (§7) — and **nothing else under `%LOCALAPPDATA%\Enfold`** (decision 5):
+and the WebView2 profile at `%LOCALAPPDATA%\Enfold\WebView2` — recreatable, and meant to hold
+nothing decrypted: every response is `no-store`, the profile is swept at start and removed at
+exit, and inspecting it after a preview is a release gate (§4) — and **nothing else under
+`%LOCALAPPDATA%\Enfold`** (decision 5):
 the vault, the settings and the log stay, and the uninstaller's last page says so: "Your vault
 and settings stay in %LOCALAPPDATA%\Enfold. Delete that folder yourself if you mean to." — the path
 shown expanded, since it is a folder the reader may go and find. `%TEMP%\Enfold` is left to the

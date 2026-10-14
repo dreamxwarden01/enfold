@@ -46,7 +46,7 @@
   }
 
   const policy = $derived(
-    [d.alwaysRequireFullAuth ? "always asks for a full unlock" : "", d.hidden ? "hidden" : ""].filter(Boolean).join(" · ") || "none set",
+    [d.hidden ? "hidden" : "", d.alwaysRequireFullAuth ? "full unlock always (reserved, not enforced)" : ""].filter(Boolean).join(" · ") || "none set",
   );
   const purge = $derived(purgeAfter(d.forgottenAt));
 

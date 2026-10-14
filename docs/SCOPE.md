@@ -21,9 +21,10 @@ consequences worth stating up front:
 
 - **TPM 2.0 cannot be assumed.** It is mandatory on Windows 11 and merely common on Windows 10, so
   device binding treats it as an optional enhancement, not a prerequisite (`SYNC.md` §3.1).
-- **DPAPI machine scope is the floor and must be implemented and tested**, not left as a branch
-  nobody exercises. It is available on every Windows version, so an unbound identity never occurs
-  on this platform.
+- **DPAPI machine scope is the floor of device binding and must be implemented and tested**, not
+  left as a branch nobody exercises. It is available on every Windows version, so an unbound
+  identity never occurs on this platform. Device binding is part of sync (`SYNC.md` §3.1), which
+  v1 does not ship (below), so this binds the sync release, not v1: v1 has no DPAPI code.
 - **The newer WebAuthn APIs are unavailable**, which rules out `prf-derived` slots on Windows 10.
   They are reserved and unused in v1 regardless.
 
@@ -75,8 +76,9 @@ consequences worth stating up front:
   second look (a denser "Workbench" one was prototyped) is a later frontend or skin, never a
   change to the core
 - Loopback HTTP streaming with Range support, for media preview — every response `no-store`,
-  and the WebView2 profile with caching disabled, so the browser engine never writes decrypted
-  content to disk (`DESIGN.md` trap #13)
+  which is the whole defence: the pinned Wails offers no way to turn the WebView2 cache off, so
+  the profile lives in a folder the app owns, swept at startup and deleted best-effort at exit,
+  and the browser engine is never handed decrypted content it may keep (`DESIGN.md` trap #13)
 - The retained VMK, KWK and K_P allocations live in pages the process allocates outside the Go
   heap, `VirtualLock`ed and erased explicitly; every other secret buffer the application owns is
   zeroed best-effort when it is done with; automatic Windows Error Reporting is off for the
@@ -94,8 +96,9 @@ consequences worth stating up front:
 
 Written down so that "just a small addition" has to argue with a list rather than with nobody.
 
-- **All of `SYNC.md`.** No pairing, no phone, no relay, no identity keys, no merge. The format
-  fields exist and are written; nothing reads them.
+- **All of `SYNC.md`.** No pairing, no phone, no relay, no identity keys, no sync merge. The
+  format fields exist and are written; nothing reads them. (A manual merge from a file does
+  ship: *Import records…* merges archive records from a backup or a vault file, `APP.md` §13.)
 - The phone application, in any form
 - Small-file packs (`pack_id` is reserved and written as zero)
 - Virtual filesystem (WinFsp / Dokan)
@@ -106,7 +109,9 @@ Written down so that "just a small addition" has to argue with a list rather tha
 - `prf-derived` slots
 - Seekable zstd
 - Automatic or scheduled backup
-- Per-archive authentication policy (the `policy` field is reserved)
+- Per-archive authentication policy (`policy` bit 0, `always_require_full_auth`, is defined
+  and carried — a merge can set it — but nothing enforces it; bits 1–5, hidden, no compression
+  and the zstd level, are in use, `FORMAT.md` §7.1)
 - Any online service
 
 - Multi-volume archives and recovery records — **committed for 1.1**, see below; neither needs a
@@ -164,13 +169,23 @@ is set, and a hybrid variant for software slots. Nothing else will catch a trans
 `info` string, because every wrong version still produces 32 plausible-looking bytes. Fix the
 vectors before the code, not after.
 
-**2. Fuzz both parsers.** The keystore and archive readers both consume attacker-supplied bytes —
-an archive file is *expected* to come from an untrusted place. Fail-closed on unknown record types
-is the right rule and is exactly the kind of rule that is easy to state and easy to implement
-wrongly.
+**2. Fuzz both parsers — harnesses written, no campaign run.** The keystore and archive readers
+both consume attacker-supplied bytes — an archive file is *expected* to come from an untrusted
+place. Fail-closed on unknown record types is the right rule and is exactly the kind of rule that
+is easy to state and easy to implement wrongly. Sixteen fuzz targets exist, in
+`internal/{archive,compress,format,keystore,stream}/fuzz_test.go`, seeded with `f.Add` (and, for
+`internal/compress`, an on-disk corpus); their reach was widened after the outside review below,
+and they run as ordinary tests over their seeds. Only short runs are on record (DECISIONS
+mentions a ten-second one that found a frame-walker bug); a sustained fuzzing campaign over
+either parser has not been run, and this item stays open until one has.
 
-**3. One external review of `FORMAT.md`.** Everything in this project so far has been reviewed by
-its own authors. One outside pass on the format specifically, before it becomes permanent.
+**3. One external review of `FORMAT.md` — done 2026-09-13.** Everything in this project so far
+had been reviewed by its own authors; one outside pass on the format specifically, before it
+becomes permanent. Done by Codex Astra (`DECISIONS.md` 2026-09-13, "Before the phone"): its
+verdict was "not ready to freeze", the precision items it found were written into the text, and
+its semantic findings became the five format rulings of the same day (`seq` in the index and
+registry AADs, `seq` across compaction, an unsupported version refused, R32's erasure claim
+qualified, the random-IV budget written down).
 
 ## Before anyone else runs a build
 

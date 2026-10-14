@@ -282,7 +282,7 @@
 
 {#if removing && sel}
   <Dialog title="Remove {sel.label}?" onclose={() => (removing = false)}>
-    <p>This way in stops working at once. The vault refuses if fewer than two independent ways in would remain.</p>
+    <p>This way in stops working here at once, but a copy of the vault made earlier still opens with it, and what it opens there reaches this vault too until every recovery key that copy held is replaced and the vault key is then rotated. The vault refuses if fewer than two independent ways in would remain.</p>
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (removing = false)}>Cancel</button>
       <button type="button" class="btn danger-fill" onclick={() => { removing = false; void begin(Keys.RemoveSlot(sel.recipientId)); }}>Remove</button>

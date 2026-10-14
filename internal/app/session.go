@@ -751,8 +751,9 @@ func (c *Core) Activity() {
 	c.emitState()
 }
 
-// SetWarning raises or clears a warning the shell discovers (lock-trigger
-// detection unavailable, BitLocker) and tells the frontend.
+// SetWarning raises or clears a warning the shell discovers (today only one:
+// lock-trigger detection unavailable, raised by lockwatch_windows.go) and
+// tells the frontend.
 func (c *Core) SetWarning(code Code, on bool) {
 	c.mu.Lock()
 	if on {

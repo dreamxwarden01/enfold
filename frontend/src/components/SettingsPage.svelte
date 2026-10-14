@@ -143,7 +143,7 @@
         <div class="ks-head top"><h2 class="t-section">Exports</h2></div>
         <div class="card setcard">
           <div class="setrow">
-            <div class="lab"><label for="recovery-pct"><b>Recovery record</b></label><span>Parity kept beside an exported volume, so damage in storage can be repaired without a key. Costs the same share of space. Recommended: 3%; 0% is off. Applies to exports made from now on.</span></div>
+            <div class="lab"><label for="recovery-pct"><b>Recovery record</b></label><span>Parity kept beside an exported volume, so damage in storage can be repaired without a key. Costs the same share of space. Recommended: 3%; 0% is off. Exported volumes arrive in a later version; until then this is only remembered, and Export a backup carries no parity.</span></div>
             <div class="ctl row slider"><input id="recovery-pct" type="range" min="0" max="20" value={draft.recoveryRecordPct} oninput={(e) => edit("recoveryRecordPct", num(e))} /><span class="num pct">{draft.recoveryRecordPct}%</span></div>
           </div>
           <div class="setrow">

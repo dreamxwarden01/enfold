@@ -683,15 +683,37 @@ recovery digits, management key) travel on the raw message channel, never as bou
 arguments, which Wails stringifies and can log (`APP.md` §1). Send the index one screenful at a time
 rather than handing over the whole decrypted file list. The WebView2 also has a disk cache of
 its own — trap #13 in §11: nothing decrypted is served to it without `no-store`. Destroying the
-window on close-to-tray (provisional, §14) additionally discards the renderer's copy of whatever
-was on screen.
+window on the way to the tray (provisional from 2026-09-04, decided by use 2026-09-13, §14)
+additionally discards the renderer's copy of whatever was on screen.
 
 ### Dependency on full-disk encryption
 
 Because hibernation defeats `VirtualLock` unconditionally, the vault's at-rest guarantee partly
-rests on the system volume being encrypted. The application should **detect whether the system
-volume is BitLocker-protected and warn if it is not.** The same reasoning applies to crash
-dumps — investigate excluding sensitive regions from Windows Error Reporting.
+rests on the system volume being encrypted. This section once said the application should
+**detect whether the system volume is BitLocker-protected and warn if it is not**; that was
+struck on 2026-09-13 (`DECISIONS.md`, "Before the phone"): no unelevated mechanism was measured
+— the documented one is administrator-only — and the product never asks for elevation. What
+remains is advice, in the product as §2 asks: the import dialog says a vault used where it lies
+belongs on a BitLocker-protected fixed drive, and that removable media and network shares are
+outside Enfold's protection. The same reasoning applied to crash dumps, and that half was built:
+Windows Error Reporting is off for the process — `SetErrorMode` with `SEM_NOGPFAULTERRORBOX`
+raises no report for the process's own faults, and `WerAddExcludedApplication`, per user and
+with no elevation, excludes the executable from the rest, best effort — a failure is only logged,
+and a path at or past `MAX_PATH` is excluded by base name (`wer_windows.go`). WER's local dump
+collection is configured by an administrator, independently of both, and stays outside the
+promise; the retained secrets themselves live in `internal/secmem`'s `VirtualLock`ed pages
+outside the Go heap (§14).
+
+### Process hardening still open
+
+- **Microsoft-signed DLLs only.** Whether `SetProcessMitigationPolicy` with
+  `ProcessSignaturePolicy` is worth enabling. It blocks a class of injection, but this process
+  loads foreign code by design: the common file dialogs host shell extensions, OLE drag and
+  drop goes through the shell's handlers, and anti-malware (Kaspersky, on the development
+  machine) loads its own module into the process. A refused module breaks a feature or the start,
+  so it must be tested with those present before it is ruled, not decided on paper. It is
+  hardening, not a boundary — see §2 on same-user isolation. Moved here from `SYNC.md`'s open
+  items on 2026-10-14: nothing about it is specific to sync.
 
 ## 11. Traps checklist
 
@@ -717,7 +739,15 @@ Correct in this document, and easy to lose during implementation.
 9. **The slot invariant is a predicate**, evaluated on every mutation — not a one-time check.
 10. **Reserve `pack_id` and a per-archive `policy` field in the index now.** Small-file packing
     and "this archive always requires full authentication" are both v2 features that cannot be
-    retrofitted into a format with no room for them.
+    retrofitted into a format with no room for them. Both were reserved: `pack_id` in every
+    file record of the archive index (`FORMAT.md` §11), written as zero and ignored on read,
+    and `policy` in the keystore's archive record (`FORMAT.md` §7.1). `pack_id` is still only
+    that; `policy` is not. Since 2026-09-06 bit 1 is `hidden` and bit 2 `no_compression`, and
+    since 2026-09-08 bits 3–5 carry the archive's zstd level — all three written and honoured.
+    Only bit 0, `always_require_full_auth`, remains the v2 feature it was reserved for: defined,
+    kept by Import records when either side carries it, shown in the archive's details, and
+    enforced by nothing (`SCOPE.md`: no per-archive authentication policy in v1). Bits 6–31 stay
+    reserved.
 11. **Removing a slot revokes nothing until the VMK is rotated.** Anyone holding an earlier copy
     of the slot record still reaches the unchanged VMK and therefore every archive key, including
     those of archives created afterwards — and with write access they can splice the old slot
@@ -732,11 +762,15 @@ Correct in this document, and easy to lose during implementation.
 13. **The WebView2 disk cache.** The browser engine caches what it fetches in its user-data
     folder. Every loopback response that carries decrypted content — the media-preview stream
     above all — must be `Cache-Control: no-store`. That header is the whole defence: Wails v3
-    beta.16 exposes no cache-disable or in-private option (the WebView2 APIs for them sit in its
-    `internal/` packages), and Chromium flags are unsupported in production per Microsoft. The
-    profile lives in a directory the app owns (`%LOCALAPPDATA%\Enfold\WebView2`), swept at
-    startup and deleted best-effort at exit; nothing clears it at lock. Inspecting that
-    directory after a preview is a release gate, re-run whenever the pinned beta moves.
+    exposes no cache-disable or in-private option (the WebView2 APIs for them sit in its
+    `internal/` packages; found on beta.16, and still so on beta.20, pinned since 2026-09-13,
+    whose public browser options are the profile and runtime paths and the Chromium flags
+    `EnabledFeatures`, `DisabledFeatures` and `AdditionalBrowserArgs`), and Chromium flags are
+    unsupported in production per Microsoft. The profile lives in a directory the app owns
+    (`%LOCALAPPDATA%\Enfold\WebView2`), swept at startup and deleted best-effort at exit;
+    nothing clears it at lock. Inspecting that directory after a preview is a release gate,
+    re-run whenever the pinned beta moves — and due again since the move to beta.20, which no
+    inspection on record has covered.
     Otherwise decrypted content is written to disk by a component that is not this program.
     The same rule forbids any preview surface that offers a browser-provided save or print:
     the native context menu is disabled and the Edge PDF viewer is not used (`APP.md` §4). The
@@ -1062,31 +1096,36 @@ and the reasoning, including why a web UI is accepted against the original objec
 in `DECISIONS.md` (2026-09-04). Fallback if the trade ever turns bad: `github.com/tailscale/walk`,
 native Win32 controls at ~4 MB, which the Go core would not notice.
 
-**Memory budget, measured 2026-09-04 (private working set, whole process tree):** idle in the
-tray with the window closed, one Go process, 7–9 MB. Window open, ~130 MB baseline from the
-WebView2 process group before any content — that group is an architectural floor of Chromium,
-not a setting. **Provisional default: closing to the tray destroys the window** rather than
-hiding it, which is what makes the idle figure real; reopening recreates it (0.2 s measured warm
-with the stock page — the real interface must be measured). **Pending, to be settled once the
-real UI exists**, on one criterion: if reopening shows no noticeable delay, stutter or state
-loss, destroy stays; if it does, the window is hidden instead and ~130 MB resident is accepted
-as the price (SCOPE.md, "Deliberately unresolved"). The session cache lives in the Go process
-either way and is unaffected.
+**Memory budget, measured 2026-09-04 on beta.16 (private working set, whole process tree):**
+idle in the tray with the window closed, one Go process, 7–9 MB. Window open, ~130 MB baseline
+from the WebView2 process group before any content — that group is an architectural floor of
+Chromium, not a setting. **Closing to the tray destroys the window** rather than hiding it,
+which is what makes the idle figure real; reopening recreates it (0.2 s measured warm with the
+stock page). This was the provisional default from 2026-09-04, left pending until the real UI
+existed on one criterion: if reopening showed no noticeable delay, stutter or state loss,
+destroy stayed; otherwise the window would be hidden and ~130 MB resident accepted as the price.
+**Decided by use on 2026-09-13: destroy** — reopening the real interface showed nothing worth
+~130 MB resident, and the `closeToTray` destroy/hide setting went with the question (SCOPE.md,
+"Deliberately unresolved"; `DECISIONS.md`, "Before the phone"). The same day ruled that the
+close button never means "to the tray" by default: the first close asks whether to keep
+Enfold running in the tray or quit (`APP.md` §2.3, §2.4). The session cache lives in the Go process either
+way and is unaffected.
 
 The whole dependency stack was verified to build and run with `CGO_ENABLED=0` on
 windows/amd64, so **no C compiler is required**. Wails v3 carries its own pure-Go WebView2
 binding in-tree (`v3/internal/webview2`); the probe binary's build info confirms
-`CGO_ENABLED=0`. Versions as resolved on 2026-08-31 (Wails on 2026-09-04):
+`CGO_ENABLED=0`. Versions as resolved on 2026-08-31 (Wails on 2026-09-04, moved to beta.20 on
+2026-09-13):
 
 | Dependency | Version | Role |
 | --- | --- | --- |
 | `github.com/go-piv/piv-go/v2` | v2.6.0 | YubiKey PIV; pure Go, talks to winscard directly. Verified on hardware 2026-09-04 (GET METADATA, AES management keys, ECDH). Lacks MOVE/DELETE KEY (0xF6), never resets the card on disconnect (trap 14), leaks an exclusive connection on two `Open` failure paths (trap 24); `internal/piv` wraps it with its own PC/SC probe and reset |
 | ~~`github.com/awnumar/memguard`~~ | — | not adopted (2026-09-13): the retained secrets live in `internal/secmem`'s own `VirtualLock`ed pages instead; §11 below keeps the reasoning about what an enclave can and cannot hold |
 | `github.com/klauspost/compress` | v1.20.0 | zstd, pure Go. Bumped 2026-09-05: 1.19.2 fixed three dictionary bugs; 1.20.0 differs from it only in regenerated assembly |
-| `golang.org/x/crypto` | v0.55.0 | argon2 (`IDKey` only — see §3) |
+| `golang.org/x/crypto` | v0.56.0 | argon2 (`IDKey` only — see §3; the API was verified against v0.55.0) |
 | `crypto/ecdh` | stdlib | P-256 for YubiKey slots, X25519 for the recovery slot; validates points on `NewPublicKey` (trap #2) |
 | `crypto/hkdf`, `crypto/aes`, `crypto/cipher` | stdlib | HKDF, AES-256-GCM |
-| `github.com/wailsapp/wails/v3` | v3.0.0-beta.16 (pin) | UI: zero-window tray app, WebView2 window on demand, file drop, tray icon |
+| `github.com/wailsapp/wails/v3` | v3.0.0-beta.20 (pin) | UI: zero-window tray app, WebView2 window on demand, file drop, tray icon. Pinned beta.16 from 2026-09-04; beta.20 since 2026-09-13, after a worktree probe found nothing this shell binds changed (`DECISIONS.md`) |
 
 Runtime requirement: the **WebView2 Evergreen runtime** must be present. It is part of Windows
 11; on Windows 10 it was rolled out by Microsoft in 2022–2023 and is installed by Microsoft 365
@@ -1094,8 +1133,8 @@ Apps, but a small number of machines still lack it. The installer checks the run
 registry value and runs Microsoft's ~2 MB bootstrapper when it is absent. Microsoft has committed
 to updating Edge and WebView2 on Windows 10 22H2 until at least October 2028.
 
-Installed on the development machine: the `wails3` CLI (v3.0.0-beta.16), Node 24 and npm 11 for
-the frontend build.
+Installed on the development machine: the `wails3` CLI (v3.0.0-beta.20 since 2026-09-13, with
+the frontend's `@wailsio/runtime` at the same tag), Node 24 and npm 11 for the frontend build.
 
 **The frontend is a client of the core, never part of it.** Everything the product decides lives
 in Go — the session state machine and its timers, the unlock ceremony's steps, staged changes

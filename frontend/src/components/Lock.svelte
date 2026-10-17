@@ -5,13 +5,13 @@
   // 2026-10-17).
   import { CeremonyStep, Keys, Shell, Vault, VaultState, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { ceremonyCopy, codeText, commandCopy, dialogCopy, lockCopy, retriesText, sinceText, stepText, vaultCopy, warningCopy } from "../lib/strings";
+  import { ceremonyCopy, codeText, commandCopy, dialogCopy, firstMethodCopy, lockCopy, retriesText, sinceText, stepText, vaultCopy, warningCopy } from "../lib/strings";
   import { leaf } from "../lib/format";
   import { fade } from "svelte/transition";
   import { onMount, untrack } from "svelte";
   import { motion, delay, LEAVE, OUT } from "../lib/motion";
   import { NO_TRACK, key as formKey, track } from "../lib/pinform";
-  import { samePath } from "../lib/paths";
+  import { middlePath, samePath } from "../lib/paths";
   import { firstRunCard } from "../lib/firstrun";
   import { wordedForToken } from "../lib/outcome";
   import SecretInput from "./SecretInput.svelte";
@@ -125,9 +125,9 @@
   let create = $state(false);
   let createName = $state(lockCopy.defaultName);
   let createPath = $state("");
-  let createKind = $state<"token" | "password">("token");
-  let createLabel = $state("");
-  let createEntangle = $state(false);
+  // The first unlock method's cards (FirstWayIn): what they hold, the
+  // password among it, is theirs until Continue takes it.
+  let createFirst = $state<ReturnType<typeof FirstWayIn>>();
   let createConfirm = $state(false);
   let createNameValid = $state(true);
   let createAttempt = $state(0);
@@ -142,6 +142,14 @@
   // A rebuild is pinned to the damaged file's place: no other destination.
   const dest = $derived(rebuild ? (st?.missingPath ?? "") : createPath || st?.defaultPath || "");
   const createReplaces = $derived(rebuild && same(dest, st?.missingPath));
+  // The place on the "Kept in" line, cut in the middle to what fits its
+  // one row beside the button (APP.md §6, ruled 2026-10-17): 412 px of
+  // body, less "Kept in" (37), the wider button ("Use the usual place",
+  // 102) and two 8 px gaps, leaves 257 px — 39 characters of the
+  // caption's mono at 6.5 px (measured in Edge, 2026-10-17); 34 leaves
+  // room for a wider fallback face. A rebuild has no button: 367 px, and
+  // 54. The full path is the line's title.
+  const destShown = $derived(middlePath(dest, rebuild ? 54 : 34));
   const openArchives = $derived(st?.openArchives ?? 0);
 
   let importing = $state(false);
@@ -174,19 +182,25 @@
   const importHeader = $derived(restoring ? lockCopy.header.restoring : lockCopy.header.replacing);
 
   let setup = $state(false);
-  let setupKind = $state<"token" | "password">("token");
-  let setupLabel = $state("");
-  let setupEntangle = $state(false);
+  let setupFirst = $state<ReturnType<typeof FirstWayIn>>();
+  let setupAttempt = $state(0);
 
   async function doSetup() {
+    setupAttempt++;
+    const first = setupFirst?.take();
+    if (!first) return;
     setup = false;
     store.dismissCeremony();
+    // The password typed in the dialog answers the setup's Choose prompt,
+    // after the recovery key (APP.md §6, ruled 2026-10-17); the bound call
+    // carries the kind, the name and the tick, never the secret (§1). A
+    // YubiKey's name left empty goes as empty: the core names it after its
+    // serial number ("YubiKey 12345678"), which is what the field promises.
+    store.holdChosen("setup", first.password);
     try {
-      // A key's label left empty goes as empty: the core names it after
-      // its serial number ("YubiKey 12345678"), which is what the field
-      // promises (FirstWayIn) — never a bare "YubiKey".
-      await Vault.FinishSetup(setupKind, setupKind === "token" ? setupLabel : "Password", setupKind === "token" && setupEntangle);
+      await Vault.FinishSetup(first.kind, first.label, first.entangle);
     } catch (e) {
+      store.dropChosen();
       store.toast(codeText(errorOf(e).code), "error");
     }
   }
@@ -205,6 +219,11 @@
     createConfirm = false; // a replacement is confirmed each time
     createAttempt = 0;
     create = true;
+  }
+
+  function openSetup() {
+    setupAttempt = 0;
+    setup = true;
   }
 
   // testBackup proves a backup opens, on a copy, from the lock screen —
@@ -268,16 +287,25 @@
   async function doCreate() {
     createAttempt++;
     if (!createNameValid || (createReplaces && !createConfirm)) return;
+    // The cards judge their own parts under the same press (attempt) and
+    // answer null while any refuses (lib/firstwayin).
+    const first = createFirst?.take();
+    if (!first) return;
     create = false;
     store.dismissCeremony();
+    // The ceremony asks the chosen password first, before the YubiKey is
+    // set up (APP.md §3): the store answers that prompt with the password
+    // typed in the dialog, at once, and drops it (APP.md §6, ruled
+    // 2026-10-17). Held before the call, so the prompt cannot come first.
+    store.holdChosen("create", first.password);
     try {
-      // A password unlock method is named "Password", whatever was typed for a key
-      // before the kind was switched; entangling is a token's option only.
-      // Elsewhere, a file already at the chosen place is retired as a
-      // dated copy — the save dialog asked about it; here, the tick.
-      // A key's label left empty becomes its serial number in the core.
-      await Vault.CreateVault(rebuild ? dest : createPath, createName, createKind, createKind === "token" ? createLabel : "Password", createKind === "token" && createEntangle, createReplaces ? createConfirm : !!createPath);
+      // A password unlock method is named "Password", and the tick is a
+      // YubiKey's alone (lib/firstwayin begin). Elsewhere, a file already
+      // at the chosen place is retired as a dated copy — the save dialog
+      // asked about it; here, the tick.
+      await Vault.CreateVault(rebuild ? dest : createPath, createName, first.kind, first.label, first.entangle, createReplaces ? createConfirm : !!createPath);
     } catch (e) {
+      store.dropChosen();
       store.toast(codeText(errorOf(e).code), "error");
     }
   }
@@ -455,7 +483,7 @@
                 <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("vault.broken")}</span></div>
                 <button type="button" class="btn accent" onclick={() => void Vault.Reopen()}>{lockCopy.reopen}</button>
               {:else if setupNeeded}
-                <button type="button" class="btn accent" onclick={() => (setup = true)}><svg class="i i-14"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
+                <button type="button" class="btn accent" onclick={openSetup}><svg class="i i-14"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
                 <button type="button" class="btn sm" onclick={() => begin("recovery")}>{lockCopy.recoveryOnly}</button>
               {:else if !firstRun}
                 {#if st?.hasHardwareSlot}
@@ -503,7 +531,12 @@
         {#key k2}
         <div class="step-body" in:fade={motion()}>
           {#if live === 2 && c && c.promptId}
-            {#if form.shows !== "none"}
+            {#if store.chosenSent === c.promptId}
+              <!-- The Choose prompt the dialog's password answered (APP.md
+                   §6, ruled 2026-10-17): no field to fill. Refused all the
+                   same, the prompt stands and is asked below as before. -->
+              <div class="u-meta q">{firstMethodCopy.sent}</div>
+            {:else if form.shows !== "none"}
               {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
               <!-- Only an unlock's recognised YubiKey unlocks the vault named
                    here: an import's matches the incoming file, and a create's
@@ -586,13 +619,25 @@
 </section>
 
 {#if create}
-  <Dialog title={rebuild ? lockCopy.rebuildTitle : lockCopy.createTitle} onclose={() => (create = false)}>
-    <TextField id="cv-name" label={vaultCopy.name} bind:value={createName} bind:valid={createNameValid} attempt={createAttempt} />
-    <div class="field">
-      <div class="field-top"><label for="cv-path">{lockCopy.keptInLabel}</label>{#if rebuild}{:else if createPath}<button type="button" class="btn subtle xs" onclick={() => (createPath = "")}>{lockCopy.usualPlace}</button>{:else}<button type="button" class="btn subtle xs" onclick={pickCreatePath}>{lockCopy.keepElsewhere}</button>{/if}</div>
-      <div id="cv-path" class="path mono">{dest}</div>
+  <!-- A form (APP.md §6, Dialogs stay put; ruled 2026-10-17): Enter in
+       the name or a password presses Create vault, under the form rule,
+       and the focus opens in the name. Anchored at the top, since a card
+       that opens makes it taller and the title must not climb. -->
+  <Dialog title={rebuild ? lockCopy.rebuildTitle : lockCopy.createTitle} onclose={() => (create = false)} onsubmit={doCreate} anchored>
+    <div class="named">
+      <TextField id="cv-name" label={vaultCopy.name} bind:value={createName} bind:valid={createNameValid} attempt={createAttempt} />
+      <!-- Where it lives, one caption line under the name, 4 px below it
+           (ruled 2026-10-17): the place in mono, cut in the middle so the
+           drive and the file name stay, then the hyperlink button that
+           changes it, in the line's caption — none for a rebuild, which is
+           pinned to the damaged file's place. -->
+      <div class="where">
+        <span class="wherelabel">{lockCopy.keptInLabel}</span>
+        <span class="path mono" title={dest}>{destShown}</span>
+        {#if rebuild}{:else if createPath}<button type="button" class="btn link" onclick={() => (createPath = "")}>{lockCopy.usualPlace}</button>{:else}<button type="button" class="btn link" onclick={pickCreatePath}>{lockCopy.keepElsewhere}</button>{/if}
+      </div>
     </div>
-    <FirstWayIn bind:kind={createKind} bind:label={createLabel} bind:entangle={createEntangle} idPrefix="cv" />
+    <FirstWayIn bind:this={createFirst} heading={firstMethodCopy.headCreate} attempt={createAttempt} idPrefix="cv" />
     {#if openArchives > 0}
       <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{lockCopy.stillOpen(openArchives)}</span></div>
     {:else if rebuild && st}
@@ -605,18 +650,20 @@
       <p>{lockCopy.replaceKept}</p>
     {/if}
     {#snippet actions()}
-      <button type="button" class="btn accent" disabled={(createReplaces && !createConfirm) || openArchives > 0} onclick={doCreate}>{rebuild ? lockCopy.rebuildPrimary : lockCopy.createPrimary}</button>
+      <button type="submit" class="btn accent" disabled={(createReplaces && !createConfirm) || openArchives > 0}>{rebuild ? lockCopy.rebuildPrimary : lockCopy.createPrimary}</button>
       <button type="button" class="btn" onclick={() => (create = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
 
 {#if setup}
-  <Dialog title={lockCopy.finishTitle} onclose={() => (setup = false)}>
+  <!-- A form, anchored, as the create dialog is: with no field shown
+       until a card opens, it opens on Continue (Dialog.svelte). -->
+  <Dialog title={lockCopy.finishTitle} onclose={() => (setup = false)} onsubmit={doSetup} anchored>
     <p>{lockCopy.finishBody}</p>
-    <FirstWayIn bind:kind={setupKind} bind:label={setupLabel} bind:entangle={setupEntangle} idPrefix="su" />
+    <FirstWayIn bind:this={setupFirst} heading={firstMethodCopy.headCreate} context="adopt" attempt={setupAttempt} idPrefix="su" />
     {#snippet actions()}
-      <button type="button" class="btn accent" onclick={doSetup}>{lockCopy.continue}</button>
+      <button type="submit" class="btn accent">{lockCopy.continue}</button>
       <button type="button" class="btn" onclick={() => (setup = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
@@ -628,9 +675,18 @@
 
 <style>
   .u-strip.first { grid-template-columns: minmax(320px, 520px); justify-content: center; }
-  /* A path wraps and is never cut (APP.md §6, a fact): the face, size and
-     ink are .mono's. */
-  .path { overflow-wrap: anywhere; user-select: text; }
+  .named { display: flex; flex-direction: column; gap: var(--s1); }
+  /* The "Kept in" line (APP.md §6, ruled 2026-10-17): one caption row
+     that never wraps. The path arrives cut in the middle (destShown);
+     should the window's fonts still make it too wide, its end is clipped
+     rather than the button pushed to a row of its own — the full path is
+     the title. The face, size and ink are .mono's; the hyperlink button
+     takes the line's caption, its fill growing past the line's 16 px
+     into the margins it gives back (app.css .btn.link). */
+  .where { display: flex; align-items: center; gap: var(--s2); font: var(--t-cap); color: var(--ink-2); }
+  .wherelabel, .where .btn { flex: none; }
+  .where .btn.link { font: inherit; }
+  .path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
   .fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .gap { margin-top: var(--s3); margin-bottom: var(--s3); }
   .u-links.tight { margin-top: 0; }

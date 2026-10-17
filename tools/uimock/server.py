@@ -77,7 +77,19 @@ The tray's Unlock... (APP.md 2.4, ruled 2026-10-17) is played as its event
 alone: POST /mock/preview {"name": "unlock"} queues the shell.unlock the
 shell emits after the tray has begun the ceremony, so the page shows its
 lock scene - over an open archive too. The ceremony itself is not begun
-here; the lock scene's own buttons do that, as everywhere in this mock."""
+here; the lock scene's own buttons do that, as everywhere in this mock.
+
+The first way in's ceremonies are played (APP.md 6, ruled 2026-10-17):
+Create vault, Restore from a backup and Finish setting up run their steps
+- the backup's recovery key first, then the chosen password's Choose
+prompt, then the YubiKey's timed steps - and land the vault. The page
+answers a prompt over the raw channel, which a browser lacks: the page is
+served with a shim that posts each "secret ..." line to /mock/secret, so
+the password typed in the dialog answers the Choose prompt from the page
+and the next step follows. POST /mock/state {"refuseChosen": true} has the
+next chosen password refused once (vault.password_short), the prompt left
+standing for card 2 to ask. Start from first run with POST /mock/state
+{"vault": {"state": "none"}} and a reload."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1505,6 +1517,218 @@ def close_decided(args):
     return None
 
 
+# ---- The first way in's ceremonies (APP.md 6, ruled 2026-10-17) -------
+#
+# CreateVault, ImportFile (a backup: InspectFile here always answers one)
+# and FinishSetup play their ceremony, so the dialogs' flow can be seen
+# end to end: the password typed in the dialog answers the ceremony's
+# Choose prompt from the page, and the next step follows. The page sends a
+# secret over the raw channel (System.invoke), which a browser does not
+# have; the shim index.html is served with (SHIM, below) posts each
+# "secret <kind> <promptId> <value>" to /mock/secret instead, where it
+# answers the prompt that stands - or is refused as the core refuses it,
+# with secret.refused and the prompt left standing. POST /mock/state
+# {"refuseChosen": true} refuses the next chosen password once with
+# vault.password_short whatever it is, so the fallback (card 2 asking the
+# Choose prompt itself) can be seen; the core would refuse it only under
+# 8 characters, which the dialog never sends. The YubiKey's own steps are
+# timed, never asked: there is no key here.
+
+CEREMONY = {"kind": "", "prompt": None, "answer": None, "cancelled": False, "before": None}
+CEREMONY_LOCK = threading.Lock()
+
+
+def next_seq():
+    """One counter for the status and the ceremony, as the core's bump():
+    above the scenes PREVIEWS hard-codes, so a ceremony played here is
+    always newer than one of them the page has seen."""
+    state["vault"]["seq"] = max(state["vault"]["seq"], 10) + 1
+    return state["vault"]["seq"]
+
+
+def emit_status():
+    next_seq()
+    emit("vault.state", vault_status())
+
+
+def emit_ceremony(kind, step, **extra):
+    c = {"seq": next_seq(), "kind": kind, "method": "", "step": step, "promptId": "", "choose": False,
+         "slotLabel": "", "recoveryId": "", "retries": 0, "retriesKnown": False, "verified": False,
+         "readerCount": 1, "n": 0, "pinAsked": False, "error": "", "removeLabel": "", "insertLabel": "",
+         "archives": 0}
+    c.update(extra)
+    state["vault"]["ceremony"] = c
+    emit("vault.ceremony", c)
+
+
+class Cancelled(Exception):
+    pass
+
+
+def pause(seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        if CEREMONY["cancelled"]:
+            raise Cancelled()
+        time.sleep(0.05)
+
+
+def ask(kind, secret, step, choose=False):
+    """A prompt: the ceremony stands at it until the page answers it on
+    /mock/secret, or the ceremony is cancelled."""
+    prompt_id = secrets.token_hex(8)
+    with CEREMONY_LOCK:
+        CEREMONY["prompt"] = {"id": prompt_id, "secret": secret, "choose": choose}
+        CEREMONY["answer"] = None
+    emit_ceremony(kind, step, promptId=prompt_id, choose=choose)
+    while True:
+        pause(0.05)
+        with CEREMONY_LOCK:
+            if CEREMONY["answer"] is not None:
+                value, CEREMONY["answer"] = CEREMONY["answer"], None
+                return value
+
+
+def submit_secret(message):
+    """The raw channel's "secret <kind> <promptId> <value>", as the core's
+    SubmitSecret takes it: a stale id or kind is ceremony.stale_prompt; a
+    chosen password under 8 characters is vault.password_short and the
+    prompt stands (so does the knob's refusal)."""
+    parts = message.split(" ", 3)
+    if len(parts) != 4 or parts[0] != "secret":
+        return
+    _, kind, prompt_id, value = parts
+    with CEREMONY_LOCK:
+        p = CEREMONY["prompt"]
+        if p is None or p["id"] != prompt_id or p["secret"] != kind:
+            emit("secret.refused", {"code": "ceremony.stale_prompt"})
+            return
+        if kind == "password" and p["choose"] and (len(value) < 8 or state.pop("refuseChosen", False)):
+            emit("secret.refused", {"code": "vault.password_short"})
+            return
+        CEREMONY["prompt"] = None
+        CEREMONY["answer"] = value
+
+
+def first_way_in(kind, first, entangle):
+    """The core's firstWayIn: the chosen password first, before the key
+    (APP.md 3), then the key's own steps."""
+    if first == "password" or entangle:
+        ask(kind, "password", "password", choose=True)
+    if first == "token":
+        emit_ceremony(kind, "waiting_for_key", method="token")
+        pause(1.5)
+        emit_ceremony(kind, "touch", method="token", slotLabel="YubiKey 5C - desk", n=1)
+        pause(1.5)
+    emit_ceremony(kind, "deriving")
+    pause(0.8)
+
+
+def play(kind, first, entangle, after):
+    """One ceremony of the first way in, on its own thread: the state goes
+    to unlocking, the steps play, and `after` lands the ending."""
+    if CEREMONY["kind"]:
+        return Err("ceremony.in_progress")
+    CEREMONY.update({"kind": kind, "prompt": None, "answer": None, "cancelled": False,
+                     "before": dict(state["vault"])})
+    state["vault"]["state"] = "unlocking"
+    emit_status()
+
+    def run():
+        try:
+            if kind != "create":
+                # An adopted backup opens with its own recovery key first.
+                ask(kind, "recovery", "recovery")
+                emit_ceremony(kind, "deriving")
+                pause(0.8)
+            first_way_in(kind, first, entangle)
+            after()
+        except Cancelled:
+            back = CEREMONY["before"] or {}
+            state["vault"]["state"] = back.get("state", "locked")
+            emit_ceremony(kind, "failed", error="ceremony.cancelled")
+            state["vault"]["ceremony"] = None
+            emit_status()
+        finally:
+            with CEREMONY_LOCK:
+                CEREMONY.update({"kind": "", "prompt": None, "answer": None})
+
+    threading.Thread(target=run, daemon=True).start()
+    return None
+
+
+def landed(first, entangle, name=None):
+    v = state["vault"]
+    v.update({"hasHardwareSlot": first == "token", "hasPasswordSlot": first == "password",
+              "entangled": first == "token" and bool(entangle), "setupNeeded": False})
+    if name:
+        v["displayName"] = name
+
+
+def create_vault(args):
+    """Vault.CreateVault(path, displayName, kind, label, entangle, replace):
+    the ceremony ends Unlocked with the new recovery key shown once (the
+    reveal's one-time URL, which GET /s/ serves here)."""
+    path, name, first, label, entangle, replace = (list(args) + ["", "", "token", "", False, False])[:6]
+
+    def after():
+        landed(first, entangle, name or "Personal vault")
+        state["vault"].update({"state": "unlocked", "idleEffectiveMinutes": 10, "absoluteEffectiveMinutes": 60,
+                               "lastUnlockedAt": int(time.time()), "path": path or state["vault"]["defaultPath"]})
+        emit_ceremony("create", "recovery", slotLabel="/s/" + secrets.token_hex(8), recoveryId="4F2A-91C3")
+        emit_status()
+
+    return play("create", first, entangle, after)
+
+
+def import_file(args):
+    """Vault.ImportFile(path, displayName, method, kind, label, entangle,
+    replace) of a backup: its recovery key, then the first way in; it ends
+    Done with the vault installed and locked."""
+    path, name, _method, first, label, entangle, replace = (list(args) + ["", "", "recovery", "token", "", False, False])[:7]
+
+    def after():
+        landed(first, entangle, name)
+        state["vault"]["state"] = "locked"
+        emit_ceremony("import", "done")
+        emit_status()
+
+    return play("import", first, entangle, after)
+
+
+def finish_setup(args):
+    """Vault.FinishSetup(kind, label, entangle): the recovery key, then the
+    first way in, ending Unlocked."""
+    first, label, entangle = (list(args) + ["token", "", False])[:3]
+
+    def after():
+        landed(first, entangle)
+        state["vault"].update({"state": "unlocked", "idleEffectiveMinutes": 10, "absoluteEffectiveMinutes": 60})
+        emit_ceremony("setup", "done")
+        emit_status()
+
+    return play("setup", first, entangle, after)
+
+
+def cancel_unlock(args):
+    """Vault.CancelUnlock: the ceremony played here ends cancelled."""
+    if CEREMONY["kind"]:
+        CEREMONY["cancelled"] = True
+    return None
+
+
+# What the page's System.invoke reaches in a browser: WebView2's
+# postMessage, stood in by a POST of the "secret ..." line to /mock/secret.
+# Defined before the page's modules load (the runtime picks its channel
+# once, at import); every other runtime message (window drags, ready) is
+# dropped, as a browser has no window to move.
+SHIM = (b'<script>window.chrome = window.chrome || {};'
+        b'if (!window.chrome.webview) window.chrome.webview = { postMessage: function (m) {'
+        b'if (typeof m === "string" && m.indexOf("secret ") === 0)'
+        b' fetch("/mock/secret", { method: "POST", headers: { "Content-Type": "text/plain" }, body: m });'
+        b'} };</script>')
+
+
 def handle(method_id, args):
     v = state["vault"]
     m = METHODS.get(method_id)
@@ -1588,6 +1812,14 @@ METHODS = {
     2169987085: close_decided,                                  # shell.CloseDecided (APP.md 2.4)
     1615108156: pending_open,                                   # shell.PendingOpen (APP.md 14)
 }
+# The first way in's ceremonies, played (see above): they answered None and
+# played nothing before, so a dialog's Continue led nowhere here.
+METHODS.update({
+    882388909: create_vault,                                    # vault.CreateVault
+    18027300: import_file,                                      # vault.ImportFile
+    1994498129: finish_setup,                                   # vault.FinishSetup
+    3770426637: cancel_unlock,                                  # vault.CancelUnlock
+})
 
 class H(SimpleHTTPRequestHandler):
     def __init__(self, *a, **k):
@@ -1597,6 +1829,17 @@ class H(SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        # The page itself, with the raw channel's stand-in ahead of its
+        # modules (SHIM, above).
+        if self.path.split("?")[0] in ("/", "/index.html"):
+            with open(os.path.join(DIST, "index.html"), "rb") as f:
+                data = f.read().replace(b"<head>", b"<head>" + SHIM, 1)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         # What the core would have emitted, drained by the page (see the
         # module docstring for the one line that dispatches them).
         if self.path.startswith("/mock/events"):
@@ -1637,6 +1880,10 @@ class H(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
+        if self.path.startswith("/mock/secret"):
+            # A line, not JSON: what the shim posts for System.invoke.
+            submit_secret(self.rfile.read(n).decode("utf-8"))
+            return self.reply({"ok": True})
         body = json.loads(self.rfile.read(n) or b"{}")
         if self.path.startswith("/mock/preview"):
             name = body.get("name", "")

@@ -822,6 +822,9 @@ export const refusedCopy = {
 // order (APP.md §6, Controls).
 export const dialogCopy = {
   cancel: "Cancel",
+  // The title of a dialog's corner close button, which does what Esc does
+  // (APP.md §6, Controls; ruled 2026-10-17); its name is plain *Cancel*.
+  cancelEsc: "Cancel (Esc)",
   close: "Close",
   howThisWorks: "How this works",
   working: "Working…",
@@ -1087,11 +1090,7 @@ export const lockCopy = {
   rebuildConsent: "Keep a copy of the damaged file and start a new vault",
   finishTitle: "Finish setting up",
   finishBody: "The vault opens with its recovery key first; then the unlock method you choose here is added.",
-  firstMethod: "First unlock method",
-  firstMethodHint: "A recovery key is always kept too.",
   entangleTick: "Also require a password with every YubiKey in this vault",
-  entangleFirst: "You choose it first, before the YubiKey is set up. Every YubiKey added later will ask for it too; the recovery key never does.",
-  passwordNext: "You choose the password in the next step.",
   // The touch a cancelled ceremony left on the YubiKey (APP.md §2.2).
   pendingTouch: "The YubiKey is still waiting for the touch you cancelled. Unlock again to pick it up, or touch it or pull it out to end it.",
   // Card 1's name with no vault yet, and the Blocked card's.
@@ -1118,6 +1117,45 @@ export const lockCopy = {
   replaceKept: "A file already at the chosen place is kept as a dated copy in Enfold's folder.",
 };
 
+// ---- The first unlock method's cards (APP.md §6, ruled 2026-10-17) -----
+//
+// The create, restore and finish-setup dialogs offer the first unlock
+// method as cards: each says what it is in one line until it is chosen,
+// and the chosen one opens on its fields. The recovery key's line is
+// fixed: a create always makes one, and an adopted backup keeps its own.
+// The line under the cards says what comes next, by the choice.
+export const firstMethodCopy = {
+  headCreate: "How you will unlock this vault",
+  headImport: "How you will unlock the imported vault",
+  token: { title: "YubiKey", line: "PIN and touch. Recommended." },
+  password: { title: "Password", line: "At least 8 characters." },
+  // The recovery key is not a choice: one caption line under the cards
+  // (ruled 2026-10-17; it was a third card), so it must stay one line at
+  // the dialog's 412 px measure (firstwayin.test.ts).
+  recoveryMade: "Recovery key — always made. You will print it or save it right after.",
+  recoveryKept: "Recovery key — the backup's own. It opens the backup first and stays.",
+  nameYubiKey: "Name this YubiKey",
+  // The tick's hint, shown ticked or not: the switch is the vault's, so
+  // every YubiKey added later inherits it (APP.md §13, FORMAT.md §3.1).
+  entangleHint: "Every YubiKey added later will ask for it too; the recovery key never does.",
+  passwordField: "Password",
+  again: "Type it again",
+  // The radio group's refusal when Continue is pressed with no card chosen.
+  chooseOne: "Choose a YubiKey or a password.",
+  next: {
+    token: "Next: insert the YubiKey, enter its PIN and touch it. Then your recovery key is shown once.",
+    password: "Next: your recovery key is shown once.",
+  },
+  // An adopted backup opens with its own recovery key before anything is
+  // added, and no new one is made.
+  nextAdopt: {
+    token: "Next: type the backup's recovery key, then insert the YubiKey, enter its PIN and touch it.",
+    password: "Next: type the backup's recovery key.",
+  },
+  // Card 2 while the password typed in the dialog answers the prompt.
+  sent: "Using the password you chose.",
+};
+
 // ---- Replacing the vault, and importing archives (APP.md §6, §13) -------
 //
 // *Replace this vault with a copy…* on the lock screen and *Restore from
@@ -1126,9 +1164,9 @@ export const lockCopy = {
 export const importCopy = {
   replaceTitle: "Replace this vault with a copy",
   restoreTitle: "Restore from a vault or backup",
-  backupReplaces: "It replaces this vault and opens with its recovery key; then you choose its first unlock method. Archives added after this backup was made are not in it.",
+  backupReplaces: "It replaces this vault and opens with its recovery key; then the unlock method chosen below is added. Archives added after this backup was made are not in it.",
   vaultReplaces: "It replaces this vault once it unlocks with one of its own unlock methods. Then unlock it as usual.",
-  backupRestores: "It becomes your vault and opens with its recovery key; then you choose its first unlock method.",
+  backupRestores: "It becomes your vault and opens with its recovery key; then the unlock method chosen below is added.",
   vaultRestores: "It becomes your vault once it unlocks with one of its own unlock methods.",
   proveWith: "Prove it with",
   methods: "Unlock methods",

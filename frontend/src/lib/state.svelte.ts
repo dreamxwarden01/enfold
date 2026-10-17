@@ -2,7 +2,7 @@
 // the little the page adds (route, selection, toasts). Every event is
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
-import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code } from "./api";
+import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code, submitSecret } from "./api";
 import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, moreNotOpened, openElsewhereText, purgedText, warningCopy } from "./strings";
@@ -78,6 +78,23 @@ class Store {
   // step so that a key the core refused comes back for correction
   // (APP.md §6); dropped when the ceremony ends.
   recoveryDraft = $state<string[] | null>(null);
+  // The password chosen in a create, restore or finish-setup dialog
+  // (APP.md §6, ruled 2026-10-17): typed there, in two fields, and held
+  // here from the dialog's Continue until the ceremony of that kind asks
+  // its Choose prompt — the first way in's password, which the core asks
+  // before the YubiKey is set up (§3) — then sent on that prompt over the
+  // raw channel and dropped. This is the only place it lives meanwhile:
+  // the dialog that typed it has closed. Not $state, since nothing
+  // renders it. It is dropped at every other end too: the ceremony
+  // ending first (failed, cancelled, blocked, done), the call that would
+  // have started it refused (dropChosen), and the panel dismissed for
+  // another ceremony (dismissCeremony).
+  private chosen: { kind: string; value: string } | null = null;
+  // chosenSent: the prompt the page answered from the dialog. Card 2
+  // shows no field for it, so a password vault never shows the Choose
+  // prompt in the normal case; a refusal of the answer (secret.refused)
+  // clears it, the prompt stands, and card 2 asks it as before.
+  chosenSent = $state("");
   ops = $state<Record<string, OpView>>({});
   archives = $state<ArchiveSummary[]>([]);
   showHidden = $state(false);
@@ -389,6 +406,9 @@ class Store {
     });
     Events.On("secret.refused", (e) => {
       const r = e.data as { code: string };
+      // The prompt the dialog's password answered still stands: card 2
+      // asks it now (APP.md §6, ruled 2026-10-17).
+      this.chosenSent = "";
       this.toast(codeText(r.code), "error");
     });
     // The close the shell cancelled (APP.md §2.4). No payload: the question
@@ -664,6 +684,7 @@ class Store {
     }
     if (s.ceremony && s.ceremony.seq > this.ceremonySeq) {
       this.ceremonySeq = s.ceremony.seq;
+      this.sendChosen(s.ceremony);
       this.ceremony = s.ceremony;
       this.noteOutcome(s.ceremony);
     }
@@ -725,6 +746,7 @@ class Store {
   private applyCeremony(c: CeremonyState): void {
     if (c.seq <= this.ceremonySeq) return;
     this.ceremonySeq = c.seq;
+    this.sendChosen(c);
     // A cancelled ceremony is over the moment it says so: nothing to
     // read, nothing to close.
     this.ceremony = c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled ? null : c;
@@ -743,6 +765,45 @@ class Store {
   dismissCeremony(): void {
     this.ceremony = null;
     this.recoveryDraft = null;
+    this.dropChosen();
+  }
+
+  // holdChosen keeps the password a dialog's Continue judged, for the
+  // Choose prompt of the ceremony of that kind the dialog is about to
+  // start — create, import or setup (APP.md §6, ruled 2026-10-17). Called
+  // after dismissCeremony and before the bound call, so the prompt can
+  // never arrive first. An empty value holds nothing: the YubiKey without
+  // the tick chooses no password.
+  holdChosen(kind: "create" | "import" | "setup", value: string): void {
+    this.chosen = value ? { kind, value } : null;
+    this.chosenSent = "";
+  }
+
+  // dropChosen forgets the held password: the bound call was refused, or
+  // the ceremony it was held for is over.
+  dropChosen(): void {
+    this.chosen = null;
+    this.chosenSent = "";
+  }
+
+  // sendChosen reads each ceremony event as it is accepted: the held
+  // password answers the first Choose password prompt of its own kind, at
+  // once, and is dropped; any end of that ceremony before it drops it
+  // unsent. An event of another kind changes nothing — the held password
+  // is never another ceremony's (the Vault page's Choose prompts are
+  // typed on that page).
+  private sendChosen(c: CeremonyState): void {
+    const ended = c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || c.step === CeremonyStep.StepBlocked;
+    if (ended) this.chosenSent = "";
+    const held = this.chosen;
+    if (!held || c.kind !== held.kind) return;
+    if (c.step === CeremonyStep.StepPassword && c.choose && c.promptId) {
+      this.chosen = null;
+      this.chosenSent = c.promptId;
+      submitSecret("password", c.promptId, held.value);
+      return;
+    }
+    if (ended) this.dropChosen();
   }
 
   private applyOp(o: OpView, done = false): void {

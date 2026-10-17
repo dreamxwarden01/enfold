@@ -14,6 +14,7 @@
     <symbol id="i-yubi" viewBox="0 0 20 20"><rect x="2.6" y="6" width="14.8" height="8" rx="2.4"/><circle cx="13.4" cy="10" r="2"/><path d="M5.4 8.6v2.8"/></symbol>
     <symbol id="i-touchdot" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2.6v1.8"/><path d="M10 15.6v1.8"/><path d="M2.6 10h1.8"/><path d="M15.6 10h1.8"/></symbol>
     <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4.5v11"/><path d="M4.5 10h11"/></symbol>
+    <symbol id="i-x" viewBox="0 0 20 20"><path d="m5.5 5.5 9 9"/><path d="m14.5 5.5-9 9"/></symbol>
     <symbol id="i-open" viewBox="0 0 20 20"><path d="M4 7V4.6h11.4V16H4v-2.4"/><path d="M10.4 10H2.8"/><path d="m5.8 7 3 3-3 3"/></symbol>
     <symbol id="i-folder" viewBox="0 0 20 20"><path d="M2.6 5.4h5.1l1.5 2h8.2V15a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V5.4Z"/></symbol>
     <symbol id="i-folder-add" viewBox="0 0 20 20"><path d="M2.6 5.4h5.1l1.5 2h8.2V15a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V5.4Z"/><path d="M13 10.4v3.2"/><path d="M11.4 12h3.2"/></symbol>

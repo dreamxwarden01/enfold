@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   DragOut: vi.fn(),
   CloseDecided: vi.fn(),
   PendingOpen: vi.fn(),
+  invoke: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -29,7 +30,7 @@ vi.mock("@wailsio/runtime", () => ({
       m.handlers[name] = fn;
     },
   },
-  System: { invoke: vi.fn() },
+  System: { invoke: m.invoke },
   Call: { ByID: vi.fn() },
   CancellablePromise: Promise,
   Create: new Proxy({}, { get: () => () => (v: unknown) => v }),
@@ -99,6 +100,7 @@ beforeEach(async () => {
   m.DragOut.mockReset();
   m.CloseDecided.mockReset().mockResolvedValue(undefined);
   m.PendingOpen.mockReset().mockResolvedValue({ seq: 0, path: "", rest: null });
+  m.invoke.mockReset();
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -1090,6 +1092,101 @@ describe("a created archive opened with the Add menu asked for (openNew)", () =>
     expect(store.takeAddAsked("b")).toBe(false);
     expect(store.takeAddAsked("a")).toBe(false);
     expect(store.takeAddAsked("")).toBe(false);
+  });
+});
+
+// The password chosen in the create, restore and finish-setup dialogs
+// (APP.md §6, ruled 2026-10-17): held by the store from the dialog's
+// Continue, sent at once on the ceremony's first Choose password prompt of
+// that kind, and dropped at every other end.
+describe("the dialog's chosen password, held for the Choose prompt (holdChosen)", () => {
+  const event = (seq: number, kind: string, step: string, promptId = "", choose = false, error = "") =>
+    m.handlers["vault.ceremony"]({ data: { seq, kind, step, promptId, choose, error } });
+  const sent = () => m.invoke.mock.calls.map((c) => c[0]);
+
+  beforeEach(() => {
+    m.Status.mockReturnValue(new Promise(() => {}));
+    store.boot();
+  });
+
+  it("answers the create's first Choose prompt at once, and only that one", () => {
+    store.holdChosen("create", "long enough");
+    event(2, "create", "");
+    expect(sent()).toEqual([]);
+    event(3, "create", "password", "p1", true);
+    expect(sent()).toEqual(["secret password p1 long enough"]);
+    expect(store.chosenSent).toBe("p1");
+    // Spent: a second Choose prompt (the first refused, asked anew) is
+    // card 2's to ask.
+    event(4, "create", "password", "p2", true);
+    expect(sent()).toHaveLength(1);
+  });
+
+  it("waits through an import's recovery key for the Choose prompt after it", () => {
+    store.holdChosen("import", "long enough");
+    event(2, "import", "recovery", "r1");
+    expect(sent()).toEqual([]);
+    event(3, "import", "deriving");
+    event(4, "import", "password", "p1", true);
+    expect(sent()).toEqual(["secret password p1 long enough"]);
+  });
+
+  it("answers from a status that carries the prompt as well as from the event", () => {
+    store.holdChosen("setup", "long enough");
+    m.handlers["vault.state"]({
+      data: { ...status(5, "unlocking"), ceremony: { seq: 6, kind: "setup", step: "password", promptId: "p1", choose: true } },
+    });
+    expect(sent()).toEqual(["secret password p1 long enough"]);
+    event(6, "setup", "password", "p1", true); // the same event, already applied
+    expect(sent()).toHaveLength(1);
+  });
+
+  it("never answers another ceremony's prompt, nor a password asked to prove one", () => {
+    store.holdChosen("create", "long enough");
+    event(2, "entangle", "password", "p1", true);
+    event(3, "unlock", "password", "p2", false);
+    event(4, "create", "password", "p3", false);
+    expect(sent()).toEqual([]);
+    event(5, "create", "password", "p4", true);
+    expect(sent()).toEqual(["secret password p4 long enough"]);
+  });
+
+  it("drops it unsent when the ceremony ends before the prompt — failed, cancelled, blocked", () => {
+    for (const [i, end] of [["failed", "token.no_service"], ["failed", "ceremony.cancelled"], ["blocked", ""]].entries()) {
+      store.holdChosen("import", "long enough");
+      event(10 * i + 2, "import", end[0], "", false, end[1]);
+      event(10 * i + 3, "import", "password", "p1", true);
+    }
+    expect(sent()).toEqual([]);
+  });
+
+  it("drops it when the call that would start the ceremony is refused, or the panel is dismissed", () => {
+    store.holdChosen("create", "long enough");
+    store.dropChosen();
+    event(2, "create", "password", "p1", true);
+    store.holdChosen("create", "long enough");
+    store.dismissCeremony();
+    event(3, "create", "password", "p2", true);
+    expect(sent()).toEqual([]);
+  });
+
+  it("holds nothing for a YubiKey without the tick", () => {
+    store.holdChosen("create", "");
+    event(2, "create", "password", "p1", true);
+    expect(sent()).toEqual([]);
+  });
+
+  it("gives the prompt back to card 2 when the core refuses the answer, and forgets it at the end", () => {
+    store.holdChosen("create", "long enough");
+    event(2, "create", "password", "p1", true);
+    expect(store.chosenSent).toBe("p1");
+    m.handlers["secret.refused"]({ data: { code: "vault.password_short" } });
+    expect(store.chosenSent).toBe("");
+    store.holdChosen("create", "long enough");
+    event(3, "create", "password", "p2", true);
+    expect(store.chosenSent).toBe("p2");
+    event(4, "create", "done");
+    expect(store.chosenSent).toBe("");
   });
 });
 

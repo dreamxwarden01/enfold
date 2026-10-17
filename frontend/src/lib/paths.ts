@@ -48,3 +48,45 @@ export function renameSelection(name: string, isDir: boolean): [number, number] 
   const dot = isDir ? -1 : name.lastIndexOf(".");
   return [0, dot > 0 ? dot : name.length];
 }
+
+// middlePath is a path shortened in the middle to at most max characters,
+// for a line that has room for one row (the create dialog's "Kept in";
+// APP.md §6, ruled 2026-10-17). CSS can only cut a line's end, which takes
+// the file name, the one part the user is choosing; so the cut is made
+// here, on the text. The root (a drive, a UNC share, or a leading
+// separator) and the file name are kept whole; the folders between are
+// put back as they fit, alternately the one nearest the file and the one
+// nearest the root, and those left out become one "…". The path's own
+// separator is kept. It is a display only: the caller puts the full path
+// in the title, and a path that fits is returned as it is.
+export function middlePath(p: string, max: number): string {
+  if (p.length <= max) return p;
+  const root = /^(?:[\\/]{2}[^\\/]+[\\/][^\\/]+|[A-Za-z]:|[\\/]?)/.exec(p)?.[0] ?? "";
+  const sep = /[\\/]/.exec(p)?.[0] ?? "\\";
+  const segs = p.slice(root.length).split(/[\\/]/).filter(Boolean);
+  const leaf = segs.pop();
+  if (leaf === undefined || segs.length === 0) return p; // nothing between to leave out
+  const prefix = root === "" || /[\\/]$/.test(root) ? root : root + sep;
+  const head: string[] = [];
+  const tail: string[] = [];
+  const show = () => prefix + [...head, "…", ...tail, leaf].join(sep);
+  let i = 0;
+  let j = segs.length - 1;
+  let nearFile = true;
+  let open = { file: true, root: true };
+  while (i <= j && (open.file || open.root)) {
+    const side = (nearFile && open.file) || !open.root ? "file" : "root";
+    nearFile = !nearFile;
+    if (side === "file") tail.unshift(segs[j]);
+    else head.push(segs[i]);
+    if (show().length <= max) {
+      if (side === "file") j--;
+      else i++;
+      continue;
+    }
+    if (side === "file") tail.shift();
+    else head.pop();
+    open = { ...open, [side]: false };
+  }
+  return show();
+}

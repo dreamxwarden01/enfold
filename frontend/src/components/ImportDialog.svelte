@@ -2,12 +2,15 @@
   // Replacing the vault with a copy, or restoring one at first run (APP.md
   // §2.1, §6; the two titles ruled 2026-10-17): pick the file, see what it
   // is and what will happen, confirm a replacement by name, then the
-  // ceremony proves the file on the lock screen. The secret itself — the
-  // recovery key, a password, a PIN — is never a field here.
+  // ceremony proves the file on the lock screen. The secret that proves it
+  // — the recovery key, a password, a PIN — is never a field here; a
+  // backup's new password is (FirstWayIn), typed twice and sent by the
+  // page at the ceremony's Choose prompt, after the recovery key (APP.md
+  // §6, ruled 2026-10-17) — never an argument of the bound call.
   import { Shell, Vault, VaultState, errorOf } from "../lib/api";
   import type { FileInfo } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText, dialogCopy, importCopy, vaultCopy } from "../lib/strings";
+  import { codeText, dialogCopy, firstMethodCopy, importCopy, vaultCopy } from "../lib/strings";
   import { dateTime, leaf, plural } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
@@ -31,9 +34,9 @@
   let problem = $state("");
   let name = $state("");
   let method = $state<"token" | "password" | "recovery">("password");
-  let kind = $state<"token" | "password">("token");
-  let label = $state("");
-  let entangle = $state(false);
+  // A backup's first unlock method (FirstWayIn): the cards hold it, the
+  // password among it, until the import's button takes it.
+  let first = $state<ReturnType<typeof FirstWayIn>>();
   let confirm = $state(false);
   let nameValid = $state(true);
   let attempt = $state(0);
@@ -91,11 +94,21 @@
   async function doImport() {
     attempt++;
     if (!info || !ready || !nameValid) return;
+    // A backup takes its first unlock method from the cards, which judge
+    // their own parts under the same press and answer null while any
+    // refuses (lib/firstwayin); a vault proves itself with its own and
+    // takes none — the core reads kind, label and tick for a backup alone.
+    const way = isBackup ? first?.take() : { kind: "token" as const, label: "", entangle: false, password: "" };
+    if (!way) return;
     onclose();
     store.dismissCeremony();
+    // Held before the call, for the Choose prompt the adopted backup asks
+    // after its recovery key (APP.md §6, ruled 2026-10-17).
+    store.holdChosen("import", way.password);
     try {
-      await Vault.ImportFile(path, name, method, kind, kind === "token" ? label : "Password", kind === "token" && entangle, kept && confirm);
+      await Vault.ImportFile(path, name, method, way.kind, way.label, way.entangle, kept && confirm);
     } catch (e) {
+      store.dropChosen();
       store.toast(codeText(errorOf(e).code), "error");
     }
   }
@@ -119,7 +132,15 @@
   });
 </script>
 
-<Dialog {title} {onclose}>
+<!-- A form (APP.md §6, Dialogs stay put; ruled 2026-10-17): Enter in the
+     name or a backup's password presses the primary shown — Use this file
+     in place, else Replace or Restore vault — under the form rule; a
+     greyed primary leaves Enter doing nothing, as the browser's implicit
+     submission does. The read-only path is no field to type in, so the
+     focus opens on the box until a file is read. Anchored at the top: a
+     file read, and a card opened, make it taller, and the title must not
+     climb. -->
+<Dialog {title} {onclose} onsubmit={() => void (eff === "inplace" ? useInPlace() : doImport())} anchored>
   <div class="field">
     <div class="field-top"><label for="im-path">{vaultCopy.file}</label></div>
     <div class="row">
@@ -143,7 +164,7 @@
     <TextField id="im-name" label={vaultCopy.name} bind:value={name} bind:valid={nameValid} {attempt} />
     {#if isBackup}
       <p>{kept ? importCopy.backupReplaces : importCopy.backupRestores}</p>
-      <FirstWayIn bind:kind bind:label bind:entangle idPrefix="im" />
+      <FirstWayIn bind:this={first} heading={firstMethodCopy.headImport} context="adopt" {attempt} idPrefix="im" />
     {:else}
       <p>{kept ? importCopy.vaultReplaces : importCopy.vaultRestores}</p>
       <div class="field">
@@ -170,9 +191,9 @@
   {/if}
   {#snippet actions()}
     {#if eff === "inplace"}
-      <button type="button" class="btn accent" disabled={!ready || openArchives > 0} onclick={useInPlace}>Use this file</button>
+      <button type="submit" class="btn accent" disabled={!ready || openArchives > 0}>Use this file</button>
     {:else}
-      <button type="button" class="btn accent" disabled={!ready || openArchives > 0} onclick={doImport}>{kept ? "Replace vault" : "Restore vault"}</button>
+      <button type="submit" class="btn accent" disabled={!ready || openArchives > 0}>{kept ? "Replace vault" : "Restore vault"}</button>
     {/if}
     <button type="button" class="btn" onclick={onclose}>{dialogCopy.cancel}</button>
   {/snippet}

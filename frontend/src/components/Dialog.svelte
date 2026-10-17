@@ -4,6 +4,7 @@
   import { fade, scale } from "svelte/transition";
   import { FAST, LEAVE, motion } from "../lib/motion";
   import { inPopover, isTopDialog, registerDialog } from "../lib/dialogs";
+  import { dialogCopy } from "../lib/strings";
 
   interface Props {
     title: string;
@@ -32,21 +33,40 @@
     // presses it — which, under the form rule, marks what would refuse
     // (lib/forms.ts) — and Escape still cancels. A form dialog opens with
     // the focus in its first field, the caret at the end, or over what
-    // `select` picks from the field's value (Rename's stem).
+    // `select` picks from the field's value (Rename's stem); one with no
+    // field to type in opens on its submit button, as WinUI's
+    // ContentDialog opens on its default button — the close question's
+    // Quit (APP.md §2.3, ruled 2026-10-17).
     onsubmit?: () => void;
     select?: (value: string) => [number, number];
+    // closeButton: a close button in the dialog's top-right corner, on the
+    // title's line, that does exactly what Escape does — greyed while
+    // onclose is left out (APP.md §6, Controls; ruled 2026-10-17). Opt-in:
+    // the close question has one, since its foot holds its two answers and
+    // no Cancel.
+    closeButton?: boolean;
+    // anchored: the box stands at a fixed distance from the top of the
+    // window instead of at its middle (APP.md §6, Dialogs stay put; ruled
+    // 2026-10-17). Opt-in, for a dialog whose height changes with a
+    // choice made in it — the create, finish-setup and restore dialogs,
+    // whose cards open — so its title stays put while the box grows
+    // downward; every other dialog is centred.
+    anchored?: boolean;
   }
-  let { title, onclose, dismissable = false, children, actions, wide = false, covered = false, onsubmit, select }: Props = $props();
+  let { title, onclose, dismissable = false, children, actions, wide = false, covered = false, onsubmit, select, closeButton = false, anchored = false }: Props = $props();
 
   // Focus moves into a dialog as it opens, so that a keyboard user is in
   // it and not still on the button that opened it: into the first field
-  // of a form, else onto the box.
+  // of a form, onto the submit button of a form with no field, else onto
+  // the box.
   let box: HTMLDivElement | undefined = $state();
   $effect(() => {
     if (!box) return;
-    const field = untrack(() => onsubmit) ? firstField(box) : null;
+    const form = untrack(() => onsubmit) !== undefined;
+    const field = form ? firstField(box) : null;
     if (!field) {
-      box.focus();
+      const act = form ? box.querySelector<HTMLButtonElement>('button[type="submit"]:not([disabled])') : null;
+      (act ?? box).focus();
       return;
     }
     field.focus();
@@ -55,10 +75,14 @@
     field.setSelectionRange(from, to);
   });
 
+  // The first field to type in: never a read-only one (the import
+  // dialog's path, filled by its Choose… button) nor one inside a closed
+  // card, which is inert and would refuse the focus (FirstWayIn).
   function firstField(root: HTMLElement): HTMLInputElement | HTMLTextAreaElement | null {
-    return root.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-      'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([disabled]), textarea:not([disabled])',
+    const all = root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+      'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly])',
     );
+    return [...all].find((el) => !el.closest("[inert]")) ?? null;
   }
 
   function submit(e: SubmitEvent) {
@@ -89,6 +113,12 @@
   // stays (APP.md §6: Esc closes only the menu).
   function key(e: KeyboardEvent) {
     if (e.key === "Escape" && !e.defaultPrevented && onclose && topmost()) onclose();
+  }
+
+  // The corner close button is Escape by another hand: the same onclose,
+  // under the same topmost rule.
+  function cancel() {
+    if (onclose && topmost()) onclose();
   }
 
   // While a dialog is up the page behind it is inert (APP.md §6): the
@@ -143,7 +173,7 @@
 
 <svelte:window onkeydowncapture={trap} onkeydown={key} onfocusin={refocus} />
 
-<div class="backdrop" role="presentation" bind:this={backdrop} in:fade|global={motion()} out:fade|global={motion(LEAVE)} onmousedown={backdropDown} onclick={backdropClick}>
+<div class="backdrop" class:anchored role="presentation" bind:this={backdrop} in:fade|global={motion()} out:fade|global={motion(LEAVE)} onmousedown={backdropDown} onclick={backdropClick}>
   <div class="dialog" class:wide role="dialog" aria-modal={covered ? undefined : true} aria-label={title} tabindex="-1" bind:this={box} inert={covered || undefined} in:scale|global={motion(FAST, { start: 0.97 })} out:fade|global={motion(LEAVE)}>
     {#if onsubmit}
       <!-- display: contents makes the body and the foot the box's own
@@ -160,7 +190,14 @@
      and the band draws them in equal widths. -->
 {#snippet parts()}
   <div class="dialog-body">
-    <h2>{title}</h2>
+    {#if closeButton}
+      <div class="dialog-head">
+        <h2>{title}</h2>
+        <button type="button" class="btn subtle dialog-close" title={onclose ? dialogCopy.cancelEsc : undefined} aria-label={dialogCopy.cancel} disabled={!onclose} onclick={cancel}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button>
+      </div>
+    {:else}
+      <h2>{title}</h2>
+    {/if}
     {@render children()}
   </div>
   {#if actions}
@@ -179,4 +216,25 @@
      clear of the edges. */
   .dialog.wide { width: 640px; }
   .dialog-form { display: contents; }
+  /* The top anchor (APP.md §6, Dialogs stay put; ruled 2026-10-17): the
+     box's top at a tenth of the window, as WinUI's tall dialogs sit high,
+     but never lower than where a 780 px box would stand centred — the
+     create dialog with the YubiKey's tick on, 775 px, rounded up — so
+     that one still fits whole once it grows (the import dialog's backup
+     with the tick on is taller and scrolls at 820 px; 780 is also that
+     window's cap, 820 less 20 at each end); and never nearer the edge
+     than the 20 px every dialog keeps. So the top is at 20 at 820 px and
+     below, 60 at 900, 108 at 1080; the box grows downward only, to 20 px
+     from the bottom, past which its body scrolls as every dialog's does. */
+  .backdrop.anchored { --anchor: max(var(--s5), min(10vh, 50vh - 390px)); align-items: flex-start; }
+  .backdrop.anchored .dialog { margin-top: var(--anchor); max-height: calc(100vh - var(--anchor) - var(--s5)); }
+  /* The title's line with the corner close button (APP.md §6, Controls;
+     ruled 2026-10-17): a 32 px subtle button at the body's own 24 px
+     inset, centred on the title's first 28 px line. The 2 px it stands
+     past that line above and below are taken back, so the body under the
+     title starts where it does in every other dialog; a long title wraps
+     beside it, never under it. */
+  .dialog-head { display: flex; align-items: flex-start; gap: var(--s2); }
+  .dialog-head h2 { flex: 1 1 auto; min-width: 0; }
+  .dialog-close { flex: none; width: 32px; margin: -2px 0; padding: 0; justify-content: center; }
 </style>

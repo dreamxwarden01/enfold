@@ -523,11 +523,13 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
 the window should exit the archive; minimising to the taskbar is not that") — and **the close
 button never means "to the tray" until the user has said so** (ruled 2026-09-13: "we must not
 default to going to the tray"): the first close — the button, Alt+F4, the taskbar's close —
-is cancelled and the page asks, in its own dialog, *Quit* or *Keep running in the tray* — two
-standard buttons in that order, neither in the accent, with the focus on the dialog's box and
-not on either (ruled 2026-10-17: by the ruling of 2026-09-13 the question has no primary, so
-§6's primary-first order of the foot band does not reach it) — with *Remember my choice*
-unticked; Esc or the backdrop is neither, the window stays.
+is cancelled and the page asks, in its own dialog, *Quit* or *Keep running in the tray* —
+*Quit* the accent and the default, first in the foot band, with the focus on it as the dialog
+opens and Enter pressing it, and *Keep running in the tray* the standard button beside it, with
+no third (ruled 2026-10-17, the user's: the default is Quit, so the close still never defaults
+to the tray) — with *Remember my choice* unticked, kept for whichever of the two is pressed.
+The close button in the dialog's top-right corner and Esc cancel the question: the dialog
+closes, the window stays, and nothing is remembered; a click on the backdrop is nothing.
 The answer, remembered or not, is `Settings.CloseAction` — `ask` (the default) · `tray` ·
 `quit` — and the Settings page shows it as *When the window closes: Ask each time · Keep
 running in the tray · Quit*, so the remembering is undone there too. *Quit* is the shell's Quit
@@ -684,7 +686,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
   generates — a cancel at the password leaves nothing on the token; enrolling into an existing
   vault never asks, the key inheriting the vault's setting (§13). Such prompts carry `Choose: true` on the ceremony state (the
   page says "choose a password", never the same words as an existing one); a password typed to
-  prove a current way in never does.
+  prove a current way in never does. The first way in's is typed in the dialog that starts the
+  ceremony and sent by the page at that prompt (§6, ruled 2026-10-17); the core is unchanged.
 - Events: `vault.state` (the whole status), `vault.ceremony {Seq, Step, PromptID, SlotLabel,
   Retries, RetriesKnown, ReaderCount, N, Error, Method, RecoveryID}` (`Method` — token · password ·
   recovery — is what the lock screen's wording follows, since an adopted pending touch carries no
@@ -1467,15 +1470,26 @@ ruled 2026-10-17) picks the file, shows what it is — vault or
 backup, its date, its ways in by kind (the fact reads *Unlock methods*), whether it claims to be this vault and newer — and says
 what will happen before the button is pressed: a vault is copied in and must unlock with one of
 its own ways in (chosen here: "prove it with"); a backup is copied in and opened with its recovery
-key, then takes the first way in (the kind, a name for a key — never a secret); with a vault kept
+key, then takes the first way in chosen on the same cards as the create dialog's (below; headed
+*How you will unlock the imported vault*, its recovery line "Recovery key — the backup's own. It
+opens the backup first and stays." (ruled 2026-10-17; it was a card),
+since a backup keeps its own and no new one is made, and its line under the cards naming the
+backup's recovery key first) — the password, standalone or with every YubiKey, chosen afresh
+(FORMAT R28) and typed there, answering the Choose prompt the ceremony asks after the recovery
+key (ruled 2026-10-17); with a vault kept
 here, a confirmation names the vault being replaced and its date, says it is kept as a dated copy
 whose ways in stay valid, and, for a backup, that archives added since its date are not in it —
 the button stays disabled until it is ticked. "Use the file where it is" is an advanced link for
 a vault, with the warning that removable media and network shares are outside Enfold's
 protection; choosing it turns the confirmation into "switch to this file — it stays where it is".
 With archives open, both dialogs say so and their buttons stay disabled. The create dialog shows
-where the vault will live and offers "keep it elsewhere" as a small subtle button, not a field
-(ruled 2026-10-17; it was a link); in its rebuild
+where the vault will live on one caption line 4 px under the name — *Kept in*, the path in mono,
+then the button (ruled 2026-10-17) — and offers *Keep it elsewhere…* (once a place is chosen, *Use
+the usual place*) as a hyperlink button in the line's caption, not a field. The line never wraps
+(ruled 2026-10-17: the full path pushed the button to a row of its own): the path is cut in the
+middle to what the row holds beside the button — the drive and the file name kept whole, the
+folders nearest each put back as they fit, "…" for the rest (`lib/paths.ts` `middlePath`) — and
+the full path is its title; in its rebuild
 form (§2.1) the place is pinned to the damaged file's — no button — and the tick "keep a copy of
 the damaged file and start a new vault" is the one consent (cleared each time the dialog opens);
 over a file that is simply absent it shows no replacement bar and no tick, since nothing is
@@ -1508,7 +1522,7 @@ a text file…*, which first says what place to choose and then opens the native
 <id>", with the key's ID (FORMAT §18.4) and never the vault's name, which says nothing about
 which sheet this is; the same string heads the text file and the sheet, and the page sets
 `document.title` to it for the print, which is what Print to PDF offers as the file name. None asks a second time: after a save the core acknowledged, a print, or *I have written it
-down*, the corner button is *Done* and one click closes the dialog. It names the key's ID
+down*, its accent button — first in the foot band — is *Done* and one click closes the dialog. It names the key's ID
 once, above the digits, and says the key can be shown again from the Vault page — the page
 named as the rail names it, never a "Keys page" no screen shows (ruled 2026-10-14; the rail's
 name is *Vault* since 2026-10-17) — unlock,
@@ -1516,17 +1530,62 @@ then prove a YubiKey or a password once more — and, when the fetch of the one-
 that the key can be shown again from there, with *Done* as the one way out. It is not dismissed
 by Escape or the backdrop, and it closes when a lock trigger locks the vault it was shown on.
 
-**The create and enrol dialogs name the key, never the secret.** A token gets "Name this key"
-(the label shown in the list of ways in); a password way in has no name field — its slot is
-"Password" — and the dialog says the password is chosen in the next step, because a typed
-secret never rides a bound-method argument (§1). The enrol dialog is *Add an unlock method*,
+**The create dialog's first way in is a group of cards** (ruled 2026-10-17, the user's, for
+direction 1), headed *How you will unlock this vault*, in this order: *YubiKey* ("PIN and touch.
+Recommended."), *Password* ("At least 8 characters."), and under them, 4 px below as the cards are
+below each other, the recovery key, which is not a choice and so not a card: one caption line
+with its icon, "Recovery key — always made. You will print it or save it right after." (ruled
+2026-10-17; it was a third card, and with a card open the dialog outgrew an 820 px window). The
+cards are compact (ruled 2026-10-17): 4 px apart, their inset 12, a strip's, and 8 between the
+parts of an open card but 12 between its two password fields. The two choices are
+a radio group whose cards are labels round real radios: the arrow keys move the choice and the
+card follows, the card's whole head is the click target, and the focus ring is the card's. Until
+one is chosen — nothing is, as the dialog opens — every card shows only its icon, title and line;
+the chosen card opens on its fields as the other closes, its row growing from nothing over 220 ms
+on the entering curve (none under reduced motion). The YubiKey's card holds *Name this YubiKey*,
+optional, and the tick "Also require a password with every YubiKey in this vault", with its hint
+under it in a caption, ticked or not: "Every YubiKey added later will ask for it too; the recovery
+key never does." (ruled 2026-10-17: the vault's fact the old notes said, back as the option's
+description); ticking it opens *Password* and *Type it again* under the tick. The Password card
+holds the same two fields, and its line folds away as they open (ruled 2026-10-17): the
+requirement it states is the rule under the first field, said once, in the one place the form
+rule turns red — the YubiKey's tick opens the same two fields with no such line above them; a
+password unlock method has no name field — it is "Password". **The chosen password is typed in
+the dialog**, never in a later step: the core asks it first, before the YubiKey is set up (§3),
+so the dialog's *Create vault* judges the cards under the form rule (below: no choice made, the
+minimum of 8, the two copies the same — each refusing part marked on the press), starts the
+ceremony with the kind, the name and the tick alone, and the page answers the ceremony's first
+prompt, the `Choose` password prompt, at once with the typed password — on the raw channel under
+that prompt's id, never as an argument of the bound call (§1) — and forgets it. The store holds it
+from the press until that prompt and nowhere else, and drops it unsent at every other end: the
+call refused, the ceremony failed, blocked or cancelled first, the panel dismissed for another
+ceremony; a dialog closed without its button takes it nowhere. So card 2 never asks the `Choose`
+prompt of a create in the normal case — it says "Using the password you chose." for the moment
+the answer is in flight — and asks it as before, two fields under one *Continue*, only when the
+core refuses the answer all the same (`vault.password_short`, which the dialog's judge makes
+unreachable). A card or a tick that closes empties its fields. Under the recovery key's line one
+line says what comes next and follows the choice — "Next: insert the YubiKey, enter its PIN and
+touch it. Then your recovery key is shown once." or "Next: your recovery key is shown once." — a
+caption, empty until a choice is made and one caption line tall then (ruled 2026-10-17; it was
+two lines of body either way, which left 40 px empty under the shorter lines). Enter in the name
+or a password field presses *Create vault*, and the dialog opens with the focus in the name (the
+form dialogs, below). The create dialog's tallest state, the YubiKey's card ticked, fits an 820 px
+window whole (775 px), and so does the import dialog's backup with the Password card open (779);
+the import dialog's backup with the YubiKey's card ticked does not — its file row, facts and name
+above the cards make a body of 864 px against the 705 an 820 px window leaves it, so that body
+scrolls — and at 1024 × 768 the create dialog ticked and the import dialog's Password card scroll
+by about 50 px (measured 2026-10-17; fitting those needs shorter import copy or a wider import
+dialog, not yet ruled). *Finish setting up* uses
+the same cards, its recovery line and its next line those of an adopted backup (the import
+dialog, above). The enrol dialog names the key, never the secret: a token gets "Name this key" (the label
+shown in the list of unlock methods), and a password is chosen in the ceremony that follows,
+because the vault must first check an unlock method. The enrol dialog is *Add an unlock method*,
 its kind field *Unlock method*, and a recovery key's name field says "Shown in the list of unlock
-methods." (ruled 2026-10-17; it was *Add a key*, *Kind* and "ways in"); the create dialog's
-first field is *First unlock method*. Ticking "Also require a password with every YubiKey in
-this vault" says the password is chosen first, before the key is set up. A key's name is optional,
-and its empty field says what an empty field produces — "Named after its serial number", the
-core's "YubiKey 12345678" — never an invented name that reads as a default already filled in;
-a recovery key's, which must be named, shows no placeholder at all (ruled 2026-10-14).
+methods." (ruled 2026-10-17; it was *Add a key*, *Kind* and "ways in"). A YubiKey's name is
+optional, in the create dialog and the enrol dialog alike, and its empty field says what an empty
+field produces — "Named after its serial number", the core's "YubiKey 12345678" — never an
+invented name that reads as a default already filled in; a recovery key's, which must be named,
+shows no placeholder at all (ruled 2026-10-14).
 
 **Forms and their errors.** A field that holds something wrong is marked once the user leaves it
 — the underline turns red, and nothing else about the field does (no frame and no ring, whether
@@ -1698,10 +1757,26 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   well. A popover (a menu) closes on any click outside, as menus do. The Archive page's dialogs
   that ask for a name or a path — *Rename…*, *Create folder…*, the extract dialog, a refused
   name's *Rename…* — are forms (ruled 2026-10-14; the Archives page's *New archive…* is not one
-  yet): each one's accent action is the submit button, so Enter in the field
-  presses it, under the form rule, and Esc still cancels; it opens with the focus in its field,
-  the caret at the end — *Rename…*'s with the stem selected — where every other dialog takes the
-  focus on its box.
+  yet), and so are the lock screen's dialogs that take a name or a password — *Create a vault*
+  (and *Rebuild the vault*), *Finish setting up* and the import dialog (ruled 2026-10-17; Enter in
+  their password fields did nothing): each one's accent action is the submit button, so Enter in a
+  field presses it, under the form rule — a greyed one leaves Enter doing nothing — and Esc still
+  cancels; Enter on a card's radio or the tick presses it too, as WinUI's default button does, so
+  Enter on the YubiKey's card starts the ceremony with the name it has (optional); it opens with the focus in its first field to type in, the caret at the end —
+  *Rename…*'s with the stem selected, the create dialog's in the name — never a read-only one (the
+  import dialog's path, which its *Choose…* fills) nor one inside a closed card; one with no field
+  to type in yet opens on its submit button when that is enabled (*Finish setting up*'s
+  *Continue*, until a card opens) and on its box when it is not (the import dialog before a file is
+  read). Every other dialog takes the focus on its box, save the close question: a form with no
+  field, it opens with the focus on its submit, *Quit*, which Enter presses (§2.3, ruled
+  2026-10-17). A dialog whose height changes with a choice made in it is anchored at the top
+  (ruled 2026-10-17: centred, each card that opened moved the title up, from 123 px to 20): the
+  create, finish-setup and import dialogs stand with their top at a tenth of the window, never
+  lower than where a 780 px box would stand centred (the create dialog's tallest state, 775 px,
+  rounded up) and never nearer the edge than 20 px — 20 at an 820 px window and below, 108 at
+  1080 — and grow downward only, their body scrolling past 20 px from the bottom as every dialog's
+  does (the import dialog's backup with the YubiKey's card ticked is taller and scrolls at 820 px,
+  above). Every other dialog is centred.
 - *Type and spacing* (ruled 2026-10-17; the sizes inherited from the mockup — 12.5 and 11.5
   among fifteen, on a 1.45 line — are gone). Six type tokens and no other size, each on a
   whole-pixel line: caption 12/16, body 13/20, strong (600) 13/20 in Segoe UI Variable Text;
@@ -1715,14 +1790,17 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   No capitals and no tracking: an eyebrow or a step label is a caption as written, in
   sentence case. A link that runs in a sentence takes that sentence's type: in a caption line
   it is a caption, never a step larger than its own words. Every inset and gap is on a 4 px grid (4, 8, 12, 16, 20, 24): a card's inset
-  is 16 and a strip's (a bar, an op row, a toast) 12; an icon stands 8 from its label, 12
+  is 16 and a strip's (a bar, an op row, a toast) 12 — and 12 for the compact cards of a first
+  way in, which must fit a dialog (ruled 2026-10-17); an icon stands 8 from its label, 12
   beside a 20 px icon; the layer's gutter is 24. The fixed heights stay as ruled — the 40 px
   locked line, the 42 px op row, the 44/64 panel, the 36 px rows, the 62 px head. A fact is
   drawn one way, a label · value list: the label a caption in the second ink, its column as
   wide as its longest label up to 120 px, the value in body beside it and left-aligned,
   wrapping onto as many lines as it needs (ruled 2026-10-17: it was one line that ellipsized,
   and the preview's narrow column cut "71% smaller" off its value) — or, for a path or a hash,
-  the label over the value, which wraps and is never cut. An option's label — a checkbox's, a
+  the label over the value, which wraps and is never cut; the one path drawn on a single line
+  beside its label, the create dialog's *Kept in*, is cut in the middle with its drive and file
+  name kept and the whole path in its title (ruled 2026-10-17). An option's label — a checkbox's, a
   radio's — is the ink, since it is what is chosen; a description under it is the second ink
   (ruled 2026-10-17; the labels were the second ink and read as hints). A row taller than its
   name's line — an archive with a description, a refused name with its reason — stands every
@@ -1750,11 +1828,13 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   states themselves). One rule for what looks like a link: a command is a button — *Cancel*,
   *Lock now*, "Use recovery key instead" are subtle buttons, 24 px high in the layer's foot —
   the lock screen's further commands too (*Test that a backup opens…*, *Replace this vault with
-  a copy…*, *Rebuild the vault…*, the card's *Cancel*: 28 px), the create dialog's *Keep it
-  elsewhere…* (24 px, on its label's line) and the replaced copy's *Restore it…*, a small button
-  on its bar's 40 px line (ruled 2026-10-17; each was a link) —
+  a copy…*, *Rebuild the vault…*, the card's *Cancel*: 28 px) and the replaced copy's *Restore
+  it…*, a small button on its bar's 40 px line (ruled 2026-10-17; each was a link) —
   and a hyperlink button (*Show in Explorer*, *Locate…*, *Technical details…*) is kept for going somewhere
-  or revealing something: the accent ink with no underline at rest (the underline at rest,
+  or revealing something, and for the create dialog's *Keep it elsewhere…* and *Use the usual
+  place*, which go to another place for the vault and stand in its one caption line, in the
+  line's caption (ruled 2026-10-17; it was a 24 px subtle button, which with the path wrapped to
+  a row of its own): the accent ink with no underline at rest (the underline at rest,
   ruled 2026-09-07, is gone), a subtle fill on hover as it darkens (`--accent-ink-hover`, a
   step past `--accent-ink`; brighter in the dark theme, where contrast goes the other way).
   Only a link inside running text keeps its underline, which thickens on hover. A button's
@@ -1784,7 +1864,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   below its buttons and 24 at the sides, which holds them in equal widths and wraps a button
   to a row of its own rather than let it spill, in WinUI's content-dialog order — the act
   first, then any other way on, and the way out (*Cancel*, *Close*, *Go back*) last (ruled
-  2026-10-17; the act used to stand last, at the right); Esc and Enter do what they did. Each page's head is one
+  2026-10-17; the act used to stand last, at the right); Esc and Enter do what they did. A
+  dialog whose foot holds no way out has a close button in its top-right corner instead, on
+  the title's line at the body's 24 px inset: a 32 px subtle button with the × glyph, titled
+  *Cancel (Esc)*, that does exactly what Esc does (ruled 2026-10-17). Only the close question
+  has one (§2.3), its foot being its two answers. Each page's head is one
   height, the line of a 32 px button, whether or not it carries one, so the body never starts
   at a different place from one page to the next; the Archive page's heading button is exactly
   its title's line. A column of magnitudes — a size — is right-aligned, its header with it, so
@@ -2140,8 +2224,10 @@ forgotten, ForgottenAt, Differs []{Field, Theirs}, Ticked}, Tampered}` (Tampered
 its own R25 hash), `Vault.MergeRecords(handle, ids)` (a registry write on the session)
 and `Vault.DiscardRecords(handle)`, `Keys.EntangledState()`, `Keys.SetEntangled(on)` and
 `Keys.ChangeEntangledPassword()` (ceremonies of kind `entangle`; the standalone password and the
-first way in are the only `Choose` prompts, confirmed on the page in a second field under the one
-prompt), `Vault.LastExportAt() int64` (seconds, zero for *never*). Codes this adds:
+first way in are the only `Choose` prompts, each typed twice on the page and sent once under the
+one prompt — the first way in's in two fields of the create, restore or finish-setup dialog,
+which answer the ceremony's first `Choose` prompt from there, the rest in a second field under
+the one prompt; ruled 2026-10-17), `Vault.LastExportAt() int64` (seconds, zero for *never*). Codes this adds:
 `archive.forgotten`, `archive.delete_failed`, `archive.file_unreachable`,
 `archive.not_this_archive` (the proven mismatch: nothing removed, the page asks once more before
 forgetting), `archive.description_long`, `archive.name_invalid` (a rename that is empty or over

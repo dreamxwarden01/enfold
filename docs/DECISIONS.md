@@ -4722,3 +4722,44 @@ its KID. Open for the user: a described row is now 52 px where one-line rows are
 now names the file's key, not the vault's; "Name this key" in the add-method dialog is the one
 bare key left, by the spec's own quote; Enter confirms the Delete dialog once the typed name
 matches. Nothing of this phase has been seen in a real window: the user's eye is the next gate.
+
+**The close question's buttons, by the user** (2026-10-17). Phase 1's fix pass had made the
+close question's two buttons equal — standard both, *Quit* first — reading the 2026-09-13 ruling
+as a ban on any default. Seeing it, the user ruled otherwise: if the window's close is to ask,
+the question wants a way out of its own — a close button in its top-right corner that cancels
+the question, leaves the window open and remembers nothing, the same as Esc — and *Quit* drawn
+in the accent, since quitting is what closing means by default; *Keep running in the tray* stays
+a standard button beside it, and "Remember my choice" applies to whichever is pressed. This
+keeps the 2026-09-13 point exactly: the close never defaults to the tray — it defaults to
+quitting, and Enter says so. Built as a corner button the dialog component offers on request (32
+px, subtle, the × glyph, on the title's line inside the dialog's padding; "Cancel (Esc)" as its
+title), used by this dialog first and open to others later; the footer band holds the two
+answers only. APP.md §2.3 says it.
+
+**The first way in, built** (2026-10-17). Seeing the new build, the user asked why the create
+flow looked unchanged — it was: the ruling of the same morning had been recorded, not built, and
+phase 1 only restyled the old select. Built now, ahead of the rest of direction 1: the method
+cards (YubiKey, Password, and the recovery key as one fixed caption line rather than a card, so
+the dialog fits), collapsed until chosen, the chosen one opening by grid rows over 220 ms with
+the other closing, real radios under the card heads so the arrows move the choice; the YubiKey's
+optional name and the tick for a password with every YubiKey, whose hint says that every YubiKey
+added later asks for it and the recovery key never does; the two password fields sliding open
+under the tick or in the Password card, judged by the form rule and the minimum of 8 before
+anything starts; a caption under the cards saying what comes next; the location line as one
+caption line with the path shortened in the middle; the create, setup and import dialogs as
+forms, anchored at the top so the head stays put while a card grows (the create dialog's tallest
+state, 775 px, fits an 820 px window). The password's path: typed in the card's own state, never
+bound out; taken by *Create vault* into a one-shot slot in the store; sent through
+`submitSecret` at the ceremony's first Choose prompt — which the core asks first for both kinds
+— and cleared there, on every end of that ceremony before the prompt, on the dialog's close and
+on a failed call; card 2 then says "Using the password you chose." and falls back to its two
+fields if the core keeps the prompt. The mock now plays the create, import and setup ceremonies
+so the flow can be shot. Left open, measured: the import dialog with a backup and the YubiKey
+ticked is 864 px of body and scrolls at 820 (shorter import copy, a wider import dialog, or
+folding its facts — not ruled); the create dialog with a chosen place scrolls 47 px when the
+replace note adds two lines; at 1024x768 the ticked states scroll by about 50 px; the anchor is
+20 px rather than a tenth of the window until the window is about 975 px tall; the tick's hint
+wraps to two caption lines; the open card's focus ring touches the next card 4 px below; Enter
+on a card's radio submits, as WinUI's default button does, so Enter on the YubiKey card starts
+the ceremony with the name it has. Also in the same commit: the close question as the user ruled
+it (the entry above).

@@ -4,10 +4,14 @@
   import { fly } from "svelte/transition";
   import { motion, delay, enter, GAP, MOVE } from "../lib/motion";
   import { leavesHint } from "../lib/rail";
+  import { settingsCopy, vaultCopy } from "../lib/strings";
 
+  // The vault's page is *Vault* (ruled 2026-10-17; it was "Keystore",
+  // a format word, while every sentence said "vault"). The route keeps
+  // its name: it is code, not copy.
   const items: { route: Route; label: string; icon: string }[] = [
     { route: "archives", label: "Archives", icon: "i-archives" },
-    { route: "keys", label: "Keystore", icon: "i-keystore" },
+    { route: "keys", label: vaultCopy.title, icon: "i-keystore" },
   ];
 
   function current(route: Route): boolean {
@@ -38,7 +42,7 @@
   <div class="rail-gap"></div>
   <div class="rail-foot">
     <button type="button" class="rail-item" aria-current={store.route === "settings" ? "page" : undefined} title={leaves} onclick={() => store.go("settings")}>
-      <svg class="i"><use href="#i-settings" /></svg>Settings
+      <svg class="i"><use href="#i-settings" /></svg>{settingsCopy.title}
     </button>
   </div>
 </nav>

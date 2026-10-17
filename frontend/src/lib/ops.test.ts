@@ -31,7 +31,7 @@ describe("the running operation's name", () => {
   it("names the kinds that count nothing", () => {
     expect(opLabel("verify", 0)).toBe("Verifying");
     expect(opLabel("compact", 0)).toBe("Compacting");
-    expect(opLabel("rotate", 0)).toBe("Rotating key");
+    expect(opLabel("rotate", 0)).toBe("Re-keying archive");
   });
 
   it("says what the core's own compaction is for, not what it is", () => {
@@ -60,14 +60,14 @@ describe("the running operation's name", () => {
     expect(opLabel("verify", 0, "hashing", "Photos 2024")).toBe("Verifying Photos 2024");
     expect(opLabel("compact", 0, "", "Photos 2024")).toBe("Compacting Photos 2024");
     expect(opLabel("reclaim", 0, "moving", "Photos 2024")).toBe("Reclaiming space in Photos 2024");
-    expect(opLabel("rotate", 0, "", "Photos 2024")).toBe("Rotating the key of Photos 2024");
+    expect(opLabel("rotate", 0, "", "Photos 2024")).toBe("Re-keying Photos 2024");
     expect(opLabel("dragout", 2, "dragging", "Photos 2024")).toBe("Dragging 2 items from Photos 2024");
     expect(opLabel("dragout", 2, "preparing", "Photos 2024")).toBe("Extracting 2 items from Photos 2024");
   });
 
   it("is the verb alone when the archive's name is not known", () => {
     expect(opLabel("verify", 0, "", "")).toBe("Verifying");
-    expect(opLabel("rotate", 0, "")).toBe("Rotating key");
+    expect(opLabel("rotate", 0, "")).toBe("Re-keying archive");
   });
 });
 

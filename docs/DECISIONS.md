@@ -4622,3 +4622,103 @@ regenerated, the mock's canned status carries the fields (a state made unlocked 
 gets the defaults). One label still knows the default by itself — Settings' "default (10
 minutes)" — and goes with direction 8's copy. APP.md §3 lists the fields, §6 names them for the
 foot.
+
+**The first way in, as the user wants it** (2026-10-17, ruled for direction 1, to be built in
+phase 2). Reading direction 1's mock of the create dialog, the user had one change: until a way
+in is chosen, each way's card shows only its compact introduction — no name field, no password,
+no checkbox — and the chosen card expands on the click, animated, the other collapsing as it
+opens; the chosen password, standalone or the one every YubiKey must carry, is typed in that
+step, two fields that slide open under the card (under the checkbox, for a YubiKey) rather than
+in a later prompt; and the YubiKey's name stays optional. Checked against the core: `firstWayIn`
+asks the chosen password *first*, before the key is enrolled, for both kinds, so the dialog's
+*Continue* starts the ceremony and the page sends the typed password at that first prompt by the
+auto-send path a PIN's acceptance already uses, then clears it — the secret stays in the page no
+longer than it does today, and the core changes nothing. Taken with it, the orchestrator's
+additions: a line under the cards that says what comes next and changes with the choice ("Next:
+insert the key, enter its PIN and touch it. Then your recovery key is shown once." / "Next: your
+recovery key is shown once."); the recovery key as a fixed card that says it is always made and
+shown right after; the same component reading right in the import dialog ("How you'll unlock the
+imported vault"); the mock's location line ("Kept in … · Keep it elsewhere…"); the expansion by
+grid rows over 220 ms on the entering curve, still under reduced motion; arrow keys moving the
+choice with the expansion following; the form rule of `lib/forms.ts` for the fields and the
+minimum of 8 for the password. Phase 1 (directions 2, 5, 8) was approved the same day and
+started first, since direction 1's mocks are drawn in its tokens and words.
+
+## 2026-10-17 — Phase 1 of the polish review: the type ramp, the controls, the words
+
+**Direction 2, a type ramp and a 4 px grid** (2026-10-17). Built as the review drew it: six type
+tokens on whole-pixel line boxes — cap 12/16, body 13/20, strong 600 13/20, sect 600 16/22, sub
+600 20/28, hero 600 28/36 — and nothing else (the fifteen sizes are gone, with every
+letter-spacing, uppercase eyebrow and weight but 400 and 600); a spacing scale of 4, 8, 12, 16,
+20, 24 with its rules of use (card inset 16, strip 12, icon-to-label 8, layer gutter 24), the
+twenty-three literal gaps snapped to it; secondary text in `--ink-2` wherever it is read (6:1 or
+better on every ground in both themes), `--ink-3` only for a placeholder, a disabled label, an
+icon; one key-value component, `<dl class="kv">`, inline or stacked, for every fact the panels
+and dialogs show; mono at 0.92 of its line in the second ink. Kept against the review: the heads
+stay centred at the 62 px phase 0 ruled, not aligned on baselines (the three groups disagreed
+and the arithmetic favoured centring); the kv row pitch is 28, on the grid, not the mock's 26.
+Open: whether the touch lead inside a 460 px dialog should take sub rather than hero; the
+recovery cells overflow at the 880 px minimum width, a layout question for direction 1.
+
+**Direction 5, Windows controls, not web controls** (2026-10-17). Built: text fields with a
+neutral underline at rest, a fill on hover, the 2 px accent only on focus, the 2 px danger when
+invalid — the always-on accent underline of the mockup is gone, and with it the painted radial
+"Mica", a solid ground until phase 5 gives the window the real thing; disabled buttons lose
+their hue through `--ink-dis` / `--accent-dis` / `--on-dis` in both themes, no opacity ghosts,
+and enable over 120 ms; the rail item as NavigationView, a fill and a 3 px pill inside the item,
+regular weight — not the raised white card the mockup drew; cards flat, shadows only on what
+floats; list rows with a rounded hover, selection as wash and pill alone (the floating tick and
+the bold name are gone), checkboxes revealed on hover or selection; the dialog as a
+ContentDialog — 24 px body, a 20/28 title, a footer band with equal-width buttons that wrap, the
+act first and the way out last; WinUI's 20 px checkbox and radio, the slider's 4 px track and 12
+px core, the 3 px progress line; a hyperlink button only where a control reveals or goes
+somewhere, no underline at rest (reversing 2026-09-07's underline); a forced-colours block for
+contrast themes. Not built, named: one indicator sliding between rail items (the pills still
+grow and shrink), the Archives list's single-select (direction 6), the ceremony dialogs' in-body
+Cancel (the one web-modal shape left, direction 1's), Segmented's bold selection, the wide
+dialogs at 640 rather than WinUI's 548.
+
+**Direction 8, one word per thing, consequences first** (2026-10-17). Built: the glossary on
+every label and in `strings.ts` — vault (never keystore on a screen; the page is *Vault*),
+unlock method (never slot or way in), backup, *Re-key archive…* and *Re-key vault…*, *Forget
+archive…* and *Restore*, *Find missing files*, *Inspect a backup…* and *Test that a backup
+opens…*, *Import archives from a backup…*, *Replace this vault with a copy…*, *Password with
+every YubiKey*, a YubiKey never a bare key; the verb table (a command names what happens, ends
+in … when it opens a dialog, and the dialog's primary repeats it); the dialog template for every
+consequence dialog — the consequence first, in the user's words, then the safety net; the lines
+table ("Opening the vault…", "This key unlocks <vault>.", the backups card, the reopen banner,
+the Settings labels, chips in sentence case, a relative date only where recency is the point);
+two registers, the format's words moved into a *Technical details* section of the Details dialog
+and the warnings' *Why?*; a vitest that walks `strings.ts` and fails on a banned term outside
+that section; the *Look* row removed (one look in this version — the 2026-09-06 ruling stands,
+the row goes) and the *Recovery record* row hidden until a volume export exists; quantities in
+figures. Chosen along the way: the house voice keeps its uncontracted forms ("cannot", "you
+are") where the review wrote Windows' contractions — one voice, changeable in one pass if the
+user prefers the other.
+
+**What the visual checks found, and the fix pass** (2026-10-17). Each direction ended with
+headless screenshots against the mock backend, compared with the mocks: the type ramp, the grid,
+the states and the words were there as built, and so were defects no gate sees — the Archive
+page's title cut to "Photos 2…" in an empty head (`.head-name`'s max-width against a
+shrink-to-fit heading), a ticked box drawn without its tick (a `display: block` from the days of
+Chromium's own box beating the new grid), a lost space in the Archives head's meta line (Svelte
+trims the start of an `{#if}` block), kv values cut at one line where the direction wraps them,
+two-line rows whose cells sat 8 px below the name, option labels in the second ink, Chromium's
+own search-cancel glyph and selection blue, a resize grip on the description, the Vault's cards
+12 px apart against Settings' 4, the step named "PIN" at rest and "Password and PIN" live with
+the PIN first, the Delete dialog's name as hint and placeholder both, the purge toast passive
+and saying "key", the close question's accent on the tray. A fix pass of two groups, reviewed,
+took every one of them — the title whole at 880 as at 1280, the tick drawn, the space back,
+values wrapping, cells on the name's line at 36 and 52 px, option labels in ink, Chromium's
+glyph and blue gone, the grip gone, the Vault's cards at 4 px, *Technical details…* a hyperlink
+button under the facts, the Settings section *Compression*, the Rename and Extract titles naming
+their object, the step *PIN and password* in one name at rest and live, the Delete dialog's
+field focused and its hint said once, the purge toast in the user's words under the banned-terms
+walk, the close question with two standard buttons and *Quit* first, the lock screen's last
+inline lines in `strings.ts` — and a re-shoot of twenty-nine screens found nothing left of the
+list. The wide dialogs stay at 640: at WinUI's 548 the Technical details' key-version table cuts
+its KID. Open for the user: a described row is now 52 px where one-line rows are 36 (direction
+6's height, taken early); the lock screen's recovery refusal during a backup check or an import
+now names the file's key, not the vault's; "Name this key" in the add-method dialog is the one
+bare key left, by the spec's own quote; Enter confirms the Delete dialog once the typed name
+matches. Nothing of this phase has been seen in a real window: the user's eye is the next gate.

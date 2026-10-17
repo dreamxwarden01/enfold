@@ -31,8 +31,8 @@ export function paneRow(s: Selection, lastClicked: string | null): string | null
 
 // ---- what stops an action on a row (APP.md §13, §2.3) --------------------
 // The core refuses an archive two ways the row itself can say beforehand:
-// a forgotten record answers archive.forgotten to Open, Compact, Rotate
-// key, Verify and Hide alike (§13), and an archive being compacted
+// a forgotten record answers archive.forgotten to Open, Compact, Re-key
+// archive, Verify and Hide alike (§13), and an archive being compacted
 // answers archive.compacting to every operation that needs its handle
 // (§2.3) — Open itself mounts the handle, but the Archive page's first
 // Page and Stat are refused, so an Open landed on an empty page under an
@@ -62,7 +62,7 @@ export function compacting(a: RowFacts, ops: readonly OpFacts[]): boolean {
   return a.state === "compacting" || ops.some((o) => !o.finished && o.kind === "compact" && o.archiveId === a.id);
 }
 
-// rowRefusal: the code that stops Open, Compact, Rotate key and Verify on
+// rowRefusal: the code that stops Open, Compact, Re-key archive and Verify on
 // this row, or "" when nothing does. Forgotten comes first: Restore is
 // the way back, whatever else is going on.
 export function rowRefusal(a: RowFacts, ops: readonly OpFacts[]): string {

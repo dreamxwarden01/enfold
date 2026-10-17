@@ -53,7 +53,10 @@
     }
     const chips = Array.from(rail.querySelectorAll<HTMLElement>(".sb-tag"));
     const probe = rail.querySelector<HTMLElement>(".sb-more");
-    const gap = 7;
+    // The pending row's own gap, read off the strip rather than copied: it
+    // is a step of the 4 px grid (APP.md §6, Type and spacing), and a
+    // stale copy here measured chips that did not fit.
+    const gap = strip ? parseFloat(getComputedStyle(strip).columnGap) || 0 : 0;
     let used = 0;
     let n = 0;
     for (const c of chips) {
@@ -107,7 +110,7 @@
         </span>
       </button>
       <button type="button" class="btn" disabled={busy} onclick={ondiscard}>Discard</button>
-      <button type="button" class="btn accent" disabled={busy || !!invalid} onclick={onsave}>{busy ? "Saving…" : saveLabel}</button>
+      <button type="button" class="btn accent" disabled={busy || !!invalid} title={!busy && invalid ? invalid : undefined} onclick={onsave}>{busy ? "Saving…" : saveLabel}</button>
     </div>
   </div>
 {/if}

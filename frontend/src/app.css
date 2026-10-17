@@ -11,7 +11,6 @@
   --stroke: #e2e2e7;
   --attention: #8a5300;
   --page: #e6e6eb;
-  --ground-tint: #e3eeeb;
   --surface: #ffffff;
   --surface-alt: #f4f4f7;
   --stroke-strong: #c9c9d0;
@@ -40,6 +39,22 @@
   --ctl-press: #ebebef;
   --ctl-stroke: #d7d7de;
   --ctl-bottom: #b7b7c1;
+  /* Windows controls (APP.md §6, Controls; ruled 2026-10-17), WinUI's own
+     values. The strong stroke edges what must be seen to be used — a
+     checkbox's or radio's box, a slider's track, the progress line.
+     Disabled has no hue and no opacity: text at 36% of the ink, a filled
+     button's ground at 22% (16% dark) with its ink over it. The two fills
+     are the subtle ones over whatever the control stands on: hover and
+     current (a rail item, a menu row), and a list row's hover or a press.
+     The dialog's foot band is a step below its surface. */
+  --ctl-strong: rgba(0, 0, 0, 0.45);
+  --ink-dis: rgba(0, 0, 0, 0.36);
+  --accent-dis: rgba(0, 0, 0, 0.22);
+  --on-dis: #ffffff;
+  --fill-1: rgba(0, 0, 0, 0.06);
+  --fill-2: rgba(0, 0, 0, 0.04);
+  --dlg-foot: #f3f3f6;
+  --smoke: rgba(0, 0, 0, 0.3);
   --touch-bg: #0e6f63;
   --touch-bg-2: #095047;
   --touch-ink: #ffffff;
@@ -72,6 +87,31 @@
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI Semibold", "Segoe UI", system-ui, sans-serif;
   --font-text: "Segoe UI Variable Text", "Segoe UI Variable Small", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  /* The type ramp (APP.md §6, Type and spacing; ruled 2026-10-17): six
+     sizes on whole-pixel lines, and nothing else — the Windows ramp has no
+     half-pixel steps. Caption for cells, headers, hints, the foot and
+     chips; body for prose and the names in a list; strong for field
+     labels; sect for a section's heading; sub for page and dialog titles;
+     hero for the touch's lead alone. Display face from 16 px up. */
+  --t-cap: 400 12px/16px var(--font-text);
+  --t-body: 400 13px/20px var(--font-text);
+  --t-strong: 600 13px/20px var(--font-text);
+  --t-sect: 600 16px/22px var(--font-display);
+  --t-sub: 600 20px/28px var(--font-display);
+  --t-hero: 600 28px/36px var(--font-display);
+  /* The 4 px grid: every inset and gap is one of these (APP.md §6). A
+     card's inset is 16 (12 for a strip: a bar, an op row, a toast); an
+     icon sits 8 from its label (12 beside a 20 px icon); the layer's
+     gutter is 24. Fixed heights stay what they were ruled — the 40 px
+     locked line, the 42 px op row, the 44/64 panel, the 36 px rows, the
+     62 px head — and a 1 to 3 px nudge that centres an icon on a line is
+     arithmetic, not spacing. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -84,7 +124,6 @@
     --stroke: #37373d;
     --attention: #efc079;
     --page: #101012;
-    --ground-tint: #20302d;
     --surface: #2c2c31;
     --surface-alt: #33333a;
     --stroke-strong: #4a4a52;
@@ -113,6 +152,13 @@
     --ctl-press: #2e2e34;
     --ctl-stroke: #45454d;
     --ctl-bottom: #55555f;
+    --ctl-strong: rgba(255, 255, 255, 0.54);
+    --ink-dis: rgba(255, 255, 255, 0.36);
+    --accent-dis: rgba(255, 255, 255, 0.16);
+    --on-dis: rgba(255, 255, 255, 0.53);
+    --fill-1: rgba(255, 255, 255, 0.06);
+    --fill-2: rgba(255, 255, 255, 0.04);
+    --dlg-foot: #212125;
     --touch-bg: #0c5048;
     --touch-bg-2: #073630;
     --touch-ink: #eafbf6;
@@ -137,7 +183,6 @@
   --stroke: #37373d;
   --attention: #efc079;
   --page: #101012;
-  --ground-tint: #20302d;
   --surface: #2c2c31;
   --surface-alt: #33333a;
   --stroke-strong: #4a4a52;
@@ -145,6 +190,7 @@
   --ink-3: #898a93;
   --accent-hover: #6adcc5;
   --accent-ink: #7be0cb;
+  --accent-ink-hover: #a9efe3;
   --accent-on: #04231f;
   --accent-wash: #173430;
   --accent-line: #2c544d;
@@ -162,6 +208,13 @@
   --ctl-press: #2e2e34;
   --ctl-stroke: #45454d;
   --ctl-bottom: #55555f;
+  --ctl-strong: rgba(255, 255, 255, 0.54);
+  --ink-dis: rgba(255, 255, 255, 0.36);
+  --accent-dis: rgba(255, 255, 255, 0.16);
+  --on-dis: rgba(255, 255, 255, 0.53);
+  --fill-1: rgba(255, 255, 255, 0.06);
+  --fill-2: rgba(255, 255, 255, 0.04);
+  --dlg-foot: #212125;
   --touch-bg: #0c5048;
   --touch-bg-2: #073630;
   --touch-ink: #eafbf6;
@@ -183,19 +236,25 @@
 /* ---------- page ---------------------------------------- */
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; }
+/* A solid ground (ruled 2026-10-17): the mockup's green radial glow stood
+   where Mica would be and was a still of it, not the material. The real
+   backdrop is the window's (APP.md §6, Controls). */
 body {
   margin: 0;
-  background: radial-gradient(140% 100% at 8% -10%, var(--ground-tint) 0%, transparent 58%), var(--ground);
+  background: var(--ground);
   color: var(--ink);
-  font-family: var(--font-text);
-  font-size: 13px;
-  line-height: 1.45;
+  font: var(--t-body);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
   user-select: none;
   cursor: default;
 }
 input, textarea { user-select: text; cursor: text; }
+/* Selected text wears the accent's line under the ink, not Chromium's own
+   blue (APP.md §6, Controls; ruled 2026-10-17). The token has its own
+   dark value, so the ink reads over it in both themes: about 11:1 light,
+   7.5:1 dark. */
+::selection { background: var(--accent-line); color: var(--ink); }
 svg { display: block; }
 .i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .i-20 { width: 20px; height: 20px; }
@@ -206,8 +265,18 @@ svg { display: block; }
    A .num cell under a plain header (the Details dialog's dates) and .num
    anywhere outside a table only ask for figures of one width. */
 th.num, table:has(th.num) td.num { text-align: right; }
-.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+/* Mono at 0.92 of its line's size and in the second ink: Cascadia at the
+   same size as Segoe reads bold beside it (APP.md §6, Type and spacing). */
+.mono { font-family: var(--font-mono); font-size: 0.92em; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 button { font: inherit; color: inherit; margin: 0; }
+/* Headings carry their token through a class (.t-title, .t-section) or a
+   rule of their own; bare, they only lose the browser's margins. */
+h1, h2, h3, h4 { margin: 0; }
+/* Secondary text that is meant to be read is --ink-2 (6:1 or better on
+   every ground and wash in both themes); --ink-3 (3.1 to 5:1) is for what is not
+   read — a placeholder, a disabled label, the "—" of an empty cell, an
+   icon (APP.md §6, ruled 2026-10-17). */
+::placeholder { color: var(--ink-3); opacity: 1; }
 :focus-visible {
   outline: 2px solid var(--focus-outer);
   outline-offset: 2px;
@@ -218,25 +287,25 @@ a { color: var(--accent-ink); }
 
 /* ---------- controls ---------------------------------------- */
 .btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 32px; padding: 0 12px;
+  display: inline-flex; align-items: center; gap: var(--s2);
+  height: 32px; padding: 0 var(--s3);
   border: 1px solid var(--ctl-stroke); border-bottom-color: var(--ctl-bottom);
   border-radius: var(--r-ctl); background: var(--ctl); color: var(--ink);
-  font-size: 13px; white-space: nowrap;
-  transition: background var(--dur-out) var(--ease-enter), border-color var(--dur-out) var(--ease-enter), color var(--dur-out) var(--ease-enter);
+  font: var(--t-body); white-space: nowrap;
+  /* The ink and the edge answer over 120 ms, so a button that becomes
+     enabled fades its colour in (APP.md §6, Controls; ruled 2026-10-17);
+     the fill keeps the hover's 160 ms way out. */
+  transition: background var(--dur-out) var(--ease-enter), border-color var(--dur-hover) var(--ease-enter), color var(--dur-hover) var(--ease-enter);
 }
-/* A disabled button still takes the pointer (APP.md §6, Controls; ruled
-   2026-10-14): its title is the reason it is greyed, and a hover is the
-   only way to read it. It cannot be pressed anyway, so every hover and
-   press state below is for an enabled button alone. */
+/* Hover and press are an enabled button's alone (disabled, below). */
 .btn:hover:not(:disabled) { background: var(--ctl-hover); transition-duration: var(--dur-hover); }
 .btn:active:not(:disabled) { background: var(--ctl-press); border-bottom-color: var(--ctl-stroke); color: var(--ink-2); transition-duration: 0s; }
-.btn:disabled { opacity: 0.5; }
 .btn.accent { background: var(--accent); color: var(--accent-on); border-color: transparent; border-bottom-color: var(--accent-under); font-weight: 600; }
 .btn.accent:hover:not(:disabled) { background: var(--accent-hover); }
 .btn.accent:active:not(:disabled) { background: var(--accent-hover); color: var(--accent-on); filter: brightness(0.94); }
 .btn.subtle { background: transparent; border-color: transparent; }
-.btn.subtle:hover:not(:disabled) { background: var(--surface-alt); border-color: transparent; }
+.btn.subtle:hover:not(:disabled) { background: var(--fill-1); border-color: transparent; }
+.btn.subtle:active:not(:disabled) { background: var(--fill-2); border-color: transparent; }
 /* Two danger buttons (APP.md §6, ruled 2026-09-10). The toolbar's is the
    outline one, red ink on the control's own ground. The one that carries
    the destructive act out — the *Delete* of a confirmation — is filled:
@@ -248,16 +317,54 @@ a { color: var(--accent-ink); }
 .btn.danger-fill { background: var(--danger-fill); color: var(--danger-on); border-color: transparent; border-bottom-color: var(--accent-under); font-weight: 600; }
 .btn.danger-fill:hover:not(:disabled) { background: var(--danger-fill-hover); }
 .btn.danger-fill:active:not(:disabled) { background: var(--danger-fill-hover); color: var(--danger-on); filter: brightness(0.94); }
+/* One rule for what looks like a link (APP.md §6, Controls; ruled
+   2026-10-17). A command is a button — Cancel, Lock now, "Use recovery key
+   instead" are `.btn.subtle`. `.btn.link` is the hyperlink button, kept for
+   going somewhere or revealing something (Show in Explorer, Locate…,
+   Details): the accent ink with no underline at rest and a subtle fill on
+   hover, like WinUI's. Its 2 × 4 px of padding are given back as margin,
+   so the fill grows around the words and nothing beside them moves. */
 .btn.link {
-  background: none; border: none; padding: 0; height: auto;
-  color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px;
-  font-size: 12.5px;
-  transition: color var(--dur-out) var(--ease-enter), text-decoration-thickness var(--dur-out) var(--ease-enter);
+  background: none; border: none; height: auto;
+  padding: 2px var(--s1); margin: -2px calc(-1 * var(--s1));
+  color: var(--accent-ink); text-decoration: none; font: var(--t-body);
+  transition: background var(--dur-out) var(--ease-enter), color var(--dur-out) var(--ease-enter), text-decoration-thickness var(--dur-out) var(--ease-enter);
 }
-.btn.link:hover:not(:disabled) { color: var(--accent-ink-hover); text-decoration-thickness: 1.5px; transition-duration: var(--dur-hover); }
-.btn.link:active:not(:disabled) { color: var(--ink); transition-duration: 0s; }
+.btn.link:hover:not(:disabled) { background: var(--fill-1); color: var(--accent-ink-hover); transition-duration: var(--dur-hover); }
+.btn.link:active:not(:disabled) { background: var(--fill-2); color: var(--ink-2); transition-duration: 0s; }
+/* A link running in a sentence is the one that keeps its underline, and
+   takes the sentence's type, so a caption line keeps one type step (the
+   import dialog's "Advanced:" line, the Keystore backup card's records
+   line; APP.md §6, Type and spacing): no padding, no fill, the underline
+   thickening on hover. */
+p .btn.link { padding: 0; margin: 0; border-radius: 0; font: inherit; text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+p .btn.link:hover:not(:disabled), p .btn.link:active:not(:disabled) { background: none; text-decoration-thickness: 1.5px; }
+/* *How this works* under a consequence dialog's body (the dialog template,
+   strings.ts dialogCopy.howThisWorks; ruled 2026-10-17): one disclosure,
+   shut until it is asked for, whose summary is of the hyperlink-button
+   family above (it reveals something), and whose mechanism reads in the
+   secondary ink, never the body's second voice. One rule here, so the
+   re-key, remove and password dialogs show one control. */
+details.how > summary { width: fit-content; font: var(--t-body); color: var(--accent-ink); cursor: pointer; border-radius: var(--r-ctl); transition: color var(--dur-out) var(--ease-enter); }
+details.how > summary:hover { color: var(--accent-ink-hover); transition-duration: var(--dur-hover); }
+details.how > p { margin: var(--s2) 0 0; color: var(--ink-2); }
 .btn.wide { width: 100%; justify-content: center; }
-.btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.btn.sm { height: 28px; padding: 0 var(--s2); }
+/* The layer foot's command (Lock now, Unlock): a subtle button the foot's
+   caption size, 24 px high in the 34 px foot. */
+.btn.xs { height: 24px; padding: 0 var(--s2); font: var(--t-cap); }
+/* Disabled (APP.md §6, Controls; ruled 2026-10-17): the hue goes, not the
+   opacity — a pale accent slab still read as the primary, and a faded
+   danger as pink. Text at 36% of the ink on the control's own ground; a
+   filled button (accent or danger) a neutral ground with its ink over
+   it; a subtle or hyperlink button the text alone. A disabled button
+   still takes the pointer (ruled 2026-10-14): its title is the reason it
+   is greyed, and a hover is the only way to read it. It cannot be pressed
+   anyway, so every hover and press state above is for an enabled button
+   alone. */
+.btn:disabled { color: var(--ink-dis); border-color: var(--stroke); }
+.btn.subtle:disabled, .btn.link:disabled { border-color: transparent; }
+.btn.accent:disabled, .btn.danger-fill:disabled { background: var(--accent-dis); color: var(--on-dis); border-color: transparent; }
 .sep { width: 1px; height: 20px; background: var(--stroke); flex: none; }
 
 /* ---------- select: the native picker, styled (Chromium 135+) ---------- */
@@ -267,7 +374,7 @@ a { color: var(--accent-ink); }
    the list fades out. An older runtime ignores base-select and shows the
    system popup, unanimated (APP.md §6, Motion). */
 select.input, select.input::picker(select) { appearance: base-select; }
-select.input { display: flex; align-items: center; gap: 8px; }
+select.input { display: flex; align-items: center; gap: var(--s2); }
 select.input::picker-icon {
   content: ""; width: 12px; height: 12px; margin-left: auto; flex: none; color: var(--ink-3); background: currentColor;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 8 5 5 5-5'/%3E%3C/svg%3E") center / contain no-repeat;
@@ -277,7 +384,7 @@ select.input::picker-icon {
 select.input:open::picker-icon { transform: rotate(180deg); }
 select.input::picker(select) {
   border: 1px solid var(--stroke-strong); border-radius: var(--r-card); background: var(--surface); color: var(--ink);
-  box-shadow: var(--shadow-pop); padding: 4px; margin: 4px 0 0; min-width: anchor-size(width);
+  box-shadow: var(--shadow-pop); padding: var(--s1); margin: var(--s1) 0 0; min-width: anchor-size(width);
   opacity: 0; transform: translateY(-4px);
   transition: opacity var(--dur-leave) var(--ease-exit), transform var(--dur-leave) var(--ease-exit), display var(--dur-leave) allow-discrete, overlay var(--dur-leave) allow-discrete;
 }
@@ -287,10 +394,10 @@ select.input:open::picker(select) {
   @starting-style { opacity: 0; transform: translateY(-4px); }
 }
 select.input option {
-  display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border-radius: var(--r-ctl); font-size: 13px; color: var(--ink);
+  display: flex; align-items: center; gap: var(--s2); min-height: 28px; padding: 0 var(--s2); border-radius: var(--r-ctl); font: var(--t-body); color: var(--ink);
   transition: background var(--dur-out) var(--ease-enter);
 }
-select.input option:hover, select.input option:focus-visible { background: var(--surface-alt); outline: none; transition-duration: var(--dur-hover); }
+select.input option:hover, select.input option:focus-visible { background: var(--fill-1); outline: none; transition-duration: var(--dur-hover); }
 select.input option:active { background: var(--accent-line); transition-duration: 0s; }
 select.input option:checked { background: var(--accent-wash); color: var(--accent-ink); }
 select.input option::checkmark { order: 2; margin-left: auto; color: var(--accent-ink); }
@@ -304,8 +411,8 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
 .menu-wrap .caret { color: var(--ink-3); transition: transform var(--dur-hover) var(--ease-enter); }
 .menu-wrap .caret.up { transform: rotate(180deg); }
 .menu {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; min-width: max(100%, 176px);
-  display: flex; flex-direction: column; padding: 4px;
+  position: absolute; top: calc(100% + var(--s1)); left: 0; z-index: 10; min-width: max(100%, 176px);
+  display: flex; flex-direction: column; padding: var(--s1);
   background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card);
   box-shadow: var(--shadow-pop);
 }
@@ -314,49 +421,139 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
    context menu there is. */
 .ctxmenu {
   position: fixed; z-index: 40; min-width: 132px;
-  display: flex; flex-direction: column; padding: 4px;
+  display: flex; flex-direction: column; padding: var(--s1);
   background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card);
   box-shadow: var(--shadow-pop);
 }
 .menu button, .ctxmenu button {
-  display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; white-space: nowrap;
-  border: none; background: none; border-radius: var(--r-ctl); font-size: 13px; color: var(--ink); text-align: left;
+  display: flex; align-items: center; gap: var(--s2); min-height: 28px; padding: 0 var(--s2); white-space: nowrap;
+  border: none; background: none; border-radius: var(--r-ctl); font: var(--t-body); color: var(--ink); text-align: left;
   transition: background var(--dur-out) var(--ease-enter);
 }
-.menu button:hover, .ctxmenu button:hover { background: var(--surface-alt); transition-duration: var(--dur-hover); }
+.menu button:hover, .ctxmenu button:hover { background: var(--fill-1); transition-duration: var(--dur-hover); }
 .menu button:active, .ctxmenu button:active { background: var(--accent-line); transition-duration: 0s; }
 .menu button .i, .ctxmenu button .i { color: var(--ink-3); }
 
 .input {
-  height: 32px; padding: 0 10px; width: 100%;
+  height: 32px; padding: 0 var(--s3); width: 100%;
   background: var(--ctl); color: var(--ink);
-  border: 1px solid var(--ctl-stroke); border-bottom: 2px solid var(--accent);
-  border-radius: var(--r-ctl); font: inherit; font-size: 13px;
+  border: 1px solid var(--ctl-stroke); border-bottom-color: var(--ctl-bottom);
+  border-radius: var(--r-ctl); font: var(--t-body);
+  transition: background var(--dur-out) var(--ease-enter);
 }
-.input:focus { outline: none; }
-.input.secret { font-family: var(--font-mono); letter-spacing: 0.2em; font-size: 15px; }
-select.input { border-bottom-color: var(--ctl-bottom); border-bottom-width: 1px; }
-.field { display: flex; flex-direction: column; gap: 6px; }
-.field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.field-top label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
-.field-top .hint { color: var(--ink-2); font-size: 12px; }
+/* A text field the Windows way (APP.md §6, Controls; ruled 2026-10-17): a
+   neutral 1 px underline at rest — the accent's 2 px on every field made
+   each one look focused, and the focused one like all the rest — a fill
+   on hover, and the 2 px accent underline over the surface only while it
+   has the focus, which is the field's focus cue (it wears no ring). The
+   second pixel is an inset shadow over the border's own, so the text never
+   moves by the half pixel a thicker border would take from it. A <select>
+   is a button that drops a list, not a field: it keeps the ring. */
+.input:hover:not(:disabled):not(:focus) { background: var(--ctl-hover); transition-duration: var(--dur-hover); }
+.input:not(select):focus { outline: none; background: var(--surface); border-bottom-color: var(--accent); box-shadow: inset 0 -1px 0 var(--accent); }
+/* The masked field's dots at the body's size: the spacing, not a bigger
+   face, is what keeps them countable. */
+.input.secret { font-family: var(--font-mono); letter-spacing: 0.2em; }
+/* A field: its label (strong) over the box, 8 px between, and a hint in
+   caption on the label's line (APP.md §6, Type and spacing). */
+.field { display: flex; flex-direction: column; gap: var(--s2); }
+.field-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); }
+.field-top label { font: var(--t-strong); color: var(--ink); }
+.field-top .hint { font: var(--t-cap); color: var(--ink-2); }
 .pin-note.danger { color: var(--danger); }
 /* A field marked wrong, by its class or by aria-invalid alone (the save
    bar's fields, the recovery cells): the underline turns red and nothing
    else does (APP.md §6, Forms and their errors; ruled 2026-10-14 — the
-   aria-invalid rule used to come later and redraw it as a pink frame). */
-.input.invalid, .input[aria-invalid="true"] { border-bottom-color: var(--danger); }
-.field-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
-.check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
-.check input { accent-color: var(--accent); }
+   aria-invalid rule used to come later and redraw it as a pink frame).
+   It is the focus underline's 2 px in the danger colour, at rest and while
+   focused alike (ruled 2026-10-17). */
+.input:is(.invalid, [aria-invalid="true"]), .input:is(.invalid, [aria-invalid="true"]):focus { border-bottom-color: var(--danger); box-shadow: inset 0 -1px 0 var(--danger); }
+.field-error { font: var(--t-cap); color: var(--danger); margin-top: var(--s1); }
+/* An option's label is what is chosen, so it is the ink; a description
+   under it is the second ink (APP.md §6, Type and spacing; ruled
+   2026-10-17: in the second ink the labels read as hints). */
+.check { display: flex; align-items: center; gap: var(--s2); font: var(--t-body); color: var(--ink); }
 
-.card { background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
-.bar {
-  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
-  border: 1px solid var(--stroke); border-radius: var(--r-card);
-  background: var(--surface-alt); color: var(--ink-2); font-size: 12.5px;
+/* ---------- WinUI's checkbox, radio, slider and progress (APP.md §6, Controls; ruled 2026-10-17) ----------
+   Drawn here rather than left to Chromium, whose own were a web page's.
+   Every one keeps its native element — keyboard, form, accessibility —
+   with `appearance: none` and the states redrawn: the strong stroke and
+   the control's ground at rest, the accent filled when on, the hover a
+   step, the press instant, disabled in the neutral tokens. */
+input[type="checkbox"], input[type="radio"] {
+  appearance: none; flex: none; margin: 0; width: 20px; height: 20px;
+  display: inline-grid; place-content: center; vertical-align: middle;
+  border: 1px solid var(--ctl-strong); background: var(--ctl); color: var(--accent-on);
+  transition: background var(--dur-out) var(--ease-enter), border-color var(--dur-out) var(--ease-enter), border-width var(--dur-out) var(--ease-enter);
 }
-.bar .i { margin-top: 1px; color: var(--ink-3); }
+input[type="checkbox"] { border-radius: var(--r-ctl); }
+/* The tick: two edges of a box turned a quarter, in the accent's own ink. */
+input[type="checkbox"]::after {
+  content: ""; width: 9px; height: 5px; border: solid currentColor; border-width: 0 0 2px 2px;
+  transform: translateY(-1px) rotate(-45deg); opacity: 0;
+}
+input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+input[type="checkbox"]:checked::after { opacity: 1; }
+input[type="checkbox"]:hover:not(:disabled):not(:checked), input[type="radio"]:hover:not(:disabled):not(:checked) { background: var(--ctl-hover); transition-duration: var(--dur-hover); }
+input[type="checkbox"]:active:not(:disabled):not(:checked), input[type="radio"]:active:not(:disabled):not(:checked) { background: var(--ctl-press); transition-duration: 0s; }
+input[type="checkbox"]:checked:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); transition-duration: var(--dur-hover); }
+/* A checkbox in a table row is 16 px, so it sits in the 36 px row's
+   caption line with the room WinUI gives it in a list. */
+table input[type="checkbox"] { width: 16px; height: 16px; }
+table input[type="checkbox"]::after { width: 7px; height: 4px; }
+/* The radio: when on, an accent ring round a dot of the accent's ink —
+   12 px at rest, 14 under the pointer, 10 while pressed. */
+input[type="radio"] { border-radius: 50%; }
+input[type="radio"]:checked { border: 4px solid var(--accent); background: var(--accent-on); }
+input[type="radio"]:checked:hover:not(:disabled) { border-width: 3px; transition-duration: var(--dur-hover); }
+input[type="radio"]:checked:active:not(:disabled) { border-width: 5px; transition-duration: 0s; }
+input:is([type="checkbox"], [type="radio"]):disabled { border-color: var(--ink-dis); background: transparent; }
+input[type="checkbox"]:checked:disabled { background: var(--accent-dis); border-color: transparent; color: var(--on-dis); }
+input[type="radio"]:checked:disabled { border-color: var(--accent-dis); background: var(--on-dis); }
+/* The slider: a 4 px track in the strong stroke, the part up to the value
+   in the accent, and a 20 px thumb whose 12 px accent core grows to 14
+   under the pointer and shrinks to 10 while dragged. The value's share is
+   the page's to say, as `style="--range-fill: 30%"` on the input (the
+   engine has no pseudo-element for it); without it the track is plain. */
+input[type="range"] { appearance: none; height: 20px; margin: 0; background: transparent; cursor: default; }
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--range-fill, 0%), var(--ctl-strong) var(--range-fill, 0%));
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none; width: 20px; height: 20px; margin-top: -8px; border-radius: 50%;
+  background: var(--accent); border: 1px solid var(--ctl-stroke); box-shadow: inset 0 0 0 3px var(--surface);
+  transition: box-shadow var(--dur-out) var(--ease-enter);
+}
+input[type="range"]:hover:not(:disabled)::-webkit-slider-thumb { box-shadow: inset 0 0 0 2px var(--surface); transition-duration: var(--dur-hover); }
+input[type="range"]:active:not(:disabled)::-webkit-slider-thumb { box-shadow: inset 0 0 0 4px var(--surface); transition-duration: 0s; }
+input[type="range"]:disabled::-webkit-slider-runnable-track { background: var(--ink-dis); }
+input[type="range"]:disabled::-webkit-slider-thumb { background: var(--accent-dis); }
+/* Progress is a 3 px accent line over a 1 px track. Without a measure (a
+   drag out's staging) it is the whole line in the accent's pale stroke,
+   standing still: nothing loops but the touch rings and the preview's
+   waiting ring (APP.md §6, Motion). */
+progress {
+  appearance: none; display: block; height: 3px; border: none; border-radius: 1.5px; color: var(--accent);
+  background: linear-gradient(var(--ctl-strong), var(--ctl-strong)) center / 100% 1px no-repeat;
+}
+progress::-webkit-progress-bar { background: transparent; }
+progress::-webkit-progress-value { background: var(--accent); border-radius: 1.5px; }
+progress:indeterminate { background: var(--accent-line); }
+
+/* Cards are flat: a 1 px stroke and no shadow (APP.md §6, Controls; ruled
+   2026-10-17). A shadow says a thing floats — a menu, a toast, the save
+   bar, the bottom panel over the list, a dialog — and a card in the layer
+   does not; it floated on one while the list beside it was flat. */
+.card { background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); }
+.bar {
+  display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s2) var(--s3);
+  border: 1px solid var(--stroke); border-radius: var(--r-card);
+  background: var(--surface-alt); color: var(--ink-2); font: var(--t-body);
+}
+/* The icon centred on the first 20 px line, whichever of the two sizes. */
+.bar .i { margin-top: 2px; color: var(--ink-3); }
+.bar .i.i-14 { margin-top: 3px; }
 .bar.attention { background: var(--attention-wash); border-color: var(--attention-line); color: var(--ink); }
 .bar.attention .i { color: var(--attention); }
 .bar.accent { background: var(--accent-wash); border-color: var(--accent-line); color: var(--ink); }
@@ -370,47 +567,67 @@ select.input { border-bottom-color: var(--ctl-bottom); border-bottom-width: 1px;
    (28 px) — 6 px of air above and below that button, the border's pixel
    included, which is the 40. It is a minimum, not a cap: a window narrow
    enough to wrap the sentence grows the line rather than cutting it. */
-.bar.line { align-items: center; min-height: 40px; padding: 5px 12px; }
-.bar.line .i { margin-top: 0; }
+.bar.line { align-items: center; min-height: 40px; padding: 5px var(--s3); }
+.bar.line .i, .bar.line .i.i-14 { margin-top: 0; }
 .chip {
-  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 11px;
-  background: var(--surface-alt); border: 1px solid var(--stroke); font-size: 11.5px; color: var(--ink-2);
+  display: inline-flex; align-items: center; gap: var(--s1); height: 22px; padding: 0 var(--s2); border-radius: 11px;
+  background: var(--surface-alt); border: 1px solid var(--stroke); font: var(--t-cap); color: var(--ink-2);
 }
-.chip.key { font-variant-numeric: tabular-nums; padding: 0 7px; border-radius: var(--r-sm); height: 19px; }
+.chip.key { font-variant-numeric: tabular-nums; padding: 0 var(--s2); border-radius: var(--r-sm); height: 20px; }
 .chip.warn { background: var(--attention-wash); border-color: var(--attention-line); color: var(--attention); }
-.t-title { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
-.t-section { font-family: var(--font-display); font-size: 15px; font-weight: 600; margin: 0; }
+/* The ramp as classes (APP.md §6, Type and spacing): a page's or a
+   dialog's title, a section's heading, a field label's weight, a caption.
+   `.t-sub` the class is older than `--t-sub` the token and is not it: it
+   is a paragraph in the second ink, at the body's size. `.t-quiet` is a
+   caption that is still read — a count, a meta line — so it is --ink-2. */
+.t-title { font: var(--t-sub); margin: 0; }
+.t-section { font: var(--t-sect); margin: 0; }
+.t-hero { font: var(--t-hero); margin: 0; }
+.t-strong { font: var(--t-strong); }
+.t-cap { font: var(--t-cap); }
 .t-sub { color: var(--ink-2); }
-.t-quiet { color: var(--ink-3); font-size: 11.5px; }
-.row { display: flex; align-items: center; gap: 8px; }
+.t-quiet { font: var(--t-cap); color: var(--ink-2); }
+.row { display: flex; align-items: center; gap: var(--s2); }
 .grow { flex: 1; min-width: 0; }
-.stack { display: flex; flex-direction: column; gap: 10px; }
+.stack { display: flex; flex-direction: column; gap: var(--s3); }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- shell: rail + layer ---------------------------------------- */
 .stage { position: relative; height: 100%; }
 .scene { position: absolute; inset: 0; }
 .shell { display: grid; grid-template-columns: 212px 1fr; height: 100%; }
-.rail { display: flex; flex-direction: column; padding: 12px 8px 12px 10px; gap: 2px; min-width: 0; }
-.brand { display: flex; align-items: center; gap: 9px; padding: 6px 8px 14px 10px; font-family: var(--font-display); font-size: 14px; font-weight: 600; letter-spacing: 0.01em; }
+/* The rail's padding and the brand's put the mark's middle on the item
+   icons' line, give or take the item's border pixel (APP.md §6), and the
+   first item stays where it stood: 12 + 8 + 20 + 12. The brand is the
+   strong weight in the display face — a name, not a heading. */
+.rail { display: flex; flex-direction: column; padding: var(--s3) var(--s2); gap: 2px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) var(--s3); font: var(--t-strong); font-family: var(--font-display); }
 .brand .mark { width: 20px; height: 20px; flex: none; }
 .rail-item {
-  display: flex; align-items: center; gap: 11px; height: 36px; padding: 0 10px; border-radius: var(--r-ctl);
+  display: flex; align-items: center; gap: var(--s3); height: 36px; padding: 0 var(--s3); border-radius: var(--r-ctl);
   color: var(--ink-2); position: relative; border: 1px solid transparent; background: none;
-  width: 100%; text-align: left; font-size: 13px;
+  width: 100%; text-align: left; font: var(--t-body);
 }
-.rail-item { transition: background var(--dur-out) var(--ease-enter), color var(--dur-out) var(--ease-enter), border-color var(--dur-out) var(--ease-enter), box-shadow var(--dur-out) var(--ease-enter); }
-/* The hover is the ink at 6% over whatever the rail stands on: --surface-alt
-   is a step from --ground in neither theme, and the tint was not seen. */
-.rail-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); transition-duration: var(--dur-hover); }
-.rail-item:active { background: var(--ctl-press); color: var(--ink-2); transition-duration: 0s; }
-.rail-item[aria-current="page"] { background: var(--surface); border-color: var(--stroke); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-card); }
-/* The current item's accent bar grows from its middle; the previous one's shrinks. */
-.rail-item::before { content: ""; position: absolute; left: -4px; top: 9px; width: 3px; height: 18px; border-radius: 2px; background: var(--accent); transform: scaleY(0); transition: transform var(--dur-out) var(--ease-enter); }
+.rail-item { transition: background var(--dur-out) var(--ease-enter), color var(--dur-out) var(--ease-enter); }
+/* The rail is WinUI's NavigationView (APP.md §6, Rail; ruled 2026-10-17):
+   an item has no card of its own. Hover and the current item are the same
+   subtle fill over whatever the rail stands on (6% of black, of white in
+   the dark theme — --surface-alt was a step from --ground in neither, and
+   the tint was not seen), a press a lighter one; the current item stays at
+   the regular weight and is told by its pill and its accent icon — it used
+   to be a raised white card with a border, a shadow and bold text. The
+   border pixel stays, transparent, so the icons keep their line. */
+.rail-item:hover { background: var(--fill-1); color: var(--ink); transition-duration: var(--dur-hover); }
+.rail-item:active { background: var(--fill-2); color: var(--ink-2); transition-duration: 0s; }
+.rail-item[aria-current="page"] { background: var(--fill-1); color: var(--ink); }
+/* The pill: 3 × 16 px inside the item's left edge, centred on its 34 px
+   inside. The current item's grows from its middle; the previous one's
+   shrinks. */
+.rail-item::before { content: ""; position: absolute; left: 0; top: 9px; width: 3px; height: 16px; border-radius: 1.5px; background: var(--accent); transform: scaleY(0); transition: transform var(--dur-out) var(--ease-enter); }
 .rail-item[aria-current="page"]::before { transform: scaleY(1); }
 .rail-item[aria-current="page"] .i { color: var(--accent-ink); }
 .rail-gap { flex: 1; }
-.rail-foot { padding: 10px 0 2px; border-top: 1px solid var(--stroke); margin-top: 8px; }
+.rail-foot { padding: var(--s2) 0 0; border-top: 1px solid var(--stroke); margin-top: var(--s2); }
 .layer {
   background: var(--layer); border-top: 1px solid var(--stroke); border-left: 1px solid var(--stroke);
   border-top-left-radius: var(--r-card); display: grid; grid-template-rows: 1fr auto; min-width: 0; overflow: hidden;
@@ -422,47 +639,61 @@ select.input { border-bottom-color: var(--ctl-bottom); border-bottom-width: 1px;
 /* One head height on every page — the line of a 32 px button, whether the
    head carries one (the Archive page's) or only its title — so the body
    below never starts at a different place from one page to the next. */
-.layer-head { display: flex; align-items: center; gap: 12px; padding: 18px 24px 12px; min-height: 62px; flex: none; }
-.layer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 24px; gap: 12px; overflow: auto; }
+/* The 18 px above is the 62 px head's remainder (32 + 12 below + 18),
+   ruled with the height, not a step of the grid. */
+.layer-head { display: flex; align-items: center; gap: var(--s3); padding: 18px var(--s6) var(--s3); min-height: 62px; flex: none; }
+.layer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 var(--s6); gap: var(--s3); overflow: auto; }
 .layer-foot {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 34px; flex: none; padding: 0 24px;
-  border-top: 1px solid var(--stroke); background: var(--ground); color: var(--ink-3); font-size: 11.5px;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3); height: 34px; flex: none; padding: 0 var(--s6);
+  border-top: 1px solid var(--stroke); background: var(--ground); color: var(--ink-2); font: var(--t-cap);
 }
-.cmdbar { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; }
-.lockchip { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.cmdbar { display: flex; align-items: center; gap: var(--s1); flex: none; flex-wrap: wrap; }
+.lockchip { display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); font-variant-numeric: tabular-nums; }
 .lockchip .i { color: var(--accent-ink); }
-.lockchip button { padding: 0; }
 
 /* ---------- tables ---------------------------------------- */
 .tablewrap { background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); overflow: auto; min-height: 0; }
-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+/* Cells and headers are captions; the name in a row is body (.fname,
+   .two-line b), so it reads first (APP.md §6, Type and spacing). */
+/* A list, not a spreadsheet (APP.md §6, Controls; ruled 2026-10-17): the
+   header is the card's own ground in caption type, the second ink, the
+   regular weight, with the one stroke under it; the rows have no rules.
+   A row's hover is the lighter subtle fill and its selection the accent
+   wash, each with 4 px rounded ends standing 4 px in from the card's
+   edges: the first and last cells carry a transparent 4 px border the
+   fill does not paint (the radius is 8 × 4 outside, so 4 × 4 inside).
+   The borders are separate, not collapsed, so a cell can be rounded and
+   the sticky header keeps its stroke as it sticks. */
+table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font: var(--t-cap); }
 thead th {
   position: sticky; top: 0; z-index: 1;
-  text-align: left; font-weight: 600; color: var(--ink-2); font-size: 11.5px; letter-spacing: 0.02em;
-  padding: 0 12px; height: 32px; border-bottom: 1px solid var(--stroke); background: var(--surface-alt); white-space: nowrap;
+  text-align: left; font: var(--t-cap); color: var(--ink-2);
+  padding: 0 var(--s3); height: 32px; border-bottom: 1px solid var(--stroke); background: var(--surface); white-space: nowrap;
 }
+/* The header's ends take the rows' 4 px ends into their padding, so a
+   header's words stand over its column's. */
+thead th:first-child { padding-left: calc(var(--s3) + var(--s1)); }
+thead th:last-child { padding-right: calc(var(--s3) + var(--s1)); }
 thead th button { background: none; border: none; padding: 0; font: inherit; color: inherit; }
-tbody td { padding: 0 12px; height: 36px; border-bottom: 1px solid var(--stroke); color: var(--ink-2); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-tbody tr:last-child td { border-bottom: none; }
-tbody tr:hover td { background: var(--surface-alt); }
+tbody td { padding: 0 var(--s3); height: 36px; color: var(--ink-2); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background-clip: padding-box; transition: background var(--dur-out) var(--ease-enter); }
+tbody td:first-child { position: relative; border-left: var(--s1) solid transparent; border-radius: 8px 0 0 8px / 4px 0 0 4px; }
+tbody td:last-child { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
+tbody tr:hover td { background-color: var(--fill-2); transition-duration: var(--dur-hover); }
 /* The focus ring on a selectable row (APP.md §7, ruled 2026-09-11) is
    drawn inside the row's cells, never as an `outline` on the <tr>:
-   Chromium draws that one per cell, unevenly, and lets the row's own
-   bottom border thicken under it. Each cell carries the top and bottom
-   edges, the first and last carry the sides, and the row's border is
-   turned transparent for the moment it is focused so the 2 px never
-   becomes 3 (the last row has no border to double with — its ring is the
-   same). */
+   Chromium draws that one per cell, unevenly. Each cell carries the top
+   and bottom edges and the first and last the sides — inside their
+   transparent ends, so the ring is the row's rounded fill drawn round. */
 tbody tr:focus-visible { outline: none; box-shadow: none; border-radius: 0; }
-tbody tr:focus-visible > td {
-  border-bottom-color: transparent;
-  box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row);
-}
+tbody tr:focus-visible > td { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row); }
 tbody tr:focus-visible > td:first-child { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset 2px 0 0 var(--focus-row); }
 tbody tr:focus-visible > td:last-child { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
-tbody tr[aria-selected="true"] td, tbody tr[aria-selected="true"]:hover td { background: var(--accent-wash); }
-tbody tr[aria-selected="true"] .fname { color: var(--ink); font-weight: 600; }
-.fname { color: var(--ink); display: flex; align-items: center; gap: 9px; min-width: 0; }
+/* Selection is one mark in two parts — the wash and a 3 × 16 px pill at
+   the row's true left edge, inside its first cell — never bold and never
+   a tick floating by the name (ruled 2026-10-17). */
+tbody tr[aria-selected="true"] td, tbody tr[aria-selected="true"]:hover td { background-color: var(--accent-wash); }
+tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 1.5px; background: var(--accent); }
+.fname { color: var(--ink); display: flex; align-items: center; gap: var(--s2); min-width: 0; font: var(--t-body); }
 .fname .i { color: var(--ink-3); flex: none; }
 .fname span { overflow: hidden; text-overflow: ellipsis; }
 /* The name takes what the fixed columns leave and ellipsizes, down to a
@@ -470,28 +701,27 @@ tbody tr[aria-selected="true"] .fname { color: var(--ink); font-weight: 600; }
    page). There is no pending chip beside it any more: a row is committed
    or it is not listed (§2.3). */
 .fname > span { flex: 1 1 auto; min-width: 3em; }
-.sel-mark { position: relative; }
-tbody tr[aria-selected="true"] .sel-mark::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 18px; border-radius: 2px; background: var(--accent); }
-.two-line { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.two-line b { font-weight: 400; color: var(--ink); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
-tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
-.two-line small { color: var(--ink-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
-.empty { padding: 40px 20px; text-align: center; color: var(--ink-3); }
+/* A name over its line: 20 + 16, the 36 px row exactly, no gap. */
+.two-line { display: flex; flex-direction: column; min-width: 0; }
+.two-line b { font: var(--t-body); color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.two-line small { font: var(--t-cap); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.empty { padding: calc(2 * var(--s5)) var(--s5); text-align: center; color: var(--ink-2); }
 
 /* ---------- lock screen ---------------------------------------- */
-.unlock { display: flex; flex-direction: column; padding: 18px 30px 28px; height: 100%; max-width: 1240px; margin: 0 auto; }
-/* The header's line is centred on the brand's (28 px from the top) and
-   the strip starts where it always did. */
-.u-head { display: flex; align-items: center; gap: 10px; flex: none; min-height: 20px; padding: 0 2px 24px; }
+.unlock { display: flex; flex-direction: column; padding: var(--s5) var(--s6) var(--s6); height: 100%; max-width: 1240px; margin: 0 auto; }
+/* The header's line is centred on the brand's (30 px from the top: the
+   rail's 12, the brand's 8, half its 20 px line) and the strip starts
+   24 px under it. */
+.u-head { display: flex; align-items: center; gap: var(--s2); flex: none; min-height: 20px; padding: 0 0 var(--s6); }
 /* The brand sits where the rail's does, to the pixel — the scene's corner,
    the rail's padding, then the brand's own — so it stays put across every
    lock and unlock instead of jumping between the centred strip's corner
    and the rail's (APP.md §6, Motion). Until the window has a caption to
    carry the name, and then neither scene draws one. */
-.u-head .brand { position: absolute; top: 12px; left: 10px; }
-.u-head .state { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); font-size: 12px; }
-.u-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; flex: 1; min-height: 0; }
-.step { display: flex; flex-direction: column; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); box-shadow: var(--shadow-card); overflow: hidden; position: relative; min-height: 0; }
+.u-head .brand { position: absolute; top: var(--s3); left: var(--s2); }
+.u-head .state { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); }
+.u-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s4); flex: 1; min-height: 0; }
+.step { display: flex; flex-direction: column; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); overflow: hidden; position: relative; min-height: 0; }
 /* A card eases between live and dim, and between the plain card and the
    touch's green, by its opacity and its shadow on the entering curve
    (APP.md §6, Motion): the green is a gradient, which no transition can
@@ -499,22 +729,24 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
    Releasing to Done rather than flashing white between them. */
 .step { transition: opacity var(--dur-fast) var(--ease-enter), box-shadow var(--dur-fast) var(--ease-enter); }
 .step.dim { opacity: 0.55; }
-.step-label { display: flex; align-items: center; gap: 9px; flex: none; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--stroke); background: var(--surface-alt); font-size: 11.5px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ink-2); }
-.step-label b { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent-wash); border: 1px solid var(--accent-line); color: var(--accent-ink); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.step-body { flex: 1; display: flex; flex-direction: column; padding: 20px 20px 18px; min-height: 0; overflow: auto; }
-.keyart { display: flex; justify-content: center; padding: 14px 0 18px; }
-.u-lead { font-family: var(--font-display); font-size: 19px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; text-wrap: balance; }
-.u-meta { color: var(--ink-2); font-size: 12.5px; }
-.u-meta.q { color: var(--ink-3); font-size: 12px; }
-.u-links { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; margin-top: 16px; }
-.u-foot { margin-top: auto; padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
-.slotchip { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--accent-wash); border: 1px solid var(--accent-line); color: var(--accent-ink); font-size: 12px; font-weight: 600; }
-.pin-note { margin-top: 10px; color: var(--ink-3); font-size: 11.5px; }
+/* The step's label is a caption in sentence case, as written — no
+   capitals and no tracking (APP.md §6, Type and spacing). */
+.step-label { display: flex; align-items: center; gap: var(--s2); flex: none; height: 34px; padding: 0 var(--s3); border-bottom: 1px solid var(--stroke); background: var(--surface-alt); font: var(--t-cap); color: var(--ink-2); }
+.step-label b { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent-wash); border: 1px solid var(--accent-line); color: var(--accent-ink); font: var(--t-cap); font-weight: 600; font-variant-numeric: tabular-nums; }
+.step-body { flex: 1; display: flex; flex-direction: column; padding: var(--s4); min-height: 0; overflow: auto; }
+.keyart { display: flex; justify-content: center; padding: var(--s3) 0 var(--s4); }
+.u-lead { font: var(--t-sub); margin: 0 0 var(--s2); text-wrap: balance; }
+.u-meta { color: var(--ink-2); }
+.u-meta.q { font: var(--t-cap); color: var(--ink-2); }
+.u-links { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); margin-top: var(--s4); }
+.u-foot { margin-top: auto; padding-top: var(--s3); display: flex; flex-direction: column; gap: var(--s3); }
+.slotchip { display: inline-flex; align-items: center; gap: var(--s2); align-self: flex-start; height: 26px; padding: 0 var(--s3); border-radius: 13px; background: var(--accent-wash); border: 1px solid var(--accent-line); color: var(--accent-ink); font: var(--t-cap); font-weight: 600; }
+.pin-note { margin-top: var(--s2); font: var(--t-cap); color: var(--ink-2); }
 .step.touch { border-color: transparent; background: linear-gradient(160deg, var(--touch-bg) 0%, var(--touch-bg-2) 100%); color: var(--touch-ink); box-shadow: var(--shadow-pop); }
 .step.touch .step-label { background: transparent; border-bottom-color: var(--touch-ring); color: var(--touch-soft); }
 .step.touch .step-label b { background: var(--touch-ring); border-color: transparent; color: var(--touch-ink); }
-.touch-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px 22px 26px; text-align: center; }
-.rings { position: relative; width: 132px; height: 132px; flex: none; margin-bottom: 24px; }
+.touch-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--s4) var(--s5) var(--s6); text-align: center; }
+.rings { position: relative; width: 132px; height: 132px; flex: none; margin-bottom: var(--s6); }
 .rings span { position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--touch-ring); }
 .rings span:nth-child(2) { inset: 16px; border-color: var(--touch-ring-2); }
 .rings span:nth-child(3) { inset: 32px; border-color: var(--touch-ring); }
@@ -532,98 +764,137 @@ tbody tr[aria-selected="true"] .two-line b { font-weight: 600; }
   .rings .core.pop { animation: pop 240ms var(--ease-pop) both; }
 }
 @keyframes pop { from { transform: scale(0.6); } to { transform: scale(1); } }
-.touch-lead { font-family: var(--font-display); font-size: 25px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 10px; line-height: 1.2; text-wrap: balance; }
-.touch-sub { color: var(--touch-soft); font-size: 13px; margin: 0; }
-.touch-slot { margin-top: auto; padding-top: 20px; color: var(--touch-soft); font-size: 11.5px; display: flex; align-items: center; gap: 7px; justify-content: center; }
+/* The one hero on any screen: the touch's lead (APP.md §6, Type and spacing). */
+.touch-lead { font: var(--t-hero); margin: 0 0 var(--s2); text-wrap: balance; }
+.touch-sub { color: var(--touch-soft); font: var(--t-body); margin: 0; }
+.touch-slot { margin-top: auto; padding-top: var(--s5); color: var(--touch-soft); font: var(--t-cap); display: flex; align-items: center; gap: var(--s2); justify-content: center; }
 .touch-slot .i { stroke: var(--touch-soft); }
-.blocked { flex: none; margin-top: 16px; display: flex; align-items: center; gap: 14px; padding: 14px 18px; border: 1px solid var(--attention-line); border-radius: var(--r-card); background: var(--attention-wash); }
+.blocked { flex: none; margin-top: var(--s4); display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--attention-line); border-radius: var(--r-card); background: var(--attention-wash); }
 .blocked .tile { width: 34px; height: 34px; flex: none; border-radius: var(--r-ctl); background: var(--surface); border: 1px solid var(--attention-line); display: flex; align-items: center; justify-content: center; color: var(--attention); }
-.blocked .txt { display: flex; flex-direction: column; gap: 1px; }
-.blocked .txt b { font-size: 13px; font-weight: 600; }
-.blocked .txt span { color: var(--ink-2); font-size: 12.5px; }
-.blocked .tag { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-.digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
-.digits span { font-family: var(--font-mono); font-size: 18px; letter-spacing: 0.08em; text-align: center; padding: 8px 0; background: var(--surface-alt); border: 1px solid var(--stroke); border-radius: var(--r-ctl); user-select: text; }
+.blocked .txt { display: flex; flex-direction: column; }
+.blocked .txt b { font: var(--t-strong); }
+.blocked .txt span { color: var(--ink-2); }
+.blocked .tag { margin-left: auto; display: flex; align-items: center; gap: var(--s3); }
+.digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s2); margin: var(--s3) 0; }
+/* The recovery digits are read off a screen onto paper and back: the sub
+   size, in mono at its regular weight, spaced. */
+.digits span { font: var(--t-sub); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; padding: var(--s2) 0; background: var(--surface-alt); border: 1px solid var(--stroke); border-radius: var(--r-ctl); user-select: text; }
 /* The recovery key's ID (FORMAT.md §18.4): the checksum catches a mistyped
    group, the ID catches the wrong sheet. */
-.key-id { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; }
-.key-id .kid-label { font-size: 11.5px; color: var(--ink-3); }
-.key-id .kid { font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.08em; color: var(--ink); user-select: text; }
+.key-id { display: flex; align-items: baseline; gap: var(--s2); margin-top: var(--s3); }
+.key-id .kid-label { font: var(--t-cap); color: var(--ink-2); }
+.key-id .kid { font: var(--t-body); font-family: var(--font-mono); letter-spacing: 0.08em; color: var(--ink); user-select: text; }
 
 /* ---------- archives / archive / keys ---------------------------------------- */
-.arch-split { display: grid; grid-template-columns: 1fr 300px; gap: 16px; flex: 1; min-height: 0; padding-bottom: 14px; }
-.arch-list { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.arch-split { display: grid; grid-template-columns: 1fr 300px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); }
+.arch-list { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; min-height: 0; }
 /* The inspector's Status column (APP.md §13): one word per fact, and
    nothing at all until a presence pass has measured the path — a blank
    cell is what "not measured" looks like, never "missing". */
-.status-cell { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.status-cell { display: flex; align-items: center; gap: var(--s1); min-width: 0; }
 .status-cell .st {
-  display: inline-flex; align-items: center; height: 19px; padding: 0 7px; flex: none;
+  display: inline-flex; align-items: center; height: 20px; padding: 0 var(--s2); flex: none;
   border-radius: var(--r-sm); border: 1px solid var(--stroke); background: var(--surface-alt);
-  color: var(--ink-2); font-size: 11px; white-space: nowrap;
+  color: var(--ink-2); font: var(--t-cap); white-space: nowrap;
 }
 .status-cell .st.open { background: var(--accent-wash); border-color: var(--accent-line); color: var(--accent-ink); }
 .status-cell .st.missing { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger); }
 .status-cell .st.forgotten { background: var(--danger-wash); border-color: var(--danger-line); color: var(--ink-2); }
-.status-cell .st.hidden { color: var(--ink-3); }
+/* "hidden" is read, so it keeps the second ink (APP.md §6, Type and
+   spacing); it is quieter than its neighbours by having no fill, only the
+   outline, never by an ink under the 6:1 floor. */
+.status-cell .st.hidden { background: transparent; }
 /* A sortable header's caret: shown on the column that sorts, turned for
    ascending. No motion vocabulary of its own. */
-thead th button { display: inline-flex; align-items: center; gap: 5px; }
-thead th .caret { width: 12px; height: 12px; color: var(--ink-3); visibility: hidden; }
+thead th button { display: inline-flex; align-items: center; gap: var(--s1); }
+thead th .caret { width: 10px; height: 10px; color: var(--ink-3); visibility: hidden; }
 thead th .caret.on { visibility: visible; }
 thead th .caret.on.asc { transform: rotate(180deg); }
+/* The hidden caret keeps its room so the words never move; in a magnitude
+   column it stands before the word, so the word stays flush right over its
+   digits whichever column sorts (APP.md §6, ruled 2026-10-17). */
+thead th.num .sorter { flex-direction: row-reverse; }
 /* The filter box sits in the command bar and is a plain field. */
 .filterbox { display: inline-flex; align-items: center; }
-.filterbox .input { width: 168px; height: 30px; font-size: 12.5px; }
-.filterbox .input::-webkit-search-cancel-button { cursor: default; }
-/* Label · value, for the details modal's rows and the dialogs that name
-   one file. There is no third column of *Copy* buttons since 2026-09-09:
-   the value is selectable and a right-click on it offers *Copy*
-   (APP.md §13). */
-.kv { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 4px 12px; align-items: baseline; font-size: 12.5px; }
-.kv .k { color: var(--ink-2); }
-.kv .v { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; cursor: text; }
-/* The ciphertext hash is never cut: it takes a second line rather than
-   ending in an ellipsis nobody can read a hash out of (APP.md §13). */
-.kv .v.wrap { white-space: normal; overflow: visible; word-break: break-all; }
+.filterbox .input { width: 168px; height: 30px; }
+/* No clear button: Chromium's is a blue X of its own, not a Windows one
+   (APP.md §6, Controls; ruled 2026-10-17). Esc still clears the box. */
+.filterbox .input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+/* Label · value: the one way a fact is drawn (APP.md §6, Type and spacing;
+   ruled 2026-10-17) — the details modal, the dialogs that name a file, the
+   Archives pane and panel, the preview's facts, This vault, About. A
+   <dl class="kv"> of <dt>/<dd> pairs (a pair may sit in a <div>, which
+   takes no box): the label column as wide as its longest label, up to
+   120 px, past which a label wraps; the value beside it, left-aligned, so
+   no value stands far from its label. The label is a caption in the
+   second ink, the value body in the ink — the value is what is read. A
+   value wraps onto as many lines as it needs, anywhere if it must (ruled
+   2026-10-17: a value was one line and ellipsized, which cut "zstd +
+   dictionary, 71% smaller" in the preview's narrow column, and `.wrap`
+   was the exception that is now the rule). `.kv.stk` stacks each label over its
+   value, for a path or a hash, which wrap rather than end in an ellipsis
+   nobody can read them out of (APP.md §13). The older markup — .k and .v
+   in a <div class="kv"> — draws the same until it is moved over. There
+   is no third column of *Copy* buttons since 2026-09-09: the value is
+   selectable and a right-click on it offers *Copy* (APP.md §13). */
+.kv { display: grid; grid-template-columns: fit-content(120px) minmax(0, 1fr); gap: var(--s2) var(--s4); align-items: baseline; margin: 0; font: var(--t-body); }
+.kv > div { display: contents; }
+.kv dt, .kv .k { font: var(--t-cap); color: var(--ink-2); min-width: 0; }
+.kv dd, .kv .v { margin: 0; min-width: 0; color: var(--ink); overflow-wrap: anywhere; user-select: text; cursor: text; }
+.kv .mono { color: var(--ink-2); }
+.kv.stk { grid-template-columns: minmax(0, 1fr); gap: 0; }
+.kv.stk :is(dd, .v) + :is(dt, .k), .kv.stk > div + div > :is(dt, .k) { margin-top: var(--s3); }
 /* The merge checklist (APP.md §13): one row per incoming record, the
    rows the merge would not change greyed and not tickable. */
 .merge-list { display: flex; flex-direction: column; max-height: 320px; overflow: auto; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); }
-.merge-list .mrow { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--stroke); }
+.merge-list .mrow { display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s2) var(--s3); border-bottom: 1px solid var(--stroke); }
 .merge-list .mrow:last-child { border-bottom: none; }
-.merge-list .mrow.skip { opacity: 0.6; }
-.merge-list input[type="checkbox"] { margin-top: 2px; accent-color: var(--accent); }
-.merge-list .mbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.merge-list .mbody label { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--ink); }
+/* A row the merge would not change is greyed by its words, not by its
+   opacity: the name steps down to the second ink, which is still read,
+   and its box wears the disabled look of its own (ruled 2026-10-17; it
+   was the whole row at 60%, under the 6:1 floor). The 20 px box is the
+   label's 20 px line. */
+.merge-list .mrow.skip .mbody label { color: var(--ink-2); }
+.merge-list .mbody { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.merge-list .mbody label { display: flex; align-items: baseline; gap: var(--s2); font: var(--t-body); color: var(--ink); }
 .merge-list .mbody label b { font-weight: 600; }
-.merge-list .mbody .tag { flex: none; height: 17px; padding: 0 6px; border-radius: var(--r-sm); background: var(--surface-alt); border: 1px solid var(--stroke); color: var(--ink-2); font-size: 10.5px; }
-.merge-list .mbody .note { color: var(--ink-3); font-size: 11.5px; }
-.merge-list .mbody .note.diff { color: var(--ink-2); }
-.merge-list .mmeta { flex: none; color: var(--ink-3); font-size: 11.5px; }
-.slotlist { margin: 6px 0 0; padding-left: 18px; }
-.slotlist li { font-size: 11.5px; color: var(--ink-2); }
-.details { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-card); overflow: auto; }
-.details-head { padding: 16px 16px 12px; border-bottom: 1px solid var(--stroke); }
-.details-head .eyebrow { color: var(--ink-3); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; }
-.details-head h3 { font-family: var(--font-display); font-size: 16px; font-weight: 600; margin: 4px 0 0; overflow-wrap: anywhere; }
-.facts { display: flex; flex-direction: column; padding: 6px 16px 12px; margin: 0; }
-.fact { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; font-size: 12.5px; }
-.fact dt { color: var(--ink-2); }
+.merge-list .mbody .tag { flex: none; height: 18px; padding: 0 var(--s1); border-radius: var(--r-sm); background: var(--surface-alt); border: 1px solid var(--stroke); color: var(--ink-2); font: var(--t-cap); }
+.merge-list .mbody .note { font: var(--t-cap); color: var(--ink-2); }
+/* A note that names a difference is the one to read first. */
+.merge-list .mbody .note.diff { color: var(--ink); }
+.merge-list .mmeta { flex: none; font: var(--t-cap); color: var(--ink-2); }
+.slotlist { margin: var(--s1) 0 0; padding-left: var(--s5); }
+.slotlist li { font: var(--t-cap); color: var(--ink-2); }
+.details { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); overflow: auto; }
+.details-head { padding: var(--s4) var(--s4) var(--s3); border-bottom: 1px solid var(--stroke); }
+/* The eyebrow is a caption in sentence case — "Selected", as written —
+   never capitals and tracking (APP.md §6, ruled 2026-10-17). */
+.details-head .eyebrow { font: var(--t-cap); color: var(--ink-2); }
+.details-head h3 { font: var(--t-sect); margin: var(--s1) 0 0; overflow-wrap: anywhere; }
+.facts { display: flex; flex-direction: column; padding: var(--s2) var(--s4) var(--s3); margin: 0; }
+.fact { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); min-height: 28px; font: var(--t-body); }
+.fact dt { font: var(--t-cap); color: var(--ink-2); }
 .fact dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; overflow: hidden; text-overflow: ellipsis; }
-.details-actions { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px; margin-top: auto; border-top: 1px solid var(--stroke); }
-.details-actions .row2 { display: flex; gap: 8px; }
+.details-actions { padding: var(--s3) var(--s4) var(--s4); display: flex; flex-direction: column; gap: var(--s2); margin-top: auto; border-top: 1px solid var(--stroke); }
+.details-actions .row2 { display: flex; gap: var(--s2); }
 .details-actions .row2 .btn { flex: 1; justify-content: center; }
 /* The Archive page's heading (APP.md §6, ruled 2026-09-10): the archive's
    name alone, a button to the root and a drop target; no folder crumb
    after it — the list's own `..` row shows where the page stands. */
-/* No vertical padding, and the side padding given back as margin: the
-   button is exactly the title's line, so this head is as tall as every
-   other page's (.layer-head's min-height, above). */
-.head-name { background: none; border: none; padding: 0 6px; margin: 0 -6px; border-radius: var(--r-sm); font: inherit; color: inherit; letter-spacing: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.head-name:hover { background: var(--surface-alt); }
+/* No vertical padding: the button is exactly the title's line, so this
+   head is as tall as every other page's (.layer-head's min-height, above).
+   The side padding is given back by the heading, not the button (ruled
+   2026-10-17): a negative margin on the button took 16 px off the
+   heading's shrink-to-fit width, which the button's max-width then
+   capped it at, so "Photos 2024" read "Photos 2…" in an empty head. The
+   heading now measures the whole button and the name ellipsizes only
+   when the head is really full. */
+.head-name { background: none; border: none; padding: 0 var(--s2); margin: 0; border-radius: var(--r-sm); font: inherit; color: inherit; letter-spacing: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.layer-head .t-title:has(> .head-name) { margin: 0 calc(-1 * var(--s2)); }
+.head-name:hover { background: var(--fill-1); }
 .head-name.drop-into { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); }
 .layer-head .t-title { min-width: 0; }
-.file-split { display: grid; grid-template-columns: 1fr 264px; gap: 16px; flex: 1; min-height: 0; padding-bottom: 14px; }
+.file-split { display: grid; grid-template-columns: 1fr 264px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); }
 .file-split.dropping .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
 /* A drag of the selection onto a folder row, onto `..` or onto the heading
    is a Move (APP.md §6) — since 2026-09-11 the native drag of the one
@@ -633,15 +904,30 @@ thead th .caret.on.asc { transform: rotate(180deg); }
    over wears the accent wash, and a refusal — the whole move refused, in
    place — is said against that target, where the drag was aimed. The name
    cell lets the line wrap under the name; no other cell does. */
-tbody tr.drop-into td { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); }
+tbody tr.drop-into td { background-color: var(--accent-wash); box-shadow: inset 0 1px 0 var(--accent-line), inset 0 -1px 0 var(--accent-line); }
+tbody tr.drop-into td:first-child { box-shadow: inset 0 1px 0 var(--accent-line), inset 0 -1px 0 var(--accent-line), inset 1px 0 0 var(--accent-line); }
+tbody tr.drop-into td:last-child { box-shadow: inset 0 1px 0 var(--accent-line), inset 0 -1px 0 var(--accent-line), inset -1px 0 0 var(--accent-line); }
 /* The name keeps its own nowrap, whatever the cell does, so it ellipsizes
    in the refused row as in every other. */
 .fname { white-space: nowrap; }
-tbody tr.refused td { height: auto; padding-top: 5px; padding-bottom: 5px; vertical-align: top; }
+/* A row taller than its name's line — the refused row here, an archive
+   with a description on the Archives list — stands every cell on the
+   name's first line, where a one-line row's text sits (APP.md §6, ruled
+   2026-10-17; the other cells were centred on the whole row, 8 px under
+   the name): 8 above the 20 px name, which is what centring it in 36
+   gives, and 2 more above a 16 px caption or box, so their middles meet
+   the name's. The row grows under the line: 36 px with one line, 52 with
+   a description. The icon is a 20 px box so it stays on that line too. */
+tbody tr.refused td, .arch-split tbody td, .arch-split tbody td.chk, tbody tr.refused td.chk { height: auto; padding-top: calc(var(--s2) + var(--s1) / 2); padding-bottom: var(--s2); vertical-align: top; }
+tbody tr.refused td.sel-mark, .arch-split tbody td.sel-mark, .arch-split tbody td:last-child { padding-top: var(--s2); }
+.arch-split tbody .fname { align-items: flex-start; }
+.arch-split tbody .fname > .i { height: 20px; }
 tbody tr.refused td.sel-mark { white-space: normal; overflow: visible; }
-.move-note { display: block; color: var(--danger); font-size: 11.5px; line-height: 1.35; padding: 4px 0 0 23px; white-space: normal; }
-.layer-body > .move-note { padding: 0 2px 2px; }
-ul.plain { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
+/* The note starts under the name's first letter: past the 14 px icon and
+   its 8 px gap. */
+.move-note { display: block; color: var(--danger); font: var(--t-cap); padding: var(--s1) 0 0 calc(14px + var(--s2)); white-space: normal; }
+.layer-body > .move-note { padding: 0 0 var(--s1); }
+ul.plain { list-style: none; margin: var(--s2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); font: var(--t-body); color: var(--ink-2); }
 ul.plain li { overflow-wrap: anywhere; }
 p.dim { color: var(--ink-2); }
 /* The file table's columns (APP.md §6, the Archive page, ruled 2026-09-10):
@@ -654,64 +940,91 @@ p.dim { color: var(--ink-2); }
 .file-split .w-date { width: 134px; }
 /* A checkbox heads every row and the header row: ticks are the selection.
    The cell is the box's and nothing else's, so a click there is the box's.
-   The Archives list carries the same boxes under the same rules (APP.md §6). */
-.file-split .w-check, .arch-split .w-check { width: 34px; }
-.file-split th.chk, .file-split td.chk, .arch-split th.chk, .arch-split td.chk { padding: 0 0 0 11px; }
-.file-split .chk input, .arch-split .chk input { accent-color: var(--accent); margin: 0; display: block; width: 14px; height: 14px; cursor: default; }
+   The Archives list carries the same boxes under the same rules (APP.md §6).
+   The 16 px box stands 16 px from the card's edge in the header and in a
+   row alike (a row's first 4 px are its transparent end), clear of the
+   selection's pill: 40 px with the 8 after it. */
+.file-split .w-check, .arch-split .w-check { width: 40px; }
+.file-split th.chk, .arch-split th.chk { padding: 0 0 0 var(--s4); }
+.file-split td.chk, .arch-split td.chk { padding: 0 0 0 var(--s3); }
+/* A grid, block-level so the cell has no line box round it, and a grid
+   so the tick (input[type="checkbox"]::after, above) has its centre: the
+   `display: block` this rule carried from Chromium's own box beat the
+   global inline-grid and left a ticked box a solid square (ruled
+   2026-10-17). */
+.file-split .chk input, .arch-split .chk input { display: grid; cursor: default; }
+/* Explorer's compromise (APP.md §6, ruled 2026-10-17): the boxes show on
+   the row under the pointer, on a selected row, on the row with the
+   keyboard's focus, and on every row once anything is selected — then the
+   list is visibly in the business of picking. The header's shows with the
+   header under the pointer, the same selection, or its own focus. Hidden,
+   a box is still there to be clicked the moment its row is hovered. */
+.chk input { opacity: 0; transition: opacity var(--dur-out) var(--ease-enter); }
+tbody tr:hover .chk input, tbody tr:focus-visible .chk input, tbody tr[aria-selected="true"] .chk input,
+thead tr:hover .chk input, .chk input:focus-visible, .chk input:checked,
+table:has(tbody tr[aria-selected="true"]) .chk input { opacity: 1; transition-duration: var(--dur-hover); }
 .file-split td.type { color: var(--ink-2); }
-/* The header cells sort: the sorting column wears its arrow. */
-thead th .sorter { display: inline-flex; align-items: center; gap: 4px; cursor: default; border-radius: var(--r-sm); padding: 2px 4px; margin: 0 -4px; }
-thead th .sorter:hover { background: var(--surface); color: var(--ink); }
-thead th .arrow { color: var(--accent-ink); font-size: 11px; }
+/* The header cells sort: the sorting column wears the one sort glyph of
+   both lists, the 10 px chevron (#i-chevdown) in the third ink, turned for
+   ascending — the caret above (ruled 2026-10-17). */
+thead th .sorter { display: inline-flex; align-items: center; gap: var(--s1); cursor: default; border-radius: var(--r-sm); padding: 2px var(--s1); margin: 0 calc(-1 * var(--s1)); }
+thead th .sorter:hover { background: var(--fill-1); color: var(--ink); }
 /* A hidden column's sort stays in force, and the Name cell then carries
-   that key's name and arrow (the container queries below show it). */
-thead th .hidden-sort { display: none; margin-left: 6px; font-weight: 500; color: var(--ink-3); }
+   that key's name and chevron (the container queries below show it). */
+thead th .hidden-sort { display: none; margin-left: var(--s2); color: var(--ink-2); }
 /* `..`: up one level, pinned first, no checkbox, never selected. */
 tbody tr.up .fname { color: var(--ink-2); }
 /* One row's height of empty space under the last row, scrolled or not
    (APP.md §6): a spacer inside the scroller, so it scrolls with the rows. */
 .tablewrap .list-tail { height: 36px; flex: none; }
 .tablewrap .empty + .list-tail { height: 0; }
-.preview { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-card); overflow: hidden; }
+.preview { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); overflow: hidden; }
 .preview .art { height: 186px; flex: none; border-bottom: 1px solid var(--stroke); background: var(--surface-alt); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .preview .art img, .preview .art video { max-width: 100%; max-height: 100%; object-fit: contain; }
 .preview .art audio { width: 90%; }
-.preview .art pre { margin: 0; padding: 10px 12px; width: 100%; height: 100%; overflow: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); white-space: pre-wrap; user-select: text; text-align: left; }
-.preview .art .none { color: var(--ink-3); font-size: 12px; }
-.preview .pname { padding: 12px 16px 2px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.preview .art pre { margin: 0; padding: var(--s2) var(--s3); width: 100%; height: 100%; overflow: auto; font: var(--t-cap); font-family: var(--font-mono); color: var(--ink-2); white-space: pre-wrap; user-select: text; text-align: left; }
+.preview .art .none { font: var(--t-cap); color: var(--ink-2); }
+.preview .pname { padding: var(--s3) var(--s4) 0; font: var(--t-strong); display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .preview .pname .i { color: var(--ink-3); }
 .preview .pname span { overflow-wrap: anywhere; }
-.preview-actions { margin-top: auto; padding: 12px 16px 16px; border-top: 1px solid var(--stroke); display: flex; gap: 8px; }
+.preview-actions { margin-top: auto; padding: var(--s3) var(--s4) var(--s4); border-top: 1px solid var(--stroke); display: flex; gap: var(--s2); }
 .preview-actions .btn { flex: 1; justify-content: center; }
 /* The columns take their content's height and grow to fill, never shrink: a save bar that follows
    them in flow must sit after the content, not after a squeezed box (APP.md §6, the save bar). */
-.ks-cols { display: grid; grid-template-columns: 1fr 316px; gap: 20px; flex: 1 0 auto; padding-bottom: 12px; }
-.ks-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.ks-head { display: flex; align-items: baseline; gap: 10px; }
+.ks-cols { display: grid; grid-template-columns: 1fr 316px; gap: var(--s5); flex: 1 0 auto; padding-bottom: var(--s3); }
+.ks-col { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.ks-head { display: flex; align-items: baseline; gap: var(--s3); }
 .ks-head .t-quiet { margin-left: auto; }
-.slot { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-card); text-align: left; width: 100%; }
+.slot { display: flex; align-items: flex-start; gap: var(--s3); padding: var(--s3) var(--s4); background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); text-align: left; width: 100%; }
 .slot .tile { width: 32px; height: 32px; flex: none; border-radius: var(--r-ctl); background: var(--accent-wash); border: 1px solid var(--accent-line); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; }
-.slot .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.slot .body b { font-size: 13px; font-weight: 600; }
-.slot .body .meta { color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.slot .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.slot .body b { font: var(--t-strong); }
+.slot .body .meta { font: var(--t-cap); color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .slot[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-wash); }
-.slot .warnline { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 6px 9px; border-radius: var(--r-ctl); background: var(--attention-wash); border: 1px solid var(--attention-line); color: var(--ink); font-size: 11.5px; }
+.slot .warnline { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); padding: var(--s1) var(--s2); border-radius: var(--r-ctl); background: var(--attention-wash); border: 1px solid var(--attention-line); color: var(--ink); font: var(--t-cap); }
 .slot .warnline .i { color: var(--attention); }
-.rule { display: flex; align-items: center; gap: 9px; color: var(--ink-2); font-size: 12px; padding: 2px 2px; }
+.rule { display: flex; align-items: center; gap: var(--s2); min-height: 20px; color: var(--ink-2); font: var(--t-cap); }
 .rule .i { color: var(--ink-3); }
-.ks-actions { display: flex; gap: 8px; padding-top: 2px; flex-wrap: wrap; }
-.setcard { padding: 4px 16px; display: flex; flex-direction: column; container-type: inline-size; }
-.setrow { display: flex; align-items: center; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--stroke); }
-.setrow:last-child { border-bottom: none; }
-.setrow .lab { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 180px; }
-.setrow .lab b { font-size: 12.5px; font-weight: 600; }
-.setrow .lab span { color: var(--ink-3); font-size: 11.5px; }
+.ks-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+/* Settings and the Keystore's This vault are Windows Settings' list
+   (APP.md §6, Controls; ruled 2026-10-17): every row a flat card of its
+   own, 4 px from the next, under its section's heading — they were rows
+   ruled off inside one card. .setcard is the list, not a card. */
+.setcard { display: flex; flex-direction: column; gap: var(--s1); container-type: inline-size; }
+.setrow { display: flex; align-items: center; gap: var(--s4); padding: var(--s3) var(--s4); background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); }
+/* A setting's name is a field label (strong) and its line a caption in
+   the second ink: 20 + 16, no gap. */
+.setrow .lab { display: flex; flex-direction: column; min-width: 0; flex: 1 1 180px; }
+.setrow .lab b { font: var(--t-strong); }
+.setrow .lab span { font: var(--t-cap); color: var(--ink-2); }
 .setrow .ctl { margin-left: auto; flex: none; }
 .setrow select.input { width: auto; min-width: 140px; }
 .setrow input.input { width: 220px; }
 /* A field that cannot be edited now — a forgotten record's name, a locked
-   vault's — reads as one, rather than as a field that swallows typing. */
-.input:disabled { background: var(--surface-alt); color: var(--ink-3); border-bottom-color: var(--ctl-bottom); }
+   vault's — reads as one, rather than as a field that swallows typing:
+   the lighter fill, a stroke all round and no underline, its text in the
+   disabled ink (ruled 2026-10-17). */
+.input:disabled { background: var(--fill-2); color: var(--ink-dis); border-color: var(--stroke); }
 /* Responsive (APP.md §6): the two columns merge when the body is narrow, and a row stacks —
    the title, its line, then the control on a line of its own — when its card is. The window
    itself never goes below 880 × 560. The queries are the body's own width, not the window's;
@@ -727,8 +1040,11 @@ tbody tr.up .fname { color: var(--ink-2); }
   .file-split thead th .hidden-sort.k-modified { display: inline; }
   /* The focus ring keeps its right edge where the column went (APP.md §7,
      ruled 2026-09-12): the edge is the last cell still shown, not the
-     last child, which is now a cell nobody draws. */
+     last child, which is now a cell nobody draws. So do the row's
+     rounded end and the header's padding over it (ruled 2026-10-17). */
   .file-split tbody tr:focus-visible > td:nth-child(4) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
+  .file-split tbody td:nth-child(4) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
+  .file-split thead th:nth-child(4) { padding-right: calc(var(--s3) + var(--s1)); }
 }
 /* Then Type, at the width where the three fixed columns would leave the
    name less than a name; Name and Size always. */
@@ -738,11 +1054,13 @@ tbody tr.up .fname { color: var(--ink-2); }
   .file-split thead th .hidden-sort.k-type { display: inline; }
   /* And again, Size being the last cell shown from here down. */
   .file-split tbody tr:focus-visible > td:nth-child(3) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
+  .file-split tbody td:nth-child(3) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
+  .file-split thead th:nth-child(3) { padding-right: calc(var(--s3) + var(--s1)); }
 }
 /* The details pane scrolls on its own, and its save bar is in flow at the
    foot of that pane and sticky there: it can never cover the last field
    for good (APP.md §6, the save bar). */
-.arch-split .details .savebar-wrap { position: sticky; bottom: 12px; margin: auto 12px 12px; z-index: 3; }
+.arch-split .details .savebar-wrap { position: sticky; bottom: var(--s3); margin: auto var(--s3) var(--s3); z-index: 3; }
 
 /* ---------- the Archives page's bottom panel (APP.md §6, refined 2026-09-12) ----------
    Below a fixed 1120 px of body — the width at which the 300 px pane
@@ -756,7 +1074,7 @@ tbody tr.up .fname { color: var(--ink-2); }
    pushing the selected row ahead of its top edge (the script measures
    that; the two numbers it needs are these). Nothing here runs above the
    threshold: the header is a heading, the panel is the side pane. */
-.arch-split { --panel-line: 44px; --panel-head: 64px; --panel-foot: 14px; }
+.arch-split { --panel-line: 44px; --panel-head: 64px; --panel-foot: var(--s3); }
 .details-head .chev, .details-head .head-line { display: none; }
 /* With no row the side pane is the count alone, as it was; the panel
    below the threshold always has its header, named or not. */
@@ -777,7 +1095,7 @@ tbody tr.up .fname { color: var(--ink-2); }
 @container (max-width: 1119.98px) {
   /* The room the collapsed panel takes, and 12 px of air over it, so the
      list's card and the panel's do not touch. */
-  .arch-split { grid-template-columns: 1fr; padding-bottom: calc(var(--panel-line) + var(--panel-foot) + 12px); }
+  .arch-split { grid-template-columns: 1fr; padding-bottom: calc(var(--panel-line) + var(--panel-foot) + var(--s3)); }
   .arch-probe { width: 1px; }
   /* The card is the only thing a frame of the motion touches, and only
      its height: the script writes that to this element's own style, never
@@ -786,7 +1104,7 @@ tbody tr.up .fname { color: var(--ink-2); }
      below the threshold and only here, so the height is a surface moving
      rather than a shadow and a rounded clip repainted. */
   .details {
-    position: absolute; left: 24px; right: 24px; bottom: var(--panel-foot); z-index: 4;
+    position: absolute; left: var(--s6); right: var(--s6); bottom: var(--panel-foot); z-index: 4;
     display: block; height: var(--panel-line); overflow: hidden;
     box-shadow: var(--shadow-pop); will-change: transform;
   }
@@ -815,20 +1133,22 @@ tbody tr.up .fname { color: var(--ink-2); }
      reversal part-way or a resettle that snaps the card cannot leave the
      header fading on another clock. The values below are the collapsed
      card's, which is what the panel starts and ends at. */
-  .details-head .head-stack { position: absolute; left: 14px; right: 42px; top: 11px; opacity: 0; will-change: opacity; }
-  .details-head .head-stack h3 { margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Both shapes start at the card's inset; the stack — a 16 px caption
+     over a 22 px name — sits 12 px down the 64. */
+  .details-head .head-stack { position: absolute; left: var(--s4); right: 42px; top: var(--s3); opacity: 0; will-change: opacity; }
+  .details-head .head-stack h3 { margin-top: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .details-head .head-line {
-    position: absolute; left: 14px; right: 38px; top: 0; height: var(--panel-line);
-    display: flex; align-items: center; gap: 10px; min-width: 0; will-change: opacity;
+    position: absolute; left: var(--s4); right: 38px; top: 0; height: var(--panel-line);
+    display: flex; align-items: center; gap: var(--s2); min-width: 0; will-change: opacity;
   }
   .details-head .head-line .eyebrow { flex: none; }
-  .details-head .head-line .hname { font-size: 13px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .details-head .head-line .hname { font: var(--t-strong); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The chevron is a sign, not a button: it turns with the panel and is
      dim while there is nothing to open. It keeps the collapsed line's own
      middle in both shapes, so the growth never moves it. Its turn stays a
      transition — a transform the compositor runs, which reverses on
      itself and lands where the class says whatever the motion did. */
-  .details-head .chev { display: block; position: absolute; right: 12px; top: 15px; color: var(--ink-3); transition: transform var(--dur-move) var(--ease-enter); }
+  .details-head .chev { display: block; position: absolute; right: var(--s3); top: 15px; color: var(--ink-3); transition: transform var(--dur-move) var(--ease-enter); }
   .details-head .chev.up { transform: rotate(180deg); }
   .details.no-row .head-line .eyebrow, .details.no-row .chev { opacity: 0.5; }
   /* The body scrolls under the header, which is outside its scroller, and
@@ -843,7 +1163,7 @@ tbody tr.up .fname { color: var(--ink-2); }
   .details.up .details-body { visibility: visible; transition: visibility 0s; }
 }
 @container (max-width: 470px) {
-  .setrow { flex-direction: column; align-items: stretch; gap: 8px; }
+  .setrow { flex-direction: column; align-items: stretch; gap: var(--s2); }
   .setrow .lab { flex: none; }
   .setrow .ctl { margin-left: 0; }
   .setrow select.input, .setrow input.input { width: 100%; }
@@ -856,9 +1176,9 @@ tbody tr.up .fname { color: var(--ink-2); }
 /* In flow at the foot of the scroll pane and sticky there: it can never cover the last row for
    good, nor the rail. Frosted over the content; a red frame when the input is invalid. */
 /* 12 px above the bar (the columns' own padding) and 12 px below it: the same breath either side. */
-.savebar-wrap { position: sticky; bottom: 12px; z-index: 3; margin-top: auto; margin-bottom: 12px; flex: none; }
+.savebar-wrap { position: sticky; bottom: var(--s3); z-index: 3; margin-top: auto; margin-bottom: var(--s3); flex: none; }
 .savebar {
-  position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 10px 8px 12px;
+  position: relative; display: flex; align-items: center; justify-content: flex-end; gap: var(--s2); padding: var(--s2) var(--s2) var(--s2) var(--s3);
   border: 1px solid var(--stroke-strong); border-radius: var(--r-card); color: var(--ink);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   /* The standard property alone (APP.md §6, ruled 2026-09-12): the
@@ -869,21 +1189,23 @@ tbody tr.up .fname { color: var(--ink-2); }
   transition: border-color var(--dur-hover) var(--ease-enter), box-shadow var(--dur-hover) var(--ease-enter);
 }
 .savebar.invalid { border-color: var(--danger-line); box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 16%, transparent), 0 0 0 1px var(--danger-line); }
-.sb-note { font-size: 12.5px; color: var(--danger); flex: none; padding-right: 6px; }
-.sb-left { display: flex; align-items: center; gap: 10px; flex: 1 1 0; min-width: 0; padding: 0; border: none; background: none; color: inherit; text-align: left; position: relative; cursor: default; }
+.sb-note { font: var(--t-body); color: var(--danger); flex: none; padding-right: var(--s2); }
+.sb-left { display: flex; align-items: center; gap: var(--s2); flex: 1 1 0; min-width: 0; padding: 0; border: none; background: none; color: inherit; text-align: left; position: relative; cursor: default; }
 .sb-left.clk { cursor: pointer; }
 .sb-left:disabled { opacity: 1; pointer-events: none; }
-.sb-count { flex: none; background: var(--accent); color: var(--accent-on); border-radius: 99px; font-size: 11px; font-weight: 600; padding: 1px 8px; font-variant-numeric: tabular-nums; }
-.sb-pending { display: flex; align-items: center; gap: 7px; overflow: hidden; min-width: 0; flex: 1 1 0; font-size: 12.5px; white-space: nowrap; }
-.sb-tag { flex: none; background: var(--accent-wash); color: var(--accent-ink); border-radius: var(--r-ctl); padding: 2px 8px; font-weight: 500; white-space: nowrap; font-size: 12px; }
+.sb-count { flex: none; background: var(--accent); color: var(--accent-on); border-radius: 99px; font: var(--t-cap); font-weight: 600; padding: 2px var(--s2); font-variant-numeric: tabular-nums; }
+/* The pending row and its measuring rail (.sb-rail) keep one gap, or the
+   rail measures chips that do not fit. */
+.sb-pending { display: flex; align-items: center; gap: var(--s2); overflow: hidden; min-width: 0; flex: 1 1 0; font: var(--t-body); white-space: nowrap; }
+.sb-tag { flex: none; background: var(--accent-wash); color: var(--accent-ink); border-radius: var(--r-ctl); padding: 2px var(--s2); white-space: nowrap; font: var(--t-cap); }
 .sb-tag.add { background: var(--accent-wash); color: var(--accent-ink); }
 .sb-tag.remove { background: var(--danger-wash); color: var(--danger); }
-.sb-more { color: var(--ink-3); white-space: nowrap; flex: none; }
-.sb-rail { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; display: flex; gap: 7px; white-space: nowrap; }
+.sb-more { color: var(--ink-2); white-space: nowrap; flex: none; }
+.sb-rail { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; display: flex; gap: var(--s2); white-space: nowrap; font: var(--t-body); }
 .sb-pop {
-  position: absolute; left: 0; bottom: calc(100% + 6px); max-width: min(520px, 100%); max-height: 140px; overflow-y: auto;
-  display: flex; flex-wrap: wrap; gap: 5px 8px; padding: 6px; transform-origin: bottom left;
-  background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: 12.5px;
+  position: absolute; left: 0; bottom: calc(100% + var(--s2)); max-width: min(520px, 100%); max-height: 140px; overflow-y: auto;
+  display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); padding: var(--s2); transform-origin: bottom left;
+  background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font: var(--t-body);
 }
 .savebar .btn:active:not(:disabled) { opacity: 0.85; }
 @container (max-width: 470px) {
@@ -893,14 +1215,15 @@ tbody tr.up .fname { color: var(--ink-2); }
 }
 
 /* ---------- ops, dialogs, toasts ---------------------------------------- */
-.ops { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.ops { display: flex; flex-direction: column; gap: var(--s2); flex: none; }
 /* The row is as tall as a row with a button in it, always: a drag out's
    hover carries no bar and no *Cancel*, and the strip must not grow under
    the user when the staging begins (APP.md §3, ruled 2026-09-11 — a strip
-   that reflows while it is being watched). 28px of .btn.sm, the padding and
-   the border. */
-.op { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 6px 10px; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); font-size: 12px; }
-.op progress { flex: 1; height: 6px; accent-color: var(--accent); }
+   that reflows while it is being watched). 28px of .btn.sm, 6 px either
+   side and the border — the height holds it, so the padding is a strip's
+   inset that the 42 px centres in. */
+.op { display: flex; align-items: center; gap: var(--s3); min-height: 42px; padding: var(--s1) var(--s3); border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); font: var(--t-cap); }
+.op progress { flex: 1; }
 /* The name keeps its room and the byte readout does not shuffle the bar as
    the figures grow (APP.md §6: progress is by bytes). */
 .op .opname { flex: none; }
@@ -911,19 +1234,34 @@ tbody tr.up .fname { color: var(--ink-2); }
 /* A drag out's hover has no bar (APP.md §3): the label stands alone at the
    strip's left, the room the bar would take left empty. */
 .op .grow { flex: 1; }
-.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; z-index: 20; }
-.dialog { width: 460px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); overflow: auto; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-window); padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
-.dialog h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0; }
+.backdrop { position: fixed; inset: 0; background: var(--smoke); display: flex; align-items: center; justify-content: center; z-index: 20; }
+/* The dialog is WinUI's ContentDialog (APP.md §6, Controls; ruled
+   2026-10-17), in two parts: the body — the title (sub, 20/28), the prose
+   in the second ink, 12 between the parts, 24 all round — which scrolls
+   when the window is too short for it, and the foot band under it, a step
+   below the surface behind a stroke, that holds the actions and never
+   scrolls away. It was one box of 20/24 with compact buttons at its right
+   on the same white, which is a web page's modal. */
+.dialog { width: 460px; max-width: calc(100vw - 2 * var(--s5)); max-height: calc(100vh - 2 * var(--s5)); overflow: hidden; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-window); display: flex; flex-direction: column; }
+.dialog-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--s6); display: flex; flex-direction: column; gap: var(--s3); }
+.dialog h2 { font: var(--t-sub); margin: 0; }
 /* Focus moves into a dialog as it opens (Dialog.svelte); the box is not a
    control and wears no ring — its buttons and fields keep theirs. */
 .dialog:focus, .dialog:focus-visible { outline: none; box-shadow: var(--shadow-window); }
-.dialog .actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
-.dialog p { margin: 0; color: var(--ink-2); font-size: 12.5px; }
+/* The foot band's buttons share its row in equal widths while their words
+   fit; one whose words do not moves to a row of its own rather than
+   spilling, and words longer than the whole band wrap inside their
+   button, so nothing is ever wider than the dialog. A hyperlink button in
+   the foot keeps its own size. The 5 px above and below the 20 px line
+   are the 32 px button's, kept when the words take two lines. */
+.dialog-foot { flex: none; display: flex; flex-wrap: wrap; gap: var(--s2); padding: var(--s5) var(--s6); background: var(--dlg-foot); border-top: 1px solid var(--stroke); }
+.dialog-foot > .btn:not(.link) { flex: 1 1 0; min-width: fit-content; max-width: 100%; height: auto; min-height: 32px; padding: 5px var(--s3); justify-content: center; text-align: center; white-space: normal; }
+.dialog p { margin: 0; color: var(--ink-2); }
 /* Toasts (APP.md §6): at the top of the window, centred on the window — not on the content
    layer — dropping in a few pixels as they fade and rising as they leave; only for what the
    page cannot say in place. */
-.toasts { position: fixed; top: 14px; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 30; pointer-events: none; }
-.toast { max-width: min(520px, calc(100vw - 48px)); padding: 9px 14px; border-radius: var(--r-card); background: var(--surface); border: 1px solid var(--stroke); box-shadow: var(--shadow-pop); font-size: 12.5px; color: var(--ink); pointer-events: auto; text-align: center; text-wrap: balance; }
+.toasts { position: fixed; top: var(--s4); left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: var(--s2); z-index: 30; pointer-events: none; }
+.toast { max-width: min(520px, calc(100vw - 2 * var(--s6))); padding: var(--s2) var(--s3); border-radius: var(--r-card); background: var(--surface); border: 1px solid var(--stroke); box-shadow: var(--shadow-pop); font: var(--t-body); color: var(--ink); pointer-events: auto; text-align: center; text-wrap: balance; }
 .toast.error { border-color: var(--danger-line); background: var(--danger-wash); }
 
 /* The recovery key's print sheet (APP.md §3 Keys): hidden on screen; the
@@ -935,9 +1273,9 @@ tbody tr.up .fname { color: var(--ink-2); }
   @page { size: auto; margin: 0; }
   body * { visibility: hidden; }
   .print-sheet, .print-sheet * { visibility: visible; }
-  .print-sheet { display: block; position: fixed; inset: 0; padding: 20mm; color: #000; background: #fff; font-family: var(--font-sans, "Segoe UI", sans-serif); }
-  .print-sheet h1 { font-size: 20px; margin: 0 0 8px; }
-  .print-sheet p { font-size: 12px; margin: 0 0 6px; max-width: 60ch; }
-  .print-digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; max-width: 480px; }
-  .print-digits span { font-family: var(--font-mono, Consolas, monospace); font-size: 20px; letter-spacing: 0.08em; text-align: center; border: 1px solid #000; padding: 6px 0; }
+  .print-sheet { display: block; position: fixed; inset: 0; padding: 20mm; color: #000; background: #fff; font-family: var(--font-text); }
+  .print-sheet h1 { font: var(--t-sub); margin: 0 0 var(--s2); }
+  .print-sheet p { font: var(--t-cap); margin: 0 0 var(--s1); max-width: 60ch; }
+  .print-digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s2); margin: var(--s4) 0; max-width: 480px; }
+  .print-digits span { font: var(--t-sub); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; border: 1px solid #000; padding: var(--s1) 0; }
 }

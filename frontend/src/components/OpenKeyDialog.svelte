@@ -2,8 +2,8 @@
   // A file opened from Explorer whose key is not in this vault (APP.md
   // §14, decision 4). The file *is* an Enfold archive — its envelope
   // decoded — and no record here holds the archive_id in it, so there is
-  // one way in and this dialog offers it: *Import records…*, which lives
-  // on the Archives page. Nothing of the file was changed, and the dialog
+  // one way on and this dialog offers it: *Import archives from a
+  // backup…*, which lives on the Archives page. Nothing of the file was changed, and the dialog
   // says so, because a user who double-clicked an archive deserves to
   // know it is still whole.
   //
@@ -24,14 +24,10 @@
 
 <Dialog title={openCopy.title(baseName(path))} onclose={onclose}>
   <p>{openCopy.keyNotInVault}</p>
-  <p class="t-quiet note">{openCopy.how}</p>
+  <p class="t-quiet">{openCopy.how}</p>
 
   {#snippet actions()}
-    <button type="button" class="btn" onclick={onclose}>{openCopy.close}</button>
     <button type="button" class="btn accent" onclick={onimport}>{openCopy.importRecords}</button>
+    <button type="button" class="btn" onclick={onclose}>{openCopy.close}</button>
   {/snippet}
 </Dialog>
-
-<style>
-  .note { margin: 10px 0 0; }
-</style>

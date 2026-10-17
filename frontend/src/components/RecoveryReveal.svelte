@@ -20,7 +20,7 @@
   import { tick } from "svelte";
   import Dialog from "./Dialog.svelte";
   import { Keys, Shell, errorOf } from "../lib/api";
-  import { codeText } from "../lib/strings";
+  import { codeText, dialogCopy } from "../lib/strings";
   import { recoveryKeyFileName, recoveryKeyTitle } from "../lib/print";
   import { cornerLabel, keptSomehow } from "../lib/reveal";
   import { store } from "../lib/state.svelte";
@@ -84,7 +84,7 @@
       savedTo = p;
     } catch (e) {
       const code = errorOf(e).code;
-      store.toast(code === "ceremony.stale_prompt" ? "The key is no longer held. Show it again from the Keystore page." : codeText(code), "error");
+      store.toast(code === "ceremony.stale_prompt" ? "The recovery key is no longer held. Show it again from the Vault page." : codeText(code), "error");
     }
   }
 
@@ -130,20 +130,20 @@
 
 <Dialog title={kind === "reveal" ? "Recovery key" : "Your recovery key"} onclose={() => {}} covered={ask !== ""}>
   {#if failed}
-    <p>The key could not be shown here: its one-time link was already used.</p>
-    <div class="bar attention"><svg class="i i-14"><use href="#i-info" /></svg><span>Show it again from the Keystore page: unlock, then prove a YubiKey or a password once more.</span></div>
+    <p>The recovery key could not be shown here: its one-time link was already used.</p>
+    <div class="bar attention"><svg class="i i-14"><use href="#i-info" /></svg><span>Show it again from the Vault page: unlock, then prove a YubiKey or a password once more.</span></div>
   {:else}
     <p>These digits open the vault without a YubiKey or a password. Keep them somewhere safe: anyone who has them can open every archive.</p>
     {#if !digits}
       <p>Loading…</p>
     {:else}
-      {#if recoveryId}<div class="key-id"><span class="kid-label">Key ID</span><span class="kid">{recoveryId}</span></div>{/if}
+      {#if recoveryId}<div class="key-id"><span class="kid-label">Recovery key ID</span><span class="kid">{recoveryId}</span></div>{/if}
       <div class="digits">
         {#each groups as g, i (i)}<span>{g}</span>{/each}
       </div>
       <!-- The key ID is said once, above the digits; this line does not
            repeat it. The page is named as the rail names it. -->
-      <p class="t-quiet">{digits.length} digits. They can be shown again from the Keystore page — unlock, then prove a YubiKey or a password once more.</p>
+      <p class="t-quiet">{digits.length} digits. They can be shown again from the Vault page: unlock, then prove a YubiKey or a password once more.</p>
       {#if savedTo}
         <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>Saved to {savedTo}.</span></div>
       {/if}
@@ -159,9 +159,9 @@
     {#if failed}
       <button type="button" class="btn accent" onclick={finish}>Done</button>
     {:else}
+      <button type="button" class="btn accent" disabled={!digits} onclick={kept ? finish : () => (wroteDown = true)}>{corner}</button>
       <button type="button" class="btn" disabled={!digits} onclick={() => (ask = "save")}>{savedTo ? "Save again…" : "Save as a text file…"}</button>
       <button type="button" class="btn" disabled={!digits} onclick={print}>{printed ? "Print again…" : "Print…"}</button>
-      <button type="button" class="btn accent" disabled={!digits} onclick={kept ? finish : () => (wroteDown = true)}>{corner}</button>
     {/if}
   {/snippet}
 </Dialog>
@@ -170,8 +170,8 @@
   <Dialog title="Where to keep it" onclose={() => (ask = "")}>
     <p>Choose a place that is safe and secret, and that you can reach when you need it — a drive you keep offline, a password manager's file store. Not Enfold's own folder or the vault's, and not a folder that syncs to somewhere you would not want this to go.</p>
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (ask = "")}>Go back</button>
       <button type="button" class="btn accent" onclick={save}>Choose a place…</button>
+      <button type="button" class="btn" onclick={() => (ask = "")}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}

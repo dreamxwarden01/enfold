@@ -54,7 +54,7 @@
   // group needs no press: its checksum is judged as it is finished.
   const missing = $derived(complete ? "" : "All 48 digits are needed.");
   const refused = $derived(!!error && !typedSince);
-  const said = $derived(anyMistyped ? "A group is mistyped: each is six digits, and the last digit checks the other five." : pressed && missing ? missing : refused ? error : "");
+  const said = $derived(anyMistyped ? "A group is mistyped: each is 6 digits, and the last digit checks the other 5." : pressed && missing ? missing : refused ? error : "");
 
   $effect(() => {
     // A prompt that says the key was refused brings the typed groups back
@@ -162,7 +162,7 @@
 </script>
 
 <form class="field" onsubmit={submit} novalidate>
-  <div class="field-top"><span class="label">Recovery key</span><span class="hint">48 digits, in eight groups.</span></div>
+  <div class="field-top"><span class="t-strong">Recovery key</span><span class="hint">48 digits, in 8 groups.</span></div>
   {#if slots.length}
     <!-- Which sheet: the digits' checksum catches a mistyped group, the
          ID catches the wrong sheet (FORMAT.md §18.4). -->
@@ -172,7 +172,7 @@
       {/each}
     </ul>
   {/if}
-  <div class="cells" role="group" aria-label="Recovery key, eight groups of six digits" aria-describedby={said ? `recovery-${promptId}-said` : undefined}>
+  <div class="cells" role="group" aria-label="Recovery key, 8 groups of 6 digits" aria-describedby={said ? `recovery-${promptId}-said` : undefined}>
     {#each groups as g, i (i)}
       <input
         bind:this={cells[i]}
@@ -201,13 +201,12 @@
 </form>
 
 <style>
-  .cells { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-  .keylist { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-  .keylist li { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; color: var(--ink-3); min-width: 0; }
-  .kl-label { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cells { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s2); }
+  .keylist { list-style: none; margin: 0 0 var(--s2); padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
+  .keylist li { display: flex; align-items: baseline; gap: var(--s2); font: var(--t-cap); color: var(--ink-2); min-width: 0; }
+  .kl-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kl-id { font-family: var(--font-mono); letter-spacing: 0.04em; color: var(--ink); flex: none; }
   .kl-date { margin-left: auto; flex: none; }
-  .cell { font-family: var(--font-mono); font-size: 15px; letter-spacing: 0.08em; text-align: center; padding: 8px 4px; }
-  .label { font-size: 12.5px; }
-  .submit { margin-top: 12px; }
+  .cell { font: var(--t-sect); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; padding: 0 var(--s1); }
+  .submit { margin-top: var(--s3); }
 </style>

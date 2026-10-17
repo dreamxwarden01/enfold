@@ -4,17 +4,19 @@
   // muted second line; Size is right-aligned so magnitudes line up; there
   // is no Files column and no Key column since 2026-10-14 — a count the
   // core has only for an open archive read "—" on every row, and the key
-  // version is the Details dialog's. Status carries what the row is —
-  // open, compacting, file missing, hidden, forgotten — and *file
-  // missing* is only ever the core's own note, so the cell is blank until
-  // a presence pass has run and never says "missing" about a path nobody
-  // has measured. The header line sums the rows shown and says so, beside
-  // the vault file's own size and the registry's date (§2.1).
+  // version is Technical details'. Status carries what the row is, in the
+  // chips' words (chipCopy, ruled 2026-10-17) — Open, Compacting, Missing,
+  // Hidden, Forgotten — and *Missing* is only ever the core's own note, so
+  // the cell is blank until a presence pass has run and never says
+  // "missing" about a path nobody has measured. The header line sums the
+  // rows shown and says so, beside the vault file's own size and the
+  // registry's date (§2.1). Every label is the verb table's or the
+  // dialog template's (strings.ts; APP.md §7, ruled 2026-10-17).
   import { tick, untrack } from "svelte";
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivesCopy, codeText, listCopy, warningCopy } from "../lib/strings";
+  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, listCopy, warningCopy } from "../lib/strings";
   import { bytes, count, date, dateTime, plural } from "../lib/format";
   import { clickRow, emptySelection, selectAll, survive, toggleRow } from "../lib/selection";
   import type { Selection } from "../lib/selection";
@@ -74,13 +76,16 @@
   const methodOptions = METHODS.map((m) => ({ value: m.value, label: m.word }));
   let newNameValid = $state(true);
   let newAttempt = $state(0);
-  // The path is never a field: *Create* opens the save dialog, and a place
+  // The path is never a field: *Create archive…* opens the save dialog, and a place
   // that already holds a file is refused here rather than overwritten
   // (APP.md §6). The refused name is kept, so the line goes the moment the
   // name is changed and never outlives what it is about.
   let newExists = $state("");
   const existsShown = $derived(!!newExists && newName.trim() === newExists);
-  let confirm = $state<null | { title: string; body: string; button: string; run: () => Promise<unknown> }>(null);
+  // A consequence dialog (the dialog template, ruled 2026-10-17): the
+  // question, the body, the primary that repeats the command's verb, and
+  // the mechanism, when there is one worth saying, behind *How this works*.
+  let confirm = $state<null | { title: string; body: string; how?: string; button: string; run: () => Promise<unknown> }>(null);
   let showDetails = $state(false);
   // The Forget/Delete dialog runs off a snapshot of the record, never off
   // the live row: a forgotten record leaves the list the moment the write
@@ -126,17 +131,17 @@
 
   function statuses(a: ArchiveSummary): Status[] {
     const out: Status[] = [];
-    if (a.forgottenAt > 0) out.push({ label: "forgotten", tone: "forgotten", title: `Forgotten on ${date(a.forgottenAt)}` });
+    if (a.forgottenAt > 0) out.push({ label: chipCopy.forgotten, tone: "forgotten", title: chipCopy.forgottenOn(date(a.forgottenAt)) });
     // Nothing is "dirty" since 2026-09-09: an archive is clean between
     // operations, each of them its own transaction (APP.md §2.3).
     // A compaction refuses the open and every operation until it ends, so
     // the row says so beside the greyed commands (ruled 2026-10-14).
-    if (compacting(a, store.runningOps)) out.push({ label: "compacting", tone: "busy", title: codeText(Code.CodeArchiveCompacting) });
-    else if (a.open) out.push({ label: "open", tone: "open" });
+    if (compacting(a, store.runningOps)) out.push({ label: chipCopy.compacting, tone: "busy", title: codeText(Code.CodeArchiveCompacting) });
+    else if (a.open) out.push({ label: chipCopy.open, tone: "open" });
     // Never computed here: the core keeps a presence per record and the
     // note is the only thing that says a file is gone (APP.md §13).
-    if (a.note === "archive.file_missing") out.push({ label: "file missing", tone: "missing", title: codeText(a.note) });
-    if (a.hidden) out.push({ label: "hidden", tone: "hidden" });
+    if (a.note === "archive.file_missing") out.push({ label: chipCopy.missing, tone: "missing", title: codeText(a.note) });
+    if (a.hidden) out.push({ label: chipCopy.hidden, tone: "hidden" });
     return out;
   }
 
@@ -851,7 +856,7 @@
   }
 
   // Open file… (Ctrl+O, APP.md §14, ruled 2026-10-14): an .efd from
-  // anywhere, through the picker Import records… uses, opened by the
+  // anywhere, through the picker *Import archives from a backup…* uses, opened by the
   // chain Explorer's double-click takes — the envelope's archive_id, the
   // lock scene first while locked, the key's own dialog when no record
   // here holds it.
@@ -861,11 +866,11 @@
   }
 
   async function importRecords() {
-    const p = (await Shell.PickFiles("Import records from a backup or a copy of this vault", false)) ?? [];
+    const p = (await Shell.PickFiles(importCopy.archivesTitle, false)) ?? [];
     if (p.length) merging = p[0];
   }
 
-  // Import records… asked for from the dialog a file opened from Explorer
+  // *Import archives from a backup…* asked for from the dialog a file opened from Explorer
   // put up (APP.md §14): its key is not in this vault, and the picker and
   // the merge dialog live here.
   $effect(() => {
@@ -874,7 +879,7 @@
     void importRecords();
   });
 
-  // ---- Forget key… and Delete archive… -----------------------------------
+  // ---- Forget archive… and Delete archive… -------------------------------
   // Both need the archive closed (APP.md §13), and the close is the
   // dialog's release: run once the name is typed and the act confirmed,
   // never before (ruled 2026-10-14), so a Cancel leaves an archive that is
@@ -948,7 +953,7 @@
 
   // What stops a record-level operation, said on the button itself. The
   // archive being open is never one of them since 2026-09-10: *Verify*,
-  // *Compact* and *Rotate key* unwrap the key with the session's KWK, open
+  // *Compact…* and *Re-key archive…* unwrap the key with the session's KWK, open
   // the file for the operation and close it again, so the page never asks
   // for the archive to be opened first (APP.md §2.3). Only the vault does:
   // while it is locked they are disabled with its own reason.
@@ -963,7 +968,7 @@
   // What the row itself stops (lib/archlist.ts): a forgotten record, or a
   // compaction under way. Hide, Locate and the name and description are
   // registry writes and are stopped by the first alone; Open, Compact,
-  // Rotate key and Verify by either. Close, Forget key and Delete archive
+  // Re-key archive and Verify by either. Close, Forget archive and Delete archive
   // by the second alone: the close the last two need is refused while a
   // compaction holds the handle, and asking for the name first would only
   // end in that refusal (APP.md §2.3, §13).
@@ -988,9 +993,13 @@
 
 <div class="layer-head">
   <h1 class="t-title">{st?.displayName || "Vault"}</h1>
-  <span class="chip num">{plural(rows.length, "archive")} shown · {bytes(shownSize)} stored</span>
-  {#if st}<span class="t-quiet">vault file {bytes(st.vaultFileSize)} · changed {dateTime(st.modifiedAt)}</span>{/if}
-  {#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>Locked</span>{/if}
+  <!-- One caption line for the vault, the count included: a pill is for
+       a state, and Locked is the head's one (APP.md §13, ruled
+       2026-10-17). The block's part is one expression, separator and
+       all: Svelte trims the white space at a block's edges, which made
+       "stored· vault file". -->
+  <span class="t-quiet num meta">{plural(rows.length, "archive")} shown · {bytes(shownSize)} stored{#if st}{` · vault file ${bytes(st.vaultFileSize)} · changed ${dateTime(st.modifiedAt)}`}{/if}</span>
+  {#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}
 </div>
 
 <!-- The page is a drop target with no data-archive-id: Wails emits a drop
@@ -1002,8 +1011,8 @@
   <div class="cmdbar">
     <!-- Every action that takes one archive works on the pane's row and is
          greyed unless exactly one is ticked (APP.md §6, ruled 2026-09-10). -->
-    <button type="button" class="btn accent" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
-    <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive…</button>
+    <button type="button" class="btn accent" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>{commandCopy.open}</button>
+    <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
     <!-- Never greyed: the chain answers a locked vault with the lock
          scene, and a file whose key is not here with its own dialog, as
          for a double-click in Explorer (APP.md §14). -->
@@ -1012,19 +1021,19 @@
     <!-- Never gated on the archive being open (APP.md §2.3, ruled
          2026-09-10): the core opens it for the operation and closes it
          again, so there is no "open the archive first". -->
-    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: "Compact this archive?", body: "Free space is reclaimed by rewriting the file. Nothing changes for the files inside; it takes time in proportion to the size.", button: "Compact", run: () => Archives.Compact(one.id) })}>Compact…</button>
-    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: "Rotate this archive's key?", body: "A new key is wrapped into the vault first, then the archive is re-keyed. Old versions of the key stay readable.", button: "Rotate key", run: () => Archives.RotateKey(one.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate key…</button>
-    <button type="button" class="btn subtle" disabled={!one || !unlocked || !!rowStop} title={!unlocked ? codeText(Code.CodeVaultLocked) : rowWhy} onclick={() => one && run(Archives.Verify(one.id))}><svg class="i i-14"><use href="#i-check" /></svg>Verify</button>
-    <button type="button" class="btn subtle" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && run(one.hidden ? Archives.Unhide(one.id) : Archives.Hide(one.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{one?.hidden ? "Unhide" : "Hide"}</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: dialogCopy.compact.title(one.name), body: dialogCopy.compact.body, button: dialogCopy.compact.primary, run: () => Archives.Compact(one.id) })}>{commandCopy.compact}</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: dialogCopy.rekeyArchive.title(one.name), body: dialogCopy.rekeyArchive.body, how: dialogCopy.rekeyArchive.how, button: dialogCopy.rekeyArchive.primary, run: () => Archives.RotateKey(one.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || !!rowStop} title={!unlocked ? codeText(Code.CodeVaultLocked) : rowWhy} onclick={() => one && run(Archives.Verify(one.id))}><svg class="i i-14"><use href="#i-check" /></svg>{commandCopy.verify}</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && run(one.hidden ? Archives.Unhide(one.id) : Archives.Hide(one.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{one?.hidden ? commandCopy.unhide : commandCopy.hide}</button>
     <div class="sep"></div>
-    <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => run(Archives.CheckFiles())}>Check files</button>
-    <button type="button" class="btn subtle" disabled={!unlocked || tampered} onclick={importRecords}><svg class="i i-14"><use href="#i-backup" /></svg>Import records…</button>
+    <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => run(Archives.CheckFiles())}>{commandCopy.findMissing}</button>
+    <button type="button" class="btn subtle" disabled={!unlocked || tampered} onclick={importRecords}><svg class="i i-14"><use href="#i-backup" /></svg>{commandCopy.importArchives}</button>
     <div class="sep"></div>
-    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || one.forgottenAt > 0 || compactStop} title={compactWhy} onclick={() => void startDelete("forget")}>Forget key…</button>
-    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || compactStop} title={compactWhy} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
+    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || one.forgottenAt > 0 || compactStop} title={compactWhy} onclick={() => void startDelete("forget")}>{commandCopy.forgetArchive}</button>
+    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || compactStop} title={compactWhy} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.deleteArchive}</button>
     <div class="grow"></div>
-    <label class="filterbox"><span class="vh">Filter</span><input class="input" type="search" placeholder="Filter" bind:value={filter} /></label>
-    <label class="check"><input type="checkbox" bind:checked={store.showHidden} onchange={() => store.refreshArchives()} />Show hidden</label>
+    <label class="filterbox"><span class="vh">{archivesCopy.filter}</span><input class="input" type="search" placeholder={archivesCopy.filter} bind:value={filter} /></label>
+    <label class="check"><input type="checkbox" bind:checked={store.showHidden} onchange={() => store.refreshArchives()} />{archivesCopy.showHidden}</label>
   </div>
 
   {#if !unlocked}
@@ -1033,7 +1042,7 @@
     <div class="bar line">
       <svg class="i i-14"><use href="#i-lock" /></svg>
       <span class="grow">The vault is locked. Open archives can still be browsed; everything else needs the vault.</span>
-      <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button>
+      <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>{commandCopy.unlock}</button>
     </div>
   {/if}
   {#if tampered}
@@ -1051,34 +1060,40 @@
         {#if rows.length === 0 && !filter.trim() && vaultEmpty}
           <!-- A vault with no archives yet says what to do, with the
                buttons that do it (ruled 2026-10-14), not greyed verbs over
-               an empty line. Import records… is the bar's own command:
+               an empty line. *Import archives from a backup…* is the bar's own command:
                its picker and its proof step come before any key is
-               asked for. -->
+               asked for. A command is a button, so it is a small subtle
+               one, not a hyperlink (APP.md §6, Controls; ruled
+               2026-10-17). -->
           <div class="empty first">
             <p>{archivesCopy.emptyVault}</p>
             <div class="row">
-              <button type="button" class="btn accent" disabled={tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>New archive…</button>
+              <button type="button" class="btn accent" disabled={tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
               <button type="button" class="btn" onclick={() => void openFile()}><svg class="i i-14"><use href="#i-folder" /></svg>{archivesCopy.emptyOpen}</button>
             </div>
-            <button type="button" class="btn link" disabled={tampered} onclick={importRecords}>Import records…</button>
+            <button type="button" class="btn subtle sm" disabled={tampered} onclick={importRecords}>{commandCopy.importArchives}</button>
           </div>
         {:else if rows.length === 0 && !filter.trim() && vaultEmpty === null}
           <div class="empty"></div>
         {:else if rows.length === 0}
-          <div class="empty">{filter.trim() ? "No archive matches that." : unlocked ? "No archives are shown. Hidden and forgotten ones are listed under Show hidden." : "No archives are open."}</div>
+          <div class="empty">{filter.trim() ? archivesCopy.noMatch : unlocked ? archivesCopy.allHidden : "No archives are open."}</div>
         {:else}
           <!-- The same checkboxes as the file list's, under the same rules:
                the header ticks the rows the filter shows and is ticked
-               exactly when all of them are, never a third state. -->
+               exactly when all of them are, never a third state; they
+               show on hover, focus and selection, and a selected row is
+               the wash and the pill alone (app.css; APP.md §6, ruled
+               2026-10-17). One sort glyph, the 10 px chevron, on the
+               sorter's own hover fill, as on the file list. -->
           <table>
             <colgroup><col class="w-check" /><col /><col class="w-size" /><col class="w-date" /><col class="w-status" /></colgroup>
             <thead>
               <tr>
                 <th scope="col" class="chk"><input type="checkbox" checked={allTicked} aria-label={archivesCopy.tickAll} onclick={tickAll} /></th>
-                <th scope="col" aria-sort={ariaSort("name")}><button type="button" onclick={() => sortOn("name")}>Name<svg class="i i-14 caret" class:on={sortKey === "name"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
-                <th scope="col" class="num" aria-sort={ariaSort("size")}><button type="button" onclick={() => sortOn("size")}>Size<svg class="i i-14 caret" class:on={sortKey === "size"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
-                <th scope="col" aria-sort={ariaSort("saved")}><button type="button" onclick={() => sortOn("saved")}>Last saved<svg class="i i-14 caret" class:on={sortKey === "saved"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
-                <th scope="col" aria-sort={ariaSort("status")}><button type="button" onclick={() => sortOn("status")}>Status<svg class="i i-14 caret" class:on={sortKey === "status"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
+                <th scope="col" aria-sort={ariaSort("name")}><button type="button" class="sorter" onclick={() => sortOn("name")}>Name<svg class="i caret" class:on={sortKey === "name"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
+                <th scope="col" class="num" aria-sort={ariaSort("size")}><button type="button" class="sorter" onclick={() => sortOn("size")}>Size<svg class="i caret" class:on={sortKey === "size"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
+                <th scope="col" aria-sort={ariaSort("saved")}><button type="button" class="sorter" onclick={() => sortOn("saved")}>Last saved<svg class="i caret" class:on={sortKey === "saved"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
+                <th scope="col" aria-sort={ariaSort("status")}><button type="button" class="sorter" onclick={() => sortOn("status")}>Status<svg class="i caret" class:on={sortKey === "status"} class:asc={sortAsc}><use href="#i-chevdown" /></svg></button></th>
               </tr>
             </thead>
             <tbody>
@@ -1179,8 +1194,10 @@
                 <div class="bar attention">
                   <svg class="i i-14"><use href="#i-warn" /></svg>
                   <div class="why">
-                    <span>Forgotten — restore it to open this archive again; its key is dropped at the first unlock after {date(purge)}.</span>
-                    <button type="button" class="btn sm" disabled={!one || !unlocked || tampered} onclick={() => one && run(Archives.Restore(one.id)).then(() => store.refreshArchives())}>Restore</button>
+                    <!-- What it means, then the undo, which the bar carries
+                         (the dialog template, ruled 2026-10-17). -->
+                    <span>{chipCopy.forgottenOn(date(pane.forgottenAt))}. Restore it to open it again; after {date(purge)} its key is gone.</span>
+                    <button type="button" class="btn sm" disabled={!one || !unlocked || tampered} onclick={() => one && run(Archives.Restore(one.id)).then(() => store.refreshArchives())}>{commandCopy.restore}</button>
                   </div>
                 </div>
               </div>
@@ -1193,37 +1210,45 @@
                   <input id="ar-name" class="input" class:invalid={nameChanged && !!nameProblem(draft.name)} aria-invalid={nameChanged && nameProblem(draft.name) ? "true" : undefined} bind:value={store.recordDraft[pane.id].name} disabled={!editable} title={forgotWhy} />
                 </div>
                 <div class="field">
-                  <div class="field-top"><label for="ar-desc">Description</label><span class="hint">a second line in the list</span></div>
+                  <div class="field-top"><label for="ar-desc">Description</label><span class="hint">Shown under the name in the list</span></div>
                   <textarea id="ar-desc" class="input area" class:invalid={descChanged && !!descriptionProblem(draft.description)} aria-invalid={descChanged && descriptionProblem(draft.description) ? "true" : undefined} rows="2" bind:value={store.recordDraft[pane.id].description} disabled={!editable} title={forgotWhy}></textarea>
                 </div>
               </div>
             {/if}
 
-            <dl class="facts">
-              <div class="fact"><dt>Size</dt><dd>{pane.storedSize ? bytes(pane.storedSize) : "—"}</dd></div>
-              {#if pane.open}<div class="fact"><dt>Files</dt><dd>{count(pane.files)}</dd></div>{/if}
-              <div class="fact"><dt>Created</dt><dd>{det ? dateTime(det.createdAt) : "—"}</dd></div>
-              <div class="fact"><dt>Last saved</dt><dd>{dateTime(pane.lastWrittenAt)}</dd></div>
-              <div class="fact"><dt>Key version</dt><dd>v{pane.keyVersion}</dd></div>
-              <div class="fact"><dt>KID</dt><dd class="mono" title={det?.currentKid}>{det?.currentKid || "—"}</dd></div>
-              <div class="fact"><dt>Compression</dt><dd>{methodWord(pane.method)}</dd></div>
-              {#if pane.receiptOwed}<div class="fact"><dt>Receipt</dt><dd>pending</dd></div>{/if}
-              {#if pane.hashBehind > 0}<div class="fact"><dt>Verified</dt><dd>{plural(pane.hashBehind, "save")} ago</dd></div>{/if}
+            <!-- The one label · value list (APP.md §6, Type and spacing):
+                 each value beside its label, never pushed to the far edge
+                 of a wide panel. User words only (ruled 2026-10-17): the key
+                 version, the KID and the receipt are Technical details'. -->
+            <dl class="kv pad">
+              <div><dt>{archivesCopy.facts.size}</dt><dd class="num">{pane.storedSize ? bytes(pane.storedSize) : "—"}</dd></div>
+              {#if pane.open}<div><dt>{archivesCopy.facts.files}</dt><dd class="num">{count(pane.files)}</dd></div>{/if}
+              <div><dt>{archivesCopy.facts.created}</dt><dd class="num">{det ? dateTime(det.createdAt) : "—"}</dd></div>
+              <div><dt>{archivesCopy.facts.lastSaved}</dt><dd class="num">{dateTime(pane.lastWrittenAt)}</dd></div>
+              <div><dt>{archivesCopy.facts.compression}</dt><dd>{methodWord(pane.method)}</dd></div>
               <!-- The figure, not advice: the core reclaims the space itself
                    after a commit that leaves it over APP.md §2.3's thresholds,
                    so "compact when convenient" would tell the user to do what
                    has already been done. What is left below the quarter is
                    why the file is bigger than the files inside it, and the
-                   same floor decides whether it is worth saying (lib/status.ts). -->
-              {#if pane.open && freeWorthShowing(pane.freeSpace)}<div class="fact"><dt>Free space</dt><dd>{bytes(pane.freeSpace)}</dd></div>{/if}
+                   same floor decides whether it is worth saying (lib/status.ts).
+                   *Unused*, not *free*, which reads as the disk's. -->
+              {#if pane.open && freeWorthShowing(pane.freeSpace)}<div><dt>{archivesCopy.facts.unused}</dt><dd class="num">{bytes(pane.freeSpace)}</dd></div>{/if}
             </dl>
+            {#if pane.hashBehind > 0}<p class="pad t-quiet verified">{archivesCopy.verifiedAgo(pane.hashBehind)}</p>{/if}
+            <!-- *Technical details…* reveals more of these facts, so it is a
+                 hyperlink button under them, as *Show in Explorer* and
+                 *Locate…* are under the path (APP.md §6, Controls; ruled
+                 2026-10-17: it was a standard button beside *Close*). -->
+            <div class="pad"><button type="button" class="btn link" disabled={!det || !one} onclick={() => (showDetails = true)}>{archivesCopy.technicalDetails}</button></div>
 
+            <!-- A path is the stacked form: its label over it, and the
+                 path wrapping rather than cut (APP.md §6, §13). -->
             <div class="pad pathblock">
-              <div class="plabel">{foreign ? "Last seen on another system at" : "File"}</div>
-              <div class="ppath" title={pane.path}>{pane.path || "—"}</div>
+              <dl class="kv stk"><dt>{foreign ? archivesCopy.facts.foreign : archivesCopy.facts.file}</dt><dd>{pane.path || "—"}</dd></dl>
               <div class="row">
-                {#if !foreign}<button type="button" class="btn link" disabled={!one} onclick={() => one && void Shell.Reveal(one.path)}>Show in Explorer</button>{/if}
-                <button type="button" class="btn link" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && locate(one)}>Locate…</button>
+                {#if !foreign}<button type="button" class="btn link" disabled={!one} onclick={() => one && void Shell.Reveal(one.path)}>{commandCopy.showInExplorer}</button>{/if}
+                <button type="button" class="btn link" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && locate(one)}>{commandCopy.locate}</button>
               </div>
             </div>
 
@@ -1234,11 +1259,12 @@
             <div class="details-actions">
               <!-- A standard button: the bar's Open is the one accent on
                    screen (ruled 2026-10-14). -->
-              <button type="button" class="btn wide" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>Open</button>
-              <div class="row2">
-                {#if pane.open}<button type="button" class="btn" disabled={!one || compactStop} title={compactWhy} onclick={() => one && run(Archives.Close(one.id)).then(() => store.refreshArchives())}>Close</button>{/if}
-                <button type="button" class="btn" disabled={!det || !one} onclick={() => (showDetails = true)}>Details…</button>
-              </div>
+              <button type="button" class="btn wide" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>{commandCopy.open}</button>
+              {#if pane.open}
+                <div class="row2">
+                  <button type="button" class="btn" disabled={!one || compactStop} title={compactWhy} onclick={() => one && run(Archives.Close(one.id)).then(() => store.refreshArchives())}>{commandCopy.close}</button>
+                </div>
+              {/if}
             </div>
 
             {#if pending.length > 0}
@@ -1260,22 +1286,25 @@
 
 
 {#if creating}
-  <Dialog title="New archive" onclose={() => (creating = false)}>
+  <Dialog title={dialogCopy.newArchive.title} onclose={() => (creating = false)}>
     <!-- judged by the rename's rule too: a name over the bound is said
-         here, before a file is made for it (APP.md §6). -->
-    <TextField id="na-name" label="Name" bind:value={newName} bind:valid={newNameValid} attempt={newAttempt} judge={nameProblem} placeholder="Photos 2026" />
+         here, before a file is made for it (APP.md §6). No placeholder:
+         an invented name read as a default already filled in (ruled
+         2026-10-17). -->
+    <TextField id="na-name" label={dialogCopy.newArchive.name} bind:value={newName} bind:valid={newNameValid} attempt={newAttempt} judge={nameProblem} />
     <div class="field">
-      <div class="field-top"><span class="lbl">Compression</span></div>
-      <Segmented id="na-method" label="Compression" options={methodOptions} bind:value={newMethod} />
+      <div class="field-top"><span class="t-strong">{dialogCopy.newArchive.compression}</span></div>
+      <Segmented id="na-method" label={dialogCopy.newArchive.compression} options={methodOptions} bind:value={newMethod} />
       <div class="pin-note">{METHOD_NOTE}</div>
     </div>
     {#if existsShown}
       <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(Code.CodeArchiveExists)}</span></div>
     {/if}
-    <p><em>Create</em> asks where to keep it, with the name above and <span class="mono">.efd</span> already filled in.</p>
+    <p>{dialogCopy.newArchive.body}</p>
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (creating = false)}>Cancel</button>
-      <button type="button" class="btn accent" onclick={create}>Create…</button>
+      <!-- The one primary that keeps its "…": the save dialog follows. -->
+      <button type="button" class="btn accent" onclick={create}>{dialogCopy.newArchive.primary}</button>
+      <button type="button" class="btn" onclick={() => (creating = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1283,15 +1312,24 @@
 {#if confirm}
   <Dialog title={confirm.title} onclose={() => (confirm = null)}>
     <p>{confirm.body}</p>
+    {#if confirm.how}
+      <!-- The mechanism, for whoever asks (the dialog template, ruled
+           2026-10-17): shut by default, never the body's second voice.
+           Styled by app.css details.how, as on every dialog. -->
+      <details class="how">
+        <summary>{dialogCopy.howThisWorks}</summary>
+        <p>{confirm.how}</p>
+      </details>
+    {/if}
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (confirm = null)}>Cancel</button>
       <button type="button" class="btn accent" onclick={() => { const c = confirm; confirm = null; if (c) void run(c.run()); }}>{confirm?.button}</button>
+      <button type="button" class="btn" onclick={() => (confirm = null)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
 
 {#if showDetails && det}
-  <ArchiveDetailsDialog d={det} keyVersion={pane?.keyVersion ?? 0} onclose={() => (showDetails = false)} />
+  <ArchiveDetailsDialog d={det} keyVersion={pane?.keyVersion ?? 0} receiptOwed={pane?.receiptOwed ?? false} onclose={() => (showDetails = false)} />
 {/if}
 
 {#if del}
@@ -1315,22 +1353,34 @@
   .w-size { width: 84px; }
   .w-date { width: 130px; }
   .w-status { width: 148px; }
+  /* The head's caption sits on the title's baseline (APP.md §6, ruled
+     2026-10-17). The title keeps the place centring gave it in the 62 px
+     head, 2 px down its 32 px line ((32 - 28) / 2), so nothing moves
+     between pages; the Locked pill is a box, centred on the line. */
+  .layer-head { align-items: baseline; }
+  .layer-head .t-title { margin-top: 2px; }
+  .layer-head .chip { align-self: center; }
+  .meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The compacting badge: the open badge's shape in the attention tone. */
   .status-cell .st.busy { background: var(--attention-wash); border-color: var(--attention-line); color: var(--attention); }
   /* The empty vault's block: centred, the two buttons on one line and the
-     import a link under them. */
-  .empty.first { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-  .empty.first p { margin: 0; color: var(--ink-2); }
-  .empty.first .row { display: flex; gap: 8px; }
-  .lbl { font-size: 12.5px; font-weight: 600; color: var(--ink); }
-  .pad { padding: 0 16px 12px; }
-  .fields { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
-  .area { height: auto; min-height: 52px; padding: 7px 10px; resize: vertical; line-height: 1.35; }
-  .pathblock { display: flex; flex-direction: column; gap: 4px; }
-  .plabel { color: var(--ink-2); font-size: 12px; }
-  .ppath { font-size: 12px; color: var(--ink); overflow-wrap: anywhere; user-select: text; }
-  .mono { font-family: var(--font-mono); font-size: 11.5px; }
-  .why { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
-  tbody tr.forgotten .two-line b { color: var(--ink-3); }
+     import a small subtle button under them. */
+  .empty.first { display: flex; flex-direction: column; align-items: center; gap: var(--s3); }
+  .empty.first p { margin: 0; }
+  /* The pane's parts: each at the card's inset, 12 below the one above,
+     and the last 12 clear of the actions' rule. */
+  .pad { padding: var(--s3) var(--s4) 0; }
+  .pad:has(+ .details-actions) { padding-bottom: var(--s3); }
+  .fields { display: flex; flex-direction: column; gap: var(--s3); }
+  /* The hint stands beside its label, not across the panel from it. */
+  .fields .field-top { justify-content: flex-start; }
+  /* Two body lines and the field's own insets: the rows decide the height,
+     and nothing else does — a WinUI text box has no resize grip (ruled
+     2026-10-17); a longer description scrolls inside its two lines. */
+  .area { height: auto; padding: var(--s2) var(--s3); resize: none; }
+  .pathblock { display: flex; flex-direction: column; gap: var(--s1); }
+  .verified { margin: 0; }
+  .why { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); min-width: 0; }
+  tbody tr.forgotten .two-line b { color: var(--ink-2); }
   .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>

@@ -156,7 +156,7 @@ permission or I/O failure is only "could not be opened, try again". The rebuild 
 at the damaged file's own place with `replace` (any other path is `vault.kept` too): the install
 retires the file as `vault-damaged-<unix>-<n>.eks` in the data folder before the new vault takes
 its place, deleting nothing, so that whatever a later tool can salvage from it is still there
-(`DamagedCopyPath` names the newest; the Keys page shows it; the lock screen offers it for
+(`DamagedCopyPath` names the newest; the Vault page shows it; the lock screen offers it for
 nothing, since it does not open). A file that is simply absent is not damage — the first-run
 card offers import and create as before — and neither is tampered: that file opens, its cure is
 importing a copy (§2.2), and a rebuild over a vault that opens would lose the keys it holds.
@@ -179,7 +179,7 @@ staged file installed: retirement is a *copy* to `vault-replaced-<unix>-<n>.eks`
 `vault.eks` — the place is never empty for an instant — after the previous handle is closed and a
 pending lock's close waited for, as `openVaultFile` does. The ceremony ends **Locked**, since the
 install needs the handle closed; the credential spent on proving is not reused to publish a
-session. The status counts the retired copies (`RetiredCopies`, `RetiredPath`), the Keys page shows
+session. The status counts the retired copies (`RetiredCopies`, `RetiredPath`), the Vault page shows
 them, and the first-run screen offers the newest one when no vault is kept — a crash between the two
 steps leaves a vault under a name the app knows. Retired copies are never read by Enfold again and
 are the user's to delete; their ways in stay valid for them, which the confirmation says.
@@ -244,7 +244,8 @@ unknown outcome is Broken, as for any slot change.
 `Keys.VerifyBackup` stages a copy, opens it with the recovery key (`kind: verify`), reports how many
 archives its registry names (`CeremonyState.Archives`) and removes the copy. It runs from the lock
 screen — the one screen a ceremony runs on while the vault is locked, first run included — as
-"Check that a backup opens…"; the Keys page inspects a backup and points there. The outcome of an
+*Test that a backup opens…* (ruled 2026-10-17; it was "Check that a backup opens…"); the Vault
+page's *Inspect a backup…* reads a backup's label and points there. The outcome of an
 import, a check or a create is kept by the page apart from the ceremony (`store.outcome`), so it
 stays on the lock screen after the reveal is dismissed and on the first-run card when nothing is
 kept.
@@ -336,7 +337,7 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
     ruling** (DECISIONS
     2026-09-07, "The same VMK adopts"): within the key's own window — at most two of its
     timeouts — whoever is at the keyboard can finish a cancelled touch for another purpose on
-    the same vault without the PIN typed seconds earlier: cancel *Add a key*, press the blinking
+    the same vault without the PIN typed seconds earlier: cancel *Add an unlock method*, press the blinking
     key under *Show recovery key*. The person is at the keyboard of a vault that is already
     Unlocked (or was, seconds ago, the one who typed the PIN), the PIN was that person's, every
     lock trigger closes the window, and the boundary that matters is the process.
@@ -366,7 +367,7 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   - A ceremony that cannot adopt — an import, a verification, a proof; any ceremony while the
     pending touch is one of those, or left unadoptable by a trigger — and a typed credential
     that needs the handle the attempt holds *wait* for the pending touch to end, with `token.pending`
-    as the note on the step they wait in (WaitingForKey; Deriving, after the password): "the key
+    as the note on the step they wait in (WaitingForKey; Deriving, after the password): "the YubiKey
     is still answering the cancelled request — touch it, or pull it out, to end that now". Then
     they go on as if it had never been there: the card opened afresh, the PIN asked again.
 - **A pulled key answers with Win32 codes first** (DESIGN trap 26). For a moment after the key
@@ -522,8 +523,11 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
 the window should exit the archive; minimising to the taskbar is not that") — and **the close
 button never means "to the tray" until the user has said so** (ruled 2026-09-13: "we must not
 default to going to the tray"): the first close — the button, Alt+F4, the taskbar's close —
-is cancelled and the page asks, in its own dialog, *Keep Enfold running in the tray* or
-*Quit*, with *Remember my choice* unticked; Esc or the backdrop is neither, the window stays.
+is cancelled and the page asks, in its own dialog, *Quit* or *Keep running in the tray* — two
+standard buttons in that order, neither in the accent, with the focus on the dialog's box and
+not on either (ruled 2026-10-17: by the ruling of 2026-09-13 the question has no primary, so
+§6's primary-first order of the foot band does not reach it) — with *Remember my choice*
+unticked; Esc or the backdrop is neither, the window stays.
 The answer, remembered or not, is `Settings.CloseAction` — `ask` (the default) · `tray` ·
 `quit` — and the Settings page shows it as *When the window closes: Ask each time · Keep
 running in the tray · Quit*, so the remembering is undone there too. *Quit* is the shell's Quit
@@ -548,7 +552,7 @@ which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the sh
   have. The frontend keeps an open archive's view mounted across a lock (a locked banner, one line: "The vault is locked. This
   archive stays open while you are here."; nothing new can be opened).
 - **The Archives page's operations never ask for the archive to be opened first.** While the
-  vault is unlocked, *Verify*, *Compact*, *Rotate key* and every other record-level operation on
+  vault is unlocked, *Verify*, *Compact…*, *Re-key archive…* (*Rotate key…* until 2026-10-17) and every other record-level operation on
   an archive whose page is not open unwrap the archive key with the session's `KWK`, open the
   file for the operation, and close it — the key destroyed — when the operation ends; an archive
   whose page *is* open uses that handle. The one-handle-per-path rule of the archive layer is
@@ -831,7 +835,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `created` with `io` in its `Code`. Directories appear in `Results` as `created | skipped |
   failed` and add no bytes to the progress `Total`, which counts file plaintext only, so a plan
   of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not). **The extract dialog** (the page's, for the pane's *Extract…* and the toolbar's *Extract all…*
-  alike; a form, so Enter in the destination extracts and the field has the focus as it opens)
+  alike; a form, so Enter in the destination extracts and the field has the focus as it opens;
+  titled with what it extracts and, for *Extract all…*, the archive by name — "Extract
+  everything in Photos 2024" — and its field's hint in sentence case, "Created if it is not
+  there yet", ruled 2026-10-17)
   holds an editable destination prefilled by one rule (ruled 2026-09-10): for *Extract
   all…*, the archive's own folder plus a folder named after the archive — `D:\Archives\ECON 280\`
   for `D:\Archives\ECON 280.efd` — created when the extract starts; for a selection, the archive's
@@ -1043,7 +1050,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Sub-states mirror §2.2 plus `ManagementKey`. `BeginEnroll(recovery, label)` adds a recovery
   slot and shows its digits: the reveal, below.
 - **The reveal.** Every showing of a recovery key — after a create, after enrolling one, and
-  `RevealRecoveryKey(recipientID)` from the Keys page — ends its ceremony at `StepRecovery` with
+  `RevealRecoveryKey(recipientID)` from the Vault page — ends its ceremony at `StepRecovery` with
   the one-time URL in `SlotLabel` (§4) and the same dialog on the page, whichever view it is on.
   `RevealRecoveryKey` is a ceremony (`kind: reveal`; the dialog's title "Show the recovery key")
   that recovers the VMK through a protector exactly as a slot change does — the YubiKey's PIN
@@ -1076,7 +1083,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
   dialog offers *Save as PDF*, which never touches the print spooler, so a spooler watch missed the
   likeliest path — built, measured at a two-second lag on a cancel, and retired): pressing
   *Print…* counts as done. So does **written down**: one click, no second confirmation — a user
-  set on leaving is not stopped by one, the key can be shown again from the Keys page, and at the
+  set on leaving is not stopped by one, the key can be shown again from the Vault page, and at the
   moment it is first shown the vault holds nothing yet. After a save the core acknowledged the
   dialog closes on *Done*. The handle is the URL's token: the one-time GET consumes the URL,
   not the value, which the core keeps for the reveal's life — until `DropRecoveryKey(handle)`
@@ -1089,7 +1096,7 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `VerifyBackup(path)` (§2.1: a staged copy opened with the
   recovery key, nothing kept). What a backup is and whether it is this vault is
   `Vault.InspectFile`; restoring archive records from a backup — the `RestoreArchiveRecord` of
-  earlier drafts, re-wrap under the current KWK — is *Import records…*:
+  earlier drafts, re-wrap under the current KWK — is *Import archives from a backup…*:
   `Vault.InspectRecords`, `MergeRecords` and `DiscardRecords` (§13, "Merge records").
 - **Slot changes and registry writes never share the handle.** While a slot-change ceremony
   runs, a registry write is refused with `ceremony.in_progress` — a Save still commits its
@@ -1246,7 +1253,9 @@ during which no program can reach the card anyway.
 
 Lock screen (one panel, three-step line, the states of §2.2 including TwoKeys, NoMatch, Busy,
 Blocked; `SwapKey` is the enrolment's alone since §13; on a vault whose entangled password is on,
-the token way in's card 2 is **Password and PIN**: two fields under one *Continue*. The PIN goes
+the YubiKey unlock method's card 2 is **PIN and password** (named in its fields' order, live,
+dim and at rest alike, and *PIN* alone on a vault that asks for no password; ruled 2026-10-17,
+it read *Password and PIN* live and *PIN* at rest): two fields under one *Continue*. The PIN goes
 first and is verified at the card before anything else (§2.2): a wrong PIN marks only the PIN
 field, with the retries, and nothing else moves — the password field keeps whatever was typed, as
 an ordinary masked field the user may still edit, and is sent only once the PIN is right, in the
@@ -1254,22 +1263,34 @@ state it is in at that moment, by the page and with no further click. A wrong pa
 only after the touch, comes back with the password field emptied and marked and the PIN not
 asked again (§2.2's cached `H`). The button reads *Unlock with YubiKey* whatever the switch, and
 the card's dim line says both are needed. The same two-field form serves every token ceremony on
-the Keys page. Secondary: recovery key, password, open a
+the Vault page. Secondary: recovery key, password, open a
 backup — never a second vault; the
 "workstation-lock detection unavailable" warning (the BitLocker warnings went with §9's checks,
 2026-09-13); while the status says
 `pendingTouch` from a cancelled unlock, one quiet line under the key card: the key is still
 waiting for the touch that was cancelled — unlock again to pick it up, or touch it or pull it
-out to end it; that line is the lock screen's only: on the Keys page the pending touch left by a
-cancelled slot change or reveal is said by the next ceremony's own `token.pending` note while it
+out to end it; that line is the lock screen's only: on the Vault page the pending touch left by a
+cancelled change of unlock methods or reveal is said by the next ceremony's own `token.pending` note while it
 waits, and on the first-run card a create or an import begun while a cancelled create's touch
-stands is answered with `token.pending`, a toast). Archives (list with details — **the details pane is a side pane of 300 px while the page's
+stands is answered with `token.pending`, a toast; the header names the state — *Locked*,
+*Unlocking*, *Unlocked*, *Open in another Enfold*, *Damaged*, *Not found*, *No vault yet*,
+*Replacing the vault* (*Restoring a vault* at first run, where there is none to replace),
+*Creating the vault*, *Setting up*, *Testing a backup*, *Needs attention*, *Needs setting up* —
+the idle card's "Last unlocked" is relative ("today,
+03:24", "22 days ago"), card 2 says "This YubiKey unlocks <vault>." (ruled 2026-10-17; it said
+"This key") once an unlock's YubiKey is
+recognised (an import's, a create's or a setup's unlocks no vault kept here, so it gets no line)
+and its button always reads *Continue*, since a touch may still follow, and in an unlock a
+YubiKey that is not one of the vault's unlock methods offers *Use recovery key* beside
+*Cancel* (only an unlock can turn to the recovery key: an import's proof or a create says *Try
+another YubiKey.*, and the Vault page's ceremony panel says the same, having only *Cancel*);
+a failed unlock's *Start again* begins the same unlock method again; ruled 2026-10-17). Archives (list with details — **the details pane is a side pane of 300 px while the page's
 body is at least 1120 px wide, a fixed threshold rather than a proportion (ruled 2026-09-11:
 the width below which the side pane would squeeze the Name column shorter than *Last
 saved*); below it the details become a bottom panel** (refined 2026-09-12 after the first
 build, and again after the first measured drags of it — the frame budget at 240 Hz is
 4.17 ms): one element at the foot of the page, a **card** whose **header** is the whole of it
-when collapsed — a single line of 44 px, the eyebrow *SELECTED* and the archive's name on the
+when collapsed — a single line of 44 px, the eyebrow *Selected* (a caption in sentence case, ruled 2026-10-17) and the archive's name on the
 left, a chevron on the right that is a sign and not a button — and stays fixed at its top
 when expanded, two lines then (the eyebrow over the name, as the wide pane's heading). What
 the card holds never changes size: its inner — the header at a fixed 64 px whose top 44 px are
@@ -1314,23 +1335,28 @@ keeps none; the write to the element's own style was the win). The header's cros
 card's growth and the list's scroll all animate over the motion tokens' duration on one frame
 clock, and none of it changes the wide window's side pane — its rows and its header carry the same checkboxes as
 the file list, with the same rules (a blank click clears; the header ticks all, ticked exactly when all
-are); the header ticks the rows the filter shows; the details pane shows the row last clicked while
+are; the boxes show on hover, focus and selection, and a selected row is the wash and the pill,
+the sort glyph the one 10 px chevron — ruled 2026-10-17); the header ticks the rows the filter shows; the details pane shows the row last clicked while
 it is ticked, else the sole ticked row, else nothing but a count ("3 archives selected"); an
 action that takes one archive works on the pane's row and is greyed unless exactly one is
 ticked —
-pane, commands Open / New archive… / Open file… / Compact… / Rotate key… / Verify / Hide and the inspector's of
-§13 (ruled 2026-10-14: each command that opens a dialog or a picker ends with an ellipsis; Open,
-Compact…, Rotate key… and Verify are greyed, with the core's own words as the reason, on a
+pane, commands Open / New archive… / Open file… / Compact… / Re-key archive… / Verify / Hide and the inspector's of
+§13 (ruled 2026-10-14: each command that opens a dialog or a picker ends with an ellipsis; ruled
+2026-10-17: every command is named from the verb table in `strings.ts`, `commandCopy` — *Re-key
+archive…* was *Rotate key…*, *Forget archive…* was *Forget key…*; Open,
+Compact…, Re-key archive… and Verify are greyed, with the core's own words as the reason, on a
 forgotten record and on an archive being compacted — a running Compact of it, or its handle's
 `compacting` state — and Hide on a forgotten one, and a double-click or Enter on such a row
-does nothing; on an archive being compacted Close, Forget key… and Delete archive… are greyed
+does nothing; on an archive being compacted Close, Forget archive… and Delete archive… are greyed
 too, with the same words, since the close they need is refused while a compaction runs; the details pane's Open is a standard button, the bar's being the one accent;
 a vault with no records at all, hidden and forgotten ones included, shows "No archives in
-this vault yet." with *New archive…*, *Open an .efd file…* and *Import records…* under it
-in place of the empty table) — *New archive* asks the name and the compression method, a five-segment control (Store ·
+this vault yet." with *New archive…*, *Open an .efd file…* and *Import archives from a backup…* under it
+in place of the empty table, the last a small subtle button — a command, not a link (ruled
+2026-10-17)) — *New archive* asks the name and the compression method, a five-segment control (Store ·
 Fast · Normal · Better · Best, Normal preselected; *Store* keeps every file as is, and at every
 other level already-compressed media is detected by sampling and stored raw by itself, DESIGN
-§9), and on *Create* opens the native Save dialog with `<name>.efd` prefilled in the folder last
+§9), and on *Create archive…* (ruled 2026-10-17: the primary repeats the command's verb and
+object; the name field has no invented placeholder) opens the native Save dialog with `<name>.efd` prefilled in the folder last
 used (`settings.json`, `lastArchiveFolder`); a chosen path where a file already exists is refused
 in place — "A file is already there. Enfold never overwrites; choose another name." — whatever
 the dialog's own replace prompt said; a cancelled dialog creates nothing, and a created archive
@@ -1347,7 +1373,8 @@ left; in an empty folder it is the only row — not counted by Ctrl+A, absent at
 under it one line names the folder and both ways to fill it, "Trips is empty. Drop files here, or
 use Add.", the root by the archive's name (ruled 2026-10-14); then the
 rows in `sort`'s order (§3), directories first; **four columns — Name, Size, Type, Modified**
-(*Stored as* is gone from the list; the details keep it): a folder shows no size and the type
+(*Stored as* is gone from the list; the preview's facts keep it as *Compressed*, "71% smaller"
+or "No, stored as is", never the method — ruled 2026-10-17): a folder shows no size and the type
 *Folder*, a file its plaintext size — right-aligned, header and cells, so the magnitudes line up
 (ruled 2026-10-14) — and a type drawn from its extension — the part after the last dot;
 none when the dot is the first character (`.env`) or there is no dot; `gz` for `a.tar.gz` — in
@@ -1355,10 +1382,17 @@ none when the dot is the first character (`.env`) or there is no dot; `gz` for `
 *JPEG image*, *MP4 video*, *Text document*, *ZIP archive*, … — "*PDF file*" for an extension
 without a name of its own and *File* for none; when the pane is narrow the columns give way
 from the right, Modified first and then Type, Name and Size always — a hidden column's sort stays in force and
-the Name cell then carries that key's arrow and name; a header cell sorts by its
+the Name cell then carries that key's chevron and name; a header cell sorts by its
 column — Name and Type ascending on the first click, Modified descending (newest first), Size
-ascending, the second click the other way, an arrow in the cell — and the choice stays while the
-archive is open; **a checkbox heads every row** and the header row; a click on a row's checkbox toggles that
+ascending, the second click the other way, the cell wearing the one sort glyph of both lists,
+a 10 px chevron in the third ink, turned for ascending (ruled 2026-10-17; it was an arrow
+character here and a chevron on the Archives list) — and the choice stays while the
+archive is open; **a checkbox heads every row** and the header row — shown on the row under the
+pointer, on a selected or focused row, and on every row once anything is selected, Explorer's
+own compromise (ruled 2026-10-17) — and the list is a list, not a spreadsheet: the header in
+caption type on the card's ground with the one stroke under it, no rule under any row, a
+row's hover a subtle fill with 4 px rounded ends inset 4 px from the card, and its selection
+the accent wash with a 3 px pill at its left edge, never bold; a click on a row's checkbox toggles that
 row alone and makes it the anchor (the row click's own rules do not run); the header's ticks
 the whole folder — every id `Children` answers, loaded or not — and shows ticked exactly when
 the selection holds every one of the folder's `Total` ids, never a third state and never for an
@@ -1374,7 +1408,8 @@ and while its URL or text is on its way the art box keeps its size and says noth
 ring, 2 px of the accent turning once a second, appears only once the wait passes 300 ms — so
 "No preview for this type" is said only of a kind the pane cannot show, and a call that fails
 says so in the pane beside its toast (ruled 2026-10-14) — the operation strip (the running operation's name with its count and its archive — *Adding 3 files
-to Photos 2024*, *Adding 1 file to …*, *Verifying Photos 2024*, *Reclaiming space in Photos 2024*
+to Photos 2024*, *Adding 1 file to …*, *Verifying Photos 2024*, *Reclaiming space in Photos 2024*,
+*Re-keying Photos 2024* (ruled 2026-10-17: the button's verb, not "Rotating the key of")
 — since the strip shows every running operation, the Archives page's included, where the verb
 alone did not say whose it was (ruled 2026-10-14); a bar that moves by bytes, *Cancel* for an add,
 a replace or a reclaim, which reads *Cancelling…*, greyed, from the press until the operation
@@ -1386,12 +1421,16 @@ directory record, written at save whether or not a file was added into it — FO
 selection's), *Rename…* (a form: the field opens on the name with its stem — the part before
 the last dot; the whole name when there is no dot, the dot is first, or it is a folder —
 selected, judged as *Create folder*'s is against every name here but its own; ruled
-2026-10-14), *Delete…* (a dialog first — "Permanently delete 3 files and 1 folder from ECON 280? A
+2026-10-14; titled with the name it renames — "Rename trip-notes.md" — over a quiet line
+under the field, "Enter renames. A name already in 2024 is refused here, not after.", the
+field's label kept, ruled 2026-10-17), *Delete…* (a dialog first — "Permanently delete 3 files and 1 folder from ECON 280? A
 folder takes everything beneath it. This cannot be undone." — whose *Delete* is a filled red
 button, the danger colour as ground and white ink, never the accent's green under red text —
 then the operation), the pane's
 *Extract…* and the toolbar's *Extract all…* through the extract dialog (§3) — every command
-here that opens a dialog or a picker ends with an ellipsis (ruled 2026-10-14); a drag of the
+here that opens a dialog or a picker ends with an ellipsis (ruled 2026-10-14), and one that is
+greyed says why in its title — "Select what to extract", "Select one item to rename" (ruled
+2026-10-17); a drag of the
 selection onto a folder row, onto the `..` row (up one level) or onto the heading (to the
 root) is `Move`,
 refused in place with the reason (§3) and never a half-moved selection — the reason sits under
@@ -1403,20 +1442,29 @@ is said by a toast naming it, the page having walked its crumbs upwards; the nam
 drag-and-drop in (§3's drop) and out (§3's drag out — the staged route; the same native drag
 serves the list's own moves, a self-drop being a `Move`); the extract dialog and the conflict dialogs of §3; the
 locked banner, one line — "The vault is locked. This archive stays open while you are here." — and
-no timeout of the archive's own (§2.3)). Keys & backups (slots, *Add a key…*,
-*Remove…* — greyed while the invariant would refuse — *Rotate now…* (its dialog says every way in is
-rewrapped here and now, and asks for a backup first, §13), the entangled password's row (§13),
+no timeout of the archive's own (§2.3)). Vault — the rail item and the page title (ruled
+2026-10-17: they read *Keystore*, a format word, while every sentence said "vault"; the spec's
+"Keys page", in older rulings, is this page, and the spec now calls it the Vault page throughout) — (*Unlock methods* with their count, "4 unlock methods" — the spec's
+slots and ways in — *Add an unlock method…*,
+*Remove…* — greyed while the invariant would refuse, "At least 2 unlock methods are always
+kept, one of them a recovery key." — *Re-key vault…* (was *Rotate now…*; its dialog, *Re-key the
+vault?*, says every unlock method gets the new key now with no YubiKey needed, and asks for a
+backup first, §13), the *Password with every YubiKey* row (§13; it read *Entangled password*),
 *Show recovery key…* — shown only while a recovery
-slot is selected — backups with the R35 date,
-the damaged copy when one is kept, session and appearance settings). First run (create, or
-import a vault or a backup; a file that is only a backup leads into *Finish setting up*, and so
-does a vault left half set up; a vault whose file is present and refused offers *try again*,
-import and *rebuild* — the create dialog in its rebuild form). Dialogs: new archive (path, name,
+slot is selected — *Backups* with *Export backup…* and *Inspect a backup…* (was *Check a
+backup…*) and the R35 date,
+the damaged copy when one is kept, session and appearance settings). First run (*Create a
+vault…*, or *Restore from a vault or backup…*, the import of a vault or a backup (ruled
+2026-10-17); a file that is only a backup leads into *Finish setting up*, and so
+does a vault left half set up; a vault whose file is present and refused offers *Try again*,
+the import and *Rebuild the vault…* — the create dialog in its rebuild form). Dialogs: new archive (path, name,
 compression), enrollment, the recovery key's (below), remove slot, rotate, progress, extract
 destination and policy, collisions, errors, import.
 
-**The import dialog** (lock screen and first run) picks the file, shows what it is — vault or
-backup, its date, its ways in by kind, whether it claims to be this vault and newer — and says
+**The import dialog** (lock screen and first run; titled *Replace this vault with a copy* on the
+lock screen and *Restore from a vault or backup* at first run, after the commands that open it —
+ruled 2026-10-17) picks the file, shows what it is — vault or
+backup, its date, its ways in by kind (the fact reads *Unlock methods*), whether it claims to be this vault and newer — and says
 what will happen before the button is pressed: a vault is copied in and must unlock with one of
 its own ways in (chosen here: "prove it with"); a backup is copied in and opened with its recovery
 key, then takes the first way in (the kind, a name for a key — never a secret); with a vault kept
@@ -1426,14 +1474,16 @@ the button stays disabled until it is ticked. "Use the file where it is" is an a
 a vault, with the warning that removable media and network shares are outside Enfold's
 protection; choosing it turns the confirmation into "switch to this file — it stays where it is".
 With archives open, both dialogs say so and their buttons stay disabled. The create dialog shows
-where the vault will live and offers "keep it elsewhere" as a link, not a field; in its rebuild
-form (§2.1) the place is pinned to the damaged file's — no link — and the tick "keep a copy of
+where the vault will live and offers "keep it elsewhere" as a small subtle button, not a field
+(ruled 2026-10-17; it was a link); in its rebuild
+form (§2.1) the place is pinned to the damaged file's — no button — and the tick "keep a copy of
 the damaged file and start a new vault" is the one consent (cleared each time the dialog opens);
 over a file that is simply absent it shows no replacement bar and no tick, since nothing is
 retired; over some other file already at a chosen place it names the dated copy that keeps it.
 A create ends in the vault with the recovery key's dialog over it; only when the created vault
 did not open on its own does the lock screen say "Created, but it did not open on its own.
-Unlock it with the way in you chose"; a ceremony that fails without parking is shown on the
+Unlock it with the unlock method you chose." (ruled 2026-10-17: the screen's word for a way in
+is *unlock method*); a ceremony that fails without parking is shown on the
 first-run card as well. The
 first-run
 screen says to have the recovery key ready before importing a backup, because a backup opens
@@ -1442,14 +1492,16 @@ with nothing else; when a configured vault could not be opened it names the file
 and refused: the dialog is titled *Rebuild the vault*, says the file is kept beside the new
 vault as a dated damaged copy and that the archives it held the keys to open only with it, and
 its tick reads "keep a copy of the damaged file and start a new vault"); when a replaced copy
-exists and no vault is kept, it names the copy and offers to import it. With a vault kept here
-the lock screen offers import and a backup check, never a second vault. A vault with only its
+exists and no vault is kept, it names the copy and offers to restore it (*Restore it…*). With a
+vault kept here the lock screen offers *Replace this vault with a copy…* and *Test that a backup
+opens…* (ruled 2026-10-17; they were *Import a backup or a copy of this vault…* and *Check that a
+backup opens…*), never a second vault. A vault with only its
 recovery key shows *Finish setting up* as its one action, with "unlock with the recovery key
 only" beneath. Precedence on the lock screen: Busy, then Broken, then setup needed, then the
 ways in; Tampered is a banner over any.
 
 **The recovery key's dialog** — after a create, after enrolling a recovery key, and after *Show
-recovery key…* on the Keys page — shows the eight groups and three ways out (§3 Keys): *Save as
+recovery key…* on the Vault page — shows the eight groups and three ways out (§3 Keys): *Save as
 a text file…*, which first says what place to choose and then opens the native Save dialog;
 *Print…*; and *I have written it down*. The saved file and the print's suggested name are both
 `Enfold Keystore Recovery Key <ID>.txt` — BitLocker's own shape, "BitLocker Recovery Key
@@ -1457,8 +1509,9 @@ a text file…*, which first says what place to choose and then opens the native
 which sheet this is; the same string heads the text file and the sheet, and the page sets
 `document.title` to it for the print, which is what Print to PDF offers as the file name. None asks a second time: after a save the core acknowledged, a print, or *I have written it
 down*, the corner button is *Done* and one click closes the dialog. It names the key's ID
-once, above the digits, and says the key can be shown again from the Keystore page — the page
-named as the rail names it, never a "Keys page" no screen shows (ruled 2026-10-14) — unlock,
+once, above the digits, and says the key can be shown again from the Vault page — the page
+named as the rail names it, never a "Keys page" no screen shows (ruled 2026-10-14; the rail's
+name is *Vault* since 2026-10-17) — unlock,
 then prove a YubiKey or a password once more — and, when the fetch of the one-time URL fails (a window recreated after the one fetch),
 that the key can be shown again from there, with *Done* as the one way out. It is not dismissed
 by Escape or the backdrop, and it closes when a lock trigger locks the vault it was shown on.
@@ -1466,8 +1519,11 @@ by Escape or the backdrop, and it closes when a lock trigger locks the vault it 
 **The create and enrol dialogs name the key, never the secret.** A token gets "Name this key"
 (the label shown in the list of ways in); a password way in has no name field — its slot is
 "Password" — and the dialog says the password is chosen in the next step, because a typed
-secret never rides a bound-method argument (§1). Ticking "also require a password with this
-key" says the password is chosen first, before the key is set up. A key's name is optional,
+secret never rides a bound-method argument (§1). The enrol dialog is *Add an unlock method*,
+its kind field *Unlock method*, and a recovery key's name field says "Shown in the list of unlock
+methods." (ruled 2026-10-17; it was *Add a key*, *Kind* and "ways in"); the create dialog's
+first field is *First unlock method*. Ticking "Also require a password with every YubiKey in
+this vault" says the password is chosen first, before the key is set up. A key's name is optional,
 and its empty field says what an empty field produces — "Named after its serial number", the
 core's "YubiKey 12345678" — never an invented name that reads as a default already filled in;
 a recovery key's, which must be named, shows no placeholder at all (ruled 2026-10-14).
@@ -1564,10 +1620,14 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   attention colour (`lib/format.ts` `lockLine`; the minutes are the status's
   `IdleEffectiveMinutes`, ruled 2026-10-17; the page's clock still moves once a second,
   the text only when its form or the count changes) — and *Lock now*
-  while unlocked; the closed padlock and *Unlock* while locked with archives still open.
-- *Rail.* Hover tints in over 120 ms and out over 160 ms — the ink at 6% over the ground, a
+  while unlocked; the closed padlock, *Locked* and *Unlock* while locked with archives still
+  open (ruled 2026-10-17: it read *Keystore locked*).
+- *Rail.* The rail is a NavigationView (ruled 2026-10-17): an item has no card of its own —
+  the current one used to be a raised white card with a border, a shadow and bold text. The
+  current item is the same subtle fill as a hover, at the regular weight, with a 3 × 16 px
+  accent pill inside its left edge and its icon in the accent. Hover tints in over 120 ms and out over 160 ms — the ink at 6% over the ground, a
   tint that is seen in both themes (ruled 2026-10-14; `--surface-alt` was not); a press is
-  instant (`--ctl-press`, the text to `--ink-2`); the current item's accent bar grows from its
+  instant (4%, the text to `--ink-2`); the current item's pill grows from its
   middle (160 ms, *out*; ruled 2026-10-14, it was 180 ms) and the previous one's shrinks. While an archive's page
   is open, every rail item's title says that a click leaves it — "Leaves Photos 2024" — the
   current *Archives* item too, since any route change away from the page leaves the archive
@@ -1590,7 +1650,13 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   foot of the scroll pane — in flow after the content and sticky 12 px above the pane's bottom,
   so it can never cover the last row for good, nor the rail — and sinks 8 px and fades out
   (leave) when the last edit is reverted, discarded or saved. It names the changes rather than
-  counting them: an accent count pill, then as many chips as fit — "Idle lock · 5 minutes";
+  counting them: an accent count pill, then as many chips as fit — "Lock when idle · 5 minutes"
+  (the row's own name: *Lock when idle* and *Always lock after*, ruled 2026-10-17, were *Idle
+  lock* and *Absolute lock*; a value reads "10 minutes (default)", and the *Look* row is gone
+  until a second look exists; the recovery record's row is hidden, its setting still stored,
+  until volume exports ship, and returns as *Repair data*; the section it stood in, left
+  holding *Dictionary for small files* alone, is *Compression*, ruled 2026-10-17 — it was
+  *Exports*);
   "+ label" and "− label" in the accent wash and the danger wash where a change adds or removes
   something — the rest folded into "+N more…", a click on which opens a popover of exactly the
   folded ones (fast, scaled from 97%; leave). Then *Discard* and the accent *Save changes*.
@@ -1636,6 +1702,38 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   presses it, under the form rule, and Esc still cancels; it opens with the focus in its field,
   the caret at the end — *Rename…*'s with the stem selected — where every other dialog takes the
   focus on its box.
+- *Type and spacing* (ruled 2026-10-17; the sizes inherited from the mockup — 12.5 and 11.5
+  among fifteen, on a 1.45 line — are gone). Six type tokens and no other size, each on a
+  whole-pixel line: caption 12/16, body 13/20, strong (600) 13/20 in Segoe UI Variable Text;
+  section 16/22, sub 20/28 and hero 28/36, all 600, in Segoe UI Variable Display. Body is
+  prose and the name in a list; caption is every other cell, a table header, a hint, the foot,
+  a chip; strong is a field label and a setting's name; section heads a section; sub is a
+  page's and a dialog's title; hero is the touch's lead and nothing else. Mono is 0.92 of its
+  line's size, in the second ink. Text that is meant to be read is the second ink at the
+  least (`--ink-2`, 6:1 or better on every ground and wash in both themes); the third (`--ink-3`) is
+  for what is not read — a placeholder, a disabled label, the "—" of an empty cell, an icon.
+  No capitals and no tracking: an eyebrow or a step label is a caption as written, in
+  sentence case. A link that runs in a sentence takes that sentence's type: in a caption line
+  it is a caption, never a step larger than its own words. Every inset and gap is on a 4 px grid (4, 8, 12, 16, 20, 24): a card's inset
+  is 16 and a strip's (a bar, an op row, a toast) 12; an icon stands 8 from its label, 12
+  beside a 20 px icon; the layer's gutter is 24. The fixed heights stay as ruled — the 40 px
+  locked line, the 42 px op row, the 44/64 panel, the 36 px rows, the 62 px head. A fact is
+  drawn one way, a label · value list: the label a caption in the second ink, its column as
+  wide as its longest label up to 120 px, the value in body beside it and left-aligned,
+  wrapping onto as many lines as it needs (ruled 2026-10-17: it was one line that ellipsized,
+  and the preview's narrow column cut "71% smaller" off its value) — or, for a path or a hash,
+  the label over the value, which wraps and is never cut. An option's label — a checkbox's, a
+  radio's — is the ink, since it is what is chosen; a description under it is the second ink
+  (ruled 2026-10-17; the labels were the second ink and read as hints). A row taller than its
+  name's line — an archive with a description, a refused name with its reason — stands every
+  cell on the name's first line, where a one-line row's text sits, and grows under it: 52 px
+  with a description (ruled 2026-10-17; the other cells were centred on the whole row). The Vault page's *This vault* is drawn so
+  (its name and last change beside their labels, its file under its own, all one row of the
+  list above the switch's), as are the backup card's facts and its *Last backup*, the vault file
+  and the data folder on the Settings page, and the import dialog's facts (ruled 2026-10-17:
+  they were a setting row's bold name over a faint line, or a value pushed to the far edge).
+  The touch's lead is the hero in a ceremony dialog too, as on the lock screen (ruled
+  2026-10-17; it was a 21 px size of its own there).
 - *Controls.* Every dialog and popover enters over 140 ms (the box also scales from 97%) and
   leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
   steps, the lock screen's three cards — fades the new content in over 140 ms and the cards
@@ -1646,17 +1744,52 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   (a saved setting is the bar leaving). Where they go, ruled 2026-09-07 for whatever toasts come
   next: at the top of the window, centred on the window — not on the content layer — dropping
   in a little as they fade (a few pixels down, never sliding in from the top edge) and leaving
-  upward as they fade out; `Toasts` does this, 14 px from the top, centred on the window's
-  width, the text centred and balanced. A link-style button darkens on
-  hover (`--accent-ink-hover`, a step past `--accent-ink`; brighter in the dark theme, where
-  contrast goes the other way) and thickens its underline; a button's press is instant and dims
-  its text. A disabled button is dimmed and answers no hover and no press, but it still takes
-  the pointer, so its title — the reason it is greyed — shows on hover (ruled 2026-10-14; it
-  used to let the pointer through, and every reason went unseen). Each page's head is one
+  upward as they fade out; `Toasts` does this, 16 px from the top (ruled 2026-10-17, on the 4 px grid; it was 14), centred on the window's
+  width, the text centred and balanced. The controls are Windows' own, not a web page's
+  (ruled 2026-10-17, from WinUI's values; the mockup's stills of WinUI states had become the
+  states themselves). One rule for what looks like a link: a command is a button — *Cancel*,
+  *Lock now*, "Use recovery key instead" are subtle buttons, 24 px high in the layer's foot —
+  the lock screen's further commands too (*Test that a backup opens…*, *Replace this vault with
+  a copy…*, *Rebuild the vault…*, the card's *Cancel*: 28 px), the create dialog's *Keep it
+  elsewhere…* (24 px, on its label's line) and the replaced copy's *Restore it…*, a small button
+  on its bar's 40 px line (ruled 2026-10-17; each was a link) —
+  and a hyperlink button (*Show in Explorer*, *Locate…*, *Technical details…*) is kept for going somewhere
+  or revealing something: the accent ink with no underline at rest (the underline at rest,
+  ruled 2026-09-07, is gone), a subtle fill on hover as it darkens (`--accent-ink-hover`, a
+  step past `--accent-ink`; brighter in the dark theme, where contrast goes the other way).
+  Only a link inside running text keeps its underline, which thickens on hover. A button's
+  press is instant and dims its text. A disabled button loses its hue, not its opacity: its
+  text at 36% of the ink, a filled one's ground a neutral grey with its ink over it, never the
+  pale accent slab or the pink a faded danger was; becoming enabled fades its ink in over
+  120 ms. It answers no hover and no press, but it still takes the pointer, so its title — the
+  reason it is greyed — shows on hover (ruled 2026-10-14; it used to let the pointer through,
+  and every reason went unseen). A text field has a neutral 1 px underline at rest, a fill
+  under the pointer, and the 2 px accent underline over the surface only while it has the
+  focus — that underline is its focus cue, and it was on every field at rest, so every field
+  looked focused; a field marked wrong has the same 2 px in the danger colour, focused or not.
+  Checkboxes and radios are 20 px (16 in a list's rows), the accent filled when on — a radio
+  an accent ring round a dot; a slider is a 4 px track, the accent up to the value, under a
+  20 px thumb with a 12 px accent core; progress is a 3 px accent line over a 1 px track. A
+  card is flat, a 1 px stroke and no shadow: a shadow says a thing floats — a menu, a toast,
+  the save bar, the bottom panel over the list, a dialog. The Settings page and the Vault page's
+  *This vault* are Windows Settings' list: each setting a card of its own, 4 px from the next
+  (ruled 2026-10-17; they were rows ruled off inside one card); the Vault page's ways to
+  unlock are separate cards the same 4 px apart (ruled 2026-10-17; they stood 12 apart). A
+  text box has no resize grip — the description's box is two lines, scrolling past them — a
+  search box has no clear button of Chromium's own, and selected text wears the accent's line
+  under the ink, never the engine's blue (ruled 2026-10-17). The window's ground is solid; the
+  green radial glow where Mica would be is gone until the window has the material itself. A
+  dialog is two parts: its body — the title 20/28, 24 px all round — which scrolls when the
+  window is short, and a foot band a step below the surface, behind a stroke, 20 px above and
+  below its buttons and 24 at the sides, which holds them in equal widths and wraps a button
+  to a row of its own rather than let it spill, in WinUI's content-dialog order — the act
+  first, then any other way on, and the way out (*Cancel*, *Close*, *Go back*) last (ruled
+  2026-10-17; the act used to stand last, at the right); Esc and Enter do what they did. Each page's head is one
   height, the line of a 32 px button, whether or not it carries one, so the body never starts
   at a different place from one page to the next; the Archive page's heading button is exactly
   its title's line. A column of magnitudes — a size — is right-aligned, its header with it, so
-  the digits line up; a column of dates or IDs is not, though its figures are of one width. A slider's label sits close beside it, fixed in width, and says the number alone,
+  the digits line up, and its sort chevron stands before the word rather than after it, so the
+  word stays flush whichever column sorts (ruled 2026-10-17); a column of dates or IDs is not, though its figures are of one width. A slider's label sits close beside it, fixed in width, and says the number alone,
   so nothing shifts as the value changes; what the number means — the recommendation, what 0
   does, what it applies to — is the row's line, never a suffix that comes and goes ("Recommended:
   3%; 0% is off. Applies to exports made from now on."). No tooltip and no tick: the label is
@@ -1671,8 +1804,28 @@ Svelte 5 + TypeScript on the Wails template, Vite; `@wailsio/runtime` pinned to 
 version, `package-lock.json` committed, `npm ci` in the Taskfile; the template's font and
 background assets removed; no remote resource; Segoe UI Variable from the system. Bindings are
 generated (`wails3 generate bindings`) and committed. Strings in one table. A number that is a
-quantity is written in figures — "30 days", "5 minutes", "At least 2 independent ways in" —
-not spelled out (ruled 2026-10-14). A code with no copy of its own is never shown raw: it reads
+quantity is written in figures — "30 days", "5 minutes", "At least 2 unlock methods" —
+not spelled out (ruled 2026-10-14). **One word per thing, consequences first** (ruled
+2026-10-17, direction 8 of the design review): the head of `strings.ts` holds a glossary — on
+screen the file is the *vault* (never "keystore"; the rail item and the page are *Vault*), a
+YubiKey, the password or a recovery key is an *unlock method* (never "slot", "way in" or "way
+to unlock"), a *backup* is an exported copy of the vault, the vault's password with every
+YubiKey is *Password with every YubiKey* — and a verb table (`commandCopy`: *Forget archive…* /
+*Restore*, *Re-key archive…* / *Re-key vault…*, *Find missing files*, and four backup verbs only:
+*Inspect a backup…*, *Test that a backup opens…*, *Import archives from a backup…*, *Replace this
+vault with a copy…* — *Replace with a copy…* on a banner's button — with *Restore from a vault or
+backup…* at first run); a command ends with "…" exactly when a dialog or a picker follows, and
+the dialog's primary repeats its verb and object. A consequence dialog's title is a question
+naming the object and its body at most two sentences, the consequence for the user's files and
+then the safety net (`dialogCopy`), the mechanism behind a "How this works" disclosure. Two
+registers: the format's words — keystore, slot, superblock, registry, KID, key version, seq,
+generation, VMK, session keys, envelope, zstd, entangled — stand only in `technicalCopy`, which
+the *Technical details* dialog, a warning's "Why?" and a "How this works" read; a vitest over
+every value of `strings.ts` and `validate.ts` fails on one anywhere else, with the YubiKey's own
+PIV "slot" in two token codes as its listed exceptions. This spec keeps its own terms in prose;
+a label quoted from a screen is the screen's word. Chips are in sentence case; a date is the
+app's ISO form in lists, facts and dialogs, and relative ("yesterday, 03:24", "22 days ago",
+`sinceText`) only where recency is the point — the last unlock, the last backup. A code with no copy of its own is never shown raw: it reads
 "Something went wrong (archive.foo). The log in the data folder has the details.", with the
 code set in muted mono where a toast shows it (ruled 2026-10-14; the fallback had been
 "Error: archive.foo").
@@ -1748,16 +1901,24 @@ the permitted range of the timeouts beyond the clamps. (The BitLocker check was 
 **The Archives page is the vault's inspector.** It lists registry records, not files, and it
 grows into the full view: columns *Name* (the description as a muted second line), *Size*
 (`last_stored_size`, the registry's last observation of the file; right-aligned), *Last saved*,
-*Status* (open · compacting · file missing · hidden · forgotten) — no *Files* and no *Key vN*
+*Status* (chips in sentence case, ruled 2026-10-17: *Open* · *Compacting* · *Missing* · *Hidden*
+· *Forgotten*) — no *Files* and no *Key vN*
 column (ruled 2026-10-14, reversing the 2026-09-07 column set: the core counts files only for an
 open archive, and an archive is open on this page only while it drains, so the column read "—"
-on every row; the key version matters only around a rotation and moves to *Details…*); a header
+on every row; the key version matters only around a rotation and moves to *Technical
+details…*); a header
 line for the vault — archives and their stored total summed by the page over the rows, the vault
-file's size (`VaultStatus.VaultFileSize`), the registry's `ModifiedAt` (§2.1); sorting by column
+file's size (`VaultStatus.VaultFileSize`), the registry's `ModifiedAt` (§2.1) — one caption
+line beside the title, on its baseline, the count no pill of its own (ruled 2026-10-17: a pill
+in the head is a state, *Locked*); sorting by column
 and a filter box. The details pane keeps what it shows and adds an editable *Description*,
-*Rename* (the registry's trusted name, FORMAT §7.4), the full `last_path` with *Show in
+*Rename* (the registry's trusted name, FORMAT §7.4), the full `last_path` — under its label,
+wrapping rather than cut (ruled 2026-10-17; its facts are §6's label · value list) — with *Show in
 Explorer* or *Locate…* — worded "last seen on another system at …" when the path's syntax is not
-this platform's — *Created*, the current *KID*, and *Details…*, a modal with the versions table
+this platform's — *Created*, and *Technical details…*, a hyperlink button under the facts
+it adds to (ruled 2026-10-17; it was a standard button beside *Close*) (ruled 2026-10-17: the pane's *KID* and
+*Key version* moved into it, where the KID was already shown once, and the pane's *Free space*
+reads *Unused space*), a modal titled *Technical details* with the versions table
 (KID · created · retired · state), `archive_id`, the key version (vN, beside the current KID),
 revision, last writer, `last_seq` /
 `hash_at_seq`, the ciphertext hash, the policy bits — every value selectable (`user-select:
@@ -1771,25 +1932,32 @@ archive from a bare key, and the way to hand one archive to someone is a later *
 record as a small keystore*, the precursor of sharing.
 
 *file missing* is the `Note` code `archive.file_missing` and is never computed inside `List`:
-the core keeps a presence per record, refreshed by a pass after unlock and by the page's *Check
-files* action (`Archives.CheckFiles()`), one path at a time with the state mutex released and a
+the core keeps a presence per record, refreshed by a pass after unlock and by the page's *Find
+missing files* action (`Archives.CheckFiles()`; *Check files* until 2026-10-17), and its chip
+reads *Missing*, one path at a time with the state mutex released and a
 2 s budget each, the probe abandoned on expiry so a path that does not answer is never reported
 missing. Only paths on a local fixed volume of this machine are probed; a path whose syntax is
 not this platform's, a removable or network drive and every UNC path are left unmeasured and
 are checked only for the one record the user acts on — `last_path` reaches the registry from
-*Import records…* as easily as from *Locate…*, and opening `\\host\share` because a record says
+*Import archives from a backup…* as easily as from *Locate…*, and opening `\\host\share` because a record says
 so is an outbound authentication to a host someone else named. Until a pass has run the column
 is blank, never "missing".
 
-**Forget and delete.** *Forget key…* drops the record softly. The archive is closed first (a running operation is
+**Forget and delete.** *Forget archive…* (ruled 2026-10-17; it was *Forget key…*, the archive
+key being a technical word) drops the record softly. Its dialog follows the template of
+`strings.ts` (`dialogCopy`): "Forget Photos 2024? The file stays where it is. You can restore it
+from Show hidden until <date>; after that its key is gone and the file cannot be opened."
+[Forget archive] [Cancel]; Delete's reads "Delete Photos 2024? Deletes <path> for good, after
+checking that the file really is this archive. Its key is kept for 30 days in case a copy of the
+file turns up." [Delete archive] [Cancel]. The archive is closed first (a running operation is
 cancelled) — on the Archives page once the name is typed and the act confirmed, never before,
 so *Cancel* leaves an archive still draining a preview as it was, and a close the core refuses
 ends the dialog with its reason and nothing removed (ruled 2026-10-14); then `forgotten_at` is set (FORMAT §7.1, §18.2) and
-the record shows under *Show hidden* as "forgotten — restore it to open this archive again; its
-key is dropped at the first unlock after <date>" with *Restore*, which clears `forgotten_at`.
+the record shows under *Show hidden* with the chip *Forgotten* — its key dropped at the first
+unlock after <date> — and *Restore*, which clears `forgotten_at`.
 While forgotten the record still holds the keys, so `Open`, `Rename`, `SetDescription`,
 `RotateKey`, `Verify`, `Compact`, `Locate`, `Hide` and `Unhide` are refused with
-`archive.forgotten` (the Archives page greys the ones it offers — Open, Compact…, Rotate key…,
+`archive.forgotten` (the Archives page greys the ones it offers — Open, Compact…, Re-key archive…,
 Verify, Hide or Unhide, the pane's Locate… and its name and description fields — with those
 words, ruled 2026-10-14) — never `archive.not_found`, which stays the answer for a record already
 purged, so the page can tell "restore it" from "its key is gone" — and no registry write ever
@@ -1799,7 +1967,7 @@ on it, and a second *Forget* does not move `forgotten_at`: the retention clock n
 *Delete archive…* is Forget plus the file (DESIGN trap 28). The file at `last_path` is opened
 once and removed through that same handle, never by the name a second time, and never with a
 handle this process is holding — the open archive is closed first, after the consent as for
-*Forget key…*, refused with `archive.busy`
+*Forget archive…*, refused with `archive.busy`
 while an operation or a preview reader is live. Four outcomes, and only two touch the record.
 **`archive_id` matches**: the file is removed first, and only then is the record forgotten; if
 the removal fails the record is *not* forgotten and the page says the file could not be removed
@@ -1810,7 +1978,8 @@ volume, share or folder is not there: `archive.file_unreachable`, nothing remove
 forgotten; *absent* is decided on the parent folder and never on the open of the file itself.
 **Anything else** — the file is held, access denied, a short read, a wrong magic, an envelope
 checksum that does not match: `archive.busy` or `archive.invalid`, **nothing removed and nothing
-forgotten**, with *Retry*, *Locate…* and *Forget the key only* offered, because a record dropped
+forgotten**, with *Retry*, *Locate…* and *Forget archive only…* offered (ruled 2026-10-17; it
+was *Forget the key only*), because a record dropped
 against a file that could not be read destroys the keys of an archive that is still intact. The Archive page's own *Delete archive…* is the same action on the archive it shows, in the same
 dialog, asked first and over the Archive page: *Cancel* leaves the user where they were, in their
 folder, and the archive is left only on consent — the leave the rail performs (§2.3), then
@@ -1818,11 +1987,14 @@ closed as on the Archives page if a preview body or an operation still holds it 
 going back to the list when the dialog closes (ruled 2026-10-14, refining 2026-09-07's close
 first). It is disabled while the vault is locked with the archive open (§2.3).
 
-Both confirm by the archive's name typed (compared trimmed and exactly, case and all), and the
+Both confirm by the archive's name typed (compared trimmed and exactly, case and all) — the name
+stands once, as the field label's hint, with no placeholder repeating it; the field has the focus
+when the dialog opens and Enter there presses the primary, which stays enabled with the field
+empty and marks it instead (§6, Forms; ruled 2026-10-17) — and the
 warning says only what is known here: with a `lastExportAt` for this vault at or after the
-record's `created_at`, "the last backup of this vault was made on <date>; if you still have it,
-it holds this key"; otherwise "no backup of this vault is recorded here — every other copy of
-this archive becomes unopenable when the record is dropped". No ceremony: the registry write
+record's `created_at`, "The last backup of this vault, <date>, can open this archive if you still
+have it." (one sentence, ruled 2026-10-17); otherwise "No backup of this vault is recorded here, so once its key
+is gone no copy of this archive can be opened." (ruled 2026-10-17, in the user's words). No ceremony: the registry write
 needs the session's key, not the VMK, and the brakes are the typed name, the retention and the
 backup.
 
@@ -1830,7 +2002,10 @@ backup.
 of the vault kept here, before any archive is opened, in one registry write of its own whose
 `modified_at` decides (FORMAT §18.2) — beside, not inside, the write that pays the owed receipts,
 since the two fail differently; a purge that would drop nothing writes nothing, so an unlock does
-not restamp `modified_at` — and `archives.changed` follows with a line naming what went. No other
+not restamp `modified_at` — and `archives.changed` follows with a line naming what went, the
+consequence first: ""Photos 2024" was forgotten more than 30 days ago, so it can no longer be
+opened.", or "3 forgotten archives can no longer be opened: …" (ruled 2026-10-17; it said the
+key "was dropped", the format's act on a main surface). No other
 registry write purges, so nothing is dropped while the vault is locked and no
 Save on one archive destroys another's keys; the unlock of a staged copy — `VerifyBackup`,
 `InspectFile`, `InspectRecords` — purges nothing. Every record while the vault is Tampered is
@@ -1838,10 +2013,13 @@ skipped and left to the next unlock.
 
 **The entangled password is the vault's** (FORMAT §3.1, §18.1). `VaultStatus.Entangled` is the
 slot region header's switch, known while Locked; the lock screen asks for the password once,
-before the PIN, whenever it is on — the standalone-password and recovery ways in never ask,
+beside the PIN and after it (§2.2's one order; ruled 2026-10-17, this said "before the PIN"),
+whenever it is on — the standalone-password and recovery ways in never ask,
 whatever the switch says — and the typed password lives with the attempt (§2.2), so a cancel, a
-retry and an adopted pending touch neither lose it nor ask again. The Keys page shows one row,
-*Entangled password: on/off · Change…*, backed by `Keys.EntangledState() {On, CanEnable,
+retry and an adopted pending touch neither lose it nor ask again. The Vault page shows one row,
+*Password with every YubiKey*, "On: …" or "Off: …", with *Change…*, *Turn off…* or *Turn on…*
+(ruled 2026-10-17: "entangled" is the format's word and stays in this prose; the row read
+*Entangled password*), backed by `Keys.EntangledState() {On, CanEnable,
 Reason}`: turning it on asks for the new password twice, changing it asks for the new one twice,
 turning it off confirms; each is a ceremony for the VMK by any way in and then re-wraps every
 hardware slot offline from the kept `K_P`, drawing a fresh `entangle_salt` (FORMAT §6). **The
@@ -1856,8 +2034,8 @@ off through the removal ceremony — is recorded in DECISIONS should the ruling 
 Turning it on is refused where the slot invariant would break (FORMAT §6.4): in a vault whose
 active slots are all hardware keys, one password would then stand in front of every way in, so
 `Keys.SetEntangled(true)` is refused for the invariant's reason before the ceremony starts and
-before a password is typed, worded "every key would then need this password — add a recovery
-key first" with the action that runs `BeginEnroll(recovery, label)`; `CanEnable` greys the
+before a password is typed, worded "Every YubiKey would then need this password. Add a recovery
+key first." with the action that runs `BeginEnroll(recovery, label)`; `CanEnable` greys the
 switch ahead of any ceremony, as *Remove* is greyed from `SlotView.Removable`. The same
 predicate from the other side: with the password on, `Removable` is false for the last recovery
 slot when every other active slot is a hardware key. Turning it off is never refused. Enrolling a
@@ -1866,8 +2044,9 @@ kept `K_P` offline — except the first way in of an adopted backup, which sets 
 entanglement afresh, a backup carrying no `K_P` (FORMAT R28). The rotate dialog loses its
 "except a key whose entangled password…" clause: every way in is re-wrapped, always.
 
-**Merge records.** Beside *Import* (which replaces the vault kept here) an *Import records…*
-action opens a backup or a vault over a staged copy and proves it before anything is listed.
+**Merge records.** Beside *Replace this vault with a copy…* (which replaces the vault kept here)
+an *Import archives from a backup…* action (ruled 2026-10-17; it was *Import records…*: the
+screen says archives, the registry's records are this prose's) opens a backup or a vault over a staged copy and proves it before anything is listed. Its dialog bears the action's name, *Import archives from a backup*; the proof step's buttons are *Continue* and *Cancel*, and the list's *Import 2 archives* (the count the ticks', *Import archives* greyed with none) and *Cancel*, which discards what was read (ruled 2026-10-17; they were *Read the records*, *Merge 2 records* and *Discard*).
 `Vault.InspectRecords(path)` is a ceremony for **this vault's** VMK by any way in — the VMK is
 what derives `KWK_secrets` and so the retired VMKs (FORMAT §7.6) — and it tries the current VMK
 and then each `vmk_history` VMK against the incoming registry, newest first by the file's own
@@ -1893,10 +2072,13 @@ dialog warns above the list that the records can be merged but the file itself i
 or trusted as a backup — Import and Verify backup refuse it.
 
 The records are listed with checkboxes, ticked by default: a record whose `archive_id`, KID and
-key the vault already has is skipped and listed greyed as "already here"; a known archive with
+key the vault already has is skipped and listed greyed as *Already here* (a chip in sentence
+case, ruled 2026-10-17); a known archive with
 a new KID gains that version (the file's envelope decides which is current); a new `archive_id`
-is added; a record this vault holds as forgotten is listed unticked as "forgotten here on
-<date>" and ticking it is an explicit *Restore*. Fields are never taken by counter alone: version
+is added; a record this vault holds as forgotten is listed unticked with the chip *Forgotten*,
+"Forgotten here on <date>. Ticking it restores it." (ruled 2026-10-17: every row's chip is
+`chipCopy`'s — *New*, *Update*, *Forgotten*, *Already here* — and its line names archives, not
+records or key versions), and ticking it is an explicit *Restore*. Fields are never taken by counter alone: version
 lists union; a field the local record leaves empty is filled; a field the two hold differently —
 `name`, `description`, `policy` — keeps the local value and the row says what differed ("named
 'Photos 2023' there"), except `always_require_full_auth`, which is set if either side has it and
@@ -1907,7 +2089,11 @@ written with `revision = max(local, incoming) + 1` and this vault's `device_id` 
 `last_writer`, so a merge in the other direction sees a descendant rather than a rival
 (SYNC.md §5).
 
-**The rotate dialog** shows the last backup's time and, past a week or with none, asks for a
+**The rotate dialog** — *Re-key the vault?*, opened by *Re-key vault…* (ruled 2026-10-17; it
+was *Rotate now…*, which collided with the archive's *Rotate key…*), its body "Every unlock
+method gets the new key now; no YubiKey is needed for this. Backups made before today keep
+opening with the methods they had." and its buttons *Re-key vault*, or *Back up, then re-key*
+with the backup ticked, and *Cancel* — shows the last backup's time and, past a week or with none, asks for a
 backup first — it asks, it never refuses to rotate without one — and it never keeps a copy of
 the vault (FORMAT §18.3, DESIGN trap 29). Its backup, like every `Keys.Export`, records
 `lastExportAt`.
@@ -1928,7 +2114,7 @@ checkbox, and it never gates a cryptographic operation.
 spliced or rolled-back region); §2.1's cached facts
 are `VaultID`, `ModifiedAt`, `Entangled`, `Slots()`. `SlotView` loses `Entangled`, `Stale` and
 `Escrowed` — every recovery slot has its escrow record from the commit that creates it (FORMAT
-R38), so `vault.no_escrow`, `EscrowOpenedKey` and the Keys page's "Made before Enfold kept
+R38), so `vault.no_escrow`, `EscrowOpenedKey` and the Vault page's "Made before Enfold kept
 recovery keys" state go too. `BeginEnroll(kind, label)` loses `entangle` and the `Choose` step
 for hardware keys; `Choose` remains for `kind = password`, the standalone slot's own.
 `CreateVault`, `ImportFile` and `FinishSetup` keep `entangle` — each is the moment a vault's
@@ -1963,10 +2149,10 @@ forgetting), `archive.description_long`, `archive.name_invalid` (a rename that i
 worded as damage), `vault.tampered_hash`, `vault.tampered_generation`, `vault.escrow_missing` (the
 registry keeps no copy of this recovery key — replace the slot; never a refusal of the unlock).
 `vault.no_escrow` and `EscrowOpenedKey` go; `vault.stale` stays for the A/B stale-copy warning and
-`Session.Live`. *Import records…* lives in the Archives page's command bar — the vault must be
-Unlocked for it, so the lock screen cannot offer it — with a pointer from the Keys page's Backups
-card, which hands the ask over as the key dialog's *Import records…* does: while the command could
-run (Unlocked, not tampered) its link is *Import records…* and the Archives page opens the picker
+`Session.Live`. *Import archives from a backup…* lives in the Archives page's command bar — the vault must be
+Unlocked for it, so the lock screen cannot offer it — with a pointer from the Vault page's Backups
+card, which hands the ask over as the key dialog's *Import archives from a backup…* does: while the command could
+run (Unlocked, not tampered) its link is *Import archives from a backup…* and the Archives page opens the picker
 on arrival; otherwise it is *Go there* and only goes there (ruled 2026-10-14; it used to go there
 alone). The rotate dialog's pre-selected backup performs the export and then the rotation in one
 press; a Save dialog cancelled at the export rotates nothing.
@@ -2058,8 +2244,9 @@ file **by its envelope's `archive_id`**, never by name: a record with that id op
 row had been double-clicked — the vault unlocked first when it is locked, the lock scene and
 then the archive — and the record's `last_path` moves to this path when it differs, the file
 having just proved where it is, the same write *Locate…* makes (decision 4); no record with
-that id → the page says "This archive's key is not in your vault." with *Import records…* as the
-way in, and the file is not touched; a file that is not an Enfold archive (the magic wrong) is a
+that id → the page says "This archive is not in your vault." with *Import archives from a
+backup…* as the way on (ruled 2026-10-17: "key" there was the archive key, a technical word), and
+the file is not touched; a file that is not an Enfold archive (the magic wrong) is a
 toast and nothing more. Several paths at once: the first is opened, the rest are counted and named in a toast ("2 more
 archives were not opened: spare.efd, other.efd. Enfold opens one at a time."). The Archives
 page's *Open file…* (Ctrl+O) and an `.efd` dropped on that page take this same path, from the

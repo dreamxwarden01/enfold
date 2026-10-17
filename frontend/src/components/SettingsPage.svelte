@@ -2,7 +2,7 @@
   import { Settings, errorOf } from "../lib/api";
   import type { SettingsView } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText } from "../lib/strings";
+  import { codeText, settingsCopy, vaultCopy } from "../lib/strings";
   import { minutesLabel } from "../lib/format";
   import { closeActionLabel, closeChoices } from "../lib/closing";
   import SaveBar from "./SaveBar.svelte";
@@ -13,7 +13,10 @@
 
   const idleChoices = [0, 2, 5, 10, 15, 20, 30];
   const absChoices = [0, 30, 60, 120, 240, 480];
-  const dictChoices: [number, string][] = [[0, "off"], [65536, "64 KB"], [262144, "256 KB"], [1048576, "1 MB"], [4194304, "4 MB"]];
+  // The recovery record's slider runs to 20%; the track's accent part is
+  // the value's share of that, which the page states (app.css, the slider).
+  const PCT_MAX = 20;
+  const dictChoices: [number, string][] = [[0, "Off"], [65536, "64 KB"], [262144, "256 KB"], [1048576, "1 MB"], [4194304, "4 MB"]];
 
   // The staged edits live in the store (they survive a visit to another
   // page); the page shows saved ⊕ draft and diffs the two for the bar
@@ -34,24 +37,40 @@
     return true;
   }
 
+  // The bar names a change by its row's own name (APP.md §6, the save
+  // bar; ruled 2026-10-17).
   const labels: Record<Key, string> = {
-    displayName: "Vault name",
-    idleMinutes: "Idle lock",
-    absoluteMinutes: "Absolute lock",
-    closeAction: "When the window closes",
-    recoveryRecordPct: "Recovery record",
-    dictionaryBelow: "Dictionary",
-    theme: "Theme",
+    displayName: settingsCopy.vaultName,
+    idleMinutes: settingsCopy.idleLock,
+    absoluteMinutes: settingsCopy.absoluteLock,
+    closeAction: settingsCopy.closeAction,
+    recoveryRecordPct: settingsCopy.repairData,
+    dictionaryBelow: settingsCopy.dictionary,
+    theme: settingsCopy.theme,
   };
+
+  // A timeout's value as its select shows it: the default says so after
+  // the time it stands for.
+  const IDLE_DEFAULT = 10;
+  const ABS_DEFAULT = 60;
+  function timeoutLabel(m: number, fallback: number): string {
+    return m === 0 ? settingsCopy.defaultValue(minutesLabel(fallback)) : minutesLabel(m);
+  }
+
+  // The recovery record's row is hidden until volume exports exist (ruled
+  // 2026-10-17): today nothing reads the setting, and an exported backup
+  // carries no parity. The setting keeps its storage; the row comes back
+  // as *Repair data* with them.
+  const repairDataShown = false;
 
   function shown(key: Key, v: unknown): string {
     switch (key) {
-      case "idleMinutes": return v === 0 ? "default (10 minutes)" : minutesLabel(v as number);
-      case "absoluteMinutes": return v === 0 ? "default (1 hour)" : minutesLabel(v as number);
+      case "idleMinutes": return timeoutLabel(v as number, IDLE_DEFAULT);
+      case "absoluteMinutes": return timeoutLabel(v as number, ABS_DEFAULT);
       case "closeAction": return closeActionLabel(v);
       case "recoveryRecordPct": return `${v}%`;
       case "dictionaryBelow": return dictChoices.find((c) => c[0] === v)?.[1] ?? String(v);
-      case "theme": return v === "system" ? "follow Windows" : String(v);
+      case "theme": return v === "system" ? "Follow Windows" : v === "dark" ? "Dark" : v === "light" ? "Light" : String(v);
       case "displayName": return String(v).trim() ? `“${String(v).trim()}”` : "(empty)";
     }
   }
@@ -109,11 +128,11 @@
   // The foot's note (LayerFoot): the one place the page says which
   // settings are this machine's and which the vault's.
   $effect(() => {
-    store.footNote = "Settings are machine-local; the session timeouts live in the vault.";
+    store.footNote = settingsCopy.foot;
   });
 </script>
 
-<div class="layer-head"><h1 class="t-title">Settings</h1></div>
+<div class="layer-head"><h1 class="t-title">{settingsCopy.title}</h1></div>
 
 <div class="layer-body">
   {#if s}
@@ -121,36 +140,41 @@
       <div class="ks-col">
         <!-- Which settings live where is the foot's to say, once; the head
              says only what stands in the way of changing these. -->
-        <div class="ks-head"><h2 class="t-section">Session</h2>{#if !unlocked}<span class="t-quiet">unlock to change</span>{/if}</div>
-        <div class="card setcard">
+        <div class="ks-head"><h2 class="t-section">{settingsCopy.session}</h2>{#if !unlocked}<span class="t-quiet">{settingsCopy.unlockToChange}</span>{/if}</div>
+        <div class="setcard">
           <div class="setrow">
-            <div class="lab"><b>Idle lock</b><span>No mouse or keyboard. Never off; at most 30 minutes.</span></div>
+            <div class="lab"><b>{settingsCopy.idleLock}</b><span>{settingsCopy.idleLine(minutesLabel(draft.idleMinutes || IDLE_DEFAULT))}</span></div>
             <div class="ctl"><select class="input" disabled={!s.timeoutsAdjustable} value={draft.idleMinutes} onchange={(e) => edit("idleMinutes", num(e))}>
-              {#each idleChoices as m (m)}<option value={m}>{m === 0 ? "default (10 minutes)" : minutesLabel(m)}</option>{/each}
+              {#each idleChoices as m (m)}<option value={m}>{timeoutLabel(m, IDLE_DEFAULT)}</option>{/each}
             </select></div>
           </div>
           <div class="setrow">
-            <div class="lab"><b>Absolute lock</b><span>Time since unlocking, whatever happens. At most 8 hours.</span></div>
+            <div class="lab"><b>{settingsCopy.absoluteLock}</b><span>{settingsCopy.absoluteLine}</span></div>
             <div class="ctl"><select class="input" disabled={!s.timeoutsAdjustable} value={draft.absoluteMinutes} onchange={(e) => edit("absoluteMinutes", num(e))}>
-              {#each absChoices as m (m)}<option value={m}>{m === 0 ? "default (1 hour)" : minutesLabel(m)}</option>{/each}
+              {#each absChoices as m (m)}<option value={m}>{timeoutLabel(m, ABS_DEFAULT)}</option>{/each}
             </select></div>
           </div>
           <div class="setrow">
-            <div class="lab"><b>When the window closes</b><span>The close button asks until this says otherwise. Going to the tray leaves every archive's page, as closing the window always does; Enfold reopens from the tray at the list.</span></div>
+            <div class="lab"><b>{settingsCopy.closeAction}</b><span>The close button asks until this says otherwise. Going to the tray leaves every archive's page, as closing the window always does; Enfold reopens from the tray at the list.</span></div>
             <div class="ctl"><select class="input" value={draft.closeAction} onchange={(e) => edit("closeAction", str(e))}>
               {#each closeChoices as [v, label] (v)}<option value={v}>{label}</option>{/each}
             </select></div>
           </div>
         </div>
 
-        <div class="ks-head top"><h2 class="t-section">Exports</h2></div>
-        <div class="card setcard">
+        <!-- *Compression*, not *Exports*: with the recovery record's row
+             hidden the section holds the dictionary alone (APP.md §6,
+             ruled 2026-10-17). -->
+        <div class="ks-head top"><h2 class="t-section">{settingsCopy.compression}</h2></div>
+        <div class="setcard">
+          {#if repairDataShown}
           <div class="setrow">
-            <div class="lab"><label for="recovery-pct"><b>Recovery record</b></label><span>Parity kept beside an exported volume, so damage in storage can be repaired without a key. Costs the same share of space. Recommended: 3%; 0% is off. Exported volumes arrive in a later version; until then this is only remembered, and an exported backup carries no parity.</span></div>
-            <div class="ctl row slider"><input id="recovery-pct" type="range" min="0" max="20" value={draft.recoveryRecordPct} oninput={(e) => edit("recoveryRecordPct", num(e))} /><span class="num pct">{draft.recoveryRecordPct}%</span></div>
+            <div class="lab"><label for="recovery-pct"><b>{settingsCopy.repairData}</b></label><span>{settingsCopy.repairDataLine} Costs the same share of space; 3% is recommended, 0% is off.</span></div>
+            <div class="ctl row slider"><input id="recovery-pct" type="range" min="0" max={PCT_MAX} value={draft.recoveryRecordPct} style="--range-fill: {(draft.recoveryRecordPct / PCT_MAX) * 100}%" oninput={(e) => edit("recoveryRecordPct", num(e))} /><span class="num pct">{draft.recoveryRecordPct}%</span></div>
           </div>
+          {/if}
           <div class="setrow">
-            <div class="lab"><b>Dictionary for small files</b><span>Files below this size share a compression dictionary.</span></div>
+            <div class="lab"><b>{settingsCopy.dictionary}</b><span>{settingsCopy.dictionaryLine}</span></div>
             <div class="ctl"><select class="input" value={draft.dictionaryBelow} onchange={(e) => edit("dictionaryBelow", num(e))}>
               {#each dictChoices as [v, label] (v)}<option value={v}>{label}</option>{/each}
             </select></div>
@@ -159,35 +183,32 @@
       </div>
 
       <div class="ks-col">
-        <div class="ks-head"><h2 class="t-section">Appearance</h2></div>
-        <div class="card setcard">
+        <div class="ks-head"><h2 class="t-section">{settingsCopy.appearance}</h2></div>
+        <div class="setcard">
           <div class="setrow">
-            <div class="lab"><b>Theme</b><span>The window's own theme follows at the next open.</span></div>
+            <div class="lab"><b>{settingsCopy.theme}</b><span>{settingsCopy.themeLine}</span></div>
             <div class="ctl"><select class="input" value={draft.theme} onchange={(e) => edit("theme", str(e))}>
               <option value="system">Follow Windows</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
             </select></div>
           </div>
-          <div class="setrow">
-            <div class="lab"><b>Look</b><span>Native is the only look in this version.</span></div>
-            <div class="ctl"><span class="chip">Native</span></div>
-          </div>
         </div>
 
-        <div class="ks-head top"><h2 class="t-section">Vault</h2></div>
-        <div class="card setcard">
+        <div class="ks-head top"><h2 class="t-section">{settingsCopy.vault}</h2></div>
+        <div class="setcard">
           <div class="setrow">
-            <div class="lab"><label for="vault-name"><b>Name</b></label><span>How this vault is called on the lock screen and in the tray.</span></div>
+            <div class="lab"><label for="vault-name"><b>{settingsCopy.vaultName}</b></label><span>{settingsCopy.vaultNameLine}</span></div>
             <div class="ctl"><input id="vault-name" class="input" type="text" maxlength="60" value={draft.displayName} aria-invalid={nameBad || undefined} oninput={(e) => edit("displayName", str(e))} /></div>
           </div>
-          <div class="setrow"><div class="lab"><b>File</b><span class="ellipsis" title={s.vaultPath || store.status?.defaultPath}>{s.vaultPath ? `${s.vaultPath} — kept elsewhere` : store.status?.defaultPath ?? ""}</span></div></div>
+          <!-- A path is a fact, its label over it and never cut (APP.md §6). -->
+          <div class="setrow"><dl class="kv stk grow"><dt>{vaultCopy.file}</dt><dd>{s.vaultPath ? `${s.vaultPath} — kept elsewhere` : store.status?.defaultPath ?? ""}</dd></dl></div>
         </div>
 
-        <div class="ks-head top"><h2 class="t-section">About</h2></div>
-        <div class="card setcard">
-          <div class="setrow"><div class="lab"><b>Enfold 0.1.0</b><span>Compression and encryption archives, unlocked by a YubiKey.</span></div></div>
-          <div class="setrow"><div class="lab"><b>Data folder</b><span>%LOCALAPPDATA%\Enfold — the vault, settings and the log.</span></div></div>
+        <div class="ks-head top"><h2 class="t-section">{settingsCopy.about}</h2></div>
+        <div class="setcard">
+          <div class="setrow"><div class="lab"><b>Enfold 0.1.0</b><span>{settingsCopy.aboutLine}</span></div></div>
+          <div class="setrow"><dl class="kv stk grow"><dt>Data folder</dt><dd>%LOCALAPPDATA%\Enfold — the vault, settings and the log.</dd></dl></div>
         </div>
       </div>
     </div>
@@ -197,9 +218,9 @@
 
 
 <style>
-  .ks-head.top { margin-top: 12px; }
-  .ctl.slider { gap: 6px; }
-  .ctl.slider input[type="range"] { accent-color: var(--accent); width: 140px; margin: 0; }
+  .ks-head.top { margin-top: var(--s3); }
+  .ctl.slider { gap: var(--s2); }
+  .ctl.slider input[type="range"] { width: 140px; }
   .pct { min-width: 30px; text-align: right; }
   .lab label { cursor: default; }
 </style>

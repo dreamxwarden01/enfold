@@ -90,15 +90,15 @@
     {#if rows.length > 1}<p class="dim">{refusedCopy.progress(at + 1, rows.length)}</p>{/if}
     {#snippet actions()}
       {#if renaming}
-        <button type="button" class="btn" onclick={() => (renaming = false)}>{refusedCopy.renameBack}</button>
         <button type="submit" class="btn accent">{refusedCopy.renameGo}</button>
+        <button type="button" class="btn" onclick={() => (renaming = false)}>{refusedCopy.renameBack}</button>
       {:else if row.kind === "name"}
-        <button type="button" class="btn" onclick={() => decide({ kind: "skip" })}>{refusedCopy.skip}</button>
+        <button type="button" class="btn accent" disabled={shorter === null} title={shorter === null ? refusedCopy.nothingShorter : refusedCopy.shortenTo(shorter)} onclick={() => decide({ kind: "shorten" })}>{refusedCopy.shorten}</button>
         <button type="button" class="btn" onclick={askRename}>{refusedCopy.rename}</button>
-        <button type="button" class="btn accent" disabled={shorter === null} title={shorter === null ? undefined : refusedCopy.shortenTo(shorter)} onclick={() => decide({ kind: "shorten" })}>{refusedCopy.shorten}</button>
+        <button type="button" class="btn" onclick={() => decide({ kind: "skip" })}>{refusedCopy.skip}</button>
       {:else}
-        <button type="button" class="btn" onclick={skipAll}>{refusedCopy.skipAllLike}</button>
         <button type="button" class="btn accent" onclick={() => decide({ kind: "skip" })}>{refusedCopy.skip}</button>
+        <button type="button" class="btn" onclick={skipAll}>{refusedCopy.skipAllLike}</button>
       {/if}
     {/snippet}
   </Dialog>

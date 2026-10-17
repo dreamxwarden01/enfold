@@ -87,7 +87,9 @@
     border: 1px solid var(--ctl-stroke);
     border-bottom-color: var(--ctl-bottom);
     border-radius: var(--r-sm);
-    box-shadow: var(--shadow-card);
+    /* Raised by its stroke and its darker bottom edge alone, as a WinUI
+       control is: no card shadow in the layer (APP.md §6, Controls; ruled
+       2026-10-17). */
     transition: transform var(--dur-move) var(--ease-enter);
     pointer-events: none;
   }
@@ -98,11 +100,9 @@
     background: none;
     border: none;
     border-radius: var(--r-sm);
-    padding: 5px 4px;
-    font: inherit;
-    font-size: 12.5px;
+    padding: var(--s1);
+    font: var(--t-body);
     color: var(--ink-2);
-    cursor: pointer;
     transition: color var(--dur-out) var(--ease-enter);
   }
   .seg-btn:hover { color: var(--ink); transition-duration: var(--dur-hover); }

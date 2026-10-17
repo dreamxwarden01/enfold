@@ -1,6 +1,9 @@
 <script lang="ts">
-  // Forget key… and Delete archive… (APP.md §13, DESIGN trap 28), one
-  // dialog for both pages. Both confirm by the archive's name typed —
+  // Forget archive… and Delete archive… (APP.md §13, DESIGN trap 28), one
+  // dialog for both pages, in the dialog template's words (dialogCopy,
+  // ruled 2026-10-17): the question that names the archive, what happens
+  // to the file and then the safety net, and a primary that repeats the
+  // command's verb. Both confirm by the archive's name typed —
   // compared trimmed and exactly, case and all — and the warning says only
   // what is known here: whether a backup of this vault recorded on this
   // machine was taken after the record was created. There is no ceremony:
@@ -15,7 +18,7 @@
   // destroy the keys of an archive nobody could open again.
   import { Archives, Shell, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText } from "../lib/strings";
+  import { archivesCopy, codeText, commandCopy, dialogCopy } from "../lib/strings";
   import { date } from "../lib/format";
   import { RETENTION_SECONDS } from "../lib/retention";
   import { nextMark, onLeave } from "../lib/forms";
@@ -55,6 +58,13 @@
   let located = $state("");
   const here = $derived(located || path);
   let forgottenAt = $state(0);
+  // acted: the act the core was last asked for, which is what the outcome
+  // reports — not the mode the dialog opened in. A Delete that ends in
+  // Forget archive only… forgot the archive and left the file alone, and
+  // its done screen must say so (APP.md §13). Empty until an act runs: a
+  // release the core refused falls back to the mode's own words.
+  let acted = $state<"" | "delete" | "forget">("");
+  const did = $derived(acted || mode);
 
   const nameSaid = $derived(mark && confirmNameProblem(typed, name) ? confirmNameProblem(typed, name) : "");
   const leave = onLeave(() => (mark = nextMark("leave", mark, confirmNameProblem(typed, name))));
@@ -65,17 +75,17 @@
   // no date, or none we can place against this record, the sentence says
   // the harder thing.
   const backupHolds = $derived(store.lastExportAt > 0 && createdAt > 0 && store.lastExportAt >= createdAt);
-  const backupLine = $derived(
-    backupHolds
-      ? `The last backup of this vault was made on ${date(store.lastExportAt)}; if you still have it, it holds this key.`
-      : "No backup of this vault is recorded here — every other copy of this archive becomes unopenable when the record is dropped.",
-  );
+  const backupLine = $derived(backupHolds ? dialogCopy.lastBackup(date(store.lastExportAt)) : dialogCopy.noBackup);
+  // The date a forget asked for now would run to: the first unlock after
+  // it drops the key (lib/retention.ts).
+  const until = $derived(date(Math.floor(Date.now() / 1000) + RETENTION_SECONDS));
 
   function fail(e: unknown): string {
     return errorOf(e).code;
   }
 
   async function forget() {
+    acted = "forget";
     phase = "busy";
     try {
       await Archives.Forget(id);
@@ -89,6 +99,7 @@
   }
 
   async function remove() {
+    acted = "delete";
     phase = "busy";
     try {
       await Archives.Delete(id, true);
@@ -136,6 +147,7 @@
   }
 
   async function go() {
+    if (phase !== "consent") return;
     mark = nextMark("press", mark, confirmNameProblem(typed, name));
     if (confirmNameProblem(typed, name)) return;
     if (!(await released())) return;
@@ -156,98 +168,125 @@
     }
   }
 
+  // A question while something is asked; what happened once it is over,
+  // keyed on the act that ran (did), never on the mode. Every outcome that
+  // touched nothing says so in its title, and an error in a forget says
+  // what a forget would have done.
   const title = $derived(
     phase === "consent" || phase === "busy"
       ? mode === "forget"
-        ? `Forget the key of ${name}?`
-        : `Delete ${name}?`
+        ? dialogCopy.forgetArchive.title(name)
+        : dialogCopy.deleteArchive.title(name)
       : phase === "mismatch-confirm"
-        ? `Forget the key of ${name}?`
+        ? dialogCopy.forgetOnly.title(name)
         : phase === "done"
-          ? mode === "forget"
-            ? "The record is forgotten"
-            : "Deleted"
-          : "Nothing was removed",
+          ? did === "forget"
+            ? dialogCopy.forgotten
+            : `${name} is deleted`
+          : phase === "error" && did === "forget"
+            ? "Nothing was forgotten"
+            : dialogCopy.notThisArchive.title,
   );
 </script>
 
 <!-- Esc: nothing while busy, Go back where that is the way out, else the
      Cancel or the Close; the backdrop closes only the phases whose one
      action is Close (APP.md §7). -->
-<Dialog {title} onclose={phase === "busy" ? undefined : phase === "mismatch-confirm" ? () => (phase = "mismatch") : onclose} dismissable={phase === "done" || phase === "error"}>
+<!-- While it asks, the dialog is a form (APP.md §6, Forms; phase 0's
+     form-dialog rule): it opens with the focus in the name field, not on
+     the box, and Enter there presses the primary, which marks the field
+     if the name does not match. -->
+<Dialog {title} onclose={phase === "busy" ? undefined : phase === "mismatch-confirm" ? () => (phase = "mismatch") : onclose} dismissable={phase === "done" || phase === "error"} onsubmit={phase === "consent" || phase === "busy" ? () => void go() : undefined}>
   {#if phase === "consent" || phase === "busy"}
     {#if mode === "forget"}
-      <p>The record is dropped softly: it keeps its keys for 30 days, shows under <em>Show hidden</em> as forgotten, and <em>Restore</em> brings it back. The file at the path below is left exactly as it is.</p>
+      <p>{dialogCopy.forgetArchive.body(until)}</p>
+      <!-- A path is the stacked label · value: it wraps, never cut (APP.md
+           §6). Delete names it in its body; Forget leaves it, so says
+           which file stays. -->
+      <dl class="kv stk"><dt>{archivesCopy.facts.file}</dt><dd>{here || "—"}</dd></dl>
     {:else}
-      <p>The file is removed first and only then is the record forgotten. Nothing is deleted unless the file at the path below proves to be this archive.</p>
+      <!-- A record with no path yet still reads as a sentence. -->
+      <p class="path-body">{dialogCopy.deleteArchive.body(here || "its file")}</p>
     {/if}
-    <div class="kv one">
-      <div class="k">File</div>
-      <div class="v" title={here}>{here || "—"}</div>
-    </div>
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
+    <!-- The name to type stands once, as the label's hint; a placeholder
+         saying it again read as a value already filled in (ruled
+         2026-10-17). -->
     <div class="field">
-      <div class="field-top"><label for="del-name">Type the archive's name to confirm</label><span class="hint">{name}</span></div>
-      <input id="del-name" class="input" class:invalid={!!nameSaid} aria-invalid={nameSaid ? "true" : undefined} bind:value={typed} onblur={leave} oninput={() => (mark = nextMark("change", mark, confirmNameProblem(typed, name)))} placeholder={name} disabled={phase === "busy"} />
+      <div class="field-top"><label for="del-name">{dialogCopy.confirmName}</label><span class="hint">{name}</span></div>
+      <input id="del-name" class="input" class:invalid={!!nameSaid} aria-invalid={nameSaid ? "true" : undefined} bind:value={typed} onblur={leave} oninput={() => (mark = nextMark("change", mark, confirmNameProblem(typed, name)))} disabled={phase === "busy"} />
       {#if nameSaid}<div class="field-error">{nameSaid === CONFIRM_NAME ? CONFIRM_NAME : nameSaid}</div>{/if}
     </div>
   {:else if phase === "done"}
-    {#if mode === "forget"}
-      <p>{name} is forgotten. It shows under <em>Show hidden</em> and <em>Restore</em> brings it back until its key is dropped, at the first unlock after {date(forgottenAt + RETENTION_SECONDS)}.</p>
+    <!-- What happened, then the undo and its date. A Delete that ended in
+         Forget archive only… left the file alone, and says so. -->
+    {#if did === "forget"}
+      <p>The file stays where it is. You can restore {name} from Show hidden until {date(forgottenAt + RETENTION_SECONDS)}; after that its key is gone.</p>
     {:else}
-      <p>The file was removed and the record forgotten. Its key is kept until the first unlock after {date(forgottenAt + RETENTION_SECONDS)}, so <em>Restore</em> still brings the record back — the file itself is gone.</p>
+      <p>The file is gone. Its key is kept until {date(forgottenAt + RETENTION_SECONDS)}, so you can restore the archive from Show hidden if a copy of the file turns up.</p>
     {/if}
   {:else if phase === "mismatch"}
-    <p>That file is not this archive: the folder was read and either the file is not in it, or the one there holds another archive. <strong>Nothing was removed and nothing was forgotten.</strong></p>
-    <p class="t-sub">Locate the archive if it moved, or forget the key on its own and leave whatever is at that path alone.</p>
+    <p>{dialogCopy.notThisArchive.body}</p>
+    <p class="t-sub">{dialogCopy.notThisArchive.next}</p>
   {:else if phase === "mismatch-confirm"}
-    <p>The file at that path is left exactly as it is. Only the record and its keys are dropped, softly: they are kept for 30 days and <em>Restore</em> brings them back.</p>
+    <p>{dialogCopy.forgetOnly.body}</p>
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
   {:else if phase === "unreachable"}
-    <p>The path could not be reached — the volume, share or folder is not there. <strong>Nothing was removed and nothing was forgotten.</strong></p>
-    <div class="kv one"><div class="k">File</div><div class="v" title={here}>{here || "—"}</div></div>
+    <p>{dialogCopy.unreachable}</p>
+    <dl class="kv stk"><dt>{archivesCopy.facts.file}</dt><dd>{here || "—"}</dd></dl>
   {:else if phase === "unreadable"}
-    <p>{codeText(problem)}</p>
-    <p><strong>Nothing was removed and nothing was forgotten.</strong> A record dropped against a file that could not be read destroys the keys of an archive that may still be whole, so the record was kept.</p>
+    <p>{dialogCopy.unreadable}</p>
+    <!-- The core's own reason, said once and quietly: held, or not an
+         archive at all. -->
+    <p class="t-quiet">{codeText(problem)}</p>
   {:else if phase === "failed"}
-    <p>That file is this archive, but it could not be removed. <strong>The record was kept</strong> — it is forgotten only after the file is gone.</p>
+    <p>{dialogCopy.deleteFailed}</p>
   {:else}
     <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(problem)}</span></div>
   {/if}
 
   {#snippet actions()}
+    <!-- The foot reads in its own order (APP.md §6, Controls; ruled
+         2026-10-17): the act first, then the other ways on, and the way
+         out last — Cancel, Close or Go back. -->
     {#if phase === "consent" || phase === "busy"}
-      <button type="button" class="btn" disabled={phase === "busy"} onclick={onclose}>Cancel</button>
       <!-- The button that carries the destructive act out is filled red
-           (APP.md §6, ruled 2026-09-10), here and in every confirmation. -->
-      <button type="button" class="btn danger-fill" disabled={phase === "busy"} onclick={() => void go()}>{phase === "busy" ? "Working…" : mode === "forget" ? "Forget the key" : "Delete archive"}</button>
+           (APP.md §6, ruled 2026-09-10), here and in every confirmation.
+           It stays enabled with the name field empty (APP.md §6, Forms:
+           a primary is never disabled for an empty field; a press marks
+           the field instead). The mock's greyed primary is wrong by the
+           spec, and is not followed. -->
+      <button type="submit" class="btn danger-fill" disabled={phase === "busy"}>{phase === "busy" ? dialogCopy.working : mode === "forget" ? dialogCopy.forgetArchive.primary : dialogCopy.deleteArchive.primary}</button>
+      <button type="button" class="btn" disabled={phase === "busy"} onclick={onclose}>{dialogCopy.cancel}</button>
     {:else if phase === "done"}
-      <button type="button" class="btn accent" onclick={onclose}>Close</button>
+      <button type="button" class="btn accent" onclick={onclose}>{dialogCopy.close}</button>
     {:else if phase === "mismatch"}
-      <button type="button" class="btn" onclick={onclose}>Close</button>
-      <button type="button" class="btn" onclick={locate}>Locate…</button>
-      <button type="button" class="btn accent" onclick={() => (phase = "mismatch-confirm")}>Forget the key only…</button>
+      <button type="button" class="btn accent" onclick={() => (phase = "mismatch-confirm")}>{dialogCopy.notThisArchive.forgetOnly}</button>
+      <button type="button" class="btn" onclick={locate}>{commandCopy.locate}</button>
+      <button type="button" class="btn" onclick={onclose}>{dialogCopy.close}</button>
     {:else if phase === "mismatch-confirm"}
+      <button type="button" class="btn danger-fill" onclick={() => void forget()}>{dialogCopy.forgetOnly.primary}</button>
       <button type="button" class="btn" onclick={() => (phase = "mismatch")}>Go back</button>
-      <button type="button" class="btn danger-fill" onclick={() => void forget()}>Forget the key</button>
     {:else if phase === "unreachable"}
-      <button type="button" class="btn" onclick={onclose}>Close</button>
-      <button type="button" class="btn" onclick={locate}>Locate…</button>
       <button type="button" class="btn accent" onclick={() => void remove()}>Retry</button>
+      <button type="button" class="btn" onclick={locate}>{commandCopy.locate}</button>
+      <button type="button" class="btn" onclick={onclose}>{dialogCopy.close}</button>
     {:else if phase === "unreadable"}
-      <button type="button" class="btn" onclick={onclose}>Close</button>
-      <button type="button" class="btn" onclick={locate}>Locate…</button>
-      <button type="button" class="btn" onclick={() => (phase = "mismatch-confirm")}>Forget the key only…</button>
       <button type="button" class="btn accent" onclick={() => void remove()}>Retry</button>
+      <button type="button" class="btn" onclick={locate}>{commandCopy.locate}</button>
+      <button type="button" class="btn" onclick={() => (phase = "mismatch-confirm")}>{dialogCopy.notThisArchive.forgetOnly}</button>
+      <button type="button" class="btn" onclick={onclose}>{dialogCopy.close}</button>
     {:else if phase === "failed"}
-      <button type="button" class="btn" onclick={onclose}>Close</button>
       <button type="button" class="btn accent" onclick={() => void remove()}>Retry</button>
+      <button type="button" class="btn" onclick={onclose}>{dialogCopy.close}</button>
     {:else}
-      <button type="button" class="btn accent" onclick={onclose}>Close</button>
+      <button type="button" class="btn accent" onclick={onclose}>{dialogCopy.close}</button>
     {/if}
   {/snippet}
 </Dialog>
 
 <style>
-  .kv.one { margin: 2px 0 10px; }
+  /* Delete names the path in its body: it wraps anywhere, never cut and
+     never pushing the dialog wider (APP.md §13). */
+  .path-body { overflow-wrap: anywhere; }
 </style>

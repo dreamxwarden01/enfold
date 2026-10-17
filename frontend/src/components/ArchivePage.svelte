@@ -3,8 +3,8 @@
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { Collision, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, codeText, columnLabels, conflictCopy, conflictTitle, listCopy, typeLabel } from "../lib/strings";
-  import { bytes, dateTime, fileIcon, previewKind, storageLabel } from "../lib/format";
+  import { archivePageCopy, codeText, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, listCopy, typeLabel } from "../lib/strings";
+  import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
   import { statusNote } from "../lib/status";
   import { newNameProblem } from "../lib/validate";
@@ -255,10 +255,10 @@
     void store.setSort(clickSortHeader(sort, key));
   }
 
-  const arrow = (key: SortKey) => {
-    const a = arrowOf(sort, key);
-    return a === null ? "" : a === "asc" ? "↑" : "↓";
-  };
+  // One sort glyph on both lists (APP.md §6, ruled 2026-10-17): the 10 px
+  // chevron, shown on the sorting column and turned for ascending; the
+  // other columns keep theirs hidden, so a header's words never move.
+  const ascending = (key: SortKey) => arrowOf(sort, key) === "asc";
 
   // The list's blank area: everything in the pane that is neither a row
   // nor the header — a header is a control of the list, not its blank
@@ -682,7 +682,9 @@
   // root id alone means everything, so the page sends that one id and
   // walks nothing.
   function extractAll() {
-    startExtract([ROOT_ID], "everything in this archive", true);
+    // The title names the archive (APP.md §3, ruled 2026-10-17):
+    // "Extract everything in Photos 2024".
+    startExtract([ROOT_ID], archiveName ? `everything in ${archiveName}` : "everything in this archive", true);
   }
 
   async function doExtract(dir: string, policy: string) {
@@ -897,15 +899,15 @@
          thing that can say whether the tree holds anything, since a
          folder occupies no data region and an archive of folders alone
          reports 0 files while holding real records (APP.md §3). -->
-    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} onclick={extractAll}><svg class="i i-14"><use href="#i-extract" /></svg>Extract all…</button>
-    <button type="button" class="btn subtle" disabled={!one} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename…</button>
-    <button type="button" class="btn subtle danger" disabled={selected.size === 0} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete…</button>
+    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} title={(stat?.records ?? 0) === 0 ? "This archive holds nothing yet" : undefined} onclick={extractAll}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extractAll}</button>
+    <button type="button" class="btn subtle" disabled={!one} title={one ? undefined : "Select one item to rename"} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename…</button>
+    <button type="button" class="btn subtle danger" disabled={selected.size === 0} title={selected.size === 0 ? "Select what to delete" : undefined} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete…</button>
     <div class="grow"></div>
     <!-- Tampered disables it here as it does on the Archives page (APP.md
          §13, R25): the flow closes the archive before the write is even
          attempted, so a refusal at the end would have shut the user's
          archive for nothing. -->
-    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined} onclick={() => void askDeleteArchive()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete archive…</button>
+    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined} onclick={() => void askDeleteArchive()}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.deleteArchive}</button>
   </div>
 
   {#if !store.unlocked}
@@ -917,11 +919,16 @@
            has no timeout of its own, and what it owes the vault is
            already said by the status strip. -->
       <span class="grow">{archivePageCopy.lockedBanner}</span>
-      <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button>
+      <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>{commandCopy.unlock}</button>
     </div>
   {/if}
   {#if stat?.state === "needs_reopen"}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span><button type="button" class="btn sm" onclick={close}>Close and reopen</button></div>
+    <!-- The button is the head's *Close archive*, by the same word, since
+         it is the same act: it closes, and the archive is opened again
+         from the list. "Close and reopen" promised a reopen it does not do
+         (one word per thing, consequences first: APP.md §7, ruled
+         2026-10-17). -->
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span><button type="button" class="btn sm" onclick={close}>Close archive</button></div>
   {/if}
   {#if stat?.copyMismatch}
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("archive.copy_mismatch")}</span></div>
@@ -948,7 +955,7 @@
              Modified, a checkbox heading every row and the header row.
              Each header cell sorts by its column; when the pane narrows
              the columns give way from the right, and the Name cell then
-             carries the hidden column's key beside its arrow (app.css). -->
+             carries the hidden column's key beside its chevron (app.css). -->
         <table>
           <colgroup><col class="w-check" /><col /><col class="w-size" /><col class="w-type" /><col class="w-date" /></colgroup>
           <thead>
@@ -956,9 +963,9 @@
               <th scope="col" class="chk"><input type="checkbox" checked={allTicked} disabled={total === 0} aria-label={listCopy.tickAll} onclick={tickAll} /></th>
               {#each SORT_KEYS as key (key)}
                 <th scope="col" class="col-{key}" class:num={key === "size"} aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : undefined}>
-                  <button type="button" class="sorter" title={listCopy.sortBy(columnLabels[key])} onclick={() => sortBy(key)}>{columnLabels[key]}{#if arrow(key)}<span class="arrow">{arrow(key)}</span>{/if}</button>
+                  <button type="button" class="sorter" title={listCopy.sortBy(columnLabels[key])} onclick={() => sortBy(key)}>{columnLabels[key]}<svg class="i caret" class:on={sort.key === key} class:asc={ascending(key)} aria-hidden="true"><use href="#i-chevdown" /></svg></button>
                   {#if key === "name" && sort.key !== "name"}
-                    <span class="hidden-sort k-{sort.key}">· {columnLabels[sort.key]} <span class="arrow">{arrow(sort.key)}</span></span>
+                    <span class="hidden-sort k-{sort.key}">· {columnLabels[sort.key]} <svg class="i caret on" class:asc={ascending(sort.key)} aria-hidden="true"><use href="#i-chevdown" /></svg></span>
                   {/if}
                 </th>
               {/each}
@@ -1070,19 +1077,31 @@
         {/if}
       </div>
       {#if one}
+        {@const size = bytes(one.size)}
+        {@const type = typeLabel(one.name, one.isDir)}
+        {@const stored = compressedText(one.storage, one.savedPercent)}
+        {@const modified = dateTime(one.modifiedAt)}
         <div class="pname"><svg class="i i-14"><use href="#{rowIcon(one)}" /></svg><span>{one.name}</span></div>
-        <dl class="facts">
-          <div class="fact"><dt>{one.isDir ? "Size beneath" : "Size"}</dt><dd>{bytes(one.size)}</dd></div>
-          <div class="fact"><dt>{columnLabels.type}</dt><dd>{typeLabel(one.name, one.isDir)}</dd></div>
-          {#if !one.isDir}
-            <div class="fact"><dt>Stored as</dt><dd>{storageLabel(one.storage, one.savedPercent)}</dd></div>
-          {/if}
-          <div class="fact"><dt>Modified</dt><dd>{dateTime(one.modifiedAt)}</dd></div>
-          <div class="fact"><dt>Path</dt><dd title={one.path}>{one.path}</dd></div>
-        </dl>
+        <!-- The facts are the one label · value list (APP.md §6, Type and
+             spacing; ruled 2026-10-17): each value beside its label, never
+             pushed to the pane's far edge, wrapping rather than cut — and
+             the path under its label, wrapping too.
+             *Compressed* says how much smaller, never the method: "zstd +
+             dictionary" is Technical details' (APP.md §7, ruled 2026-10-17). -->
+        <div class="pfacts">
+          <dl class="kv">
+            <dt>{one.isDir ? "Size beneath" : "Size"}</dt><dd class="num" title={size}>{size}</dd>
+            <dt>{columnLabels.type}</dt><dd title={type}>{type}</dd>
+            {#if !one.isDir}
+              <div><dt>{compressedLabel}</dt><dd title={stored}>{stored}</dd></div>
+            {/if}
+            <dt>Modified</dt><dd class="num" title={modified}>{modified}</dd>
+          </dl>
+          <dl class="kv stk"><dt>Path</dt><dd>{one.path}</dd></dl>
+        </div>
       {/if}
       <div class="preview-actions">
-        <button type="button" class="btn accent" disabled={selected.size === 0} onclick={() => startExtract(chosenIds, countPhrase(deleteCounts(chosen)) || listCopy.selected(selected.size))}>Extract…</button>
+        <button type="button" class="btn accent" disabled={selected.size === 0} title={selected.size === 0 ? "Select what to extract" : undefined} onclick={() => startExtract(chosenIds, countPhrase(deleteCounts(chosen)) || listCopy.selected(selected.size))}>{commandCopy.extract}</button>
       </div>
     </aside>
   </div>
@@ -1091,27 +1110,37 @@
 
 <!-- Rename and Create folder are forms (APP.md §6, ruled 2026-10-14):
      Enter presses the accent button, Esc cancels, the field has the focus
-     as the dialog opens — Rename's with the stem selected. -->
+     as the dialog opens — Rename's with the stem selected. Every dialog's
+     buttons stand in its foot band in equal widths, the accent or filled
+     action first and *Cancel* last (APP.md §6, ruled 2026-10-17). -->
 {#if renaming}
-  <Dialog title="Rename" onclose={() => (renaming = null)} onsubmit={doRename} select={(v) => renameSelection(v, renaming?.isDir ?? false)}>
+  <!-- The title names what is renamed, and a quiet line under the field
+       says what Enter does and when a taken name is said (APP.md §6,
+       ruled 2026-10-17). -->
+  <Dialog title="Rename {renaming.name}" onclose={() => (renaming = null)} onsubmit={doRename} select={(v) => renameSelection(v, renaming?.isDir ?? false)}>
     <TextField id="rn" label="New name" bind:value={renameTo} bind:valid={renameValid} attempt={renameAttempt} judge={judgeRename} />
+    <p class="t-quiet">Enter renames. A name already in {folderName} is refused here, not after.</p>
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (renaming = null)}>Cancel</button>
       <button type="submit" class="btn accent">Rename</button>
+      <button type="button" class="btn" onclick={() => (renaming = null)}>Cancel</button>
     {/snippet}
   </Dialog>
 {/if}
 
 <!-- Create folder (APP.md §6): the name is judged by the rename's own
      rule, and against the names this folder already holds. The button is
-     never disabled for an empty field — pressing it marks the field. -->
+     never disabled for an empty field — pressing it marks the field. No
+     placeholder: an invented name reads as the one an empty field gives,
+     and an empty field gives none. The body says what the user gets, not
+     how the record is written; the primary repeats the verb with its
+     object (APP.md §7, ruled 2026-10-17). -->
 {#if creating}
   <Dialog title="Create folder" onclose={() => (creating = false)} onsubmit={makeFolder}>
-    <TextField id="cf-name" label="Name" bind:value={newFolder} bind:valid={newFolderValid} attempt={newFolderAttempt} judge={judgeFolder} placeholder="Receipts" />
-    <p>A folder is a record of its own: it is written now, and it stays whether or not anything is put into it.</p>
+    <TextField id="cf-name" label="Name" bind:value={newFolder} bind:valid={newFolderValid} attempt={newFolderAttempt} judge={judgeFolder} />
+    <p>The folder is created now and stays, even while it is empty.</p>
     {#snippet actions()}
+      <button type="submit" class="btn accent">Create folder</button>
       <button type="button" class="btn" onclick={() => (creating = false)}>Cancel</button>
-      <button type="submit" class="btn accent">Create</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1123,8 +1152,8 @@
   <Dialog title={deleteTitle(deleting.rows, stat?.name ?? "")} onclose={() => (deleting = null)}>
     <p>{deleteBody(deleting.rows)}</p>
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (deleting = null)}>Cancel</button>
       <button type="button" class="btn danger-fill" onclick={doDelete}>Delete</button>
+      <button type="button" class="btn" onclick={() => (deleting = null)}>Cancel</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1212,10 +1241,10 @@
     </ul>
     {#if kindsDiffer}<p class="dim">A file and a folder never replace one another, so <b>Replace</b> is off: skip those, or keep both.</p>{/if}
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (collisions = null)}>Cancel</button>
       <button type="button" class="btn" onclick={() => collisions && void addWith(collisions.at, collisions.plan, "skip")}>Skip those</button>
       <button type="button" class="btn" onclick={() => collisions && void addWith(collisions.at, collisions.plan, "keep-both")}>Keep both</button>
-      <button type="button" class="btn" disabled={kindsDiffer} onclick={() => collisions && void addWith(collisions.at, collisions.plan, "replace")}>Replace</button>
+      <button type="button" class="btn" disabled={kindsDiffer} title={kindsDiffer ? "A file and a folder never replace one another" : undefined} onclick={() => collisions && void addWith(collisions.at, collisions.plan, "replace")}>Replace</button>
+      <button type="button" class="btn" onclick={() => (collisions = null)}>Cancel</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1240,6 +1269,21 @@
 {/if}
 
 <style>
+  /* The facts under the preview's name: the card's 16 at the sides, 12
+     above and below and between the two lists (APP.md §6, Type and
+     spacing). A long path wraps rather than being cut, so in a short
+     window the facts scroll in their own box and the pane's *Extract…*
+     stays in view. */
+  .pfacts {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s3);
+    padding: var(--s3) var(--s4);
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
   /* The preview's wait (APP.md §6, ruled 2026-10-14): a 14 px ring, 2 px,
      the accent, one turn a second — shown only after 300 ms, so a quick
      preview never flashes it. Under reduced motion it stands still. */

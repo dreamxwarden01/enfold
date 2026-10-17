@@ -2,7 +2,7 @@
   import { CeremonyStep, Keys, Shell, Vault, errorOf } from "../lib/api";
   import type { FileInfo, SlotView } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText, warningCopy } from "../lib/strings";
+  import { chipCopy, codeText, commandCopy, dialogCopy, sinceText, vaultCopy, warningCopy } from "../lib/strings";
   import { date, dateTime, leaf } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
@@ -11,8 +11,8 @@
   const st = $derived(store.status);
   const unlocked = $derived(store.unlocked);
   const tampered = $derived(st?.tampered ?? false);
-  // This page's own ceremonies: the ways in, the backups and the vault's
-  // password. A `records` ceremony belongs to the Archives page, which
+  // This page's own ceremonies: the unlock methods, the backups and the
+  // vault's password. A `records` ceremony belongs to the Archives page, which
   // renders its own panel — the incoming file's recovery prompt has
   // nowhere to go here (APP.md §13).
   const c = $derived(store.ceremony && !["unlock", "create", "import", "setup", "verify", "records"].includes(store.ceremony.kind) ? store.ceremony : null);
@@ -32,16 +32,20 @@
   const ent = $derived(store.entangled);
   let entangling = $state<"" | "on" | "change" | "off">("");
   // Why the switch is greyed: turning it on where every active slot is a
-  // hardware key would put one password in front of every way in
+  // hardware key would put one password in front of every unlock method
   // (FORMAT.md §6.4), and the cure is a recovery key.
   const entangleBlocked = $derived(!!ent && !ent.on && !ent.canEnable && unlocked);
+  // Why a change is greyed, as its title: a disabled button still takes
+  // the pointer so that this can be read (APP.md §6, Controls). The
+  // tampered one is the banner's own words.
+  const greyed = $derived(!unlocked ? codeText("vault.needs_unlock") : tampered ? "Changes are off until you replace this vault with a copy from the lock screen." : undefined);
 
   function fail(e: unknown) {
     store.toast(codeText(errorOf(e).code), "error");
   }
 
-  // Every ceremony this page starts can change the ways in or the vault's
-  // switch, so both are read again when it ends (APP.md §13).
+  // Every ceremony this page starts can change the unlock methods or the
+  // vault's switch, so both are read again when it ends (APP.md §13).
   async function begin(p: Promise<unknown>) {
     store.dismissCeremony();
     try {
@@ -57,18 +61,19 @@
     return t === "hardware" ? "i-yubi" : t === "recovery" ? "i-recovery" : "i-password";
   }
 
-  // A slot's second line. Since Revision 2 the entangled password is the
-  // vault's, not a slot's (FORMAT.md §3.1), so no slot says anything about
-  // it; a recovery slot names its ID, so the right sheet can be found
-  // (FORMAT.md §18.4).
+  // An unlock method's second line, in the glossary's words (ruled
+  // 2026-10-17: a YubiKey is never a bare "key"). Since Revision 2 the
+  // vault's password with every YubiKey is the vault's, not a slot's
+  // (FORMAT.md §3.1), so no line says anything about it; a recovery key
+  // names its ID, so the right sheet can be found (FORMAT.md §18.4).
   function slotMeta(s: SlotView): string {
-    const kind = s.type === "hardware" ? "hardware key · PIN + touch" : s.type === "recovery" ? "recovery key" : "password";
+    const kind = s.type === "hardware" ? "YubiKey · PIN and touch" : s.type === "recovery" ? "Recovery key" : "Password";
     const id = s.type === "recovery" && s.recoveryId ? ` · ${s.recoveryId}` : "";
     return `${kind}${id} · added ${date(s.createdAt)}`;
   }
 
-  // Add a key, preset to a recovery key: the action beside the greyed
-  // entangled switch (APP.md §13).
+  // Add an unlock method, preset to a recovery key: the action beside the
+  // greyed password switch (APP.md §13).
   function addRecoveryKey() {
     addKind = "recovery";
     addLabel = "";
@@ -108,8 +113,10 @@
     await begin(Keys.RotateNow());
   }
 
-  async function checkBackup() {
-    const p = (await Shell.PickFiles("Check a backup", false)) ?? [];
+  // Inspect a backup… reads the file's label; proving it opens is the
+  // lock screen's Test that a backup opens… (the verb table, strings.ts).
+  async function inspectBackup() {
+    const p = (await Shell.PickFiles("Inspect a backup", false)) ?? [];
     if (!p.length) return;
     try {
       backup = await Vault.InspectFile(p[0]);
@@ -118,10 +125,10 @@
     }
   }
 
-  // The foot's note (LayerFoot): the vault and its ways in.
+  // The foot's note (LayerFoot): the vault's name alone, since the page
+  // says the count (ruled 2026-10-17).
   $effect(() => {
-    const n = store.slots.length;
-    store.footNote = `${st?.displayName ?? ""} · ${n} way${n === 1 ? "" : "s"} in`;
+    store.footNote = vaultCopy.foot(st?.displayName ?? "");
   });
 
   // The ceremony dialog's two ways out. Close, once the ceremony is over,
@@ -142,92 +149,106 @@
   }
 </script>
 
-<div class="layer-head"><h1 class="t-title">Keystore</h1>{#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>Locked</span>{/if}</div>
+<div class="layer-head"><h1 class="t-title">{vaultCopy.title}</h1>{#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}</div>
 
 <div class="layer-body">
   {#if tampered}
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy("vault.tampered", st?.tamperedReason)}</span></div>
   {/if}
   {#if !unlocked}
-    <div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">Changing the ways in needs the vault unlocked.</span><button type="button" class="btn sm accent" onclick={() => store.go("lock")}>Unlock</button></div>
+    <div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.go("lock")}>{commandCopy.unlock}</button></div>
   {:else if st?.setupNeeded}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">This vault has only its recovery key. Add a key — a YubiKey or a password — to finish setting it up; the recovery key is asked for first.</span></div>
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine}</span></div>
   {/if}
 
   <div class="ks-cols">
     <div class="ks-col">
-      <div class="ks-head"><h2 class="t-section">Ways to unlock</h2><span class="t-quiet">{store.slots.length} slot{store.slots.length === 1 ? "" : "s"}</span></div>
-      {#each store.slots as s (s.recipientId)}
-        <button type="button" class="slot" aria-pressed={selected === s.recipientId} onclick={() => (selected = s.recipientId)}>
-          <div class="tile"><svg class="i"><use href="#{slotIcon(s.type)}" /></svg></div>
-          <div class="body">
-            <b>{s.label}</b>
-            <span class="meta">{slotMeta(s)}</span>
-          </div>
-        </button>
-      {/each}
-      <div class="rule"><svg class="i i-14"><use href="#i-info" /></svg>At least 2 independent ways in are always kept; a recovery key is one of them.</div>
+      <div class="ks-head"><h2 class="t-section">{vaultCopy.unlockMethods}</h2><span class="t-quiet">{vaultCopy.methodCount(store.slots.length)}</span></div>
+      <!-- One card per way in, 4 px from the next: Windows Settings' list,
+           as the settings and This vault are (APP.md §6, ruled 2026-10-17;
+           they stood 12 apart, the column's gap). -->
+      <div class="slots">
+        {#each store.slots as s (s.recipientId)}
+          <button type="button" class="slot" aria-pressed={selected === s.recipientId} onclick={() => (selected = s.recipientId)}>
+            <div class="tile"><svg class="i"><use href="#{slotIcon(s.type)}" /></svg></div>
+            <div class="body">
+              <b>{s.label}</b>
+              <span class="meta">{slotMeta(s)}</span>
+            </div>
+          </button>
+        {/each}
+      </div>
+      <div class="rule"><svg class="i i-14"><use href="#i-info" /></svg>{vaultCopy.rule}</div>
       <div class="ks-actions">
-        <button type="button" class="btn accent" disabled={!unlocked || tampered} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>Add a key…</button>
-        <button type="button" class="btn" disabled={!sel || !sel.removable || !unlocked || tampered} title={sel && !sel.removable ? "At least 2 independent ways in are always kept." : undefined} onclick={() => (removing = true)}>Remove…</button>
+        <button type="button" class="btn accent" disabled={!unlocked || tampered} title={greyed} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.addUnlockMethod}</button>
+        <button type="button" class="btn" disabled={!sel || !sel.removable || !unlocked || tampered} title={greyed ?? (sel && !sel.removable ? vaultCopy.rule : undefined)} onclick={() => (removing = true)}>{commandCopy.removeUnlockMethod}</button>
         {#if sel?.type === "recovery"}
-          <button type="button" class="btn" disabled={!unlocked} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>Show recovery key…</button>
+          <button type="button" class="btn" disabled={!unlocked} title={unlocked ? undefined : greyed} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>{commandCopy.showRecoveryKey}</button>
         {/if}
-        <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openRotate}><svg class="i i-14"><use href="#i-rotate" /></svg>Rotate now…</button>
+        <button type="button" class="btn" disabled={!unlocked || tampered} title={greyed} onclick={openRotate}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyVault}</button>
       </div>
 
-      <div class="ks-head top"><h2 class="t-section">Backups</h2></div>
+      <div class="ks-head top"><h2 class="t-section">{vaultCopy.backups}</h2></div>
       <div class="card backup">
-        <p class="t-sub">A backup is the vault file without the archive keys' history it does not need: the registry and the recovery slots. It carries its own date, so Enfold can tell an old one from a new one.</p>
+        <p class="t-sub">{vaultCopy.backupsLine}</p>
         <div class="ks-actions">
-          <button type="button" class="btn" disabled={!unlocked || tampered} onclick={() => void exportBackup()}><svg class="i i-14"><use href="#i-backup" /></svg>Export backup…</button>
-          <button type="button" class="btn" onclick={checkBackup}>Check a backup…</button>
+          <button type="button" class="btn" disabled={!unlocked || tampered} title={greyed} onclick={() => void exportBackup()}><svg class="i i-14"><use href="#i-backup" /></svg>{commandCopy.exportBackup}</button>
+          <button type="button" class="btn" onclick={inspectBackup}>{commandCopy.inspectBackup}</button>
         </div>
-        <div class="setrow"><div class="lab"><b>Last backup</b><span>{store.lastExportAt ? `${dateTime(store.lastExportAt)} — recorded here, not proof the file is still there` : "none recorded here"}</span></div></div>
-        <!-- Import records… lives in the Archives page's command bar; this
+        <!-- The last backup is one of the two places a relative date is
+             said, since recency is the point (strings.ts sinceText). -->
+        <dl class="kv"><dt>{vaultCopy.lastBackup}</dt><dd>{store.lastExportAt ? vaultCopy.lastBackupValue(sinceText(store.lastExportAt, store.now)) : vaultCopy.noBackup}</dd></dl>
+        <!-- Import archives from a backup… lives in the Archives page's command bar; this
              is the pointer to it (APP.md §13), and it hands the ask over
              the way the key dialog does — the page opens its picker on
              arrival — whenever that command could run; otherwise it only
              goes there, where the command shows why it is greyed. -->
-        <p class="t-quiet">To take archive records out of a backup or another copy of this vault without replacing the vault kept here, {#if unlocked && !tampered}use <button type="button" class="btn link" onclick={() => store.askImportRecords()}>Import records…</button> on the Archives page.{:else}use <em>Import records…</em> on the Archives page. <button type="button" class="btn link" onclick={() => store.go("archives")}>Go there</button>{/if}</p>
+        <p class="t-quiet">To take archives out of a backup without replacing this vault, {#if unlocked && !tampered}use <button type="button" class="btn link" onclick={() => store.askImportRecords()}>{commandCopy.importArchives}</button> on the Archives page.{:else}use {commandCopy.importArchives} on the Archives page. <button type="button" class="btn link" onclick={() => store.go("archives")}>{commandCopy.goThere}</button>{/if}</p>
         {#if backup}
-          <dl class="facts">
-            <div class="fact"><dt>File</dt><dd title={backup.path}>{leaf(backup.path)}</dd></div>
-            <div class="fact"><dt>What it is</dt><dd>{backup.kind === "backup" ? "a backup — opens with the recovery key only" : "a full vault"}</dd></div>
-            <div class="fact"><dt>Dated</dt><dd>{dateTime(backup.modifiedAt)}</dd></div>
-            <div class="fact"><dt>This vault</dt><dd>{backup.vaultMatches ? "yes" : "no — another vault"}</dd></div>
-            <div class="fact"><dt>Slots</dt><dd>{backup.slotCount}</dd></div>
+          <dl class="kv">
+            <dt>{vaultCopy.inspected.file}</dt><dd title={backup.path}>{leaf(backup.path)}</dd>
+            <dt>{vaultCopy.inspected.kind}</dt><dd>{backup.kind === "backup" ? vaultCopy.inspected.backup : vaultCopy.inspected.vault}</dd>
+            <dt>{vaultCopy.inspected.dated}</dt><dd>{dateTime(backup.modifiedAt)}</dd>
+            <dt>{vaultCopy.inspected.thisVault}</dt><dd>{backup.vaultMatches ? vaultCopy.inspected.yes : vaultCopy.inspected.no}</dd>
+            <dt>{vaultCopy.inspected.methods}</dt><dd class="num">{backup.slotCount}</dd>
           </dl>
           {#if backup.vaultMatches && !backup.newer && st}
-            <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>Older than this vault (changed {dateTime(st.modifiedAt)}).</span></div>
+            <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{vaultCopy.inspected.older(dateTime(st.modifiedAt))}</span></div>
           {:else if backup.vaultMatches && backup.newer}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-info" /></svg><span>Newer than the vault kept here. Lock, then import it from the lock screen.</span></div>
+            <div class="bar accent"><svg class="i i-14"><use href="#i-info" /></svg><span>{vaultCopy.inspected.newer}</span></div>
           {/if}
-          <p class="t-quiet">To prove it opens, lock the vault and use "Check that a backup opens…" on the lock screen: a copy is opened with the recovery key.</p>
+          <p class="t-quiet">{vaultCopy.inspected.testHint}</p>
         {/if}
       </div>
     </div>
 
     <div class="ks-col">
-      <div class="ks-head"><h2 class="t-section">This vault</h2></div>
-      <div class="card setcard">
-        <div class="setrow"><div class="lab"><b>Name</b><span>{st?.displayName}</span></div></div>
-        <div class="setrow"><div class="lab"><b>File</b><span class="ellipsis" title={st?.path}>{st?.path}</span></div></div>
-        <div class="setrow"><div class="lab"><b>Last changed</b><span>{dateTime(st?.modifiedAt ?? 0)}</span></div></div>
+      <div class="ks-head"><h2 class="t-section">{vaultCopy.thisVault}</h2></div>
+      <div class="setcard">
+        <!-- Facts, drawn as every fact is (APP.md §6): the label a caption,
+             the value beside it; the path under its label, whole. They
+             are one row of the list, a card like the settings under. -->
+        <div class="setrow"><div class="grow stack">
+          <dl class="kv">
+            <dt>{vaultCopy.name}</dt><dd title={st?.displayName}>{st?.displayName}</dd>
+            <dt>{vaultCopy.lastChanged}</dt><dd>{dateTime(st?.modifiedAt ?? 0)}</dd>
+          </dl>
+          <dl class="kv stk"><dt>{vaultCopy.file}</dt><dd>{st?.path}</dd></dl>
+        </div></div>
         <!-- One switch for the whole vault (FORMAT.md §3.1, APP.md §13):
              every YubiKey asks for it, the standalone password and the
              recovery key never do, and the old one is never asked for. -->
         <div class="setrow">
           <div class="lab">
-            <b>Entangled password</b>
-            <span>{ent?.on ? "on — every YubiKey also asks for this password, before its PIN" : "off — a YubiKey opens the vault with its PIN and touch alone"}</span>
+            <b>{vaultCopy.password}</b>
+            <span>{ent?.on ? vaultCopy.passwordOn : vaultCopy.passwordOff}</span>
           </div>
           <div class="ctl">
             {#if ent?.on}
-              <button type="button" class="btn sm" disabled={!unlocked || tampered} onclick={() => (entangling = "change")}>Change…</button>
-              <button type="button" class="btn sm" disabled={!unlocked || tampered} onclick={() => (entangling = "off")}>Turn off…</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => (entangling = "change")}>{vaultCopy.change}</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => (entangling = "off")}>{vaultCopy.turnOff}</button>
             {:else}
-              <button type="button" class="btn sm" disabled={!unlocked || tampered || !ent?.canEnable} title={entangleBlocked ? "Every key would then need this password — add a recovery key first." : undefined} onclick={() => (entangling = "on")}>Turn on…</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered || !ent?.canEnable} title={greyed ?? (entangleBlocked ? vaultCopy.passwordBlockedShort : undefined)} onclick={() => (entangling = "on")}>{vaultCopy.turnOn}</button>
             {/if}
           </div>
         </div>
@@ -235,16 +256,17 @@
           <div class="bar attention">
             <svg class="i i-14"><use href="#i-warn" /></svg>
             <div class="why">
-              <span>{ent?.reason && ent.reason !== "vault.invariant" ? codeText(ent.reason) : "Every way into this vault is a YubiKey, so one password would then stand in front of all of them. Add a recovery key first."}</span>
-              <button type="button" class="btn link" onclick={addRecoveryKey}>Add a recovery key…</button>
+              <span>{ent?.reason && ent.reason !== "vault.invariant" ? codeText(ent.reason) : vaultCopy.passwordBlocked}</span>
+              <!-- The cure is a command, so a button (APP.md §6, Controls). -->
+              <button type="button" class="btn sm" onclick={addRecoveryKey}>{commandCopy.addRecoveryKey}</button>
             </div>
           </div>
         {/if}
         {#if (st?.retiredCopies ?? 0) > 0 && st?.retiredPath}
-          <div class="setrow"><div class="lab"><b>Replaced copies</b><span>{st.retiredCopies} in Enfold's folder, kept when a vault was replaced; yours to delete.</span></div><div class="ctl"><button type="button" class="btn sm" onclick={() => void Shell.Reveal(st?.retiredPath ?? "")}>Show</button></div></div>
+          <div class="setrow"><div class="lab"><b>{vaultCopy.replacedCopies}</b><span>{vaultCopy.replacedLine(st.retiredCopies)}</span></div><div class="ctl"><button type="button" class="btn link" onclick={() => void Shell.Reveal(st?.retiredPath ?? "")}>{vaultCopy.show}</button></div></div>
         {/if}
         {#if st?.damagedCopyPath}
-          <div class="setrow"><div class="lab"><b>Damaged copy</b><span>Kept in Enfold's folder when the vault was rebuilt, for whatever can be salvaged from it; yours to delete.</span></div><div class="ctl"><button type="button" class="btn sm" onclick={() => void Shell.Reveal(st?.damagedCopyPath ?? "")}>Show</button></div></div>
+          <div class="setrow"><div class="lab"><b>{vaultCopy.damagedCopy}</b><span>{vaultCopy.damagedLine}</span></div><div class="ctl"><button type="button" class="btn link" onclick={() => void Shell.Reveal(st?.damagedCopyPath ?? "")}>{vaultCopy.show}</button></div></div>
         {/if}
       </div>
     </div>
@@ -253,61 +275,64 @@
 
 
 {#if adding}
-  <Dialog title="Add a key" onclose={() => (adding = false)}>
-    <p>The vault asks for a current way in first, then adds the new one.</p>
+  <Dialog title={dialogCopy.addUnlockMethod.title} onclose={() => (adding = false)}>
+    <p>{dialogCopy.addUnlockMethod.body}</p>
     <div class="field">
-      <div class="field-top"><label for="ak-kind">Kind</label></div>
+      <div class="field-top"><label for="ak-kind">{dialogCopy.addUnlockMethod.kind}</label></div>
       <select id="ak-kind" class="input" bind:value={addKind}>
-        <option value="token">YubiKey (PIN + touch)</option>
-        <option value="password" disabled={st?.hasHardwareSlot}>Password{st?.hasHardwareSlot ? " — not with a hardware key in the vault" : ""}</option>
-        <option value="recovery">Another recovery key</option>
+        <option value="token">{dialogCopy.addUnlockMethod.token}</option>
+        <option value="password" disabled={st?.hasHardwareSlot}>{st?.hasHardwareSlot ? dialogCopy.addUnlockMethod.passwordNotHere : dialogCopy.addUnlockMethod.password}</option>
+        <option value="recovery">{dialogCopy.addUnlockMethod.recovery}</option>
       </select>
     </div>
     {#if addKind === "password"}
-      <p>You choose the password once the current way in is checked.</p>
+      <p>{dialogCopy.addUnlockMethod.passwordNext}</p>
     {:else}
       <div class="field">
         <!-- The placeholder says what an empty field produces — a key is
              named after its serial number by the core — and a recovery
              key, which must be named, has none: an invented name there
              read as a default already filled in. -->
-        <div class="field-top"><label for="ak-label">{addKind === "token" ? "Name this key" : "Name this recovery key"}</label><span class="hint">{addKind === "token" ? "Optional" : "Shown in the list of ways in."}</span></div>
-        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? "Named after its serial number" : undefined} />
+        <div class="field-top"><label for="ak-label">{addKind === "token" ? dialogCopy.addUnlockMethod.nameKey : dialogCopy.addUnlockMethod.nameRecovery}</label><span class="hint">{addKind === "token" ? dialogCopy.addUnlockMethod.optional : dialogCopy.addUnlockMethod.nameRecoveryHint}</span></div>
+        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? dialogCopy.addUnlockMethod.keyPlaceholder : undefined} />
       </div>
     {/if}
     {#if addKind === "token" && ent?.on}
       <!-- The vault's switch is inherited, never chosen per key: the new
            key is wrapped from the kept K_P offline (APP.md §13). -->
-      <p>This vault's entangled password is on, so this key will ask for it too. Nothing is asked for here.</p>
+      <p>{dialogCopy.addUnlockMethod.passwordInherited}</p>
     {/if}
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (adding = false)}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} onclick={() => { adding = false; void begin(Keys.BeginEnroll(addKind, addKind === "password" ? "Password" : addLabel)); addLabel = ""; }}>Add</button>
+      <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} title={!addLabel && addKind === "recovery" ? dialogCopy.addUnlockMethod.needName : undefined} onclick={() => { adding = false; void begin(Keys.BeginEnroll(addKind, addKind === "password" ? "Password" : addLabel)); addLabel = ""; }}>{dialogCopy.addUnlockMethod.primary}</button>
+      <button type="button" class="btn" onclick={() => (adding = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
 
 {#if removing && sel}
-  <Dialog title="Remove {sel.label}?" onclose={() => (removing = false)}>
-    <p>This way in stops working here at once, but a copy of the vault made earlier still opens with it, and what it opens there reaches this vault too until every recovery key that copy held is replaced and the vault key is then rotated. The vault refuses if fewer than 2 independent ways in would remain.</p>
+  <!-- The dialog template (strings.ts): the consequence, then what still
+       opens; the mechanism behind "How this works" (ruled 2026-10-17). -->
+  <Dialog title={dialogCopy.removeUnlockMethod.title(sel.label)} onclose={() => (removing = false)}>
+    <p>{dialogCopy.removeUnlockMethod.body(sel.label)}</p>
+    <details class="how"><summary>{dialogCopy.howThisWorks}</summary><p>{dialogCopy.removeUnlockMethod.how}</p></details>
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (removing = false)}>Cancel</button>
-      <button type="button" class="btn danger-fill" onclick={() => { removing = false; void begin(Keys.RemoveSlot(sel.recipientId)); }}>Remove</button>
+      <button type="button" class="btn danger-fill" onclick={() => { removing = false; void begin(Keys.RemoveSlot(sel.recipientId)); }}>{dialogCopy.removeUnlockMethod.primary}</button>
+      <button type="button" class="btn" onclick={() => (removing = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
 
 {#if rotating}
-  <Dialog title="Rotate the vault key?" onclose={() => (rotating = false)}>
-    <p>Every way in is rewrapped to a fresh key here and now — no YubiKey needs to be present, and nothing is deferred. A copy of the vault made before this rotation still opens with the ways in it held, so no copy is kept beside it.</p>
-    <div class="setrow"><div class="lab"><b>Last backup</b><span>{store.lastExportAt ? dateTime(store.lastExportAt) : "none recorded here"}</span></div></div>
+  <Dialog title={dialogCopy.rekeyVault.title} onclose={() => (rotating = false)}>
+    <p>{dialogCopy.rekeyVault.body}</p>
+    <dl class="kv"><dt>{dialogCopy.rekeyVault.lastBackup}</dt><dd>{store.lastExportAt ? sinceText(store.lastExportAt, store.now) : dialogCopy.rekeyVault.noBackup}</dd></dl>
     {#if backupWanted}
-      <p>A backup holds the recovery slots only, so keeping one revokes nothing — and it is what brings the archives' keys back if this vault is lost.</p>
+      <p>{dialogCopy.rekeyVault.backupWhy}</p>
     {/if}
-    <label class="check"><input type="checkbox" bind:checked={rotateBackup} />Export a backup first</label>
+    <label class="check"><input type="checkbox" bind:checked={rotateBackup} />{dialogCopy.rekeyVault.backupFirst}</label>
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (rotating = false)}>Cancel</button>
-      <button type="button" class="btn accent" onclick={doRotate}>{rotateBackup ? "Back up, then rotate" : "Rotate"}</button>
+      <button type="button" class="btn accent" onclick={doRotate}>{rotateBackup ? dialogCopy.rekeyVault.primaryWithBackup : dialogCopy.rekeyVault.primary}</button>
+      <button type="button" class="btn" onclick={() => (rotating = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -319,17 +344,18 @@
 {#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel}
   <!-- the recovery key is revealed by App, above every route -->
 {:else if c}
-  <Dialog title={c.kind === "enroll" ? "Add a key" : c.kind === "remove" ? "Remove a key" : c.kind === "rotate" ? "Rotate the vault key" : c.kind === "reveal" ? "Show the recovery key" : c.kind === "entangle" ? "The vault's password" : "Export a backup"} onclose={escapeCeremony} dismissable={store.ceremonyIsOver}>
+  <Dialog title={vaultCopy.ceremonyTitle[c.kind] ?? vaultCopy.ceremonyTitle.export} onclose={escapeCeremony} dismissable={store.ceremonyIsOver}>
     <CeremonyPanel {c} onclose={closeCeremony} />
   </Dialog>
 {/if}
 
 <style>
-  .ks-head.top { margin-top: 12px; }
-  .backup { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-  .backup p { margin: 0; font-size: 12.5px; }
-  .backup .facts { padding: 0; }
+  .ks-head.top { margin-top: var(--s3); }
+  /* The ways in: separate cards, 4 apart, as .setcard's rows are. */
+  .slots { display: flex; flex-direction: column; gap: var(--s1); }
+  .backup { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s3); }
+  .backup p { margin: 0; }
   /* The invariant's reason and its cure, stacked: this card is the narrow
      column, where a bar's inline action would be a word per line. */
-  .why { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+  .why { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s1); min-width: 0; }
 </style>

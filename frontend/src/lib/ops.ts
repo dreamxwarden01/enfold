@@ -3,7 +3,7 @@
 // so the strip has one job — name what is running, move a bar by the bytes
 // the core reports, and offer *Cancel* where a cancel means something.
 import { plural } from "./format";
-import { dragOutCopy, reclaimedText } from "./strings";
+import { dragOutCopy, opCopy, reclaimedText } from "./strings";
 
 // opLabel is the running operation's name, as the strip says it: the verb
 // and what it is working on — *Adding 3 files*, *Adding 1 file*,
@@ -57,8 +57,11 @@ export function opLabel(kind: string, items = 0, phase = "", archive = ""): stri
     // machinery: *Reclaiming space*.
     case "reclaim":
       return named("Reclaiming space", "in", archive);
+    // A key rotation, in the words its button says (*Re-key archive…*,
+    // ruled 2026-10-17): *Re-keying Photos 2024*, or *Re-keying archive*
+    // with no name. The kind keeps the core's name.
     case "rotate":
-      return archive ? `Rotating the key of ${archive}` : "Rotating key";
+      return archive ? named(opCopy.rekeying, "", archive) : opCopy.rekeyingArchive;
   }
   return kind;
 }

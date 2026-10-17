@@ -5,7 +5,7 @@ import { Events } from "@wailsio/runtime";
 import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code } from "./api";
 import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
-import { codeText, moreNotOpened, openElsewhereText, warningCopy } from "./strings";
+import { codeText, moreNotOpened, openElsewhereText, purgedText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
@@ -349,7 +349,7 @@ class Store {
       // other change carries an empty list (APP.md §13).
       const purged = (e.data as ArchivesChanged | undefined)?.purged ?? [];
       if (purged.length) {
-        this.toast(purged.length === 1 ? `The key of "${purged[0]}" was dropped: it was forgotten more than 30 days ago.` : `${purged.length} forgotten archives' keys were dropped: ${purged.join(", ")}.`);
+        this.toast(purgedText(purged));
       }
       void this.refreshArchives();
     });

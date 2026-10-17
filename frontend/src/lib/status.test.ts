@@ -23,17 +23,23 @@ function stat(over: Partial<ArchiveStat> = {}): ArchiveStat {
 // The archive's status strip (APP.md §3, §6).
 describe("the status strip", () => {
   it("is singular at one file (ruled 2026-09-09: \"1 files\" was on the line)", () => {
-    expect(statusNote(stat({ files: 1 }))).toBe("1 file · 1.5 GB · key v1");
+    expect(statusNote(stat({ files: 1 }))).toBe("1 file · 1.5 GB");
   });
 
   it("counts and groups the rest", () => {
-    expect(statusNote(stat({ files: 12406 }))).toBe("12,406 files · 1.5 GB · key v1");
-    expect(statusNote(stat({ files: 0 }))).toBe("0 files · 1.5 GB · key v1");
+    expect(statusNote(stat({ files: 12406 }))).toBe("12,406 files · 1.5 GB");
+    expect(statusNote(stat({ files: 0 }))).toBe("0 files · 1.5 GB");
   });
 
   it("names the last save only once there has been one", () => {
     expect(statusNote(stat({ lastSavedAt: 0 }))).not.toMatch(/last saved/);
     expect(statusNote(stat({ lastSavedAt: 1_757_000_000 }))).toMatch(/· last saved \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  });
+
+  // The key version is a format word: Technical details carries it
+  // (APP.md §7, ruled 2026-10-17).
+  it("never names the key version", () => {
+    expect(statusNote(stat({ keyVersion: 3, lastSavedAt: 1_757_000_000 }))).not.toMatch(/key|v3/);
   });
 
   it("is empty with no archive open", () => {
@@ -67,12 +73,12 @@ describe("the free space on the strip", () => {
   });
 
   it("is appended to the line above it", () => {
-    expect(statusNote(stat({ freeSpace: 3_100_000_000 }))).toBe("1 file · 1.5 GB · key v1 · 2.9 GB unused");
+    expect(statusNote(stat({ freeSpace: 3_100_000_000 }))).toBe("1 file · 1.5 GB · 2.9 GB unused");
   });
 
   it("comes after the last save, so the figures the file has always had come first", () => {
     expect(statusNote(stat({ files: 2, lastSavedAt: 1_757_000_000, freeSpace: 3_100_000_000 }))).toMatch(
-      /^2 files · 1\.5 GB · key v1 · last saved .* · 2\.9 GB unused$/,
+      /^2 files · 1\.5 GB · last saved .* · 2\.9 GB unused$/,
     );
   });
 });

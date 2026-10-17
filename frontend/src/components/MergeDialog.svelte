@@ -1,12 +1,15 @@
 <script lang="ts">
-  // Import records… (APP.md §13): a backup or another copy of this vault
-  // is opened over a staged copy and proved before anything is listed.
+  // Import archives from a backup… (APP.md §13; *Import records…* until
+  // 2026-10-17): a backup or another copy of this vault is opened over a
+  // staged copy and proved before anything is listed. The screen says
+  // archives and unlock methods; the registry, its records, the VMK and
+  // the generation are this comment's words, not the dialog's.
   // Three moments in one dialog —
   //   1. the proof step, which says what the file is and, from its own
   //      plaintext recovery slots, which key would be wanted if no VMK of
   //      this vault opens it: the claim informs and decides nothing;
   //   2. the ceremony (kind `records`), rendered through the shared panel,
-  //      since the Keys page deliberately leaves this kind alone;
+  //      since the Vault page deliberately leaves this kind alone;
   //   3. the checklist, from the rows the core classified by running the
   //      merge on the copy, so the row and the write cannot disagree.
   // Nothing of that file is installed, and the handle dies with the
@@ -14,9 +17,9 @@
   import { CeremonyStep, Vault, errorOf } from "../lib/api";
   import type { FileInfo, IncomingRecord } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText } from "../lib/strings";
-  import { date, dateTime, keyId, leaf } from "../lib/format";
-  import { actionLabel, actionNote, actionOf, defaultTicks, differLine, incomingOf, summarise, tamperedNote, tickable, tickedIds } from "../lib/merge";
+  import { chipCopy, codeText, dialogCopy, importCopy, lockCopy, vaultCopy } from "../lib/strings";
+  import { date, dateTime, keyId, leaf, plural } from "../lib/format";
+  import { actionOf, defaultTicks, differLine, incomingOf, summarise, tickable, tickedIds } from "../lib/merge";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
 
@@ -35,12 +38,14 @@
   // landed yet, so the proof screen does not flash back.
   let reading = $state(false);
 
-  // This page's ceremony, and only this one: the Keys page renders every
+  // This page's ceremony, and only this one: the Vault page renders every
   // other kind.
   const cer = $derived(store.ceremony && store.ceremony.kind === "records" ? store.ceremony : null);
   const rows = $derived<IncomingRecord[]>(store.merge?.records ?? []);
   const listed = $derived(!!store.merge);
-  const tamperedBar = $derived(tamperedNote(!!store.merge?.tampered));
+  // The file failed its own check (APP.md §13, R25): said in user words —
+  // which part of it, and why the rows still stand, is the spec's.
+  const tamperedBar = $derived(store.merge?.tampered ? "Something changed that file after it was written, so do not keep it or trust it as a backup. The archives in it can still be imported." : "");
   const sum = $derived(summarise(rows, ticks));
 
   function fail(e: unknown) {
@@ -84,7 +89,7 @@
 
   // The first ceremony event ends the staging note; a ceremony that is
   // cancelled drops to null and the proof screen comes back, rather than
-  // leaving "Staging a copy of the file…" standing with nothing behind it
+  // leaving "Opening a copy of the file…" standing with nothing behind it
   // (APP.md §6).
   $effect(() => {
     if (cer) reading = false;
@@ -134,62 +139,91 @@
     ticks = { ...ticks, [id]: on };
   }
 
+  // A row's chip in the chips' own words, in sentence case (chipCopy,
+  // ruled 2026-10-17); what each action does is lib/merge.ts's.
+  function chip(r: IncomingRecord): string {
+    switch (actionOf(r)) {
+      case "add":
+        return chipCopy.new;
+      case "version":
+        return chipCopy.update;
+      case "forgotten":
+        return chipCopy.forgotten;
+    }
+    return chipCopy.alreadyHere;
+  }
+
+  // What ticking the row does, in the screen's words: archives, not
+  // records or key versions (the glossary, ruled 2026-10-17).
+  function note(r: IncomingRecord): string {
+    switch (actionOf(r)) {
+      case "add":
+        return "Not in this vault yet.";
+      case "version":
+        return "Already in this vault; this copy adds what it is missing.";
+      case "forgotten":
+        return r.forgottenAt ? `Forgotten here on ${date(r.forgottenAt)}. Ticking it restores it.` : "Forgotten here. Ticking it restores it.";
+    }
+    return "Already in this vault.";
+  }
+
   const recoveryLines = $derived((info?.recoverySlots ?? []).map((s) => ({ label: s.label, id: keyId(s.recipientId), createdAt: s.createdAt })));
 </script>
 
-<!-- Esc is the Cancel or the Discard, and nothing while the merge is
-     being written: a discard under a running merge dropped the handle the
+<!-- Esc is the Cancel, and nothing while the merge is being
+     written: a cancel under a running merge dropped the handle the
      merge was using (APP.md §7). -->
-<Dialog title="Import records" wide onclose={merging ? undefined : close}>
+<Dialog title={importCopy.archivesTitle} wide onclose={merging ? undefined : close}>
   {#if listed}
-    <p class="t-sub">Ticked records are written into this vault's registry. Nothing of that file is installed, and this vault's own values are kept wherever the two differ.</p>
+    <p class="t-sub">{importCopy.archivesBody}</p>
     <!-- The file failed its own R25 check: a fact about the file, not about
          any row, so it stands above the list and the ticks still work
          (APP.md §13). -->
     {#if tamperedBar}
       <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{tamperedBar}</span></div>
     {/if}
-    <div class="merge-list" role="group" aria-label="Incoming records">
+    <div class="merge-list" role="group" aria-label="Archives in that file">
       {#each rows as r (r.archiveId)}
         <div class="mrow" class:skip={!tickable(r)}>
           <input type="checkbox" id="mg-{r.archiveId}" checked={!!ticks[r.archiveId]} disabled={!tickable(r)} onchange={(e) => tick(r.archiveId, e.currentTarget.checked)} />
           <div class="mbody">
-            <label for="mg-{r.archiveId}"><b>{r.name || "(unnamed)"}</b><span class="tag">{actionLabel(r)}</span></label>
-            {#if actionOf(r) === "forgotten" && r.forgottenAt}
-              <span class="note">forgotten here on {date(r.forgottenAt)} — ticking it is an explicit restore</span>
-            {:else}
-              <span class="note">{actionNote(r)}</span>
-            {/if}
+            <label for="mg-{r.archiveId}"><b>{r.name || "(unnamed)"}</b><span class="tag">{chip(r)}</span></label>
+            <span class="note">{note(r)}</span>
             {#if differLine(r.differs)}<span class="note diff">{differLine(r.differs)}</span>{/if}
           </div>
           <div class="mmeta num">{r.createdAt ? date(r.createdAt) : "—"}</div>
         </div>
       {/each}
-      {#if rows.length === 0}<div class="empty">That file names no archive this vault could take.</div>{/if}
+      {#if rows.length === 0}<div class="empty">That file has no archive this vault could take.</div>{/if}
     </div>
   {:else if cer}
     <CeremonyPanel c={cer} onclose={close} />
   {:else if reading}
-    <p class="t-sub">Staging a copy of the file…</p>
+    <p class="t-sub">Opening a copy of the file…</p>
   {:else}
-    <p class="t-sub">A copy of the file is opened here and proved before anything is listed: this vault's key first, and its own recovery key only if no key of this vault opens it.</p>
-    <div class="kv">
-      <div class="k">File</div>
-      <div class="v" title={path}>{leaf(path)}</div>
-      <div class="k">What it is</div>
-      <div class="v">{info ? (info.kind === "backup" ? "a backup — recovery slots only" : "a full vault") : looked ? "unreadable" : "reading…"}</div>
+    <!-- Consequence first, then what opens it (the dialog template, ruled
+         2026-10-17): this vault's own unlock methods, else the file's
+         recovery key. -->
+    <p class="t-sub">Nothing changes until you choose which archives to import. The file opens with one of this vault's unlock methods, or with its own recovery key if none of them opens it.</p>
+    <!-- The file's own facts as the one label · value list (APP.md §6);
+         the name alone, the whole path in its title. The words are
+         *Inspect a backup…*'s, which reads the same label, save a backup's
+         kind: there it opens with its recovery key only, but here this
+         vault's own keys are tried first, so the fact makes no claim about
+         how the file opens and leaves that to the body (APP.md §13). -->
+    <dl class="kv">
+      <div><dt>{vaultCopy.inspected.file}</dt><dd title={path}>{leaf(path)}</dd></div>
+      <div><dt>{vaultCopy.inspected.kind}</dt><dd>{info ? (info.kind === "backup" ? "A backup" : vaultCopy.inspected.vault) : looked ? "Could not be read" : "Reading…"}</dd></div>
       {#if info}
-        <div class="k">Dated</div>
-        <div class="v">{dateTime(info.modifiedAt)}</div>
-          <div class="k">Claims to be</div>
-        <div class="v">{info.vaultMatches ? "this vault" : "another vault"} · generation {info.generation}</div>
-        {/if}
-    </div>
+        <div><dt>{vaultCopy.inspected.dated}</dt><dd class="num">{dateTime(info.modifiedAt)}</dd></div>
+        <div><dt>{vaultCopy.inspected.thisVault}</dt><dd>{info.vaultMatches ? vaultCopy.inspected.yes : vaultCopy.inspected.no}</dd></div>
+      {/if}
+    </dl>
     {#if recoveryLines.length > 0}
       <div class="bar">
         <svg class="i i-14"><use href="#i-recovery" /></svg>
         <div class="grow">
-          <span>If no key of this vault opens it — another vault's file, or a backup from a generation this vault no longer keeps — its own recovery key is asked for. That file names {recoveryLines.length === 1 ? "one recovery key" : `${recoveryLines.length} recovery keys`}:</span>
+          <span>If no unlock method of this vault opens it, its own recovery key is asked for. That file has {plural(recoveryLines.length, "recovery key")}:</span>
           <ul class="slotlist">
             {#each recoveryLines as s (s.label + s.id)}
               <li>{s.label}{s.id ? ` · ${s.id}` : ""} · {date(s.createdAt)}</li>
@@ -201,15 +235,21 @@
   {/if}
 
   {#snippet actions()}
+    <!-- The act first and the way out after it, in the foot band's equal
+         widths (APP.md §6, Controls; ruled 2026-10-17). -->
     {#if listed}
-      <button type="button" class="btn" disabled={merging} onclick={close}>Discard</button>
-      <button type="button" class="btn accent" disabled={merging || sum.total === 0} onclick={merge}>{merging ? "Writing…" : sum.total === 0 ? "Nothing ticked" : `Merge ${sum.total} record${sum.total === 1 ? "" : "s"}`}</button>
+      <!-- [Import 2 archives] [Cancel] (the verb table, ruled 2026-10-17):
+           the count is the ticks', and with none ticked the verb stands
+           alone, greyed. Cancel discards what was read. -->
+      <button type="button" class="btn accent" disabled={merging || sum.total === 0} onclick={merge}>{merging ? dialogCopy.working : importCopy.archivesPrimary(sum.total)}</button>
+      <button type="button" class="btn" disabled={merging} onclick={close}>{dialogCopy.cancel}</button>
     {:else if !cer && !reading}
-      <button type="button" class="btn" onclick={close}>Cancel</button>
-      <button type="button" class="btn accent" disabled={!looked} onclick={read}>Read the records</button>
+      <!-- What happens next is the unlock that opens the file. -->
+      <button type="button" class="btn accent" disabled={!looked} onclick={read}>{lockCopy.continue}</button>
+      <button type="button" class="btn" onclick={close}>{dialogCopy.cancel}</button>
     {:else if !cer}
       <!-- staging: nothing to cancel yet in the core -->
-      <button type="button" class="btn" onclick={close}>Cancel</button>
+      <button type="button" class="btn" onclick={close}>{dialogCopy.cancel}</button>
     {/if}
     <!-- While the ceremony runs the panel carries its own Cancel (APP.md §6). -->
   {/snippet}

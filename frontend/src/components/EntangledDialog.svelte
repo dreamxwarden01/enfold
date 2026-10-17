@@ -6,11 +6,12 @@
   // the ceremony that follows — a typed secret never rides a bound-method
   // argument (APP.md §1) — and **the old password is never a field here**
   // (the ruling of 2026-09-07): whoever reaches this page already holds
-  // the VMK and could enrol a way in of their own, so asking for the old
-  // one would be friction and not a guard.
+  // the VMK and could enrol an unlock method of their own. Why is the
+  // disclosure's, not the body's: the body says what changes for the
+  // user, the dialog template (strings.ts, ruled 2026-10-17).
   import { Keys, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText } from "../lib/strings";
+  import { codeText, dialogCopy } from "../lib/strings";
   import Dialog from "./Dialog.svelte";
 
   interface Props {
@@ -19,8 +20,8 @@
   }
   let { mode, onclose }: Props = $props();
 
-  const title = $derived(mode === "on" ? "Require a password with every YubiKey?" : mode === "change" ? "Change the vault's password" : "Stop requiring a password?");
-  const act = $derived(mode === "on" ? "Turn on" : mode === "change" ? "Change" : "Turn off");
+  const copy = $derived(mode === "on" ? dialogCopy.passwordOn : mode === "change" ? dialogCopy.passwordChange : dialogCopy.passwordOff);
+  const how = $derived(mode === "on" ? dialogCopy.passwordOn.how : mode === "change" ? dialogCopy.passwordChange.how : "");
 
   async function go() {
     onclose();
@@ -37,19 +38,15 @@
   }
 </script>
 
-<Dialog {title} {onclose}>
-  {#if mode === "on"}
-    <p>Every YubiKey in this vault will ask for this password beside its PIN. A stolen key alone will not open the vault; a forgotten password will not shut you out, because the recovery key and any standalone password are untouched by it.</p>
-    <p>You choose it in the next step and type it twice. The vault asks for a way in first, then re-wraps every YubiKey without needing one present.</p>
-  {:else if mode === "change"}
-    <p>You choose the new password in the next step and type it twice. Every YubiKey is re-wrapped to it at once, and none needs to be present.</p>
-    <p>The old password is not asked for. Anyone who can reach this page has already opened the vault and could add a way in of their own, so asking would be friction and not a guard.</p>
-  {:else}
-    <p>The vault's YubiKeys stop asking for a password: each will open the vault with its PIN and touch alone. Every key is re-wrapped at once, and none needs to be present.</p>
-    <p>The old password is not asked for, and nothing else about the vault changes.</p>
+<Dialog title={copy.title} {onclose}>
+  <p>{copy.body}</p>
+  <!-- The body keeps to 2 sentences; that the password is chosen next
+       goes with the mechanism, behind the disclosure (direction 8). -->
+  {#if how}
+    <details class="how"><summary>{dialogCopy.howThisWorks}</summary><p>{mode === "on" ? `${dialogCopy.passwordOn.next} ${how}` : how}</p></details>
   {/if}
   {#snippet actions()}
-    <button type="button" class="btn" onclick={onclose}>Cancel</button>
-    <button type="button" class="btn accent" onclick={go}>{act}</button>
+    <button type="button" class="btn accent" onclick={go}>{copy.primary}</button>
+    <button type="button" class="btn" onclick={onclose}>{dialogCopy.cancel}</button>
   {/snippet}
 </Dialog>

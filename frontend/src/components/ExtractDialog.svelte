@@ -10,7 +10,9 @@
   // a folder: the prefill is the rule; the policy last chosen is kept while
   // Enfold runs (lib/extract.ts). The destination need not exist: the core
   // creates it. The dialog is a form: Enter in the field extracts, and the
-  // field has the focus as it opens.
+  // field has the focus as it opens. The field has no placeholder: an
+  // invented path read as where an empty field would extract to, and an
+  // empty field extracts nowhere (APP.md §7, ruled 2026-10-17).
   import { untrack } from "svelte";
   import Dialog from "./Dialog.svelte";
   import { Shell } from "../lib/api";
@@ -18,8 +20,8 @@
   import { extractCopy } from "../lib/strings";
 
   interface Props {
-    // what is being extracted, for the title: "everything in this
-    // archive", "2 files and 1 folder"
+    // what is being extracted, for the title: "everything in Photos
+    // 2024" (the archive named, ruled 2026-10-17), "2 files and 1 folder"
     label: string;
     // the destination the rule of §3 prefills, empty when the archive's
     // own folder is not known
@@ -56,10 +58,10 @@
 
 <Dialog title="Extract {label}" onclose={oncancel} onsubmit={go}>
   <div class="field">
-    <div class="field-top"><label for="xd">Destination folder</label><span class="hint">created if it is not there yet</span></div>
+    <div class="field-top"><label for="xd">Destination folder</label><span class="hint">Created if it is not there yet</span></div>
     <div class="row">
       <input
-        id="xd" class="input" bind:value={dir} placeholder="D:\Extracted"
+        id="xd" class="input" bind:value={dir}
         class:invalid={attempted && empty}
         aria-invalid={attempted && empty ? "true" : undefined}
         aria-describedby={attempted && empty ? "xd-said" : undefined}
@@ -82,12 +84,15 @@
   </fieldset>
 
   {#snippet actions()}
-    <button type="button" class="btn" onclick={oncancel}>Cancel</button>
     <button type="submit" class="btn accent">Extract</button>
+    <button type="button" class="btn" onclick={oncancel}>Cancel</button>
   {/snippet}
 </Dialog>
 
 <style>
-  .policies { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-  .policies .lbl { font-size: 12.5px; font-weight: 600; color: var(--ink); padding: 0 0 2px; }
+  /* A fieldset that is a .field (APP.md §6, Type and spacing): the options
+     stand 8 apart, and the legend — which sits outside the column's gap —
+     is a field label, strong, 8 above the first of them. */
+  .policies { border: 0; margin: 0; padding: 0; }
+  .policies .lbl { font: var(--t-strong); color: var(--ink); padding: 0 0 var(--s2); }
 </style>

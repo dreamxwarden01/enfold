@@ -1,13 +1,14 @@
 <script lang="ts">
-  // Importing a vault or a backup (APP.md §2.1, §6): pick the file, see
-  // what it is and what will happen, confirm a replacement by name, then
-  // the ceremony proves the file on the lock screen. The secret itself —
-  // the recovery key, a password, a PIN — is never a field here.
+  // Replacing the vault with a copy, or restoring one at first run (APP.md
+  // §2.1, §6; the two titles ruled 2026-10-17): pick the file, see what it
+  // is and what will happen, confirm a replacement by name, then the
+  // ceremony proves the file on the lock screen. The secret itself — the
+  // recovery key, a password, a PIN — is never a field here.
   import { Shell, Vault, VaultState, errorOf } from "../lib/api";
   import type { FileInfo } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { codeText } from "../lib/strings";
-  import { dateTime, leaf } from "../lib/format";
+  import { codeText, dialogCopy, importCopy, vaultCopy } from "../lib/strings";
+  import { dateTime, leaf, plural } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
   import TextField from "./TextField.svelte";
@@ -20,6 +21,9 @@
 
   const st = $derived(store.status);
   const kept = $derived(!!st && st.state !== VaultState.StateNone);
+  // With a vault kept here the file replaces it; at first run it is
+  // restored, there being nothing to replace.
+  const title = $derived(kept ? importCopy.replaceTitle : importCopy.restoreTitle);
 
   let path = $state("");
   let info = $state<FileInfo | null>(null);
@@ -42,14 +46,23 @@
   const eff = $derived(isBackup ? "copy" : mode);
   const ways = $derived.by(() => {
     const out: Array<{ v: "token" | "password" | "recovery"; t: string }> = [];
-    if (info?.hardware) out.push({ v: "token", t: "YubiKey (PIN + touch)" });
-    if (info?.password) out.push({ v: "password", t: "Password" });
+    if (info?.hardware) out.push({ v: "token", t: dialogCopy.addUnlockMethod.token });
+    if (info?.password) out.push({ v: "password", t: dialogCopy.addUnlockMethod.password });
     out.push({ v: "recovery", t: "Recovery key" });
     return out;
   });
+  // A vault's unlock methods by kind, counted ("1 YubiKey, 1 recovery key").
+  const methods = $derived(
+    info
+      ? ([[info.hardware, "YubiKey"], [info.password, "password"], [info.recovery, "recovery key"]] as [number, string][])
+          .filter(([n]) => n > 0)
+          .map(([n, w]) => plural(n, w))
+          .join(", ")
+      : "",
+  );
 
   async function pick() {
-    const p = (await Shell.PickFiles("Import a vault or a backup", false)) ?? [];
+    const p = (await Shell.PickFiles(title, false)) ?? [];
     if (p.length) await inspect(p[0]);
   }
 
@@ -106,9 +119,9 @@
   });
 </script>
 
-<Dialog title="Import a vault or a backup" {onclose}>
+<Dialog {title} {onclose}>
   <div class="field">
-    <div class="field-top"><label for="im-path">File</label></div>
+    <div class="field-top"><label for="im-path">{vaultCopy.file}</label></div>
     <div class="row">
       <input id="im-path" class="input grow" readonly value={path} placeholder="A vault.eks, or a backup exported by Enfold" />
       <button type="button" class="btn" onclick={pick}>Choose…</button>
@@ -119,21 +132,22 @@
   {:else if problem}
     <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{problem}</span></div>
   {:else if info}
-    <dl class="facts plain">
-      <div class="fact"><dt>What it is</dt><dd>{isBackup ? "A backup — opens with its recovery key only" : `A vault — ${info.hardware} YubiKey, ${info.password} password, ${info.recovery} recovery key`}</dd></div>
-      <div class="fact"><dt>Dated</dt><dd>{dateTime(info.modifiedAt)}</dd></div>
+    <dl class="kv">
+      <dt>{vaultCopy.inspected.kind}</dt><dd>{isBackup ? vaultCopy.inspected.backup : vaultCopy.inspected.vault}</dd>
+      {#if !isBackup}<dt>{importCopy.methods}</dt><dd>{methods}</dd>{/if}
+      <dt>{vaultCopy.inspected.dated}</dt><dd>{dateTime(info.modifiedAt)}</dd>
       {#if kept}
-        <div class="fact"><dt>This vault</dt><dd>{info.vaultMatches ? (info.newer ? "yes — newer than the one kept here" : "yes — not newer than the one kept here") : "no — another vault"}</dd></div>
+        <dt>{vaultCopy.inspected.thisVault}</dt><dd>{info.vaultMatches ? (info.newer ? "Yes, and newer than this one" : "Yes, and not newer than this one") : vaultCopy.inspected.no}</dd>
       {/if}
     </dl>
-    <TextField id="im-name" label="Name" bind:value={name} bind:valid={nameValid} {attempt} />
+    <TextField id="im-name" label={vaultCopy.name} bind:value={name} bind:valid={nameValid} {attempt} />
     {#if isBackup}
-      <p>It is copied into Enfold's folder and opened with its recovery key; you then choose the first way in, as when creating a vault. Archives added after this backup was made are not in it.</p>
+      <p>{kept ? importCopy.backupReplaces : importCopy.backupRestores}</p>
       <FirstWayIn bind:kind bind:label bind:entangle idPrefix="im" />
     {:else}
-      <p>It is copied into Enfold's folder and must unlock with one of its own ways in first — that is what makes it yours, not what the file says about itself. Then unlock it as usual.</p>
+      <p>{kept ? importCopy.vaultReplaces : importCopy.vaultRestores}</p>
       <div class="field">
-        <div class="field-top"><label for="im-method">Prove it with</label></div>
+        <div class="field-top"><label for="im-method">{importCopy.proveWith}</label></div>
         <select id="im-method" class="input" bind:value={method}>
           {#each ways as w (w.v)}<option value={w.v}>{w.t}</option>{/each}
         </select>
@@ -144,27 +158,22 @@
     {:else if kept && st}
       <div class="bar attention">
         <svg class="i i-14"><use href="#i-warn" /></svg>
-        <span>{eff === "inplace" ? "Enfold switches to this file" : "Importing replaces the vault kept here"} — <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {eff === "inplace" || st.keptElsewhere ? `It stays where it is${st.keptElsewhere ? ", at " + st.path : ""}, untouched.` : "It is kept beside the new one as a dated copy, never deleted."} Its ways in stay valid for it; the archives it holds the keys to open only with it.</span>
+        <span>{eff === "inplace" ? "Enfold switches to this file from" : "This replaces"} <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {eff === "inplace" || st.keptElsewhere ? `It stays where it is${st.keptElsewhere ? ", at " + st.path : ""}, untouched` : "It is kept as a dated copy in Enfold's folder, never deleted"}: its own unlock methods still open it, and archives only it holds open only with it.</span>
       </div>
-      <label class="check"><input type="checkbox" bind:checked={confirm} />{eff === "inplace" ? "Switch to this file" : "Replace the vault kept here"} ({st.displayName})</label>
+      <label class="check"><input type="checkbox" bind:checked={confirm} />{eff === "inplace" ? "Switch to this file" : "Replace this vault"} ({st.displayName})</label>
     {/if}
     {#if !isBackup}
-      <p class="quiet">Advanced: {#if eff === "copy"}<button type="button" class="btn link" onclick={() => (mode = "inplace")}>use the file where it is</button> instead of copying it. Only on a BitLocker-protected fixed drive; removable media and network shares are outside Enfold's protection.{:else}the file stays where it is and becomes the vault by reference; nothing is copied, nothing is proved first. <button type="button" class="btn link" onclick={() => (mode = "copy")}>Copy it in instead</button>.{/if}</p>
+      <p class="t-quiet">Advanced: {#if eff === "copy"}<button type="button" class="btn link" onclick={() => (mode = "inplace")}>use the file where it is</button> instead of copying it. Only on a BitLocker-protected fixed drive; removable media and network shares are outside Enfold's protection.{:else}the file stays where it is and becomes the vault by reference; nothing is copied, nothing is proved first. <button type="button" class="btn link" onclick={() => (mode = "copy")}>Copy it in instead</button>.{/if}</p>
     {/if}
   {:else}
-    <p>Have the recovery key ready to import a backup: a backup opens with nothing else. A full vault opens with any of its ways in.</p>
+    <p>For a backup, have its recovery key ready: a backup opens with nothing else. A full vault opens with any of its unlock methods.</p>
   {/if}
   {#snippet actions()}
-    <button type="button" class="btn" onclick={onclose}>Cancel</button>
     {#if eff === "inplace"}
-      <button type="button" class="btn accent" disabled={!ready || openArchives > 0} onclick={useInPlace}>Use it here</button>
+      <button type="button" class="btn accent" disabled={!ready || openArchives > 0} onclick={useInPlace}>Use this file</button>
     {:else}
-      <button type="button" class="btn accent" disabled={!ready || openArchives > 0} onclick={doImport}>Import</button>
+      <button type="button" class="btn accent" disabled={!ready || openArchives > 0} onclick={doImport}>{kept ? "Replace vault" : "Restore vault"}</button>
     {/if}
+    <button type="button" class="btn" onclick={onclose}>{dialogCopy.cancel}</button>
   {/snippet}
 </Dialog>
-
-<style>
-  .facts.plain { padding: 0; }
-  .quiet { color: var(--ink-3); font-size: 12px; }
-</style>

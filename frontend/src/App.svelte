@@ -131,7 +131,7 @@
 <Toasts />
 
 <style>
-  .splash { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ink-3); }
-  .boot-failed { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--ink-2); font-size: 12.5px; }
+  .splash { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ink-2); }
+  .boot-failed { display: flex; flex-direction: column; align-items: center; gap: var(--s3); }
   .boot-failed p { margin: 0; }
 </style>

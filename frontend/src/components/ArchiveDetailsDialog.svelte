@@ -1,4 +1,9 @@
 <script lang="ts">
+  // *Technical details* (ruled 2026-10-17; it was *Details*): the second
+  // register, the one dialog where the format's words stand, each label
+  // from technicalCopy. The key version, the KID and the receipt live here
+  // and nowhere on the main surfaces.
+  //
   // One registry record read whole (APP.md §13): the versions table and
   // the record's values, rendered from what the details pane already
   // loaded — the record is read when the selection changes, not when this
@@ -17,6 +22,7 @@
   import { bytes, date, dateTime, hashText } from "../lib/format";
   import { methodWord } from "../lib/method";
   import { purgeAfter } from "../lib/retention";
+  import { archivesCopy, chipCopy, dialogCopy, technicalCopy } from "../lib/strings";
   import ContextMenu from "./ContextMenu.svelte";
   import Dialog from "./Dialog.svelte";
 
@@ -26,9 +32,13 @@
     // since 2026-10-14, and the number matters only around a rotation, so
     // it is read here, beside the KID it names. 0 when there is no row.
     keyVersion: number;
+    // receiptOwed is the row's too: a save whose receipt the registry has
+    // not taken yet. A format fact, so it left the pane for here (ruled
+    // 2026-10-17).
+    receiptOwed?: boolean;
     onclose: () => void;
   }
-  let { d, keyVersion, onclose }: Props = $props();
+  let { d, keyVersion, receiptOwed = false, onclose }: Props = $props();
 
   // The menu the right-click opened: where it is, and what it copies.
   let menu = $state<{ x: number; y: number; text: string } | null>(null);
@@ -49,66 +59,82 @@
     menu = { x: e.clientX, y: e.clientY, text };
   }
 
-  const policy = $derived(
-    [d.hidden ? "hidden" : "", d.alwaysRequireFullAuth ? "full unlock always (reserved, not enforced)" : ""].filter(Boolean).join(" · ") || "none set",
-  );
+  // The policy bits by their words, the line in sentence case like every
+  // value (ruled 2026-10-17).
+  const policy = $derived.by(() => {
+    const line = [d.hidden ? "hidden" : "", d.alwaysRequireFullAuth ? "full unlock always (reserved, not enforced)" : ""].filter(Boolean).join(" · ");
+    return line ? line[0].toUpperCase() + line.slice(1) : "None set";
+  });
   const purge = $derived(purgeAfter(d.forgottenAt));
 
   // long marks the rows whose value can be cut short: tooltips only there,
-  // never over text that is fully visible (APP.md §13). wrap marks the one
-  // value that is never cut at all — the hash, which takes a second line.
+  // never over text that is fully visible (APP.md §13). The path and the
+  // hash are never cut at all: they are the stacked list's, below, whose
+  // values wrap.
   interface Row {
     key: string;
     label: string;
     value: string;
     mono?: boolean;
+    num?: boolean;
     long?: boolean;
-    wrap?: boolean;
   }
-  const rows = $derived<Row[]>([
-    { key: "id", label: "Archive ID", value: d.archiveId, mono: true, long: true },
-    { key: "kid", label: "Current KID", value: d.currentKid || "—", mono: true, long: true },
-    { key: "keyv", label: "Key version", value: keyVersion > 0 ? `v${keyVersion}` : "—" },
-    { key: "created", label: "Created", value: dateTime(d.createdAt) },
-    { key: "path", label: "Last path", value: d.lastPath || "—", long: true },
-    { key: "size", label: "Last stored size", value: d.lastStoredSize ? bytes(d.lastStoredSize) : "—" },
-    { key: "saved", label: "Last saved", value: dateTime(d.lastWrittenAt) },
-    { key: "rev", label: "Revision", value: String(d.revision) },
-    { key: "writer", label: "Last writer", value: d.lastWriter || "—", mono: true, long: true },
-    { key: "seq", label: "Last seq / hash at seq", value: `${d.lastSeq} / ${d.hashAtSeq}` },
-    { key: "hash", label: "Ciphertext hash", value: hashText(d.lastCiphertextHash), mono: true, wrap: true },
+  const inline = $derived<Row[]>([
+    { key: "id", label: technicalCopy.archiveId, value: d.archiveId, mono: true, long: true },
+    { key: "kid", label: technicalCopy.currentKid, value: d.currentKid || "—", mono: true, long: true },
+    { key: "keyv", label: technicalCopy.keyVersion, value: technicalCopy.keyVersionValue(keyVersion) },
+    { key: "created", label: technicalCopy.created, value: dateTime(d.createdAt), num: true },
+    { key: "size", label: technicalCopy.lastStoredSize, value: d.lastStoredSize ? bytes(d.lastStoredSize) : "—", num: true },
+    { key: "saved", label: technicalCopy.lastSaved, value: dateTime(d.lastWrittenAt), num: true },
+    { key: "rev", label: technicalCopy.revision, value: String(d.revision), num: true },
+    { key: "writer", label: technicalCopy.lastWriter, value: d.lastWriter || "—", mono: true, long: true },
+    { key: "seq", label: technicalCopy.seq, value: `${d.lastSeq} / ${d.hashAtSeq}`, num: true, long: true },
     // The compression the archive was created with, by its word: every
     // writer of this archive follows it (FORMAT.md §7.1 bits 2-5).
-    { key: "method", label: "Compression", value: methodWord(d.method) },
-    { key: "policy", label: "Policy", value: policy },
+    { key: "method", label: archivesCopy.facts.compression, value: methodWord(d.method) },
+    { key: "policy", label: technicalCopy.policy, value: policy, long: true },
+    ...(receiptOwed ? [{ key: "receipt", label: technicalCopy.receipt, value: technicalCopy.receiptPending }] : []),
+  ]);
+  const stacked = $derived<Row[]>([
+    { key: "path", label: technicalCopy.lastPath, value: d.lastPath || "—" },
+    { key: "hash", label: technicalCopy.ciphertextHash, value: hashText(d.lastCiphertextHash), mono: true },
   ]);
 </script>
 
 <!-- Close is its one action, so the backdrop closes it too (APP.md §7). -->
-<Dialog title="Details — {d.name}" wide onclose={onclose} dismissable>
-  {#if d.description}<p class="t-sub desc">{d.description}</p>{/if}
+<Dialog title={technicalCopy.titleOf(d.name)} wide onclose={onclose} dismissable>
+  {#if d.description}<p class="t-sub">{d.description}</p>{/if}
   {#if purge}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>Forgotten on {date(d.forgottenAt)}. Its key is dropped at the first unlock after {date(purge)}.</span></div>
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{chipCopy.forgottenOn(date(d.forgottenAt))}. Its key is dropped at the first unlock after {date(purge)}.</span></div>
   {/if}
 
+  <!-- The record's values in the one label · value list (APP.md §6, Type
+       and spacing); the path and the hash in its stacked form, the label
+       over a value that wraps rather than being cut (APP.md §13). -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="kv">
-    {#each rows as r (r.key)}
-      <div class="k">{r.label}</div>
-      <div
-        class="v" class:mono={r.mono} class:wrap={r.wrap}
-        title={r.long ? r.value : undefined}
-        role="note"
-        oncontextmenu={(e) => askCopy(e, r.value)}
-      >{r.value}</div>
+  <dl class="kv">
+    {#each inline as r (r.key)}
+      <div>
+        <dt>{r.label}</dt>
+        <dd class:mono={r.mono} class:num={r.num} title={r.long ? r.value : undefined} oncontextmenu={(e) => askCopy(e, r.value)}>{r.value}</dd>
+      </div>
     {/each}
-  </div>
+  </dl>
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <dl class="kv stk">
+    {#each stacked as r (r.key)}
+      <div>
+        <dt>{r.label}</dt>
+        <dd class:mono={r.mono} oncontextmenu={(e) => askCopy(e, r.value)}>{r.value}</dd>
+      </div>
+    {/each}
+  </dl>
 
-  <h3 class="t-section vh">Key versions</h3>
+  <h3 class="t-section vh">{technicalCopy.keyVersions}</h3>
   <div class="tablewrap vers">
     <table>
       <colgroup><col /><col class="w-date" /><col class="w-date" /><col class="w-state" /></colgroup>
-      <thead><tr><th scope="col">KID</th><th scope="col">Created</th><th scope="col">Retired</th><th scope="col">State</th></tr></thead>
+      <thead><tr><th scope="col">{technicalCopy.columns.kid}</th><th scope="col">{technicalCopy.columns.created}</th><th scope="col">{technicalCopy.columns.retired}</th><th scope="col">{technicalCopy.columns.state}</th></tr></thead>
       <tbody>
         {#each d.versions ?? [] as v (v.kid)}
           <tr>
@@ -124,7 +150,7 @@
   </div>
 
   {#snippet actions()}
-    <button type="button" class="btn accent" onclick={onclose}>Close</button>
+    <button type="button" class="btn accent" onclick={onclose}>{dialogCopy.close}</button>
   {/snippet}
 </Dialog>
 
@@ -134,8 +160,9 @@
 {/if}
 
 <style>
-  .desc { margin: 0 0 4px; }
-  .vh { margin: 14px 0 0; }
+  /* A section heading stands a step further off than the parts of the
+     dialog (APP.md §6, Type and spacing). */
+  .vh { margin: var(--s3) 0 0; }
   /* The table takes its content's height: three rows are visible before it
      scrolls at all, and it never scrolls past eight — beyond that the
      modal's own scroll takes over (APP.md §13). It may not be squeezed by
@@ -143,5 +170,4 @@
   .vers { flex: 0 0 auto; max-height: 320px; }
   .w-date { width: 128px; }
   .w-state { width: 72px; }
-  .mono { font-family: var(--font-mono); font-size: 11.5px; }
 </style>

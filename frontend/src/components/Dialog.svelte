@@ -19,6 +19,9 @@
     // since it has a Cancel (ruled 2026-09-10).
     dismissable?: boolean;
     children: Snippet;
+    // actions: the dialog's buttons, drawn in its foot band (ruled
+    // 2026-10-17) — the accent or filled-danger action and its Cancel, in
+    // equal widths that wrap to rows of their own rather than spill.
     actions?: Snippet;
     wide?: boolean;
     // covered: another dialog stands over this one — it answers no key or
@@ -142,26 +145,38 @@
 
 <div class="backdrop" role="presentation" bind:this={backdrop} in:fade|global={motion()} out:fade|global={motion(LEAVE)} onmousedown={backdropDown} onclick={backdropClick}>
   <div class="dialog" class:wide role="dialog" aria-modal={covered ? undefined : true} aria-label={title} tabindex="-1" bind:this={box} inert={covered || undefined} in:scale|global={motion(FAST, { start: 0.97 })} out:fade|global={motion(LEAVE)}>
-    <h2>{title}</h2>
     {#if onsubmit}
-      <!-- display: contents keeps the box's own flex gaps between the
-           form's children, as if the form were not there. -->
-      <form class="dialog-form" novalidate onsubmit={submit}>
-        {@render children()}
-        {#if actions}
-          <div class="actions">{@render actions()}</div>
-        {/if}
-      </form>
+      <!-- display: contents makes the body and the foot the box's own
+           flex children, as if the form were not there. -->
+      <form class="dialog-form" novalidate onsubmit={submit}>{@render parts()}</form>
     {:else}
-      {@render children()}
-      {#if actions}
-        <div class="actions">{@render actions()}</div>
-      {/if}
+      {@render parts()}
     {/if}
   </div>
 </div>
 
+<!-- The body scrolls and the foot band stays (app.css, APP.md §6
+     Controls): `actions` is the foot — every dialog's buttons go there,
+     and the band draws them in equal widths. -->
+{#snippet parts()}
+  <div class="dialog-body">
+    <h2>{title}</h2>
+    {@render children()}
+  </div>
+  {#if actions}
+    <div class="dialog-foot">{@render actions()}</div>
+  {/if}
+{/snippet}
+
 <style>
+  /* 640, past WinUI ContentDialog's 548 cap, on purpose (checked
+     2026-10-17). The compare list's two columns and the import checklist
+     would keep at 548 (500 of content, 244 a column), but Technical
+     details' versions table would not: its KID, 32 hex digits in mono
+     beside two dates and a state, needs 231 px and gets 164 at 548, so a
+     key version could no longer be read off its row (APP.md §6, §13). At
+     640 it fits whole, and at the 880 px minimum window 640 still stands
+     clear of the edges. */
   .dialog.wide { width: 640px; }
   .dialog-form { display: contents; }
 </style>

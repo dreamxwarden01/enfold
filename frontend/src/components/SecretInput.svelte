@@ -243,6 +243,6 @@
 </form>
 
 <style>
-  .submit { margin-top: 12px; }
-  .pairfield { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+  .submit { margin-top: var(--s3); }
+  .pairfield { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s1); }
 </style>

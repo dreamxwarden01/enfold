@@ -19,5 +19,5 @@
 </div>
 
 <style>
-  .code { color: var(--ink-2); font-size: 0.92em; user-select: text; }
+  .code { user-select: text; }
 </style>

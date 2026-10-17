@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The close question (APP.md §2.4, ruled 2026-09-13: "we must not
+  // The close question (APP.md §2.3, ruled 2026-09-13: "we must not
   // default to going to the tray"). The shell cancels the first close —
   // the button, Alt+F4, the taskbar's close — and emits `shell.close`;
   // this is what it asks. There is no Cancel button because there are only
@@ -27,14 +27,15 @@
 <Dialog title={closeCopy.title} onclose={busy ? undefined : onclose}>
   <p>{closeCopy.body}</p>
   <label class="check"><input type="checkbox" bind:checked={remember} disabled={busy} />{closeCopy.remember}</label>
-  <p class="t-quiet note">{closeCopy.inSettings}</p>
+  <p class="t-quiet">{closeCopy.inSettings}</p>
 
   {#snippet actions()}
+    <!-- Two standard buttons, Quit first, and the box keeps the focus
+         (APP.md §2.3, ruled 2026-10-17): the close button never means the
+         tray by default (ruled 2026-09-13), so neither answer is the
+         primary, and the foot band's primary-first order (§6, Controls)
+         has nothing to put first. -->
     <button type="button" class="btn" disabled={busy} onclick={() => ondecide("quit", remember)}>{closeCopy.quit}</button>
-    <button type="button" class="btn accent" disabled={busy} onclick={() => ondecide("tray", remember)}>{closeCopy.tray}</button>
+    <button type="button" class="btn" disabled={busy} onclick={() => ondecide("tray", remember)}>{closeCopy.tray}</button>
   {/snippet}
 </Dialog>
-
-<style>
-  .note { margin: 10px 0 0; }
-</style>

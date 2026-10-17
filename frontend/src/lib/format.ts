@@ -69,17 +69,6 @@ export function clockTime(unix: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// idleMinutes is the idle timeout the session actually runs on, from the
-// registry's stored minutes: 0 is the default, and a stored value outside
-// the permitted range is replaced by the default as the core's reader
-// replaces it (internal/app/settings.go timeouts: 10 minutes, 1 to 30).
-// Undefined is not known yet — settings read while the vault was locked
-// carry no vault's values — and says no number at all.
-export function idleMinutes(stored: number | undefined): number | undefined {
-  if (stored === undefined) return undefined;
-  return stored >= 1 && stored <= 30 ? stored : 10;
-}
-
 // LockLine is what the foot's lock chip says while the vault is unlocked.
 export interface LockLine {
   text: string;
@@ -96,8 +85,10 @@ export interface LockLine {
 // *Session ends 16:42* — which never needs to tick. Only in the last 60
 // seconds is it a count, m:ss, marked urgent. The page's clock still
 // moves once a second (store.now); the text it makes here changes only
-// when its form or the count does.
-export function lockLine(locksAt: number, absoluteAt: number, idle: number | undefined, nowMs: number): LockLine {
+// when its form or the count does. idle is the status's
+// idleEffectiveMinutes — the minutes the core runs the session on, its
+// clamp already applied (ruled 2026-10-17) — and 0 says no number.
+export function lockLine(locksAt: number, absoluteAt: number, idle: number, nowMs: number): LockLine {
   const at = nearerDeadline(locksAt, absoluteAt);
   const cap = absoluteAt > 0 && (locksAt <= 0 || absoluteAt <= locksAt);
   if (at - nowMs / 1000 <= 60) {

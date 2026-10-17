@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockTime, ext, fileIcon, hashText, idleMinutes, keyId, lockLine, nearerDeadline, plural } from "./format";
+import { clockTime, ext, fileIcon, hashText, keyId, lockLine, nearerDeadline, plural } from "./format";
 
 // The foot's countdown (APP.md §6, ruled 2026-09-12 after a review found
 // the foot reading the idle deadline alone): the absolute cap locks the
@@ -56,18 +56,15 @@ describe("lockLine", () => {
     expect(lockLine(t0 + 600, t0 + 300, 10, now + 1000).text).toBe(lockLine(t0 + 600, t0 + 300, 10, now).text);
   });
 
-  it("names no number while the idle timeout is not known", () => {
-    expect(lockLine(t0 + 600, t0 + 3600, undefined, now).text).toBe("Locks when idle");
+  // The minutes are the status's idleEffectiveMinutes, the core's clamp
+  // already applied (ruled 2026-10-17): said as given, with no rule of
+  // the page's own between.
+  it("says the core's minutes as they are", () => {
+    expect(lockLine(t0 + 1500, t0 + 3600, 25, now).text).toBe("Locks after 25 min idle");
   });
-});
 
-describe("idleMinutes", () => {
-  it("is the stored value, or the default for 0 and for a value out of range", () => {
-    expect(idleMinutes(5)).toBe(5);
-    expect(idleMinutes(30)).toBe(30);
-    expect(idleMinutes(0)).toBe(10);
-    expect(idleMinutes(45)).toBe(10);
-    expect(idleMinutes(undefined)).toBeUndefined();
+  it("names no number while the status names none", () => {
+    expect(lockLine(t0 + 600, t0 + 3600, 0, now).text).toBe("Locks when idle");
   });
 });
 

@@ -10,7 +10,7 @@
 // component.
 import type { FileOutcome } from "./api";
 import { leaf } from "./format";
-import { skipSameText } from "./strings";
+import { compareCountText, skipSameText } from "./strings";
 
 // One conflict as the core reported it: id is the record's, which is what
 // the re-issue names; path is the record's path inside the archive and
@@ -66,10 +66,17 @@ export function skipSameLabel(rows: ConflictRow[]): string {
   return skipSameText(rows.filter(sameDateAndSize).length);
 }
 
-// startingDecisions: every row starts on replace — the extract dialog's
-// default until 2026-10-14, when it became ask; whether the compare list
-// should follow is open — with the copies that match already skipped,
-// which is what the foot's pre-ticked box means.
+// startingDecisions: every row whose date or size differs starts on
+// replace, and the copies that match start skipped, which is what the
+// foot's pre-ticked box means (ruled 2026-10-17). The extract dialog's own
+// default became ask on 2026-10-14, but this list is reached by choosing
+// to decide, and extracting into a folder that already has the files is,
+// most of the time, putting new copies over old ones; adding only what is
+// missing is the rarer wish, and it is one click a row, or *Skip all*
+// before the list, or *Cancel* in it.
+// Starting with nothing ticked and Continue held until every row is
+// answered was weighed and not taken: it taxes the common case to guard
+// the rare one. The foot's count says what Continue will do.
 export function startingDecisions(rows: ConflictRow[]): Record<string, Decision> {
   const out: Record<string, Decision> = {};
   for (const r of rows) out[r.path] = sameDateAndSize(r) ? "skip" : "replace";
@@ -128,6 +135,22 @@ export function reissuePlan(rows: ConflictRow[], decisions: Record<string, Decis
 
 export function planIsEmpty(p: Reissue): boolean {
   return p.replace.length === 0 && p.rename.length === 0;
+}
+
+// summarise counts what *Continue* will do with the ticks as they stand,
+// by the plan's own rule: an undecided row is a replace, and a row with no
+// id is a skip whatever its ticks say, since nothing is re-issued for it.
+export function summarise(rows: ConflictRow[], decisions: Record<string, Decision>): { replace: number; both: number; skip: number } {
+  const plan = reissuePlan(rows, decisions);
+  const replace = plan.replace.length;
+  const both = plan.rename.length;
+  return { replace, both, skip: rows.length - replace - both };
+}
+
+// countLine is the foot's count in words, beside the same-date-and-size
+// box (ruled 2026-10-17).
+export function countLine(rows: ConflictRow[], decisions: Record<string, Decision>): string {
+  return compareCountText(summarise(rows, decisions));
 }
 
 // namesFor is what a conflict's re-issue carries in `names`: of the names

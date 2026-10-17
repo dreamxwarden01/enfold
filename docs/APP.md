@@ -593,11 +593,15 @@ its state and, while unlocked, the nearer deadline in the foot's words that neve
 "Personal vault — Unlocked · locks after 10 min idle", "… · session ends 16:42", "Personal
 vault — Locked" — is the menu's first item, greyed, and the tooltip's start, followed there by
 the open-archive count and the running operations; menu *header* / Open / Lock now / Quit,
-where Open reads *Unlock…* while the vault is locked and the window would show the lock
-screen, and begins the ceremony — the YubiKey where the vault has one, the password otherwise,
-as the lock screen's first button does — before it opens the window on it (locked with
-archives still open, the window shows their page and its banner's Unlock, and a ceremony begun
-under it would run unseen, so the item stays Open) (*Close all
+where Open reads *Unlock…* while the vault is locked — with archives open or not (ruled
+2026-10-17; it used to stay Open while archives were open, since the window shows their page
+and a ceremony begun under it would run unseen) — and begins the ceremony — the YubiKey where
+the vault has one, the password otherwise, as the lock screen's first button does — before it
+shows the window and emits `shell.unlock` (no payload), which the page answers as the locked
+banner's own Unlock does, with the lock scene over whatever page it holds, so the ceremony is
+seen running; the page ignores it with no vault configured or the vault already unlocked, and a
+refusal of the begin (setup needed, the Smart Card service missing) is the lock screen's to
+say (*Close all
 archives* went 2026-09-13: the window's close already leaves every page, and while the window
 is up the page closes archives; a tray item that changed the core under a page that did not
 refresh was worse than none).
@@ -653,7 +657,11 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - `Status() VaultStatus{Seq, State, Path, DisplayName, LastUnlockedAt, LocksAt, AbsoluteAt,
   Entangled, VaultFileSize, Tampered, TamperedReason Code, Note Code, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
   OpenArchives int}` plus the one-vault facts of §2.1 (`SetupNeeded`, `DefaultPath`,
-  `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`);
+  `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`)
+  and, while unlocked, `IdleEffectiveMinutes` and `AbsoluteEffectiveMinutes` — the timeouts the
+  timers were armed with, the registry's minutes after the clamp of §2.1, zero while not
+  unlocked — so that the foot and the tray say the core's number and keep no copy of its rule
+  (one truth; ruled 2026-10-17);
   `Readers() []Reader{Name}`.
 - `BeginUnlock()`, `CancelUnlock()`, `Lock()`, `Reopen()`, `Activity()`. Secret submissions
   arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`.
@@ -851,7 +859,11 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `replace` or `rename`. *Compare* and *Let me decide* are one dialog after Windows Explorer's:
   a row per file with the type's icon, *Files from the archive* on the left and *Files already
   in the destination* on the right, each side's date and size, a tick on either or both (both =
-  keep both), and "Skip N files with the same date and size" at the foot. **A name the
+  keep both), and "Skip N files with the same date and size" at the foot, pre-ticked. The rows
+  whose date or size differs start on replace (ruled 2026-10-17, after the extract dialog's own
+  default became `ask`: the list is entered by choosing to decide, and extracting into a folder is
+  usually updating it), and the foot counts what *Continue* will do — "3 will be replaced ·
+  2 skipped". **A name the
   destination refuses** (ruled 2026-09-10) is the same shape: a name is checked on the way *in*
   against R20 — Windows' own rules, 255 code units, no reserved name, no forbidden character —
   so what went in can come out on any Windows volume as far as the name itself goes, but the
@@ -1549,7 +1561,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   the idle deadline nearer, the rule — *Locks after 10 min idle* — since any input resets it;
   with the cap nearer (or equal: no input moves it), the clock time — *Session ends 16:42*;
   and only in the last 60 seconds a count, *Locks in 0:42* or *Session ends in 0:42*, in the
-  attention colour (`lib/format.ts` `lockLine`; the page's clock still moves once a second,
+  attention colour (`lib/format.ts` `lockLine`; the minutes are the status's
+  `IdleEffectiveMinutes`, ruled 2026-10-17; the page's clock still moves once a second,
   the text only when its form or the count changes) — and *Lock now*
   while unlocked; the closed padlock and *Unlock* while locked with archives still open.
 - *Rail.* Hover tints in over 120 ms and out over 160 ms — the ink at 6% over the ground, a

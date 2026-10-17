@@ -27,7 +27,15 @@ type VaultStatus struct {
 	LastUnlockedAt int64      `json:"lastUnlockedAt"`
 	LocksAt        int64      `json:"locksAt"`    // idle deadline, 0 when locked
 	AbsoluteAt     int64      `json:"absoluteAt"` // absolute deadline, 0 when locked
-	ModifiedAt     int64      `json:"modifiedAt"` // the keystore's own date (R35)
+	// IdleEffectiveMinutes and AbsoluteEffectiveMinutes are the timeouts
+	// the session runs on — the registry's minutes as timeouts() clamps
+	// them, not as stored (Settings.IdleMinutes, 0 = default) — so that the
+	// foot and the tray say the core's number rather than each re-deriving
+	// its rule (ruled 2026-10-17). 0 while not unlocked: only an unlocked
+	// vault's registry is read.
+	IdleEffectiveMinutes     int   `json:"idleEffectiveMinutes"`
+	AbsoluteEffectiveMinutes int   `json:"absoluteEffectiveMinutes"`
+	ModifiedAt               int64 `json:"modifiedAt"` // the keystore's own date (R35)
 	// Entangled is the slot region header's switch (FORMAT.md §6, §18.1):
 	// the vault's password, not a slot's, and a plaintext fact the lock
 	// screen has while Locked.

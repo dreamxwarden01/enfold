@@ -4,7 +4,8 @@
   // *Files already in the destination* on the right, each side's date and
   // size, a tick on either or both — both keeps both, which is the
   // `rename` policy — and "Skip N files with the same date and size" at
-  // the foot, pre-ticked for the copies that match. *Continue* re-issues
+  // the foot, pre-ticked for the copies that match, with a count beside it
+  // of what *Continue* will do (ruled 2026-10-17). *Continue* re-issues
   // the extract for the ids the ticks chose.
   //
   // Every rule it obeys is in lib/conflicts.ts and every word it says is
@@ -13,7 +14,7 @@
   import Dialog from "./Dialog.svelte";
   import { bytes, dateTime, fileIcon } from "../lib/format";
   import { compareCopy } from "../lib/strings";
-  import { sameDateAndSize, skipSameLabel, startingDecisions, ticks, toggle, withSkipSame } from "../lib/conflicts";
+  import { countLine, sameDateAndSize, skipSameLabel, startingDecisions, ticks, toggle, withSkipSame } from "../lib/conflicts";
   import type { ConflictRow, Decision } from "../lib/conflicts";
 
   interface Props {
@@ -30,6 +31,8 @@
   // The foot's box is ticked while every matching copy is being skipped,
   // which is how it starts.
   const skipSame = $derived(rows.filter(sameDateAndSize).every((r) => decisions[r.path] === "skip"));
+  // What Continue will do, said before it does it; it follows every tick.
+  const count = $derived(countLine(rows, decisions));
 
   function hit(path: string, side: "left" | "right") {
     decisions = { ...decisions, [path]: toggle(decisions[path] ?? "replace", side) };
@@ -67,9 +70,12 @@
     {/each}
   </ul>
 
-  {#if sameLabel}
-    <label class="check foot"><input type="checkbox" checked={skipSame} onchange={(e) => (decisions = withSkipSame(rows, decisions, e.currentTarget.checked))} />{sameLabel}</label>
-  {/if}
+  <div class="foot">
+    {#if sameLabel}
+      <label class="check"><input type="checkbox" checked={skipSame} onchange={(e) => (decisions = withSkipSame(rows, decisions, e.currentTarget.checked))} />{sameLabel}</label>
+    {/if}
+    <span class="count" aria-live="polite">{count}</span>
+  </div>
   <p class="dim">{compareCopy.note}</p>
 
   {#snippet actions()}
@@ -89,5 +95,6 @@
   .who { display: flex; flex-direction: column; min-width: 0; }
   .who b { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .who small { font-size: 11.5px; color: var(--ink-3); }
-  .foot { padding-top: 10px; }
+  .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding-top: 10px; }
+  .count { margin-left: auto; font-size: 12.5px; color: var(--ink-2); }
 </style>

@@ -303,6 +303,18 @@ export function skipSameText(n: number): string {
   return n === 0 ? "" : `Skip ${plural(n, "file")} with the same date and size`;
 }
 
+// compareCountText is the foot's count beside that tick: what *Continue*
+// will do, before it does it — "3 will be replaced · 2 skipped" (ruled
+// 2026-10-17). A part with nothing in it is left out, and keep both is
+// said the way the note under the ticks says it.
+export function compareCountText(c: { replace: number; both: number; skip: number }): string {
+  const parts: string[] = [];
+  if (c.replace > 0) parts.push(`${c.replace} will be replaced`);
+  if (c.both > 0) parts.push(`${c.both} kept under a new name`);
+  if (c.skip > 0) parts.push(`${c.skip} skipped`);
+  return parts.join(" · ");
+}
+
 // retriesText is the count shown with the PIN prompt. The card is asked
 // before the prompt, so the count is always known here; when the card is
 // verified it cannot say, and the copy says that instead of a number. It

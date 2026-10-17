@@ -28,8 +28,14 @@ type tray struct {
 	mu     sync.Mutex
 	state  brand.TrayState
 	status app.VaultStatus
-	idle   int // the idle timeout in minutes, 0 while not known
 }
+
+// eventShellUnlock is the tray's word to the page that an unlock was asked
+// for there (APP.md §2.4, ruled 2026-10-17): the page shows its lock scene,
+// over an open archive as the locked banner's own Unlock does, so that the
+// ceremony the tray began is seen. No payload: the scene reads the
+// ceremony from the status like any other.
+const eventShellUnlock = "shell.unlock"
 
 func newTray(s *shell) *tray {
 	t := &tray{s: s, t: s.app.SystemTray.New()}
@@ -44,8 +50,8 @@ func newTray(s *shell) *tray {
 	// The header: which vault, and its state — never a command, so greyed.
 	t.head = menu.Add(appName).SetEnabled(false)
 	menu.AddSeparator()
-	// Open, or Unlock… while the lock screen is what the window would show:
-	// that one starts the ceremony as well (openOrUnlock).
+	// Open, or Unlock… while the vault is locked: that one starts the
+	// ceremony as well (openOrUnlock).
 	t.open = menu.Add("Open")
 	t.open.OnClick(func(*application.Context) { go t.openOrUnlock() })
 	t.lock = menu.Add("Lock now")
@@ -69,14 +75,8 @@ func newTray(s *shell) *tray {
 // the clock time the session ends at, and both change only when the
 // status does (APP.md §2.4, ruled 2026-10-14).
 func (t *tray) update(st app.VaultStatus) {
-	idle := 0
-	if st.State == app.StateUnlocked && t.s.settings != nil {
-		if set := t.s.settings(); set.TimeoutsFromVault {
-			idle = idleMinutes(set.IdleMinutes)
-		}
-	}
 	t.mu.Lock()
-	t.status, t.idle = st, idle
+	t.status = st
 	state := brand.TrayLocked
 	switch {
 	case st.State == app.StateUnlocked:
@@ -94,57 +94,61 @@ func (t *tray) update(st app.VaultStatus) {
 		t.t.SetDarkModeIcon(t.icons[state][1])
 	}
 	// A menu label's "&" marks a mnemonic; a vault named "Q&A" keeps it.
-	t.head.SetLabel(strings.ReplaceAll(vaultLine(st, idle), "&", "&&"))
+	t.head.SetLabel(strings.ReplaceAll(vaultLine(st), "&", "&&"))
 	if unlocksFromTray(st) {
 		t.open.SetLabel("Unlock…")
 	} else {
 		t.open.SetLabel("Open")
 	}
 	t.lock.SetEnabled(st.State == app.StateUnlocked)
-	t.t.SetTooltip(tooltip(st, idle))
+	t.t.SetTooltip(tooltip(st))
 }
 
-// openOrUnlock is the menu's first command. While the vault is locked and
-// the window would show the lock screen, it is *Unlock…*: the ceremony is
-// begun first, by the way the lock screen's own first button begins it —
-// the YubiKey where the vault has one, the password otherwise — so the
-// window opens on it already running, the explicit Unlock of the polish
-// review's direction 1. Locked with archives still open, the window shows
-// their page and its locked banner rather than the lock screen, and a
-// ceremony begun under it would run unseen: there the item is *Open*, and
-// the banner's own Unlock is one click away. A refusal (setup needed, the
-// Smart Card service missing) is the lock screen's to say: the window
-// opens all the same.
+// openOrUnlock is the menu's first command. While the vault is locked it
+// is *Unlock…*: the ceremony is begun first, by the way the lock screen's
+// own first button begins it — the YubiKey where the vault has one, the
+// password otherwise — then the window is shown and the page told to show
+// its lock scene, which opens on the ceremony already running: the
+// explicit Unlock of the polish review's direction 1. Locked with archives
+// still open, the window would show their page and its locked banner, and
+// a ceremony begun under it would run unseen; the page answers
+// `shell.unlock` as the banner's own Unlock does, with the lock scene over
+// the open archive (ruled 2026-10-17 — the item used to stay *Open* there).
+// A refusal (setup needed, the Smart Card service missing) is the lock
+// screen's to say: the window and the scene come all the same.
 func (t *tray) openOrUnlock() {
 	t.mu.Lock()
 	st := t.status
 	t.mu.Unlock()
-	if unlocksFromTray(st) {
-		method := app.MethodPassword
-		if st.HasHardwareSlot {
-			method = app.MethodToken
-		}
-		if e := t.s.core.BeginUnlock(method); e != nil && t.s.log != nil {
-			t.s.log("tray: unlock not begun: %s", e.Code)
-		}
+	e := firstItem(st, t.s.core.BeginUnlock, t.s.ensureWindow, func() { t.s.app.Event.Emit(eventShellUnlock) })
+	if e != nil && t.s.log != nil {
+		t.s.log("tray: unlock not begun: %s", e.Code)
 	}
-	t.s.ensureWindow()
 }
 
-// unlocksFromTray: the first item reads *Unlock…* and begins the ceremony.
+// firstItem is openOrUnlock apart from the shell it acts on: begin the
+// unlock where the item reads *Unlock…*, show the window, and then — the
+// page being up to hear it — tell it to show the lock scene. It returns
+// the refusal of the begin, if any.
+func firstItem(st app.VaultStatus, begin func(app.UnlockMethod) *app.Error, show, tell func()) *app.Error {
+	if !unlocksFromTray(st) {
+		show()
+		return nil
+	}
+	method := app.MethodPassword
+	if st.HasHardwareSlot {
+		method = app.MethodToken
+	}
+	e := begin(method)
+	show()
+	tell()
+	return e
+}
+
+// unlocksFromTray: the first item reads *Unlock…* and begins the ceremony —
+// in every locked state, with archives open or not (ruled 2026-10-17).
 func unlocksFromTray(st app.VaultStatus) bool {
-	return st.State == app.StateLocked && st.OpenArchives == 0
-}
-
-// idleMinutes is the idle timeout the session runs on, from the registry's
-// stored minutes: 0 is the default, and a value outside the permitted
-// range is replaced by the default, as the core's reader replaces it
-// (internal/app/settings.go timeouts: 10 minutes, 1 to 30).
-func idleMinutes(stored int) int {
-	if stored >= 1 && stored <= 30 {
-		return stored
-	}
-	return 10
+	return st.State == app.StateLocked
 }
 
 // vaultLine is the tray's one line about the vault — the menu's header
@@ -152,15 +156,17 @@ func idleMinutes(stored int) int {
 // deadline that is nearer, in the foot's words (APP.md §6): the idle rule
 // — "Personal vault — Unlocked · locks after 10 min idle" — or, when the
 // absolute cap comes first, the clock time it comes at — "· session ends
-// 16:42". idle is 0 while the timeout is not known.
-func vaultLine(st app.VaultStatus, idle int) string {
+// 16:42". The idle minutes are the status's own, as the core applies them
+// (IdleEffectiveMinutes, ruled 2026-10-17): the tray keeps no copy of the
+// core's rule.
+func vaultLine(st app.VaultStatus) string {
 	name := st.DisplayName
 	if name == "" {
 		name = appName
 	}
 	switch st.State {
 	case app.StateUnlocked:
-		return name + " — Unlocked · " + deadline(st, idle)
+		return name + " — Unlocked · " + deadline(st)
 	case app.StateUnlocking, app.StateReleasing:
 		return name + " — Unlocking"
 	case app.StateBroken:
@@ -172,20 +178,21 @@ func vaultLine(st app.VaultStatus, idle int) string {
 }
 
 // deadline is the nearer of the two deadlines as words that never tick.
-// Equal deadlines are the cap's: no input moves it.
-func deadline(st app.VaultStatus, idle int) string {
+// Equal deadlines are the cap's: no input moves it. A status that names no
+// idle timeout says no number.
+func deadline(st app.VaultStatus) string {
 	if st.AbsoluteAt > 0 && (st.LocksAt <= 0 || st.AbsoluteAt <= st.LocksAt) {
 		return "session ends " + time.Unix(st.AbsoluteAt, 0).Format("15:04")
 	}
-	if idle <= 0 {
+	if st.IdleEffectiveMinutes <= 0 {
 		return "locks when idle"
 	}
-	return fmt.Sprintf("locks after %d min idle", idle)
+	return fmt.Sprintf("locks after %d min idle", st.IdleEffectiveMinutes)
 }
 
 // tooltip is the vault's line with the open count and what is under way.
-func tooltip(st app.VaultStatus, idle int) string {
-	s := vaultLine(st, idle)
+func tooltip(st app.VaultStatus) string {
+	s := vaultLine(st)
 	switch st.OpenArchives {
 	case 0:
 	case 1:

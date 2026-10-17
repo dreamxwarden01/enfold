@@ -63,6 +63,7 @@ Opening an archive from Explorer (APP.md 14) is played the same way: POST
 shell.open a second launch emits. The launch's own argument, which the page
 asks for at boot rather than hearing, is staged with POST /mock/state
 {"pendingOpen": {"seq": 1, "path": "...", "rest": []}} and then a reload.
+
 Archives.OpenPath answers as the core does, as far as a mock without
 envelopes can: a path a record carries opens that archive; a path whose
 leaf a record carries at another folder opens it and moves the record
@@ -70,7 +71,13 @@ leaf a record carries at another folder opens it and moves the record
 archive.key_not_in_vault, since its keys are somewhere else; anything that
 is not an .efd is archive.not_an_archive; and a locked vault answers
 vault.needs_unlock, which sends the page to the lock scene with the path
-kept."""
+kept.
+
+The tray's Unlock... (APP.md 2.4, ruled 2026-10-17) is played as its event
+alone: POST /mock/preview {"name": "unlock"} queues the shell.unlock the
+shell emits after the tray has begun the ceremony, so the page shows its
+lock scene - over an open archive too. The ceremony itself is not begun
+here; the lock scene's own buttons do that, as everywhere in this mock."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -87,6 +94,11 @@ state = {
     "vault": {
         "seq": 1, "state": "locked", "path": "D:/Vaults/personal.eks", "displayName": "Personal vault",
         "lastUnlockedAt": NOW - 86400, "locksAt": 0, "absoluteAt": 0, "modifiedAt": NOW - 3600,
+        # The timeouts the core runs the session on (APP.md 3, ruled
+        # 2026-10-17): 0 while locked, as the core sends them; a state set
+        # to unlocked through /mock/state sets them too (10 and 60 are the
+        # defaults) or the foot names no number.
+        "idleEffectiveMinutes": 0, "absoluteEffectiveMinutes": 0,
         "entangled": True, "vaultFileSize": 148_480, "tampered": False, "warnings": [], "ops": [], "openArchives": 0,
         "hasPasswordSlot": False, "hasHardwareSlot": True, "pendingTouch": False,
         "setupNeeded": False, "defaultPath": "C:/Users/me/AppData/Local/Enfold/vault.eks", "missingPath": "",
@@ -252,12 +264,15 @@ state = {
 # pane cannot raise for itself: the shell's cancelled window close (APP.md
 # 2.4), which the page answers with its close question. "open" is the other
 # one: the shell handing a second launch's file over (APP.md 14), which
-# takes "path" or "paths" from the same body. Both are queued like every
-# other event and drained by GET /mock/events.
+# takes "path" or "paths" from the same body. "unlock" is the third: the
+# tray's Unlock..., which the page answers with its lock scene (APP.md 2.4,
+# ruled 2026-10-17). All are queued like every other event and drained by
+# GET /mock/events.
 PREVIEW_OPS = {
     "reclaim": lambda body: start_reclaim(),
     "close": lambda body: emit("shell.close", None),
     "open": lambda body: shell_open(body),
+    "unlock": lambda body: emit("shell.unlock", None),
 }
 
 PREVIEWS = {
@@ -1631,6 +1646,10 @@ class H(SimpleHTTPRequestHandler):
             if over is None:
                 return self.reply({"ok": False, "names": sorted(list(PREVIEWS) + list(PREVIEW_OPS))})
             state["vault"].update(over)
+            # A state made unlocked from outside says the core's defaults
+            # for the effective timeouts unless the poster set them.
+            if state["vault"].get("state") == "unlocked" and not state["vault"].get("idleEffectiveMinutes"):
+                state["vault"]["idleEffectiveMinutes"], state["vault"]["absoluteEffectiveMinutes"] = 10, 60
             return self.reply({"ok": True})
         if self.path.startswith("/mock/state"):
             for k, v in body.items():

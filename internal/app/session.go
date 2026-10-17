@@ -274,6 +274,8 @@ func (c *Core) statusLocked() VaultStatus {
 	}
 	if v.state == StateUnlocked {
 		st.LocksAt, st.AbsoluteAt = v.locksAt.Unix(), v.absoluteAt.Unix()
+		// The same timeouts() result the timers were armed with.
+		st.IdleEffectiveMinutes, st.AbsoluteEffectiveMinutes = int(v.idle/time.Minute), int(v.absolute/time.Minute)
 	}
 	for code := range v.warnings {
 		st.Warnings = append(st.Warnings, code)

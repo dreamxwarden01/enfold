@@ -399,6 +399,16 @@ class Store {
     Events.On("shell.close", () => {
       this.closeAsked = true;
     });
+    // The tray's Unlock… (APP.md §2.4, ruled 2026-10-17): it has begun the
+    // ceremony and shown the window, and the lock scene is where that
+    // ceremony is seen — over an open archive too, as the locked banner's
+    // own Unlock shows it. No payload. Nothing to show with no vault yet,
+    // or with the vault already unlocked by the time this lands.
+    Events.On("shell.unlock", () => {
+      const s = this.status?.state;
+      if (!s || s === VaultState.StateNone || s === VaultState.StateUnlocked) return;
+      this.go("lock");
+    });
     // A second launch's file (APP.md §14): the page is already up, so it
     // is told rather than asked. The first launch's own argument cannot
     // travel this way — there was no page to hear it — and waits in the

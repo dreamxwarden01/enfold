@@ -1104,6 +1104,17 @@ export interface VaultStatus {
     "absoluteAt": number;
 
     /**
+     * IdleEffectiveMinutes and AbsoluteEffectiveMinutes are the timeouts
+     * the session runs on — the registry's minutes as timeouts() clamps
+     * them, not as stored (Settings.IdleMinutes, 0 = default) — so that the
+     * foot and the tray say the core's number rather than each re-deriving
+     * its rule (ruled 2026-10-17). 0 while not unlocked: only an unlocked
+     * vault's registry is read.
+     */
+    "idleEffectiveMinutes": number;
+    "absoluteEffectiveMinutes": number;
+
+    /**
      * the keystore's own date (R35)
      */
     "modifiedAt": number;

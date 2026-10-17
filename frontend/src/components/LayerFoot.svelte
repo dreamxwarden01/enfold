@@ -8,7 +8,7 @@
   import { fade } from "svelte/transition";
   import { Vault } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { idleMinutes, lockLine } from "../lib/format";
+  import { lockLine } from "../lib/format";
   import { motion } from "../lib/motion";
 
   interface Props {
@@ -16,10 +16,9 @@
   }
   let { pageKey }: Props = $props();
   const st = $derived(store.status);
-  // The idle timeout is the vault's, so only settings read while it was
-  // unlocked know it; until then the chip names no number.
-  const idle = $derived(store.settings?.timeoutsFromVault ? idleMinutes(store.settings.idleMinutes) : undefined);
-  const line = $derived(st ? lockLine(st.locksAt, st.absoluteAt, idle, store.now) : null);
+  // The idle minutes are the status's, as the core runs the session on
+  // them (ruled 2026-10-17): no copy of its clamp here.
+  const line = $derived(st ? lockLine(st.locksAt, st.absoluteAt, st.idleEffectiveMinutes, store.now) : null);
 </script>
 
 <div class="layer-foot">

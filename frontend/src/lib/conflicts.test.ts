@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { FileOutcome } from "./api";
 import {
-  allOf, conflictsOf, hasConflicts, namesFor, planIsEmpty, reissuePlan, sameDateAndSize,
-  skipSameLabel, startingDecisions, ticks, toggle, withSkipSame,
+  allOf, conflictsOf, countLine, hasConflicts, namesFor, planIsEmpty, reissuePlan, sameDateAndSize,
+  skipSameLabel, startingDecisions, summarise, ticks, toggle, withSkipSame,
 } from "./conflicts";
 import type { ConflictRow } from "./conflicts";
 import { conflictTitle } from "./strings";
@@ -79,7 +79,7 @@ describe("the copies with the same date and size", () => {
     expect(skipSameLabel([conflict()])).toBe("");
   });
 
-  it("starts them skipped and everything else replaced — the dialog's own default", () => {
+  it("starts them skipped and everything else replaced — the list is entered to update a folder (ruled 2026-10-17)", () => {
     const same = conflict({ path: "s.jpg", size: 1, existingSize: 1, modifiedAt: 2, existingModifiedAt: 2 });
     const other = conflict({ path: "o.jpg" });
     expect(startingDecisions([same, other])).toEqual({ "s.jpg": "skip", "o.jpg": "replace" });
@@ -147,6 +147,39 @@ describe("the re-issue", () => {
 
   it("treats a row nobody decided about as the default, replace", () => {
     expect(reissuePlan([a], {}).replace).toEqual(["a".repeat(32)]);
+  });
+});
+
+// The foot's count beside the same-date-and-size box (APP.md §3, ruled
+// 2026-10-17): what Continue will do, before it does it.
+describe("the foot's count", () => {
+  const a = conflict({ path: "a.jpg", id: "a".repeat(32) });
+  const b = conflict({ path: "b.jpg", id: "b".repeat(32) });
+  const c = conflict({ path: "c.jpg", id: "c".repeat(32) });
+  const same = conflict({ path: "s.jpg", id: "s".repeat(32), size: 1, existingSize: 1, modifiedAt: 2, existingModifiedAt: 2 });
+
+  it("starts by saying the differing rows will be replaced and the matching ones skipped", () => {
+    const rows = [a, b, c, same, { ...same, path: "t.jpg", id: "t".repeat(32) }];
+    expect(summarise(rows, startingDecisions(rows))).toEqual({ replace: 3, both: 0, skip: 2 });
+    expect(countLine(rows, startingDecisions(rows))).toBe("3 will be replaced · 2 skipped");
+  });
+
+  it("follows the ticks as they change, keep both counted too", () => {
+    const rows = [a, b, c];
+    let d = startingDecisions(rows);
+    d = { ...d, "b.jpg": toggle(d["b.jpg"], "right") };
+    d = { ...d, "c.jpg": toggle(d["c.jpg"], "left") };
+    expect(countLine(rows, d)).toBe("1 will be replaced · 1 kept under a new name · 1 skipped");
+  });
+
+  it("leaves out a part with nothing in it", () => {
+    expect(countLine([a, b], allOf([a, b], "skip"))).toBe("2 skipped");
+    expect(countLine([a], allOf([a], "replace"))).toBe("1 will be replaced");
+  });
+
+  it("counts a row with no id as skipped, since nothing is re-issued for it", () => {
+    const gone = conflict({ path: "g.jpg", id: "" });
+    expect(summarise([a, gone], {})).toEqual({ replace: 1, both: 0, skip: 1 });
   });
 });
 

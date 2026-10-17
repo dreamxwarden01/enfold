@@ -4579,3 +4579,46 @@ the Archives page's own `letGo` closes with the kill switch where the core says 
 nothing; direction 4's *Stay unlocked* and InfoBar and direction 10's running-operation tray
 line wait for their phases. Nothing of this phase was looked at in a real window: the gates and
 a few uimock checks only — the user's eye is the next gate.
+
+## 2026-10-17 — After phase 0: the compare list, the tray's Unlock, one truth for the timeouts
+
+**The compare list keeps replace, and counts** (2026-10-17). Phase 0 left the extract conflict
+dialog's compare list — *Let me decide for each file* — starting every differing row on replace
+while the dialog's own default had just become `ask`. Asked, the user ruled the default stays:
+extracting into a folder that already holds the files is, nearly always, putting new copies over
+old ones, and adding only what is missing is the rarer wish, one click a row, *Skip all* before
+the list or *Cancel* in it. The alternative the user also offered — nothing pre-selected and
+*Continue* held until every row is answered — was weighed and not taken: it taxes the common
+case to guard the rare one, in a list entered by choosing to decide. What changes is visibility:
+the foot now counts what *Continue* will do — "3 will be replaced · 1 kept under a new name · 2
+skipped" — from the same plan the button sends, so the count cannot drift from the act. APP.md
+§3 says it.
+
+**The tray unlocks from any locked state** (2026-10-17). Phase 0's tray offered *Unlock…* only
+when the window would show the lock screen; locked with archives still open, the window shows
+their page and its banner, and a ceremony begun under it would have run unseen, so the item
+stayed *Open*. Ruled: the item reads *Unlock…* whenever the vault is locked; it begins the
+ceremony as the lock screen's first button does, shows the window, and emits `shell.unlock` — no
+payload — which the page answers as the banner's own Unlock does, with the lock scene over
+whatever it holds, so the ceremony is seen; the page ignores it with no vault or the vault
+already open. Two edges, accepted and named: the lock scene unmounts the archive page, so an
+extract dialog not yet confirmed, or the compare list's ticks, are lost under a tray unlock (the
+conflict question itself lives in the store and returns) — a guard that kept the page would
+bring back the unseen ceremony, the very thing this removes; and a window just re-created from
+the tray is not listening when the event is sent, which only matters while a left archive is
+still draining a body (`OpenArchives` above zero for a few seconds) — the fix, when it is worth
+it, is a pulled flag at boot like §14's `PendingOpen`. APP.md §2.4 says the rule; the mock plays
+the event.
+
+**One truth for the timeouts** (2026-10-17). The idle and absolute timeouts are the registry's
+minutes after the core's clamp (`timeouts()`: 0 is the default, 1–30 kept, outside clamped with
+`vault.timeouts_clamped`), and phase 0's static foot line and tray header each re-derived that
+rule from the stored value — two copies that would have drifted silently the day the clamp
+changed. Ruled: `VaultStatus` carries `IdleEffectiveMinutes` and `AbsoluteEffectiveMinutes`, the
+minutes the timers were armed with, set in the critical section that arms them and zero while
+not unlocked, as `LocksAt` and `AbsoluteAt` are; the foot and the tray say the core's number and
+keep no rule of their own; the page's and the tray's re-derivations are deleted, the bindings
+regenerated, the mock's canned status carries the fields (a state made unlocked from outside
+gets the defaults). One label still knows the default by itself — Settings' "default (10
+minutes)" — and goes with direction 8's copy. APP.md §3 lists the fields, §6 names them for the
+foot.

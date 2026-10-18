@@ -33,18 +33,26 @@ export interface BandButton {
   accent: boolean;
 }
 
-// band is the dialog's foot, in the order its buttons stand. Before any of
-// the three, *Print…* is the suggested way (the accent, first) — a sheet
-// on paper, away from this PC — then *Save as a text file…*, then *I have
-// written it down*, standard. From the first of them on, *Done* is the
-// accent and first, and one click closes; printing and saving stay
-// offered, worded again for whichever of them has already been done.
-export function band(k: Kept): BandButton[] {
-  const save = { act: "save" as const, label: k.savedTo.trim() ? revealCopy.saveAgain : revealCopy.save, accent: false };
-  if (!keptSomehow(k)) {
-    return [{ act: "print", label: revealCopy.print, accent: true }, save, { act: "wrote", label: revealCopy.wroteDown, accent: false }];
-  }
-  return [{ act: "done", label: revealCopy.done, accent: true }, { act: "print", label: k.printed ? revealCopy.printAgain : revealCopy.print, accent: false }, save];
+// ways is the row under the digits (ruled 2026-10-18, the user's, after
+// seeing the build: the band had held all three ways, equal and wide).
+// The two ways that leave the machine stand with the digits they act on,
+// at their own width: *Print…* the suggested one — the accent, with the
+// document icon — until any way is taken, then both standard, worded
+// again for whichever of them has already been done.
+export function ways(k: Kept): BandButton[] {
+  return [
+    { act: "print", label: k.printed ? revealCopy.printAgain : revealCopy.print, accent: !keptSomehow(k) },
+    { act: "save", label: k.savedTo.trim() ? revealCopy.saveAgain : revealCopy.save, accent: false },
+  ];
+}
+
+// band is the dialog's foot: one button. *I have written it down*,
+// standard, until any way is taken — a print, a save the core
+// acknowledged, or its own press — and *Done*, the accent, from then on,
+// which closes with one click. One accent at a time: the row's until a way
+// is taken, the band's after.
+export function band(k: Kept): BandButton {
+  return keptSomehow(k) ? { act: "done", label: revealCopy.done, accent: true } : { act: "wrote", label: revealCopy.wroteDown, accent: false };
 }
 
 // The key is eight groups of six digits (FORMAT.md §18.4).

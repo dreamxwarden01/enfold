@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { band, digitsOnly, keptSomehow, pickGroups, readbackMark } from "./reveal";
+import { band, digitsOnly, keptSomehow, pickGroups, readbackMark, ways } from "./reveal";
 
 const none = { savedTo: "", printed: false, wroteDown: false };
-const labels = (k: typeof none) => band(k).map((b) => `${b.accent ? "*" : ""}${b.label}`);
+const row = (k: typeof none) => ways(k).map((b) => `${b.accent ? "*" : ""}${b.label}`);
+const foot = (k: typeof none) => `${band(k).accent ? "*" : ""}${band(k).label}`;
 
 // "None asks a second time" (APP.md §6, ruled 2026-09-09): each of the
 // three ways out counts at once, and from the first of them *Done* leads.
@@ -26,31 +27,32 @@ describe("the reveal's done state", () => {
 
 // The band (direction 9, ruled 2026-10-18): Print… suggested first, then
 // the text file, then the written-down way; after any of them, Done.
-describe("the reveal's band", () => {
-  it("suggests the print before anything is done", () => {
-    expect(labels(none)).toEqual(["*Print…", "Save as a text file…", "I have written it down"]);
-    expect(band(none).map((b) => b.act)).toEqual(["print", "save", "wrote"]);
+describe("the reveal's ways and its band", () => {
+  it("suggests the print in the row before anything is done, with the one statement in the band", () => {
+    expect(row(none)).toEqual(["*Print…", "Save as a text file…"]);
+    expect(foot(none)).toBe("I have written it down");
+    expect(band(none).act).toBe("wrote");
   });
-  it("leads with Done after a print", () => {
-    expect(labels({ ...none, printed: true })).toEqual(["*Done", "Print again…", "Save as a text file…"]);
+  it("turns the band into Done after a print, the row worded again", () => {
+    expect(row({ ...none, printed: true })).toEqual(["Print again…", "Save as a text file…"]);
+    expect(foot({ ...none, printed: true })).toBe("*Done");
   });
-  it("leads with Done after a save", () => {
-    expect(labels({ ...none, savedTo: "E:\\key.txt" })).toEqual(["*Done", "Print…", "Save again…"]);
+  it("turns the band into Done after a save", () => {
+    expect(row({ ...none, savedTo: "E:\\key.txt" })).toEqual(["Print…", "Save again…"]);
+    expect(foot({ ...none, savedTo: "E:\\key.txt" })).toBe("*Done");
   });
-  it("leads with Done after *I have written it down*", () => {
-    expect(labels({ ...none, wroteDown: true })).toEqual(["*Done", "Print…", "Save as a text file…"]);
-    expect(band({ ...none, wroteDown: true }).map((b) => b.act)).toEqual(["done", "print", "save"]);
+  it("turns the band into Done after *I have written it down*, which then closes", () => {
+    expect(row({ ...none, wroteDown: true })).toEqual(["Print…", "Save as a text file…"]);
+    expect(band({ ...none, wroteDown: true }).act).toBe("done");
   });
-  it("has exactly one accent, first", () => {
-    for (const k of [none, { ...none, printed: true }, { ...none, savedTo: "x", printed: true, wroteDown: true }]) {
-      const b = band(k);
-      expect(b.filter((x) => x.accent).length).toBe(1);
-      expect(b[0].accent).toBe(true);
+  it("has exactly one accent across the row and the band", () => {
+    for (const k of [none, { ...none, printed: true }, { ...none, savedTo: "x" }, { ...none, savedTo: "x", printed: true, wroteDown: true }]) {
+      const accents = [...ways(k), band(k)].filter((x) => x.accent).length;
+      expect(accents).toBe(1);
     }
   });
 });
 
-// The readback: optional, two random groups, never a gate.
 describe("the readback's two groups", () => {
   const seq = (...xs: number[]) => {
     let i = 0;

@@ -20,9 +20,11 @@
   // not watched for: the spooler watch that once told a print from a
   // cancelled one could not see *Save as PDF* at all — the WebView's print
   // dialog writes that PDF itself and no spooler job exists — so pressing
-  // *Print…* counts as done, and so does *I have written it down*. After
-  // any of the three *Done* leads the band, and one click closes
-  // (lib/reveal.ts band).
+  // *Print…* counts as done, and so does *I have written it down*. The two
+  // ways that leave the machine stand in a row under the digits, at their
+  // own width; the band holds the one statement, *I have written it down*,
+  // which is *Done* after any of the three and then closes with one click
+  // (lib/reveal.ts ways, band; ruled 2026-10-18, the user's).
   //
   // The readback, *Check what I wrote*, is optional and never a gate: two
   // groups drawn once per dialog, each ticked when its six digits match.
@@ -33,7 +35,7 @@
   import { Keys, Shell, errorOf } from "../lib/api";
   import { codeText, revealCopy } from "../lib/strings";
   import { recoveryKeyFileName, recoveryKeyTitle } from "../lib/print";
-  import { band, digitsOnly, keptSomehow, pickGroups, readbackMark } from "../lib/reveal";
+  import { band, digitsOnly, keptSomehow, pickGroups, readbackMark, ways } from "../lib/reveal";
   import type { Act } from "../lib/reveal";
   import { store } from "../lib/state.svelte";
 
@@ -142,7 +144,8 @@
     wrote: () => (wroteDown = true),
     done: finish,
   };
-  const buttons = $derived(band({ savedTo, printed, wroteDown }));
+  const row = $derived(ways({ savedTo, printed, wroteDown }));
+  const foot = $derived(band({ savedTo, printed, wroteDown }));
   const kept = $derived(keptSomehow({ savedTo, printed, wroteDown }));
 
   function onInput(i: number, e: Event) {
@@ -172,6 +175,16 @@
       <div class="digits">
         {#each groups as g, i (i)}<span>{g}</span>{/each}
       </div>
+      <!-- The two ways that leave the machine, with the digits they act on
+           and at their own width (ruled 2026-10-18, the user's): *Print…*
+           the suggested one until a way is taken; the readback's quiet
+           button beside them. -->
+      <div class="row ways">
+        {#each row as b (b.act)}
+          <button type="button" class="btn" class:accent={b.accent} onclick={acts[b.act]}>{#if b.act === "print" && b.accent}<svg class="i i-14" aria-hidden="true"><use href="#i-doc" /></svg>{/if}{b.label}</button>
+        {/each}
+        {#if !checking}<button type="button" class="btn subtle sm" onclick={() => (checking = true)}>{revealCopy.check}</button>{/if}
+      </div>
       <!-- The readback (direction 9; ruled 2026-09-09, nothing asked
            twice): offered by a quiet button, never required, and nothing
            in the band waits on it. -->
@@ -200,8 +213,6 @@
           {/each}
         </div>
         <p class="t-quiet">{revealCopy.onlyACheck}</p>
-      {:else}
-        <div><button type="button" class="btn subtle sm" onclick={() => (checking = true)}>{revealCopy.check}</button></div>
       {/if}
       <p class="t-quiet">{revealCopy.digitsLine(digits.length)}</p>
       <p class="t-quiet">{revealCopy.textFile}</p>
@@ -220,12 +231,10 @@
     {#if failed}
       <button type="button" class="btn accent" onclick={finish}>{revealCopy.done}</button>
     {:else}
-      <!-- The band lib/reveal.ts decides: Print… suggested first until a
-           way is taken, then Done first. *I have written it down* is never
-           greyed by the readback (ruled 2026-09-09). -->
-      {#each buttons as b (b.act)}
-        <button type="button" class="btn" class:accent={b.accent} disabled={!digits} onclick={acts[b.act]}>{#if b.act === "print" && !kept}<svg class="i i-14" aria-hidden="true"><use href="#i-doc" /></svg>{/if}{b.label}</button>
-      {/each}
+      <!-- One button, lib/reveal.ts band: *I have written it down* until a
+           way is taken, *Done* after. Never greyed by the readback (ruled
+           2026-09-09). -->
+      <button type="button" class="btn" class:accent={foot.accent} disabled={!digits} onclick={acts[foot.act]}>{foot.label}</button>
     {/if}
   {/snippet}
 </Dialog>
@@ -260,4 +269,6 @@
      top-right corner (RecoveryInput .ok). */
   .ok { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   .field-error { margin-top: 0; }
+  /* The ways wrap on a narrow dialog rather than spill. */
+  .ways { flex-wrap: wrap; }
 </style>

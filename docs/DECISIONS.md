@@ -4978,3 +4978,16 @@ fails about 2 in 100 runs on the antivirus's temp-dir race; the mock's paths mix
 foot's fit was measured at 1024 px while the window's minimum is 880; a status re-read that
 re-learns a running operation would clear a standing done line. Nothing of phase 3 has been seen
 in a real window.
+
+**The reveal's ways, by the user** (2026-10-18). Seeing direction 9's build in the real window —
+the recovery key's dialog from *Show recovery key…* — the user found its logic unchanged and the
+demo's shape not taken: *Print…* and *Save as a text file…* still stood in the band, equal and
+wide, beside *I have written it down*. Ruled, the user's: the two ways that leave the machine
+move up under the digits they act on, on one row at their own width, with *Check what I wrote*
+beside them; the band holds one button, *I have written it down*, which reads *Done* after a
+print, a save the core acknowledged or its own press, and then closes with one click. Built so
+(`lib/reveal.ts` `ways` and `band`): *Print…* keeps the accent and the document icon in the row
+until any way is taken, and *Done* takes the accent then — one accent at a time. The create's
+first showing is the same dialog (App.svelte mounts one component for every kind, *Your recovery
+key* titled), so both have it. The "again" rule stands: a way is worded again only once it was
+actually taken.

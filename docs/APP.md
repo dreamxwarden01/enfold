@@ -2088,22 +2088,26 @@ second ink (ruled 2026-10-18; it stood on a line of its own above the digits) �
 checksum catches a mistyped group, the ID the wrong sheet (FORMAT §18.4). Its lead is the two
 risks in two sentences (ruled 2026-10-18): "With this key, the vault file or a backup opens
 without your YubiKey. Keep it from others." and "Without the vault file or a backup, this key
-opens nothing. Keep those too." Then the eight groups; then *Check what I wrote*, a small subtle
-button that opens the readback, below; then "48 digits. They can be shown again from the Vault
+opens nothing. Keep those too." Then the eight groups; under them, on one row at their own width,
+*Print…* and *Save as a text file…* — the two ways that leave the machine, beside the digits they
+act on — and *Check what I wrote*, a small subtle button that opens the readback (ruled
+2026-10-18, the user's, after seeing the build: the band had held all three ways, equal and
+wide); then "48 digits. They can be shown again from the Vault
 page: unlock, then prove a YubiKey or a password once more." — the page named as the rail names
 it, never a "Keys page" no screen shows (ruled 2026-10-14; the rail's name is *Vault* since
 2026-10-17); then the text file's caution as a caption, "A text file is plain text. Keep it off
 this PC and out of any folder that syncs." It offers three ways out (§3 Keys), and *Print…* is
-the suggested one — a sheet on paper, away from this PC: before any is taken the band is *Print…*
-(accent, first, with the document icon), *Save as a text file…* and *I have written it down*.
+the suggested one — a sheet on paper, away from this PC: before any is taken *Print…* wears the
+accent and the document icon in the row, and the band holds one button, *I have written it
+down*, standard.
 *Save as a text file…* opens the native Save dialog at once (ruled 2026-10-18; a dialog of its
 own, *Where to keep it*, came first, its caution now the caption above), and the core still
 refuses Enfold's folder and the vault's (`vault.recovery_place`). Each way taken is said in the
 body by an accent bar with its check — "Saved to <path>.", "Sent to print as “<title>”.",
 "Written down." — and none asks a second time (ruled 2026-09-09): after a save the core
-acknowledged, a print, or *I have written it down*, the band is *Done* (accent, first; one click
-closes), then *Print…* and *Save as a text file…*, each worded *Print again…* or *Save again…*
-only once that way was actually taken (`lib/reveal.ts` `band`). The saved file and the print's
+acknowledged, a print, or *I have written it down*, the band's one button is *Done* (accent; one
+click closes) and the row's two are standard, each worded *Print again…* or *Save again…* only
+once that way was actually taken (`lib/reveal.ts` `ways`, `band`). The saved file and the print's
 suggested name are both `Enfold Keystore Recovery Key <ID>.txt` — BitLocker's own shape,
 "BitLocker Recovery Key <id>", with the key's ID (FORMAT §18.4) and never the vault's name, which
 says nothing about which sheet this is; the same string heads the text file and the sheet, and

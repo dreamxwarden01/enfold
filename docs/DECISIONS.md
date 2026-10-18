@@ -4763,3 +4763,76 @@ wraps to two caption lines; the open card's focus ring touches the next card 4 p
 on a card's radio submits, as WinUI's default button does, so Enter on the YubiKey card starts
 the ceremony with the name it has. Also in the same commit: the close question as the user ruled
 it (the entry above).
+
+## 2026-10-18 — Direction 1: one stage for the unlock
+
+**One stage for the unlock, built** (2026-10-18). The user asked for the rest of direction 1
+after the cards, and it was built in three stages — the stage, the states, the dialogs — each
+reviewed, each shot with headless Edge against the mock and fixed from what the shots showed,
+then reviewed as a whole. The lock screen is one centred panel, 440 px wide with its top at 14vh
+in every state, that changes in place — the ruling of 2026-09-06 restored, and the three cards
+of 2026-09-07/08, two of them dim placeholders, gone with their wording in APP.md §6. The step
+line (1 YubiKey · 2 PIN and password · 3 Touch; the password's and the recovery key's shorter
+lines) exists only while a ceremony runs, its discs filling with a check as steps pass, and its
+space is kept at rest so nothing moves. At rest: the vault's name, "Locked · last unlocked
+yesterday, 03:24", *Unlock with YubiKey* focused so Enter starts, *Unlock with recovery key*,
+and the two maintenance links of every daily unlock folded into a quiet *Backups and copies…*
+menu; a gear beside the state word opens Settings, which needs no vault. An explicit Unlock —
+the banner's, the foot's, the Vault page's, an Explorer open's, the tray's — starts the ceremony
+at once by the vault's everyday way in; an idle or Windows lock lands on the rest panel. Insert:
+the key art (one component, `KeyArt`, four LED states) breathing while the page listens. PIN and
+password: the slot chip, the PIN with its tries as the hint, a reserved line that holds the rule
+or the error without moving anything, the password under it, *Continue*; retries turn attention
+at 2 and danger at 1, and the last try carries an attention bar with the one way out, *Use
+recovery key*; a password refused after the touch keeps the touch's check and its button reads
+*Unlock*. Touch: the whole stage turns the touch gradient (the overlay's opacity eases 220 ms;
+the leaving PIN view fades as it was), the rings pulse, the hero lead, no timeout number;
+Opening and Releasing keep the green with the rings held at half and only the words crossing;
+Done pops its check and holds 320 ms before the shell rises, the header's padlock opening with
+it. Failure where it happened: a touch timeout stays on step 3 in neutral ink with *Start
+again*; a wrong PIN crosses into the reserved line. The password-only vault unlocks in one step,
+the field in place. The timing table is APP.md §6 Motion's Unlock paragraph now.
+
+**The states on the stage** (2026-10-18). The recovery key's step: the vault's name, "Type or
+paste the 48 digits from the sheet…", the vault's recovery keys listed ID first and quietly,
+eight 90 × 40 px cells with 20 px digits, a small accent tick on a finished group that checks
+out, a 2 px danger underline and the group's number in the message on one that does not,
+*Unlock* with *Cancel* beside it and "5 of 8 groups" at the row's end; a refused key keeps its
+digits, marks every cell at 1 px as any refusal is marked, and names the key ID as the thing to
+check. No match: the art with the LED dark and *Use recovery key* as a button where a sentence
+used to offer it; two keys in: the second key fading in the art; the pending touch at rest: the
+art breathing, the info line, and *Continue unlocking* as the primary since it adopts the touch;
+the deadline note on the same info line; blocked: a danger bar naming whose PIN and the recovery
+key as the way, the only way out on the last try; no Smart Card service: an attention line under
+the insert view. First run: "Create your vault" and one sentence, *Create a vault…*, *Restore
+from a vault or backup…*, *Test that a backup opens…*, no numbered START, no empty white; finish
+setting up takes the same shape. The damaged vault: the name and the path, the kept copy first
+as an attention bar with *Use that copy* inside it, *Try again* and *Restore from another
+file…*, *Rebuild the vault…* last with its consequence on its own line; the absent, busy and
+broken vaults on the same panel, each with its own state word (*Open elsewhere*, *Damaged*,
+*Needs attention*, *Needs setting up*, *Not found*, *No vault yet*). Every view that replaces
+the one holding focus gives it to its first button. The ceremony in a dialog (`CeremonyPanel`)
+has the stage's internals: the two-part line for an enrolment ("Prove it is you · Add the new
+unlock method"), the key art, the chip, the fields, the touch takeover inside the box, a pinned
+height so the box never jumps, the dialog's own foot band for *Cancel* and, after a failure the
+user did not choose, *Start again*; a typed proof leads with what to type and why; and the green
+stays through an enrolment's second touch, which the whole-tree review caught leaving early. The
+mock stages every state (its previews are listed in server.py's docstring) and plays explicit
+and tray unlocks.
+
+**Chosen along the way, and left** (2026-10-18). Chosen against the mock, for the house: the
+step label is *YubiKey*, never *Key*; no contractions; the busy vault's word is *Open
+elsewhere*; the damaged vault's kept copy says "Enfold kept the vault it replaced on <date>",
+since the retired file is whatever a replacement retired; a lead inside a dialog takes the
+section size under the dialog's own title; a refused recovery key underlines the cells at 1 px
+and points at the key ID rather than faulting a group. Left: the insert view's *Cancel* now
+takes the focus, so Enter twice after *Unlock with YubiKey* cancels the wait (the focus could
+stay on the stage there); the panel's height eases only across a view change, not for an error
+line inside one; "Drive D: is not connected" for an absent vault needs a drive-root check the
+core does not make; the Done hold of 320 ms is coded but the mock cannot play a whole unlock; in
+a dialog, *Start again* keeps the failed ceremony on screen until the new one's first event, and
+its way out reads *Cancel* where *Close* may be truer; the setup-needed panel still shows
+*Backups and copies…*; `.u-lead`/`.u-meta` are dead rules and a few comments still say "card 2";
+the deadline note keeps the string §2.2 quotes. Nothing of direction 1 has been seen in a real
+window: the user's eye is the next gate, and the YubiKey's real timing (the LED, the touch's
+blink) is what the mock cannot show.

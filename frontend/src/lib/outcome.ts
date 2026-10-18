@@ -36,8 +36,8 @@ export function methodAfter(prev: string, c: CeremonyState): string {
   return c.method || prev;
 }
 
-// wordedForToken says whether the three cards read as the token flow —
-// "Waiting for the key", the PIN, the touch — rather than as a typed
+// wordedForToken says whether the lock screen's panel reads as the token
+// flow — the YubiKey, the PIN, the touch — rather than as a typed
 // secret. A check of a backup and a finish-setup are never worded for a
 // token, whatever they ask for. Before the core names the method, the
 // step is the only evidence there is: a password or recovery prompt is

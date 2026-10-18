@@ -163,7 +163,7 @@ describe("the verb table", () => {
 describe("the lock screen's and the dialogs' words", () => {
   it("names card 2 in its fields' order, the PIN first", () => {
     expect(ceremonyCopy.pinAndPassword).toBe("PIN and password");
-    for (const line of [lockCopy.tokenPasswordHint, vaultCopy.passwordOn]) {
+    for (const line of [ceremonyCopy.pinAndPassword, vaultCopy.passwordOn]) {
       expect(line.indexOf("PIN"), line).toBeGreaterThanOrEqual(0);
       expect(line.indexOf("PIN"), line).toBeLessThan(line.indexOf("password"));
     }
@@ -174,7 +174,8 @@ describe("the lock screen's and the dialogs' words", () => {
       if (code && code.startsWith("token.")) expect(codeText(code), code).not.toMatch(bare);
     }
     expect(codeText(Code.CodePasswordDeadline)).not.toMatch(/\bthe key\b/i);
-    expect(lockCopy.matched("Personal vault")).toBe("This YubiKey unlocks Personal vault.");
+    expect(lockCopy.insertLine("Personal vault")).toBe("Waiting for a YubiKey that unlocks Personal vault.");
+    for (const s of [lockCopy.stepKey, lockCopy.lastTry, lockCopy.stoppedWaiting, lockCopy.stoppedLine, lockCopy.insertStill]) expect(s, s).not.toMatch(/\b(the|this|a) key\b|^key\b/i);
   });
   it("says what the purge means, the consequence first and no key", () => {
     expect(purgedText(["Old laptop backup"])).toBe('"Old laptop backup" was forgotten more than 30 days ago, so it can no longer be opened.');
@@ -188,6 +189,44 @@ describe("the lock screen's and the dialogs' words", () => {
   });
   it("ends a lock-screen command that opens a dialog with an ellipsis", () => {
     expect(lockCopy.createInstead.endsWith("…")).toBe(true);
+    for (const s of [lockCopy.findIt, lockCopy.useThatCopy, lockCopy.restoreOther]) expect(s.endsWith("…"), s).toBe(true);
+  });
+  it("says the stage's edge states in the house voice: no contraction, no bare key", () => {
+    const said = [
+      lockCopy.noMatch("Personal vault"), lockCopy.busyLead("Personal vault"), lockCopy.busyLine, lockCopy.absentLead("Personal vault"),
+      lockCopy.damagedLead("Personal vault"), lockCopy.keptCopy("2026-10-01"), lockCopy.rebuildLine, lockCopy.finishLead("Personal vault"),
+      lockCopy.recoveryLine, lockCopy.recoveryRefused("Personal vault"), lockCopy.pendingTouch, lockCopy.continueUnlocking,
+      ceremonyCopy.blockedLead, ceremonyCopy.blockedMeans, ceremonyCopy.blockedMeansWayOut, lockCopy.pinLead, lockCopy.brokenLine(""), lockCopy.brokenLine("yesterday, 17:10"), lockCopy.header.busy, stepCopy[CeremonyStep.StepBlocked].body, ceremonyCopy.groupsMistyped([3]), ceremonyCopy.groupsMistyped([3, 5]),
+      ceremonyCopy.insertProve, ceremonyCopy.insertProveLine(["Desk"], true), ceremonyCopy.insertProveLine(["Desk"], false), ceremonyCopy.insertNew, ...ceremonyCopy.halves,
+      ceremonyCopy.swapLead("Desk"), ceremonyCopy.swapLine, ceremonyCopy.checking, ceremonyCopy.lastTryHere, ...Object.values(ceremonyCopy.doneTitle),
+      ceremonyCopy.typeProve, ceremonyCopy.typeProveLine(true), ceremonyCopy.typeProveLine(false), codeText("vault.broken"), codeText("vault.indeterminate"),
+      stepCopy[CeremonyStep.StepTwoKeys].title, stepCopy[CeremonyStep.StepTwoKeys].body, ...Object.values(lockCopy.derivingLead), lockCopy.done.created,
+    ];
+    for (const s of said) {
+      expect(s, s).not.toMatch(/n't|'re|'ll|'ve|it's/i);
+      // "key ID" is the recovery sheet's own word for its ID.
+      expect(s, s).not.toMatch(/\b(the|this|a) key\b(?! ID)/i);
+    }
+    expect(lockCopy.noMatch("Personal vault")).toBe("This YubiKey is not one of Personal vault's unlock methods");
+    // Only an enrolment's wait says what comes next (APP.md §13).
+    expect(ceremonyCopy.insertProveLine(["Desk", "Travel"], true)).toBe("Desk, or Travel. The new unlock method comes next.");
+    expect(ceremonyCopy.insertProveLine(["Desk"], false)).toBe("Desk.");
+    expect(ceremonyCopy.insertProveLine([], false)).toBe("");
+    // A typed proof says why; only an enrolment's what comes next.
+    expect(ceremonyCopy.typeProveLine(false)).toBe("It proves it is you.");
+    expect(ceremonyCopy.typeProveLine(true)).toBe("The new unlock method comes next.");
+    // The broken line names what is reopened, the lock screen's button.
+    expect(codeText("vault.broken")).toBe("A save could not be confirmed. Reopen the vault to see which version was kept.");
+    // Whose PIN is in the lead; the bar is one sentence, the way out after its meaning.
+    expect(ceremonyCopy.blockedLead).toBe("This YubiKey's PIN is blocked");
+    expect(ceremonyCopy.blockedMeansWayOut.startsWith(ceremonyCopy.blockedMeans.slice(0, -1))).toBe(true);
+    // A broken vault's caption names the state the header names.
+    expect(lockCopy.brokenLine("")).toBe(lockCopy.header.broken);
+    expect(lockCopy.brokenLine("yesterday, 17:10").startsWith(`${lockCopy.header.broken} · `)).toBe(true);
+    expect(ceremonyCopy.groupsMistyped([3])).toBe("Group 3 does not check out. Compare its six digits with the sheet.");
+    expect(ceremonyCopy.groupsMistyped([2, 3, 5])).toBe("Groups 2, 3 and 5 do not check out. Compare their digits with the sheet.");
+    expect(ceremonyCopy.groupsTyped(5, 8)).toBe("5 of 8 groups");
+    expect(stepCopy[CeremonyStep.StepPIN].body).toBe("");
   });
   it("asks the close question in the order its buttons stand", () => {
     expect(closeCopy.body.indexOf("Quit")).toBe(0);
@@ -202,9 +241,12 @@ describe("the lock screen's and the dialogs' words", () => {
     expect(lockCopy.stillOpen(2)).toMatch(/^2 archives are still open\. Close them first: their saves/);
   });
   it("names the YubiKey, never a bare key, in the strip's and the panel's lines", () => {
-    const said = [lockCopy.pendingTouch, ceremonyCopy.touchCount(2), ceremonyCopy.swapBoth("Desk", ""), stepCopy[CeremonyStep.StepBlocked].title];
+    const said = [lockCopy.pendingTouch, ceremonyCopy.touchCount(2), ceremonyCopy.swapLead("Desk"), ceremonyCopy.swapLead(""), ceremonyCopy.swapLine, stepCopy[CeremonyStep.StepBlocked].title];
     for (const s of said) expect(s).not.toMatch(/\b(the|this) key\b/i);
-    expect(ceremonyCopy.swapBoth("Desk", "")).toBe("Remove Desk, then insert the YubiKey to add.");
+    // The core's InsertLabel, "the key to enroll", is never shown: the
+    // swap names the YubiKey to remove and says the new one follows.
+    expect(ceremonyCopy.swapLead("Desk")).toBe("Remove Desk");
+    expect(ceremonyCopy.swapLine).toBe("Then insert the new YubiKey. Enfold carries on by itself.");
     expect(stepCopy[CeremonyStep.StepBlocked].title).toBe("The PIN is blocked. Use your recovery key.");
   });
 });
@@ -266,8 +308,8 @@ describe("retries", () => {
     expect(retriesText({ retries: 0, retriesKnown: true, verified: true })).not.toMatch(/0/);
   });
   it("shows the count before the PIN is asked", () => {
-    expect(retriesText({ retries: 3, retriesKnown: true, verified: false })).toBe("3 attempts left");
-    expect(retriesText({ retries: 1, retriesKnown: true, verified: false })).toMatch(/last/);
+    expect(retriesText({ retries: 3, retriesKnown: true, verified: false })).toBe("3 tries left");
+    expect(retriesText({ retries: 1, retriesKnown: true, verified: false })).toBe("1 try left");
   });
   it("says unknown when the card is verified", () => {
     expect(retriesText({ retries: 3, retriesKnown: true, verified: true })).toMatch(/unknown/);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockTime, ext, fileIcon, hashText, keyId, lockLine, nearerDeadline, plural } from "./format";
+import { clockTime, date, ext, fileIcon, hashText, keyId, lockLine, nearerDeadline, plural, recoveryWords } from "./format";
 
 // The foot's countdown (APP.md §6, ruled 2026-09-12 after a review found
 // the foot reading the idle deadline alone): the absolute cap locks the
@@ -91,6 +91,24 @@ describe("keyId", () => {
 
 // The details modal's ciphertext hash (APP.md §13): a hash of all zeros is
 // no commit yet, and reads N/A rather than sixty-four zeros.
+describe("recoveryWords", () => {
+  const at = 1760000000;
+  it("keeps the label's own words, without the kind the list already says", () => {
+    expect(recoveryWords("Recovery key — printed, in the safe", at)).toBe("printed, in the safe");
+    expect(recoveryWords("Recovery key - the first one", at)).toBe("the first one");
+    expect(recoveryWords("recovery key: office", at)).toBe("office");
+    expect(recoveryWords("In the safe", at)).toBe("In the safe");
+  });
+  it("leaves a word that only begins like the kind alone", () => {
+    expect(recoveryWords("Recovery keys for Mum", at)).toBe("Recovery keys for Mum");
+  });
+  it("says the day it was added for a key named by its kind alone", () => {
+    expect(recoveryWords("Recovery key", at)).toBe(`added ${date(at)}`);
+    expect(recoveryWords("  ", at)).toBe(`added ${date(at)}`);
+    expect(recoveryWords("Recovery key", 0)).toBe("");
+  });
+});
+
 describe("hashText", () => {
   it("is the hash itself, whole and never shortened", () => {
     const h = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";

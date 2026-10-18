@@ -19,8 +19,12 @@
   interface Props {
     onclose: () => void;
     prefill?: string;
+    // prefer: the lock screen's Find it… opens the file where it is, the
+    // advanced choice already taken (APP.md §6, ruled 2026-10-17); a
+    // backup is always copied in, whatever this says.
+    prefer?: "copy" | "inplace";
   }
-  let { onclose, prefill = "" }: Props = $props();
+  let { onclose, prefill = "", prefer = "copy" }: Props = $props();
 
   const st = $derived(store.status);
   const kept = $derived(!!st && st.state !== VaultState.StateNone);
@@ -81,6 +85,7 @@
       info = i;
       name = i.vaultMatches && st?.displayName ? st.displayName : leaf(p).replace(/\.eks$/i, "");
       method = i.hardware ? "token" : i.password ? "password" : "recovery";
+      if (prefer === "inplace" && i.kind !== "backup") mode = "inplace";
     } catch (e) {
       problem = codeText(errorOf(e).code);
     } finally {

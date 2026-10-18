@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { setContext, untrack } from "svelte";
   import type { Snippet } from "svelte";
   import { fade, scale } from "svelte/transition";
   import { FAST, LEAVE, motion } from "../lib/motion";
-  import { inPopover, isTopDialog, registerDialog } from "../lib/dialogs";
+  import { DIALOG_HOST, inPopover, isTopDialog, registerDialog } from "../lib/dialogs";
+  import type { DialogHost } from "../lib/dialogs";
   import { dialogCopy } from "../lib/strings";
 
   interface Props {
@@ -54,6 +55,12 @@
     anchored?: boolean;
   }
   let { title, onclose, dismissable = false, children, actions, wide = false, covered = false, onsubmit, select, closeButton = false, anchored = false }: Props = $props();
+
+  // What the body lends a ceremony panel (lib/dialogs DialogHost): the
+  // foot band while it is mounted, and the touch's green over the box
+  // (APP.md §6, ruled 2026-10-17).
+  const host: DialogHost = $state({ foot: null, green: false, ceremony: false });
+  setContext(DIALOG_HOST, host);
 
   // Focus moves into a dialog as it opens, so that a keyboard user is in
   // it and not still on the button that opened it: into the first field
@@ -174,7 +181,7 @@
 <svelte:window onkeydowncapture={trap} onkeydown={key} onfocusin={refocus} />
 
 <div class="backdrop" class:anchored role="presentation" bind:this={backdrop} in:fade|global={motion()} out:fade|global={motion(LEAVE)} onmousedown={backdropDown} onclick={backdropClick}>
-  <div class="dialog" class:wide role="dialog" aria-modal={covered ? undefined : true} aria-label={title} tabindex="-1" bind:this={box} inert={covered || undefined} in:scale|global={motion(FAST, { start: 0.97 })} out:fade|global={motion(LEAVE)}>
+  <div class="dialog" class:wide class:ceremony={host.ceremony} class:green={host.green} role="dialog" aria-modal={covered ? undefined : true} aria-label={title} tabindex="-1" bind:this={box} inert={covered || undefined} in:scale|global={motion(FAST, { start: 0.97 })} out:fade|global={motion(LEAVE)}>
     {#if onsubmit}
       <!-- display: contents makes the body and the foot the box's own
            flex children, as if the form were not there. -->
@@ -200,7 +207,11 @@
     {/if}
     {@render children()}
   </div>
-  {#if actions}
+  <!-- A ceremony panel in the body draws the foot while it is mounted:
+       its buttons follow the ceremony's step (lib/dialogs DialogHost). -->
+  {#if host.foot}
+    <div class="dialog-foot">{@render host.foot()}</div>
+  {:else if actions}
     <div class="dialog-foot">{@render actions()}</div>
   {/if}
 {/snippet}

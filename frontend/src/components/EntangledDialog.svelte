@@ -9,32 +9,27 @@
   // the VMK and could enrol an unlock method of their own. Why is the
   // disclosure's, not the body's: the body says what changes for the
   // user, the dialog template (strings.ts, ruled 2026-10-17).
-  import { Keys, errorOf } from "../lib/api";
-  import { store } from "../lib/state.svelte";
-  import { codeText, dialogCopy } from "../lib/strings";
+  import { Keys } from "../lib/api";
+  import { dialogCopy } from "../lib/strings";
   import Dialog from "./Dialog.svelte";
 
   interface Props {
     mode: "on" | "change" | "off";
     onclose: () => void;
+    // begin is the Vault page's: it starts the act, reads the unlock
+    // methods and the switch again when it ends, and keeps the act for the
+    // ceremony dialog's Start again (KeysPage).
+    begin: (run: () => Promise<unknown>) => Promise<void>;
   }
-  let { mode, onclose }: Props = $props();
+  let { mode, onclose, begin }: Props = $props();
 
   const copy = $derived(mode === "on" ? dialogCopy.passwordOn : mode === "change" ? dialogCopy.passwordChange : dialogCopy.passwordOff);
   const how = $derived(mode === "on" ? dialogCopy.passwordOn.how : mode === "change" ? dialogCopy.passwordChange.how : "");
 
   async function go() {
+    const m = mode;
     onclose();
-    store.dismissCeremony();
-    try {
-      if (mode === "off") await Keys.SetEntangled(false);
-      else if (mode === "on") await Keys.SetEntangled(true);
-      else await Keys.ChangeEntangledPassword();
-    } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
-    }
-    await store.refreshSlots();
-    await store.refreshEntangled();
+    await begin(() => (m === "off" ? Keys.SetEntangled(false) : m === "on" ? Keys.SetEntangled(true) : Keys.ChangeEntangledPassword()));
   }
 </script>
 

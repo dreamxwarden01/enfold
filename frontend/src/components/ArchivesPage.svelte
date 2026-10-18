@@ -1042,7 +1042,7 @@
     <div class="bar line">
       <svg class="i i-14"><use href="#i-lock" /></svg>
       <span class="grow">The vault is locked. Open archives can still be browsed; everything else needs the vault.</span>
-      <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>{commandCopy.unlock}</button>
+      <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
     </div>
   {/if}
   {#if tampered}

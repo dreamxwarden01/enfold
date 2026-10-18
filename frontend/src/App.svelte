@@ -30,6 +30,9 @@
   // is open to browse, or when the user asks for it.
   const showLock = $derived.by(() => {
     if (!st) return true;
+    // Settings, opened from the lock scene's gear: it needs no vault
+    // (APP.md §6, ruled 2026-10-17), so the scene steps aside for it.
+    if (store.settingsLocked && store.route === "settings") return false;
     if (st.state === VaultState.StateNone) return true;
     if (st.state === VaultState.StateUnlocked) return store.settling; // the unlock's full stop (APP.md §6)
     if (store.route === "lock") return true;

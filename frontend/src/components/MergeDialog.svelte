@@ -95,8 +95,12 @@
     if (cer) reading = false;
   });
 
-  async function read() {
-    store.dismissCeremony();
+  // keep: begun again from the panel's Start again (CeremonyPanel onagain;
+  // ruled 2026-10-17) — the failed ceremony stays on the panel until the
+  // new one's first event takes its place, so the box does not fall back
+  // to the proof screen and return.
+  async function read(keep = false) {
+    if (!keep) store.dismissCeremony();
     reading = true;
     try {
       await Vault.InspectRecords(path);
@@ -197,7 +201,7 @@
       {#if rows.length === 0}<div class="empty">That file has no archive this vault could take.</div>{/if}
     </div>
   {:else if cer}
-    <CeremonyPanel c={cer} onclose={close} />
+    <CeremonyPanel c={cer} onclose={close} onagain={() => void read(true)} />
   {:else if reading}
     <p class="t-sub">Opening a copy of the file…</p>
   {:else}
@@ -245,12 +249,14 @@
       <button type="button" class="btn" disabled={merging} onclick={close}>{dialogCopy.cancel}</button>
     {:else if !cer && !reading}
       <!-- What happens next is the unlock that opens the file. -->
-      <button type="button" class="btn accent" disabled={!looked} onclick={read}>{lockCopy.continue}</button>
+      <button type="button" class="btn accent" disabled={!looked} onclick={() => void read()}>{lockCopy.continue}</button>
       <button type="button" class="btn" onclick={close}>{dialogCopy.cancel}</button>
     {:else if !cer}
       <!-- staging: nothing to cancel yet in the core -->
       <button type="button" class="btn" onclick={close}>{dialogCopy.cancel}</button>
     {/if}
-    <!-- While the ceremony runs the panel carries its own Cancel (APP.md §6). -->
+    <!-- While the ceremony runs its panel draws this band instead: its
+         Continue and Cancel follow the step (CeremonyPanel; APP.md §6,
+         ruled 2026-10-17). -->
   {/snippet}
 </Dialog>

@@ -73,11 +73,19 @@ is not an .efd is archive.not_an_archive; and a locked vault answers
 vault.needs_unlock, which sends the page to the lock scene with the path
 kept.
 
-The tray's Unlock... (APP.md 2.4, ruled 2026-10-17) is played as its event
-alone: POST /mock/preview {"name": "unlock"} queues the shell.unlock the
-shell emits after the tray has begun the ceremony, so the page shows its
-lock scene - over an open archive too. The ceremony itself is not begun
-here; the lock scene's own buttons do that, as everywhere in this mock.
+The tray's Unlock... (APP.md 2.4, ruled 2026-10-17) is played as the shell
+plays it: POST /mock/preview {"name": "unlock"} begins the ceremony the way
+the tray's firstItem does - the YubiKey where the vault has one, else its
+password - and then queues the shell.unlock, so the page shows its lock
+scene with the ceremony already running - over an open archive too.
+
+An unlock begun from the page (Vault.BeginUnlock: the rest panel's buttons,
+or an explicit Unlock - the banner's, the foot's, an Explorer open's, which
+begin it at once, APP.md 6, ruled 2026-10-17) is parked at its opening
+step: WaitingForKey under the method named, or, with a touch pending, the
+touch it picks up. Nothing moves on from there - the stage's other moments
+are the PREVIEWS below - and Vault.CancelUnlock ends it cancelled, back at
+Locked.
 
 The first way in's ceremonies are played (APP.md 6, ruled 2026-10-17):
 Create vault, Restore from a backup and Finish setting up run their steps
@@ -88,8 +96,37 @@ served with a shim that posts each "secret ..." line to /mock/secret, so
 the password typed in the dialog answers the Choose prompt from the page
 and the next step follows. POST /mock/state {"refuseChosen": true} has the
 next chosen password refused once (vault.password_short), the prompt left
-standing for card 2 to ask. Start from first run with POST /mock/state
-{"vault": {"state": "none"}} and a reload."""
+standing for the panel's password step to ask. Start from first run with POST /mock/state
+{"vault": {"state": "none"}} and a reload.
+
+A create's or a finish-setup's run past its YubiKey's touch is played as
+events, not posted as a state, since the green holds through what follows
+a touch only for a page that saw the touch (APP.md 6, ruled 2026-10-17):
+POST /mock/preview {"name": "lock", "scene": "create_deriving"} - or
+"create_done", "setup_deriving", "setup_done" (LOCK_SCENES) - with the
+page on the lock screen.
+
+The ceremony in a dialog (APP.md 6, 13; ruled 2026-10-17) is played on an
+unlocked vault. The Vault page's acts - Keys.BeginEnroll, RemoveSlot,
+RotateNow, ExportBackup, RevealRecoveryKey, ChangeEntangledPassword - and
+the import's proof, Vault.InspectRecords, park their ceremony at the
+proof's opening wait (begin_act), so the page's own buttons open the
+dialog's panel; Vault.CancelUnlock, the panel's Cancel, ends it cancelled
+with the vault still unlocked. Each moment after that is a scene, queued
+as the core's events a step apart, with the page on the Vault page:
+POST /mock/preview {"name": "dialog", "scene": "pin"} - or "touch",
+"swap", "new_key", "last_try", "blocked", "done", "timeout"... (the list
+is DIALOG_SCENES; an unknown scene answers with the names) - and "kind"
+for another act than the enrolment ("remove", "rotate", "export",
+"reveal", "entangle", or "records" with the import dialog open on its
+proof and Continue pressed). {"scene": "end"} ends what a scene left.
+
+The dialog's Start again (ruled 2026-10-17) calls again the act the page
+began, which parks again at the opening wait (begin_act): it is offered
+only for an act the page itself began, so stage it by opening the act
+from the page's own button first (Add an unlock method... then Add), then
+the "timeout" or "failed" scene, then press Start again. A scene played
+with no act begun shows Close alone, as an act the page cannot repeat."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -266,7 +303,8 @@ state = {
 # 2026-09-08 — an entangled vault, a token ceremony parked at the PIN, with
 # the vault's password waiting in the field beside it; "deadline" is the
 # note the status carries when the five minutes from the touch ran out
-# (APP.md 2.2); "locked" puts it back.
+# (APP.md 2.2); "locked" puts it back. The stage's moments (insert, touch,
+# done, timeout, the password-only vault...) are listed after _cer below.
 # "reclaim" is not a vault state but an operation: it plays the in-place
 # compaction the core runs itself after a commit whose plan would give
 # enough of the tail back (APP.md 2.3, FORMAT.md R40). It is in the same
@@ -278,13 +316,16 @@ state = {
 # one: the shell handing a second launch's file over (APP.md 14), which
 # takes "path" or "paths" from the same body. "unlock" is the third: the
 # tray's Unlock..., which the page answers with its lock scene (APP.md 2.4,
-# ruled 2026-10-17). All are queued like every other event and drained by
-# GET /mock/events.
+# ruled 2026-10-17). "dialog" is the fourth: a ceremony inside a dialog,
+# played as events on an unlocked vault (DIALOG_SCENES, below). All are
+# queued like every other event and drained by GET /mock/events.
 PREVIEW_OPS = {
     "reclaim": lambda body: start_reclaim(),
     "close": lambda body: emit("shell.close", None),
     "open": lambda body: shell_open(body),
-    "unlock": lambda body: emit("shell.unlock", None),
+    "unlock": lambda body: tray_unlock(body),
+    "dialog": lambda body: dialog_scene(body),
+    "lock": lambda body: lock_scene(body),
 }
 
 PREVIEWS = {
@@ -292,7 +333,7 @@ PREVIEWS = {
         "state": "unlocking", "entangled": True, "note": "",
         "ceremony": {
             "seq": 2, "kind": "unlock", "method": "token", "step": "pin", "promptId": "pin-1",
-            "choose": False, "slotLabel": "YubiKey 5C - desk", "recoveryId": "", "retries": 3,
+            "choose": False, "slotLabel": "YubiKey 5C — desk", "recoveryId": "", "retries": 3,
             "retriesKnown": True, "verified": False, "readerCount": 1, "n": 0, "pinAsked": False,
             "error": "", "removeLabel": "", "insertLabel": "", "archives": 0,
         },
@@ -301,7 +342,7 @@ PREVIEWS = {
         "state": "unlocking", "entangled": True, "note": "",
         "ceremony": {
             "seq": 3, "kind": "unlock", "method": "token", "step": "pin", "promptId": "pin-2",
-            "choose": False, "slotLabel": "YubiKey 5C - desk", "recoveryId": "", "retries": 2,
+            "choose": False, "slotLabel": "YubiKey 5C — desk", "recoveryId": "", "retries": 2,
             "retriesKnown": True, "verified": False, "readerCount": 1, "n": 0, "pinAsked": False,
             "error": "token.pin", "removeLabel": "", "insertLabel": "", "archives": 0,
         },
@@ -310,14 +351,123 @@ PREVIEWS = {
         "state": "unlocking", "entangled": True, "note": "",
         "ceremony": {
             "seq": 4, "kind": "unlock", "method": "token", "step": "password", "promptId": "pw-2",
-            "choose": False, "slotLabel": "YubiKey 5C - desk", "recoveryId": "", "retries": 0,
+            "choose": False, "slotLabel": "YubiKey 5C — desk", "recoveryId": "", "retries": 0,
             "retriesKnown": False, "verified": True, "readerCount": 1, "n": 1, "pinAsked": True,
             "error": "vault.auth", "removeLabel": "", "insertLabel": "", "archives": 0,
         },
     },
     "deadline": {"state": "locked", "entangled": True, "note": "token.password_deadline", "ceremony": None},
-    "locked": {"state": "locked", "entangled": True, "note": "", "ceremony": None},
+    "locked": {"state": "locked", "entangled": True, "note": "", "ceremony": None,
+               "hasHardwareSlot": True, "hasPasswordSlot": False},
 }
+
+
+def _cer(step, **over):
+    """One unlock ceremony event, as the core emits it, for the stage's
+    scenes below; everything not named is the event's zero."""
+    c = {"seq": 5, "kind": "unlock", "method": "token", "step": step, "promptId": "", "choose": False,
+         "slotLabel": "YubiKey 5C — desk", "recoveryId": "", "retries": 0, "retriesKnown": False,
+         "verified": False, "readerCount": 1, "n": 0, "pinAsked": False, "error": "",
+         "removeLabel": "", "insertLabel": "", "archives": 0}
+    c.update(over)
+    return c
+
+
+# The lock screen's stage (APP.md 6, ruled 2026-10-17): one panel changing
+# in place, each moment of an unlock staged as the core leaves it, so each
+# can be looked at without a YubiKey. Reload the page after each.
+#   insert    listening for the YubiKey: the key art, its LED breathing
+#   two_keys  two YubiKeys in, on the insert step
+#   no_match  a YubiKey that is not one of the vault's unlock methods
+#   last_try  the PIN on its last try, after a wrong one (the bar above)
+#   touch     the whole stage green, the rings pulsing
+#   deriving  still green, the rings held at half: "Opening the vault..."
+#   releasing the same green while the YubiKey is let go
+#   done      the check; staged as Releasing so that it stands - the real
+#             one holds only for the settle before the shell rises
+#   timeout   the touch timed out (token.touch): the state is back at
+#             Locked and the failure stays on the touch's step, neutral
+#   blocked   the PIN is blocked: the core parks there until a cancel
+#   password_only   a vault with no YubiKey: the rest panel's primary is
+#             *Unlock with password*; "password_step" is its one step
+#   recovery  the recovery key's cells, on the recovery line
+#   create_insert / setup_insert   the first way in's wait for the YubiKey
+#             it adds, staged at the SwapKey with nothing to remove that
+#             opens the enrolment (a create names no method; a setup has
+#             named the recovery key's). The live run, with the WaitingForKey
+#             after it, is the dialogs' own: Create vault... or Finish
+#             setting up... in the page, with POST /mock/state
+#             {"enrolWait": 60} to hold the wait (first_way_in, below).
+PREVIEWS.update({
+    "insert": {"state": "unlocking", "ceremony": _cer("waiting_for_key")},
+    "two_keys": {"state": "unlocking", "ceremony": _cer("two_keys", readerCount=2)},
+    "no_match": {"state": "unlocking", "ceremony": _cer("no_match")},
+    "last_try": {"state": "unlocking", "entangled": True, "ceremony": _cer(
+        "pin", promptId="pin-3", retries=1, retriesKnown=True, error="token.pin")},
+    "touch": {"state": "unlocking", "ceremony": _cer("touch", pinAsked=True, verified=True, n=1)},
+    "deriving": {"state": "unlocking", "ceremony": _cer("deriving", pinAsked=True, verified=True, n=1)},
+    "releasing": {"state": "releasing", "ceremony": _cer("releasing", pinAsked=True, verified=True, n=1)},
+    "done": {"state": "releasing", "ceremony": _cer("done", pinAsked=True, verified=True, n=1)},
+    "timeout": {"state": "locked", "ceremony": _cer("failed", pinAsked=True, verified=True, n=1, error="token.touch")},
+    "blocked": {"state": "unlocking", "ceremony": _cer("blocked", error="token.pin_blocked")},
+    "password_only": {"state": "locked", "entangled": False, "hasHardwareSlot": False, "hasPasswordSlot": True,
+                      "note": "", "ceremony": None},
+    "password_step": {"state": "unlocking", "entangled": False, "hasHardwareSlot": False, "hasPasswordSlot": True,
+                      "ceremony": _cer("password", method="password", promptId="pw-1", slotLabel="")},
+    "recovery": {"state": "unlocking", "ceremony": _cer("recovery", method="recovery", promptId="rk-1", slotLabel="")},
+    "create_insert": {"state": "unlocking", "ceremony": _cer("swap_key", kind="create", method="", slotLabel="",
+                                                             readerCount=0, insertLabel="the key to enroll")},
+    "setup_insert": {"state": "unlocking", "setupNeeded": True, "ceremony": _cer(
+        "swap_key", kind="setup", method="recovery", slotLabel="", readerCount=0, insertLabel="the key to enroll")},
+})
+
+# The lock screen's other states (APP.md 6, ruled 2026-10-17), each one
+# preview away, so the one panel can be looked at in every shape it takes
+# without a sequence of /mock/state posts. Each names every fact it leans
+# on, since a preview is merged over whatever the last one left - start
+# from "locked" when in doubt. Reload the page after each.
+#   recovery_refused  the recovery key refused (vault.auth): the prompt
+#             asked again with the error, a higher seq, the typed digits
+#             brought back by the page's own draft (none after a reload)
+#   no_service  ten seconds at the insert step with the Smart Card service
+#             not running (token.no_service): the LED stops breathing
+#   pending_touch  at rest with the YubiKey still blinking from a cancelled
+#             unlock: *Continue unlocking* adopts the touch (APP.md 2.2)
+#   broken    a save's outcome unknown: *Reopen the vault*
+#   busy      the vault held by another Enfold
+#   setup_needed  an adopted backup with its recovery key alone
+#   first_run  no vault configured yet
+#   absent    the configured vault is not at its path
+#   damaged / damaged_no_copy  the file is there and is not a vault, with
+#             and without the copy a replacement kept
+#   create_pin / create_touch  a create's YubiKey after its wait, at first
+#             run: no step line, the header *Creating*
+#   setup_recovery  Finish setting up's recovery key, asked first
+_AT_REST = {"state": "locked", "ceremony": None, "note": "", "pendingTouch": False, "setupNeeded": False,
+            "missingPath": "", "damaged": False, "retiredCopies": 0, "retiredPath": "",
+            "hasHardwareSlot": True, "hasPasswordSlot": False, "entangled": True}
+_FIRST_RUN = dict(_AT_REST, state="none", hasHardwareSlot=False, entangled=False)
+# Retired at noon UTC on 2026-10-01, so the date reads the same in any zone.
+_RETIRED = "C:/Users/me/AppData/Local/Enfold/vault-replaced-1790856000-1.eks"
+PREVIEWS.update({
+    "recovery_refused": {"state": "unlocking", "ceremony": _cer(
+        "recovery", seq=6, method="recovery", promptId="rk-2", slotLabel="", error="vault.auth")},
+    "no_service": {"state": "unlocking", "ceremony": _cer("waiting_for_key", readerCount=0, error="token.no_service")},
+    "pending_touch": dict(_AT_REST, pendingTouch=True),
+    "broken": dict(_AT_REST, state="broken"),
+    "busy": dict(_AT_REST, state="busy"),
+    "setup_needed": dict(_AT_REST, setupNeeded=True, hasHardwareSlot=False, entangled=False),
+    "first_run": _FIRST_RUN,
+    "absent": dict(_FIRST_RUN, missingPath="D:/Vaults/personal.eks"),
+    "damaged": dict(_FIRST_RUN, missingPath="D:/Vaults/personal.eks", damaged=True,
+                    retiredCopies=1, retiredPath=_RETIRED),
+    "damaged_no_copy": dict(_FIRST_RUN, missingPath="D:/Vaults/personal.eks", damaged=True),
+    "create_pin": {"state": "unlocking", "ceremony": _cer(
+        "pin", kind="create", method="", promptId="pin-c", retries=3, retriesKnown=True)},
+    "create_touch": {"state": "unlocking", "ceremony": _cer("touch", kind="create", method="", pinAsked=True, n=1)},
+    "setup_recovery": {"state": "unlocking", "setupNeeded": True, "ceremony": _cer(
+        "recovery", kind="setup", method="recovery", promptId="rk-s", slotLabel="")},
+})
 
 def archive(archive_id):
     for a in state["archives"]:
@@ -1529,8 +1679,8 @@ def close_decided(args):
 # answers the prompt that stands - or is refused as the core refuses it,
 # with secret.refused and the prompt left standing. POST /mock/state
 # {"refuseChosen": true} refuses the next chosen password once with
-# vault.password_short whatever it is, so the fallback (card 2 asking the
-# Choose prompt itself) can be seen; the core would refuse it only under
+# vault.password_short whatever it is, so the fallback (the panel's password step
+# asking the Choose prompt itself) can be seen; the core would refuse it only under
 # 8 characters, which the dialog never sends. The YubiKey's own steps are
 # timed, never asked: there is no key here.
 
@@ -1551,12 +1701,17 @@ def emit_status():
     emit("vault.state", vault_status())
 
 
-def emit_ceremony(kind, step, **extra):
+def ceremony_event(kind, step, **extra):
     c = {"seq": next_seq(), "kind": kind, "method": "", "step": step, "promptId": "", "choose": False,
          "slotLabel": "", "recoveryId": "", "retries": 0, "retriesKnown": False, "verified": False,
          "readerCount": 1, "n": 0, "pinAsked": False, "error": "", "removeLabel": "", "insertLabel": "",
          "archives": 0}
     c.update(extra)
+    return c
+
+
+def emit_ceremony(kind, step, **extra):
+    c = ceremony_event(kind, step, **extra)
     state["vault"]["ceremony"] = c
     emit("vault.ceremony", c)
 
@@ -1573,14 +1728,15 @@ def pause(seconds):
         time.sleep(0.05)
 
 
-def ask(kind, secret, step, choose=False):
+def ask(kind, secret, step, choose=False, **extra):
     """A prompt: the ceremony stands at it until the page answers it on
-    /mock/secret, or the ceremony is cancelled."""
+    /mock/secret, or the ceremony is cancelled. extra goes on the event
+    (the method the core has named by then)."""
     prompt_id = secrets.token_hex(8)
     with CEREMONY_LOCK:
         CEREMONY["prompt"] = {"id": prompt_id, "secret": secret, "choose": choose}
         CEREMONY["answer"] = None
-    emit_ceremony(kind, step, promptId=prompt_id, choose=choose)
+    emit_ceremony(kind, step, promptId=prompt_id, choose=choose, **extra)
     while True:
         pause(0.05)
         with CEREMONY_LOCK:
@@ -1610,17 +1766,24 @@ def submit_secret(message):
         CEREMONY["answer"] = value
 
 
-def first_way_in(kind, first, entangle):
+def first_way_in(kind, first, entangle, method=""):
     """The core's firstWayIn: the chosen password first, before the key
-    (APP.md 3), then the key's own steps."""
+    (APP.md 3), then the key's own steps. As the core does (enrollToken,
+    then waitForOneReader), the token flow opens at SwapKey with nothing to
+    remove and then waits at WaitingForKey - under the method the core
+    named before, which for a create is none and for an adopted backup is
+    the recovery key's, never "token": the page must draw this wait from
+    the steps alone. POST /mock/state {"enrolWait": 60} holds the wait that
+    many seconds (1.5 by default), so it can be looked at."""
     if first == "password" or entangle:
-        ask(kind, "password", "password", choose=True)
+        ask(kind, "password", "password", choose=True, method=method)
     if first == "token":
-        emit_ceremony(kind, "waiting_for_key", method="token")
+        emit_ceremony(kind, "swap_key", method=method, insertLabel="the key to enroll")
+        emit_ceremony(kind, "waiting_for_key", method=method, readerCount=0)
+        pause(float(state.get("enrolWait", 1.5)))
+        emit_ceremony(kind, "touch", method=method, slotLabel="YubiKey 5C — desk", n=1)
         pause(1.5)
-        emit_ceremony(kind, "touch", method="token", slotLabel="YubiKey 5C - desk", n=1)
-        pause(1.5)
-    emit_ceremony(kind, "deriving")
+    emit_ceremony(kind, "deriving", method=method)
     pause(0.8)
 
 
@@ -1632,16 +1795,23 @@ def play(kind, first, entangle, after):
     CEREMONY.update({"kind": kind, "prompt": None, "answer": None, "cancelled": False,
                      "before": dict(state["vault"])})
     state["vault"]["state"] = "unlocking"
+    # Every ceremony opens at WaitingForKey with no method named (the
+    # core's newCeremonyLocked), carried on the status that says Unlocking.
+    state["vault"]["ceremony"] = ceremony_event(kind, "waiting_for_key", readerCount=0)
     emit_status()
 
     def run():
         try:
+            method = ""
             if kind != "create":
-                # An adopted backup opens with its own recovery key first.
-                ask(kind, "recovery", "recovery")
-                emit_ceremony(kind, "deriving")
+                # An adopted backup opens with its own recovery key first,
+                # and the core names that way in (credential's setMethod).
+                method = "recovery"
+                emit_ceremony(kind, "waiting_for_key", method=method, readerCount=0)
+                ask(kind, "recovery", "recovery", method=method)
+                emit_ceremony(kind, "deriving", method=method)
                 pause(0.8)
-            first_way_in(kind, first, entangle)
+            first_way_in(kind, first, entangle, method)
             after()
         except Cancelled:
             back = CEREMONY["before"] or {}
@@ -1711,10 +1881,270 @@ def finish_setup(args):
 
 
 def cancel_unlock(args):
-    """Vault.CancelUnlock: the ceremony played here ends cancelled."""
+    """Vault.CancelUnlock: the ceremony played here ends cancelled; an
+    unlock parked by begin_unlock, or staged by a preview, ends as the
+    core ends a cancelled one - a Failed event with ceremony.cancelled,
+    then the state back at Locked."""
     if CEREMONY["kind"]:
         CEREMONY["cancelled"] = True
+        return None
+    v = state["vault"]
+    # A dialog's ceremony, parked by begin_act or staged by a scene, ends
+    # cancelled and leaves the vault unlocked.
+    if v["state"] == "unlocked":
+        return end_act()
+    if v["state"] in ("unlocking", "releasing") and (v.get("ceremony") or {}).get("kind") == "unlock":
+        emit_ceremony("unlock", "failed", method=v["ceremony"].get("method", ""), error="ceremony.cancelled")
+        v["state"] = "locked"
+        emit_status()
     return None
+
+
+def begin_unlock(args):
+    """Vault.BeginUnlock(method): the unlock parked at its opening step, as
+    the core leaves it until a YubiKey answers - WaitingForKey under the
+    method named (APP.md 2.2); a pending touch is picked up instead, at the
+    touch (the rest panel's *Continue unlocking*). Refused, as the core
+    refuses it, for a vault that is not at rest or needs setting up."""
+    v = state["vault"]
+    method = args[0] if args else "token"
+    if CEREMONY["kind"] or v["state"] != "locked":
+        return Err("vault.busy") if v["state"] == "busy" else None
+    if v.get("setupNeeded"):
+        return Err("vault.setup_needed")
+    v["state"] = "unlocking"
+    v["note"] = ""
+    if v.get("pendingTouch") and method == "token":
+        v["pendingTouch"] = False
+        emit_ceremony("unlock", "touch", method="token", slotLabel="YubiKey 5C — desk", pinAsked=True, verified=True, n=1)
+    else:
+        emit_ceremony("unlock", "waiting_for_key", method=method, readerCount=0)
+    emit_status()
+    return None
+
+
+# The ceremony in a dialog (APP.md 6, 13; ruled 2026-10-17): the Vault
+# page's acts - Add an unlock method..., Remove..., Re-key..., Show the
+# recovery key..., Export a backup..., the password with every YubiKey -
+# and the proof of Import archives from a backup... run the lock screen's
+# ceremony inside their dialog. The page's own buttons only open the
+# panel here (begin_act parks the act at its opening wait, as begin_unlock
+# parks an unlock); each moment after that is a scene, queued as the
+# core's events on an unlocked vault, so the dialog moves through them as
+# it would. With the page on the Vault page (the rail's second item):
+#     POST /mock/preview {"name": "dialog", "scene": "pin"}
+# and "kind" names another act than the enrolment ("remove", "rotate",
+# "export", "reveal", "entangle", "records" - the last with the import
+# dialog open on its proof, Continue pressed). A scene replays its whole
+# run up to its moment, a step apart, so the panel's held views and the
+# enrolment's two-part line see the order the core emits. The scenes:
+#   insert     the proof's wait for a YubiKey the vault has (key art)
+#   two_keys   two YubiKeys in;  no_match  one that is not the vault's
+#   pin        the YubiKey's PIN and the vault's password, merged
+#   wrong_pin  the PIN refused (2 tries left);  last_try  1 left: the bar
+#   blocked    the PIN blocked: the danger bar, Cancel alone
+#   touch      the green takes the box: the rings, the hero lead
+#   deriving   still green, the rings held at half: "Checking that..."
+#   swap       an enrolment's swap: the proving YubiKey to come out
+#   new_key    an enrolment's second half: "Now insert the new YubiKey"
+#   new_pin    the new YubiKey's PIN, on the second half's line
+#   new_touch  the new YubiKey's own touch (keys.go proveKey): the green
+#   done       ... and the enrolment's Done after it, on the same green,
+#              Close in the band (it was drawn neutral, with no touch)
+#   proof_done the act's end after the proof's touch: Done on the green
+#   timeout    the touch timed out (token.touch): neutral, Close
+#   failed     refused (vault.auth): the danger bar, Close
+#   password   a typed proof on a vault without a YubiKey
+#   choose     an enrolment of a password: the chosen one, typed twice
+#   mgmt_key   the new YubiKey's management key, in hex
+#   recovery   the recovery key's cells (kind "records": the import's)
+# POST /mock/preview {"name": "dialog", "scene": "end"} ends whatever a
+# scene left as Vault.CancelUnlock does, the dialog's Cancel included.
+_PROVE = [("waiting_for_key", {"readerCount": 0}),
+          ("pin", {"promptId": "dpin-1", "retries": 3, "retriesKnown": True, "slotLabel": "YubiKey 5C \u2014 desk"})]
+# On an entangled vault (the mock's) the core asks the vault's password
+# once the PIN is accepted, before the touch (APP.md 2.2); the page
+# answers it from the merged card by itself, so the card is done with it
+# before any later prompt - an enrolment's chosen password included.
+_TOUCHED = _PROVE + [("password", {"promptId": "dpw-v", "slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True}),
+                     ("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True}),
+                     ("touch", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1})]
+_SWAPPED = _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
+                       ("swap_key", {"removeLabel": "YubiKey 5C \u2014 desk", "insertLabel": "the key to enroll"})]
+_NEW = _SWAPPED + [("swap_key", {"insertLabel": "the key to enroll"}), ("waiting_for_key", {"readerCount": 0})]
+_NEW_TOUCHED = _NEW + [("pin", {"promptId": "dpin-n2", "retries": 3, "retriesKnown": True, "slotLabel": "YubiKey 5 NFC \u2014 travel"}),
+                       ("touch", {"slotLabel": "YubiKey 5 NFC \u2014 travel", "pinAsked": True, "n": 1})]
+DIALOG_SCENES = {
+    "insert": _PROVE[:1],
+    "two_keys": _PROVE[:1] + [("two_keys", {"readerCount": 2})],
+    "no_match": _PROVE[:1] + [("no_match", {"slotLabel": ""})],
+    "pin": _PROVE,
+    "wrong_pin": _PROVE + [("pin", {"promptId": "dpin-2", "retries": 2, "retriesKnown": True, "error": "token.pin", "slotLabel": "YubiKey 5C \u2014 desk"})],
+    "last_try": _PROVE + [("pin", {"promptId": "dpin-3", "retries": 1, "retriesKnown": True, "error": "token.pin", "slotLabel": "YubiKey 5C \u2014 desk"})],
+    "blocked": _PROVE[:1] + [("blocked", {"error": "token.pin_blocked", "slotLabel": "YubiKey 5C \u2014 desk"})],
+    "touch": _TOUCHED,
+    "deriving": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1})],
+    "swap": _SWAPPED,
+    "new_key": _NEW,
+    "new_pin": _NEW + [("pin", {"promptId": "dpin-n", "retries": 3, "retriesKnown": True, "slotLabel": "YubiKey 5 NFC \u2014 travel"})],
+    # The new YubiKey proves itself by its PIN and its touch before the
+    # vault depends on it (keys.go proveKey), so the enrolment's Done comes
+    # after that touch, on its green (APP.md 6, Controls; ruled 2026-10-17).
+    "new_touch": _NEW_TOUCHED,
+    "done": _NEW_TOUCHED + [("done", {"slotLabel": "YubiKey 5 NFC \u2014 travel", "pinAsked": True, "n": 1})],
+    "proof_done": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
+                              ("done", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1})],
+    "timeout": _TOUCHED + [("failed", {"error": "token.touch", "slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "n": 1})],
+    "failed": _PROVE + [("failed", {"error": "vault.auth", "slotLabel": "YubiKey 5C \u2014 desk"})],
+    "password": [("waiting_for_key", {"readerCount": 0, "method": "password"}),
+                 ("password", {"promptId": "dpw-1", "method": "password"})],
+    "choose": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
+                          ("password", {"promptId": "dpw-c", "choose": True})],
+    "mgmt_key": _NEW + [("management_key", {"promptId": "dmk-1", "slotLabel": "YubiKey 5 NFC \u2014 travel"})],
+    "recovery": [("waiting_for_key", {"readerCount": 0, "method": "recovery"}),
+                 ("recovery", {"promptId": "drk-1", "method": "recovery"})],
+}
+
+
+# The kinds a dialog runs (the lock screen runs unlock, create, setup,
+# import and verify).
+DIALOG_KINDS = ("enroll", "remove", "rotate", "export", "reveal", "entangle", "records")
+
+
+def _unlocked_for_dialogs():
+    """The Vault page's acts run on an unlocked vault: made so, with the
+    core's default timeouts, if a scene finds it otherwise."""
+    v = state["vault"]
+    if v["state"] != "unlocked":
+        now = int(time.time())
+        v.update({"state": "unlocked", "note": "", "ceremony": None, "locksAt": now + 600, "absoluteAt": now + 3600,
+                  "idleEffectiveMinutes": 10, "absoluteEffectiveMinutes": 60})
+        emit_status()
+
+
+def dialog_scene(body):
+    """POST /mock/preview {"name": "dialog", "scene": ..., "kind": ...}:
+    one of DIALOG_SCENES, played as the core's events a step apart on a
+    thread of its own, so the page sees each as it would. "end" ends what
+    a scene or begin_act left, as a cancel does."""
+    scene = body.get("scene", "")
+    if scene == "end":
+        return end_act()
+    steps = DIALOG_SCENES.get(scene)
+    if steps is None:
+        return {"scenes": sorted(DIALOG_SCENES) + ["end"]}
+    kind = body.get("kind", "enroll")
+    gap = float(body.get("gap", 0.3))
+    method = "password" if scene == "password" else "recovery" if scene == "recovery" else "token"
+    _unlocked_for_dialogs()
+
+    def run():
+        for step, extra in steps:
+            ev = dict({"method": method}, **extra)
+            emit_ceremony(kind, step, **ev)
+            time.sleep(gap)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"scene": scene, "kind": kind, "steps": [s for s, _ in steps]}
+
+
+# Lock-screen scenes (POST /mock/preview {"name": "lock", "scene": ...}):
+# the first-run create's and the finish-setup's runs past their YubiKey's
+# touch, played as the core's events a step apart, since the green holds
+# through what follows a touch only for a page that saw the touch (APP.md
+# 6, ruled 2026-10-17) - a static preview at the derivation is a page that
+# joined late. Each stops at its last event; Vault.CancelUnlock or the
+# "locked" preview ends it.
+#   create_deriving  wait, PIN, the key made, the touch, then the derivation
+#                    that creates the vault ("Creating the vault...")
+#   create_done      ... then Done (a lock landed before the recovery key)
+#   setup_deriving   the recovery key, the opening derivation, the wait, the
+#                    PIN, the touch, then the derivation that adds the first
+#                    way in ("Adding the unlock method...")
+#   setup_done       ... then Done ("Set up")
+_C_SLOT = {"slotLabel": "YubiKey 5C \u2014 desk"}
+_CREATE_TOUCHED = [("waiting_for_key", {"readerCount": 0}),
+                   ("swap_key", {"insertLabel": "the key to enroll"}),
+                   ("waiting_for_key", {"readerCount": 0}),
+                   ("pin", dict(_C_SLOT, promptId="lpin-c", retries=3, retriesKnown=True)),
+                   ("deriving", dict(_C_SLOT, pinAsked=True)),
+                   ("touch", dict(_C_SLOT, pinAsked=True, n=1)),
+                   ("deriving", dict(_C_SLOT, pinAsked=True, n=1))]
+_SETUP_TOUCHED = [("recovery", {"method": "recovery", "promptId": "lrk-s", "slotLabel": ""}),
+                  ("deriving", {"method": "recovery", "slotLabel": ""}),
+                  ("swap_key", {"method": "recovery", "insertLabel": "the key to enroll"}),
+                  ("waiting_for_key", {"method": "recovery", "readerCount": 0}),
+                  ("pin", dict(_C_SLOT, method="recovery", promptId="lpin-s", retries=3, retriesKnown=True)),
+                  ("touch", dict(_C_SLOT, method="recovery", pinAsked=True, n=1)),
+                  ("deriving", dict(_C_SLOT, method="recovery", pinAsked=True, n=1))]
+LOCK_SCENES = {
+    "create_deriving": ("create", _CREATE_TOUCHED),
+    "create_done": ("create", _CREATE_TOUCHED + [("done", dict(_C_SLOT, pinAsked=True, n=1))]),
+    "setup_deriving": ("setup", _SETUP_TOUCHED),
+    "setup_done": ("setup", _SETUP_TOUCHED + [("done", dict(_C_SLOT, method="recovery", pinAsked=True, n=1))]),
+}
+
+
+def lock_scene(body):
+    """POST /mock/preview {"name": "lock", "scene": ...}: one of
+    LOCK_SCENES, played on the lock screen as the core's events a step
+    apart ("gap", seconds, default 0.3). The vault is first made what the
+    act runs on - no vault yet for a create, an adopted backup for a
+    setup - and unlocking."""
+    scene = body.get("scene", "")
+    found = LOCK_SCENES.get(scene)
+    if found is None:
+        return {"scenes": sorted(LOCK_SCENES)}
+    kind, steps = found
+    gap = float(body.get("gap", 0.3))
+    base = _FIRST_RUN if kind == "create" else dict(_AT_REST, setupNeeded=True, hasHardwareSlot=False, entangled=False)
+    state["vault"].update(dict(base, state="unlocking", ceremony=None))
+    emit_status()
+
+    def run():
+        for step, extra in steps:
+            ev = dict({"method": ""}, **extra)
+            emit_ceremony(kind, step, **ev)
+            time.sleep(gap)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"scene": scene, "kind": kind, "steps": [s for s, _ in steps]}
+
+
+def begin_act(kind):
+    """The Vault page's acts (Keys.BeginEnroll, RemoveSlot, RotateNow,
+    ExportBackup, RevealRecoveryKey, ChangeEntangledPassword;
+    Vault.InspectRecords): parked at the proof's opening wait, under the
+    way the core proves with - the YubiKey where the vault has one
+    (keys.go acquireUnlocked) - so the page's own button opens its panel.
+    The moments after are DIALOG_SCENES; Vault.CancelUnlock ends it."""
+    def begin(args):
+        v = state["vault"]
+        if CEREMONY["kind"] or v["state"] != "unlocked":
+            return Err("vault.needs_unlock") if v["state"] != "unlocked" else Err("ceremony.in_progress")
+        emit_ceremony(kind, "waiting_for_key", method="token" if v.get("hasHardwareSlot") else "password", readerCount=0)
+        return None
+    return begin
+
+
+def end_act():
+    """A cancel of a dialog's ceremony, as the core ends one: a Failed
+    event with ceremony.cancelled; the vault stays unlocked."""
+    c = state["vault"].get("ceremony") or {}
+    if c.get("kind") in DIALOG_KINDS and c.get("step") not in ("done", "failed"):
+        emit_ceremony(c["kind"], "failed", method=c.get("method", ""), error="ceremony.cancelled")
+        state["vault"]["ceremony"] = None
+    return None
+
+
+def tray_unlock(body):
+    """The tray's Unlock... (tray_windows.go firstItem): begin the unlock
+    where the vault is Locked - the YubiKey where it has one, else the
+    password - then tell the page, which shows its lock scene."""
+    v = state["vault"]
+    if v["state"] == "locked":
+        begin_unlock(["token" if v.get("hasHardwareSlot") else "password"])
+    emit("shell.unlock", None)
 
 
 # What the page's System.invoke reaches in a browser: WebView2's
@@ -1747,7 +2177,7 @@ def handle(method_id, args):
 METHODS = {
     3940765069: vault_status,                                   # vault.Status
     3956196437: lambda a: [{"name": "Yubico YubiKey OTP+FIDO+CCID 0"}],
-    1779776360: lambda a: None,                                 # BeginUnlock
+    1779776360: begin_unlock,                                   # BeginUnlock
     3770426637: lambda a: None, 951839700: lambda a: None, 4094929714: lambda a: None, 2320277474: lambda a: None,
     2953146167: lambda a: None, 882388909: lambda a: None,
     4176692468: lambda a: listed(bool(a and a[0])),             # archives.List
@@ -1812,6 +2242,17 @@ METHODS = {
     2169987085: close_decided,                                  # shell.CloseDecided (APP.md 2.4)
     1615108156: pending_open,                                   # shell.PendingOpen (APP.md 14)
 }
+# The Vault page's acts and the import's proof open their panel (begin_act,
+# above): they answered None and drew nothing before.
+METHODS.update({
+    309727738: begin_act("enroll"),                             # keys.BeginEnroll
+    1280438677: begin_act("remove"),                            # keys.RemoveSlot
+    332274822: begin_act("rotate"),                             # keys.RotateNow
+    3159373965: begin_act("export"),                            # keys.ExportBackup
+    207819850: begin_act("reveal"),                             # keys.RevealRecoveryKey
+    3747209322: begin_act("entangle"),                          # keys.ChangeEntangledPassword
+    1148297629: begin_act("records"),                           # vault.InspectRecords
+})
 # The first way in's ceremonies, played (see above): they answered None and
 # played nothing before, so a dialog's Continue led nowhere here.
 METHODS.update({

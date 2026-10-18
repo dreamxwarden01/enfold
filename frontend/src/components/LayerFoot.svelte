@@ -37,7 +37,7 @@
   {:else}
     <!-- *Locked*, the lock header's own word (ruled 2026-10-17: it read
          "Keystore locked", a format word; APP.md §7). -->
-    <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}<button type="button" class="btn subtle xs" onclick={() => store.go("lock")}>{commandCopy.unlock}</button></span>
+    <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}<button type="button" class="btn subtle xs" onclick={() => store.unlock()}>{commandCopy.unlock}</button></span>
   {/if}
 </div>
 

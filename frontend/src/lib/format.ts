@@ -116,6 +116,20 @@ export function keyId(recipientId: string): string {
   return `${h.slice(0, 4)}-${h.slice(4)}`;
 }
 
+// recoveryWords is what a recovery key's line says after its ID, in a
+// list that already says these are recovery keys (the recovery key's
+// panel; APP.md §6, ruled 2026-10-17): the label's own words, with the
+// kind it repeats taken off — "Recovery key — printed, in the safe" says
+// "printed, in the safe" — and, for a key named by its kind alone (the
+// vault's first, keys.go), the day it was added, so every line still says
+// something of its own beside the ID.
+const RECOVERY_KIND = /^recovery key(?:\s*[—–:·-]\s*|\s*$)/i;
+
+export function recoveryWords(label: string, createdAt: number): string {
+  const words = label.trim().replace(RECOVERY_KIND, "").trim();
+  return words || (createdAt ? `added ${date(createdAt)}` : "");
+}
+
 // leaf is the last segment of a stored name or a path.
 export function leaf(p: string): string {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));

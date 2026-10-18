@@ -1,6 +1,6 @@
-// The token way in's card 2, as a state machine (APP.md §6, the ruling of
+// The token way in's PIN step, as a state machine (APP.md §6, the ruling of
 // 2026-09-08): on a vault whose entangled password is on, the key's PIN and
-// the vault's password stand on one card under one *Continue*. The core
+// the vault's password stand on one form under one *Continue*. The core
 // asks the PIN first and verifies it at the card (APP.md §2.2), so a wrong
 // PIN marks that field alone and moves nothing else; the password field
 // keeps whatever was typed and goes out by itself, with no further click,
@@ -8,7 +8,7 @@
 //
 // Pure: given the form as it stands and the ceremony's next event, what
 // each field shows and which prompt the next Continue answers. The lock
-// screen's card 2 and the Keys page's ceremony panel both render from it.
+// screen's PIN step (its one panel, APP.md §6) and the Keys page's ceremony panel both render from it.
 import { CeremonyStep } from "./api";
 
 // Shows is what the card carries.

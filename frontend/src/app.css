@@ -84,6 +84,14 @@
   --ease-enter: cubic-bezier(0.2, 0, 0, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* The unlock's own beats (APP.md §6, Motion: Unlock; ruled 2026-10-17):
+     a step's check pops in 180 ms, Done's in 240; the two loops, the
+     listening LED and the touch's rings, run only where motion is
+     allowed, so they are not zeroed below — their rules are gated. */
+  --dur-pop-step: 180ms;
+  --dur-pop: 240ms;
+  --loop-listen: 1.6s;
+  --loop-pulse: 2.4s;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI Semibold", "Segoe UI", system-ui, sans-serif;
   --font-text: "Segoe UI Variable Text", "Segoe UI Variable Small", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
@@ -230,7 +238,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur-tap: 0ms; --dur-leave: 0ms; --dur-hover: 0ms; --dur-fast: 0ms; --dur-out: 0ms; --dur-move: 0ms; }
+  :root { --dur-tap: 0ms; --dur-leave: 0ms; --dur-hover: 0ms; --dur-fast: 0ms; --dur-out: 0ms; --dur-move: 0ms; --dur-pop-step: 0ms; --dur-pop: 0ms; }
 }
 
 /* ---------- page ---------------------------------------- */
@@ -349,6 +357,9 @@ details.how > summary { width: fit-content; font: var(--t-body); color: var(--ac
 details.how > summary:hover { color: var(--accent-ink-hover); transition-duration: var(--dur-hover); }
 details.how > p { margin: var(--s2) 0 0; color: var(--ink-2); }
 .btn.wide { width: 100%; justify-content: center; }
+/* A button that grows to share a row centres its label, as a wide one
+   does (APP.md §6, Controls): Continue, Unlock, Start again. */
+.btn.grow { justify-content: center; }
 .btn.sm { height: 28px; padding: 0 var(--s2); }
 /* The layer foot's command (Lock now, Unlock): a subtle button the foot's
    caption size, 24 px high in the 34 px foot. */
@@ -708,73 +719,176 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .empty { padding: calc(2 * var(--s5)) var(--s5); text-align: center; color: var(--ink-2); }
 
 /* ---------- lock screen ---------------------------------------- */
-.unlock { display: flex; flex-direction: column; padding: var(--s5) var(--s6) var(--s6); height: 100%; max-width: 1240px; margin: 0 auto; }
+/* One stage (APP.md §6, ruled 2026-10-17; the ruling of 2026-09-06 built
+   at last): the header, the notices, the step line and one panel that
+   changes in place, centred, its top at about 14vh. The section is its
+   own stacking context, so the touch's wash sits under everything in it
+   without a z-index on each child. The stage scrolls inside it
+   (.u-scroll), so the wash, pinned to the section, covers the window
+   however far a short one scrolls. Its sizes are named here: the panel's
+   width, its top, what stands above it, the rings (the step disc is the
+   line's own, below). */
+.unlock {
+  --stage-w: 440px; --stage-top: 14vh; --stage-above: 92px; --rings-big: 160px;
+  position: relative; isolation: isolate; height: 100%; overflow: hidden;
+}
+.u-scroll { display: flex; flex-direction: column; padding: var(--s5) var(--s6) var(--s6); height: 100%; overflow: auto; }
+/* The touch's green over the whole stage, a full-surface takeover: an
+   overlay whose opacity moves, since a gradient cannot transition — in
+   over the scene change's 220 ms on the entering curve, out over 160 ms
+   on the exit's when a touch times out (APP.md §6, Motion: Unlock). */
+.wash {
+  position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: 0;
+  background: linear-gradient(160deg, var(--touch-bg) 0%, var(--touch-bg-2) 100%);
+  transition: opacity var(--dur-out) var(--ease-exit);
+}
+/* The stage's ink travels with the wash: into the touch's ink over the
+   wash's 220 ms, back over its 160 ms, so dark words never stand on the
+   green while it fades out after a timeout (APP.md §6, Motion: Unlock). */
+.unlock { color: var(--ink); transition: color var(--dur-out) var(--ease-exit); }
+.unlock.green { color: var(--touch-ink); transition: color var(--dur-move) var(--ease-enter); }
+.unlock.green .wash { opacity: 1; transition: opacity var(--dur-move) var(--ease-enter); }
 /* The header's line is centred on the brand's (30 px from the top: the
-   rail's 12, the brand's 8, half its 20 px line) and the strip starts
+   rail's 12, the brand's 8, half its 20 px line) and the stage starts
    24 px under it. */
-.u-head { display: flex; align-items: center; gap: var(--s2); flex: none; min-height: 20px; padding: 0 0 var(--s6); }
+/* Its line is the brand's 20 px whatever it holds — the state word's 16,
+   or the gear's 24 overhanging it — so the stage starts at 64 px in every
+   state and the panel never moves (the min-height counts the padding:
+   border-box). */
+.u-head { display: flex; align-items: center; gap: var(--s2); flex: none; min-height: calc(20px + var(--s6)); padding: 0 0 var(--s6); }
 /* The brand sits where the rail's does, to the pixel — the scene's corner,
    the rail's padding, then the brand's own — so it stays put across every
-   lock and unlock instead of jumping between the centred strip's corner
-   and the rail's (APP.md §6, Motion). Until the window has a caption to
+   lock and unlock (APP.md §6, Motion). The section is the scene's full
+   width, so its corner is the scene's. Until the window has a caption to
    carry the name, and then neither scene draws one. */
 .u-head .brand { position: absolute; top: var(--s3); left: var(--s2); }
 .u-head .state { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); }
-.u-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s4); flex: 1; min-height: 0; }
-.step { display: flex; flex-direction: column; border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); overflow: hidden; position: relative; min-height: 0; }
-/* A card eases between live and dim, and between the plain card and the
-   touch's green, by its opacity and its shadow on the entering curve
-   (APP.md §6, Motion): the green is a gradient, which no transition can
-   carry, so it switches — and once on, it stays through Deriving and
-   Releasing to Done rather than flashing white between them. */
-.step { transition: opacity var(--dur-fast) var(--ease-enter), box-shadow var(--dur-fast) var(--ease-enter); }
-.step.dim { opacity: 0.55; }
-/* The step's label is a caption in sentence case, as written — no
-   capitals and no tracking (APP.md §6, Type and spacing). */
-.step-label { display: flex; align-items: center; gap: var(--s2); flex: none; height: 34px; padding: 0 var(--s3); border-bottom: 1px solid var(--stroke); background: var(--surface-alt); font: var(--t-cap); color: var(--ink-2); }
-.step-label b { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent-wash); border: 1px solid var(--accent-line); color: var(--accent-ink); font: var(--t-cap); font-weight: 600; font-variant-numeric: tabular-nums; }
-.step-body { flex: 1; display: flex; flex-direction: column; padding: var(--s4); min-height: 0; overflow: auto; }
-.keyart { display: flex; justify-content: center; padding: var(--s3) 0 var(--s4); }
+.u-head .brand, .u-head .state { transition: color var(--dur-out) var(--ease-exit); }
+.unlock.green .u-head .brand, .unlock.green .u-head .state { color: var(--touch-soft); transition: color var(--dur-move) var(--ease-enter); }
+/* The mark draws in the accent and its wash (Icons.svelte), which on the
+   green read as a white tile in light and an outline in dark: there it
+   takes the brand's ink and no fill, alike in both themes. */
+.unlock.green .u-head .brand .mark { --accent: currentColor; --accent-wash: transparent; }
+/* The panel's top lands at 14vh: the stage starts 64 px down (20 of
+   padding, the header's 20 and its 24) and the step line takes 28 of
+   the rest. */
+/* .u-stage, not .stage: the scene's own .stage (above) is the window's
+   full height, and the lock's stage must be its content's, or an empty
+   rest panel scrolls. */
+.u-stage { display: flex; flex-direction: column; align-items: center; flex: none; padding-top: max(0px, calc(var(--stage-top) - var(--stage-above))); }
+.notices { width: min(var(--stage-w), 100%); display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s3); }
+/* The step line: a caption, the done steps in the second ink behind an
+   accent disc with a check, the live one in ink at 600, the rest in the
+   third ink. Its 16 px are kept when it is empty. */
+/* The disc's size is the line's own, so the dialogs' two-part line draws
+   the same discs outside the lock's stage (APP.md §13). */
+.steps { --step-disc: 16px; list-style: none; margin: 0 0 var(--s3); padding: 0; min-height: var(--step-disc); display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2) var(--s4); font: var(--t-cap); color: var(--ink-3); }
+.steps li { display: inline-flex; align-items: center; gap: var(--s2); transition: color var(--dur-fast) var(--ease-enter); }
+.steps .done { color: var(--ink-2); }
+.steps .live { color: var(--ink); font-weight: 600; }
+.steps .disc {
+  width: var(--step-disc); height: var(--step-disc); flex: none; box-sizing: border-box; border-radius: 50%;
+  display: inline-grid; place-items: center; border: 1px solid var(--stroke-strong);
+  font: var(--t-cap); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+  transition: background-color var(--dur-fast) var(--ease-enter), border-color var(--dur-fast) var(--ease-enter);
+}
+.steps .disc .i { width: 10px; height: 10px; stroke-width: 1.8; }
+.steps .live .disc { border: 1.5px solid currentColor; }
+.steps .done .disc { background: var(--accent); border-color: var(--accent); color: var(--accent-on); }
+/* A step passing pops its check (180 ms on the pop curve). */
+@media (prefers-reduced-motion: no-preference) {
+  .steps .done .disc .i { animation: pop var(--dur-pop-step) var(--ease-pop) both; }
+}
+/* On the green — the lock's stage, or a dialog's body at the touch — the
+   line takes the touch's inks. */
+.unlock.green .steps, .unlock.green .steps .done, .dialog.green .steps, .dialog.green .steps .done { color: var(--touch-soft); }
+.unlock.green .steps .live, .dialog.green .steps .live { color: var(--touch-ink); }
+.unlock.green .steps .disc, .dialog.green .steps .disc { border-color: var(--touch-ring); }
+.unlock.green .steps .done .disc, .dialog.green .steps .done .disc { background: var(--touch-ink); border-color: transparent; color: var(--touch-bg-2); }
+/* The panel: 440 px, 28 px in, a flat 1 px stroke. Its views share one
+   grid cell, so the old one leaves where the new one arrives. On the
+   green its fill and stroke fade, and it dissolves into the stage. Every
+   rule is under .unlock: the dialogs' CeremonyPanel is a .panel too, and
+   keeps its own frame (APP.md §13). */
+.unlock .panel {
+  width: min(var(--stage-w), 100%); box-sizing: border-box; padding: calc(var(--s6) + var(--s1));
+  display: grid; background-color: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card);
+  transition: background-color var(--dur-out) var(--ease-exit), border-color var(--dur-out) var(--ease-exit);
+}
+.unlock.green .panel { background-color: transparent; border-color: transparent; transition-duration: var(--dur-move); transition-timing-function: var(--ease-enter); }
+.unlock .views { display: grid; min-width: 0; }
+/* While a view crosses in, the panel's height eases from the old view's to
+   the new one's (Lock.svelte sized; APP.md §6, Motion: Unlock), and what
+   overhangs it is clipped at the panel's stroke, not at the views' box, so
+   a focus ring at the edge of a view is never cut. */
+.unlock .views.easing { overflow: clip; overflow-clip-margin: calc(var(--s6) + var(--s1)); transition: height var(--dur-move) var(--ease-enter); }
+.unlock .views > .view { grid-area: 1 / 1; display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.unlock .views > .view.center { align-items: center; text-align: center; }
+/* The panel's insides, the lock screen's and a dialog's ceremony panel's
+   alike (APP.md §6, §13; ruled 2026-10-17): a lead over its caption, the
+   attention and info lines, the quiet glyph. */
+.unlock .panel .lead, .cer-panel .lead { display: flex; flex-direction: column; gap: var(--s1); }
+.unlock .panel .t-title, .cer-panel .t-section { text-wrap: balance; }
+.unlock .panel .cap, .cer-panel .cap { font: var(--t-cap); color: var(--ink-2); overflow-wrap: anywhere; }
+.unlock .panel .row { display: flex; align-items: center; gap: var(--s2); }
+.unlock .panel .row .grow { flex: 1; }
+.unlock .panel .start { align-self: flex-start; }
+/* A command and its consequence on its own line, held together at the
+   lead's gap (APP.md §6, the damaged vault's rebuild; ruled 2026-10-17). */
+.unlock .panel .then { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s1); }
+.unlock .panel .restlock, .cer-panel .restlock { color: var(--ink-3); }
+.unlock .panel .infoline, .cer-panel .infoline { display: flex; align-items: flex-start; gap: var(--s2); font: var(--t-cap); color: var(--ink-2); }
+.unlock .panel .infoline .i, .cer-panel .infoline .i { flex: none; margin-top: 1px; color: var(--ink-3); }
+/* An attention line: the icon and the words in the attention ink, with no
+   box — the boxed bar is kept for the last try and the kept copy (the
+   Smart Card service not running, a broken vault; ruled 2026-10-17). */
+.unlock .panel .infoline.att, .unlock .panel .infoline.att .i, .cer-panel .infoline.att, .cer-panel .infoline.att .i { color: var(--attention); }
+/* Words that cross-fade in one place: both in one cell, a gap apart. */
+.xf { display: grid; justify-items: center; width: 100%; }
+.xf > * { grid-area: 1 / 1; }
 .u-lead { font: var(--t-sub); margin: 0 0 var(--s2); text-wrap: balance; }
 .u-meta { color: var(--ink-2); }
 .u-meta.q { font: var(--t-cap); color: var(--ink-2); }
-.u-links { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); margin-top: var(--s4); }
-.u-foot { margin-top: auto; padding-top: var(--s3); display: flex; flex-direction: column; gap: var(--s3); }
 .slotchip { display: inline-flex; align-items: center; gap: var(--s2); align-self: flex-start; height: 26px; padding: 0 var(--s3); border-radius: 13px; background: var(--accent-wash); border: 1px solid var(--accent-line); color: var(--accent-ink); font: var(--t-cap); font-weight: 600; }
 .pin-note { margin-top: var(--s2); font: var(--t-cap); color: var(--ink-2); }
-.step.touch { border-color: transparent; background: linear-gradient(160deg, var(--touch-bg) 0%, var(--touch-bg-2) 100%); color: var(--touch-ink); box-shadow: var(--shadow-pop); }
-.step.touch .step-label { background: transparent; border-bottom-color: var(--touch-ring); color: var(--touch-soft); }
-.step.touch .step-label b { background: var(--touch-ring); border-color: transparent; color: var(--touch-ink); }
-.touch-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--s4) var(--s5) var(--s6); text-align: center; }
 .rings { position: relative; width: 132px; height: 132px; flex: none; margin-bottom: var(--s6); }
 .rings span { position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--touch-ring); }
 .rings span:nth-child(2) { inset: 16px; border-color: var(--touch-ring-2); }
 .rings span:nth-child(3) { inset: 32px; border-color: var(--touch-ring); }
 .rings .core { position: absolute; inset: 44px; border-radius: 50%; background: var(--touch-ring); border: 1px solid var(--touch-soft); display: flex; align-items: center; justify-content: center; }
 .rings .core svg { width: 26px; height: 26px; stroke: var(--touch-ink); fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
-/* Done: a white disc with the accent's check, on the same green card. */
+/* The lock screen's are 160 px, centred on the stage. */
+.rings.big { width: var(--rings-big); height: var(--rings-big); margin-bottom: var(--s2); }
+.rings.big span:nth-child(2) { inset: 20px; }
+.rings.big span:nth-child(3) { inset: 40px; }
+.rings.big .core { inset: 54px; }
+/* Touched: the rings stop and hold at half (APP.md §6, Motion: Unlock). */
+.rings.still span { opacity: 0.5; }
+/* Done: a white disc with the accent's check, on the same green. */
 .rings.done .core { background: var(--touch-ink); border-color: var(--touch-ink); }
 .rings.done .core svg { width: 30px; height: 30px; stroke: var(--touch-bg-2); stroke-width: 1.7; }
 @media (prefers-reduced-motion: no-preference) {
-  .rings.live span:nth-child(1) { animation: pulse 2.4s ease-out infinite; }
-  .rings.live span:nth-child(3) { animation: pulse 2.4s ease-out infinite 0.8s; }
+  .rings.live span:nth-child(1) { animation: pulse var(--loop-pulse) ease-out infinite; }
+  .rings.live span:nth-child(3) { animation: pulse var(--loop-pulse) ease-out infinite calc(var(--loop-pulse) / 3); }
 }
 @keyframes pulse { 0% { transform: scale(0.86); opacity: 0.15; } 40% { opacity: 0.9; } 100% { transform: scale(1.04); opacity: 0; } }
 @media (prefers-reduced-motion: no-preference) {
-  .rings .core.pop { animation: pop 240ms var(--ease-pop) both; }
+  .rings .core.pop, .donedisc.pop { animation: pop var(--dur-pop) var(--ease-pop) both; }
 }
 @keyframes pop { from { transform: scale(0.6); } to { transform: scale(1); } }
+/* Done of a typed way in, on the neutral panel: the same check, accent. */
+.donedisc { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--accent); }
+.donedisc svg { width: 28px; height: 28px; stroke: var(--accent-on); fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 /* The one hero on any screen: the touch's lead (APP.md §6, Type and spacing). */
 .touch-lead { font: var(--t-hero); margin: 0 0 var(--s2); text-wrap: balance; }
 .touch-sub { color: var(--touch-soft); font: var(--t-body); margin: 0; }
 .touch-slot { margin-top: auto; padding-top: var(--s5); color: var(--touch-soft); font: var(--t-cap); display: flex; align-items: center; gap: var(--s2); justify-content: center; }
 .touch-slot .i { stroke: var(--touch-soft); }
-.blocked { flex: none; margin-top: var(--s4); display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--attention-line); border-radius: var(--r-card); background: var(--attention-wash); }
-.blocked .tile { width: 34px; height: 34px; flex: none; border-radius: var(--r-ctl); background: var(--surface); border: 1px solid var(--attention-line); display: flex; align-items: center; justify-content: center; color: var(--attention); }
-.blocked .txt { display: flex; flex-direction: column; }
-.blocked .txt b { font: var(--t-strong); }
-.blocked .txt span { color: var(--ink-2); }
-.blocked .tag { margin-left: auto; display: flex; align-items: center; gap: var(--s3); }
+/* In the panel the view's gap spaces them, and the sub-line keeps its
+   line when it has nothing to say, so the receipt does not climb. */
+.unlock .panel .touch-lead { margin: 0; }
+.unlock .panel .touch-sub { min-height: 20px; }
+.unlock .panel .touch-slot { padding-top: var(--s2); }
 .digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s2); margin: var(--s3) 0; }
 /* The recovery digits are read off a screen onto paper and back: the sub
    size, in mono at its regular weight, spaced. */
@@ -1257,6 +1371,23 @@ tbody tr.up .fname { color: var(--ink-2); }
 .dialog-foot { flex: none; display: flex; flex-wrap: wrap; gap: var(--s2); padding: var(--s5) var(--s6); background: var(--dlg-foot); border-top: 1px solid var(--stroke); }
 .dialog-foot > .btn:not(.link) { flex: 1 1 0; min-width: fit-content; max-width: 100%; height: auto; min-height: 32px; padding: 5px var(--s3); justify-content: center; text-align: center; white-space: normal; }
 .dialog p { margin: 0; color: var(--ink-2); }
+/* A ceremony in a dialog (CeremonyPanel; APP.md §6, §13; ruled
+   2026-10-17): the touch takes the box over as it takes the lock's stage.
+   The touch's gradient is a wash under the body whose opacity moves —
+   a gradient cannot transition — in over the scene change's 220 ms on the
+   entering curve and out over 160 ms on the exit's; the box's stroke
+   fades with it and the body's ink travels with it, so no dark word
+   stands on the green. The foot band stays as it is, with its Cancel. */
+.dialog.ceremony { transition: border-color var(--dur-out) var(--ease-exit); }
+.dialog.ceremony .dialog-body { position: relative; isolation: isolate; color: var(--ink); transition: color var(--dur-out) var(--ease-exit); }
+.dialog.ceremony .dialog-body::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: 0;
+  background: linear-gradient(160deg, var(--touch-bg) 0%, var(--touch-bg-2) 100%);
+  transition: opacity var(--dur-out) var(--ease-exit);
+}
+.dialog.green { border-color: transparent; transition: border-color var(--dur-move) var(--ease-enter); }
+.dialog.green .dialog-body { color: var(--touch-ink); transition: color var(--dur-move) var(--ease-enter); }
+.dialog.green .dialog-body::before { opacity: 1; transition: opacity var(--dur-move) var(--ease-enter); }
 /* Toasts (APP.md §6): at the top of the window, centred on the window — not on the content
    layer — dropping in a few pixels as they fade and rising as they leave; only for what the
    page cannot say in place. */

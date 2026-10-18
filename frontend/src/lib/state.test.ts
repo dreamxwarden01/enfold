@@ -1117,7 +1117,7 @@ describe("the dialog's chosen password, held for the Choose prompt (holdChosen)"
     expect(sent()).toEqual(["secret password p1 long enough"]);
     expect(store.chosenSent).toBe("p1");
     // Spent: a second Choose prompt (the first refused, asked anew) is
-    // card 2's to ask.
+    // the panel's password step's to ask.
     event(4, "create", "password", "p2", true);
     expect(sent()).toHaveLength(1);
   });
@@ -1229,5 +1229,37 @@ describe("an archive let go of for Delete archive… (releasedForDelete)", () =>
     m.Page.mockResolvedValueOnce(reply(2, ["x"], 1));
     await store.refreshArchive();
     expect(m.Stat).toHaveBeenCalledWith("a");
+  });
+});
+
+// Whether the running ceremony has left its opening WaitingForKey (APP.md
+// §6, ruled 2026-10-17): followed on every event the store accepts, so a
+// create's SwapKey and the WaitingForKey after it, dispatched in one tick,
+// still leave the lock screen drawing the wait for the YubiKey.
+describe("the ceremony's opening step, passed (ceremonyPassed)", () => {
+  const event = (seq: number, kind: string, step: string, method = "") =>
+    m.handlers["vault.ceremony"]({ data: { seq, kind, step, method, promptId: "", choose: false, error: "" } });
+
+  beforeEach(() => {
+    m.Status.mockReturnValue(new Promise(() => {}));
+    store.boot();
+  });
+
+  it("is passed once any step but the opening WaitingForKey is seen, back to back", () => {
+    event(2, "create", "waiting_for_key");
+    expect(store.ceremonyPassed.passed).toBe(false);
+    event(3, "create", "swap_key");
+    event(4, "create", "waiting_for_key");
+    expect(store.ceremonyPassed).toMatchObject({ kind: "create", passed: true });
+  });
+
+  it("starts afresh after the end, a cancel and a dismissal", () => {
+    event(2, "setup", "recovery", "recovery");
+    event(3, "setup", "failed");
+    expect(store.ceremonyPassed.passed).toBe(false);
+    event(4, "unlock", "pin", "token");
+    expect(store.ceremonyPassed.passed).toBe(true);
+    store.dismissCeremony();
+    expect(store.ceremonyPassed.passed).toBe(false);
   });
 });

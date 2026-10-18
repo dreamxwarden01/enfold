@@ -13,6 +13,8 @@
 // out — Svelte marks an outroing element inert, and destroys it only once
 // the fade ends — and one covered by a dialog of its own are not live and
 // so never topmost, whatever their place in the stack.
+import type { Snippet } from "svelte";
+
 export interface DialogEntry {
   live: () => boolean;
 }
@@ -56,3 +58,21 @@ export const POPOVER_ATTR = "data-popover";
 export function inPopover(t: EventTarget | null): boolean {
   return t instanceof Element && t.closest(`[${POPOVER_ATTR}]`) !== null;
 }
+
+// DialogHost is what a dialog lends the component in its body that runs
+// a ceremony (CeremonyPanel; APP.md §6, ruled 2026-10-17). The foot band
+// is the dialog's, drawn by the Dialog, but what it holds changes with the
+// ceremony's step — Continue and Cancel at a prompt, Cancel alone while a
+// YubiKey is waited for, Close at the end — and only the panel knows the
+// step: while the panel is mounted its foot replaces the dialog's own
+// actions. green: the touch's takeover inside the box — the box's stroke
+// fades, the touch's gradient fills the body, the foot band stays.
+// ceremony: a ceremony panel is in the body at all, so the body carries
+// the wash that the green fades in.
+export interface DialogHost {
+  foot: Snippet | null;
+  green: boolean;
+  ceremony: boolean;
+}
+
+export const DIALOG_HOST = Symbol("dialog-host");

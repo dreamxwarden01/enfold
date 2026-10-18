@@ -59,15 +59,22 @@ export interface StepCopy {
 // around.
 export const stepCopy: Record<StepKey, StepCopy> = {
   [CeremonyStep.StepWaitingForKey]: { title: "Insert your YubiKey", body: "The YubiKey that unlocks this vault." },
-  [CeremonyStep.StepTwoKeys]: { title: "More than one YubiKey is inserted", body: "Leave just one in to continue." },
+  // The instruction is the heading, and the core carries on by itself
+  // once one is out (ruled 2026-10-17): nothing to press but Cancel.
+  [CeremonyStep.StepTwoKeys]: { title: "Two YubiKeys are in", body: "Remove one; Enfold carries on by itself." },
   [CeremonyStep.StepProbing]: { title: "Reading the YubiKey", body: "Checking that it is one of this vault's unlock methods." },
   // The page carries the button the body names (lockCopy.useRecoveryKey):
   // a sentence that offers the recovery key has something to press.
   [CeremonyStep.StepNoMatch]: { title: "This YubiKey is not one of this vault's unlock methods", body: "Try another YubiKey, or use your recovery key." },
   [CeremonyStep.StepBusy]: { title: "The YubiKey is in use", body: "Another program holds the YubiKey. Close it, or wait, then try again." },
   [CeremonyStep.StepPassword]: { title: "Password", body: "" },
-  [CeremonyStep.StepPIN]: { title: "PIN", body: "The YubiKey counts wrong tries, not Enfold." },
-  [CeremonyStep.StepTouch]: { title: "Touch your YubiKey now", body: "It blinks until you touch it." },
+  // No line of its own (ruled 2026-10-17): the retries in the label row
+  // say what counting there is, and the field's reserved line holds its
+  // rule or what is wrong.
+  [CeremonyStep.StepPIN]: { title: "PIN", body: "" },
+  // No number in the body: the wait is the YubiKey's and the blinking is
+  // its clock (DESIGN.md trap 23; APP.md §6, ruled 2026-10-17).
+  [CeremonyStep.StepTouch]: { title: "Touch your YubiKey now", body: "Touch it while it blinks. If it stops blinking, start again." },
   [CeremonyStep.StepBlocked]: { title: "The PIN is blocked. Use your recovery key.", body: "This YubiKey will not accept a PIN again until it is reset." },
   // What the step does in the user's words; the derivation it is lives in
   // technicalCopy (ruled 2026-10-17).
@@ -89,8 +96,8 @@ export function stepText(step: CeremonyStep): StepCopy {
 }
 
 // What a ceremony says beyond its step's own line, on the lock screen's
-// strip and the Vault page's panel alike (APP.md §6, ruled 2026-10-17).
-// Card 2 is named in the order its fields stand: the PIN first, as the
+// panel and the Vault page's alike (APP.md §6, ruled 2026-10-17). The
+// PIN's step is named in the order its fields stand: the PIN first, as the
 // core asks it (APP.md §2.2), then the vault's password when the vault
 // asks for one.
 export const ceremonyCopy = {
@@ -105,11 +112,61 @@ export const ceremonyCopy = {
   chooseVaultPassword: "Choose the vault's password",
   wrongPin: "Wrong PIN.",
   wrongPassword: "Wrong password.",
-  // No match and Blocked where nothing offers the recovery key (an
-  // import's proof, a create, the Vault page's panel): the line says what
-  // can be done instead of naming a button the screen does not have.
+  // No match where nothing offers the recovery key (an import's proof, a
+  // create, a dialog's ceremony): the line says what can be done instead
+  // of naming a button the screen does not have.
   noMatchWithoutRecovery: "Try another YubiKey.",
-  blockedWithoutRecovery: "The PIN is blocked.",
+  // A blocked PIN on the lock screen, on the PIN's step where it arises
+  // (APP.md §6, ruled 2026-10-17): the lead says whose PIN, and the danger
+  // bar says in one sentence what it means and, where the panel offers
+  // it, the way out.
+  blockedLead: "This YubiKey's PIN is blocked",
+  blockedMeans: "It will not accept a PIN until it is reset.",
+  blockedMeansWayOut: "It will not accept a PIN until it is reset; your recovery key still opens the vault.",
+  // The recovery key's cells (APP.md §6, ruled 2026-10-17): the group to
+  // fix by its number, and how far the typing is.
+  groupsMistyped: (groups: number[]): string =>
+    groups.length === 1
+      ? `Group ${groups[0]} does not check out. Compare its six digits with the sheet.`
+      : `Groups ${groups.slice(0, -1).join(", ")} and ${groups[groups.length - 1]} do not check out. Compare their digits with the sheet.`,
+  groupsTyped: (n: number, of: number): string => `${n} of ${of} groups`,
+  // The dialogs' enrolment: two halves, not three steps (ruled
+  // 2026-10-17) — proving it is you, then adding the new unlock method.
+  halves: ["Prove it is you", "Add the new unlock method"],
+  halvesLabel: "Adding an unlock method",
+  // The wait of a dialog's ceremony (APP.md §13, ruled 2026-10-17): the
+  // vault's YubiKeys by name, and for an enrolment what comes next; the
+  // other acts prove it is you and say nothing of a next step.
+  insertProve: "Insert a YubiKey that already unlocks this vault",
+  insertProveLine: (labels: string[], enrol: boolean): string =>
+    [labels.length ? `${labels.join(", or ")}.` : "", enrol ? "The new unlock method comes next." : ""].filter(Boolean).join(" "),
+  // A typed proof (a vault with no YubiKey proves it is you with its
+  // password): headed as the YubiKey's wait is, with what to type and why
+  // (APP.md §13, ruled 2026-10-17) — a bare field under the dialog's title
+  // said neither.
+  typeProve: "Type a password that already unlocks this vault",
+  typeProveLine: (enrol: boolean): string => (enrol ? "The new unlock method comes next." : "It proves it is you."),
+  insertNew: "Now insert the new YubiKey",
+  insertNewLine: "The one to add to this vault.",
+  // An enrolment's swap: the YubiKey that proved it is you comes out
+  // first, so the same one is not added twice (keys.go enrollToken). The
+  // core's own InsertLabel ("the key to enroll") is never shown.
+  swapLead: (label: string): string => (label ? `Remove ${label}` : "Remove the YubiKey"),
+  swapLine: "Then insert the new YubiKey. Enfold carries on by itself.",
+  // The proof's derivation in a dialog: the vault is open already, so
+  // nothing is being opened.
+  checking: "Checking that it is you…",
+  // The last try in a dialog: the consequence alone, since the dialog
+  // offers no recovery key (ruled 2026-10-17).
+  lastTryHere: "A wrong PIN now blocks this YubiKey's PIN until it is reset.",
+  // The end of a dialog's ceremony, by kind: what is now true, over the
+  // dialog's Close.
+  doneTitle: {
+    enroll: "Unlock method added",
+    remove: "Unlock method removed",
+    rotate: "Vault re-keyed",
+    export: "Backup saved",
+  } as Record<string, string>,
   // Whose recovery key the panel asks for follows the act (APP.md §13).
   recoveryNote: {
     verify: "The backup's recovery key. Nothing here changes.",
@@ -128,14 +185,9 @@ export const ceremonyCopy = {
   chooseVaultPasswordNote: "Every YubiKey in this vault will ask for it. Longer is better; a passphrase of several words is best.",
   // A slot that asks for more than one touch counts them.
   touchCount: (n: number): string => `Touch ${n} on this YubiKey`,
-  // The enrol's swap, when the core names the YubiKeys; the step's own
-  // body is the line when it names neither.
-  swapBoth: (remove: string, insert?: string): string => `Remove ${remove}, then insert ${insert || "the YubiKey to add"}.`,
-  swapInsert: (insert: string): string => `Insert ${insert}.`,
   // A backup check's outcome, one wording on the lock screen and in the
   // panel (it read "Opens. …" in the panel).
   verified: (archives: number): string => `The backup opens. ${plural(archives, "archive")} inside.`,
-  done: "Done.",
 };
 
 // codeCopy is what an error code says. Every code has an entry; the test
@@ -145,8 +197,9 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeNoVault]: "No vault is open.",
   [Code.CodeVaultLocked]: "The vault is locked.",
   // The reopen banner's line (ruled 2026-10-17): what happened, then what
-  // to do; the page carries *Reopen*.
-  [Code.CodeVaultBroken]: "A save could not be confirmed. Reopen to see which version was kept.",
+  // to do, naming what is reopened — the lock screen's broken panel says
+  // it over *Reopen the vault*, the page's banner over *Reopen*.
+  [Code.CodeVaultBroken]: "A save could not be confirmed. Reopen the vault to see which version was kept.",
   [Code.CodeVaultBusy]: "The vault file is open in another Enfold. Close it first.",
   // The three tampered codes say the same thing on a main surface: the
   // remedy is one, and which check failed is the Technical details' and
@@ -184,7 +237,7 @@ export const codeCopy: Record<CodeKey, string> = {
   // back to an older copy; technicalCopy.notThisVaultWhy says so.
   [Code.CodeNotThisVault]: "This vault cannot open that file: it belongs to another vault, or to a later version of this one. Its own recovery key opens it.",
   [Code.CodeConflict]: "The vault changed under Enfold. Reopen it.",
-  [Code.CodeIndeterminate]: "A save could not be confirmed. Reopen to see which version was kept.",
+  [Code.CodeIndeterminate]: "A save could not be confirmed. Reopen the vault to see which version was kept.",
   [Code.CodeCeremonyRunning]: "An unlock is already in progress.",
   [Code.CodeReleasing]: "The YubiKey is being released; try again in a moment.",
   [Code.CodeNoCeremony]: "Nothing is waiting for that.",
@@ -438,14 +491,16 @@ export function compareCountText(c: { replace: number; both: number; skip: numbe
   return parts.join(" · ");
 }
 
-// retriesText is the count shown with the PIN prompt. The card is asked
+// retriesText is the count shown in the PIN's label row. The card is asked
 // before the prompt, so the count is always known here; when the card is
 // verified it cannot say, and the copy says that instead of a number. It
-// never says "0".
+// never says "0". The last try is said by its ink and, on the lock screen,
+// by the bar above the field (lockCopy.lastTry; ruled 2026-10-17: it read
+// "1 attempt left — the last one" in the ink of the first).
 export function retriesText(s: Pick<CeremonyState, "retries" | "retriesKnown" | "verified">): string {
-  if (!s.retriesKnown || s.verified) return "attempts left unknown";
+  if (!s.retriesKnown || s.verified) return "Tries left unknown";
   if (s.retries <= 0) return "";
-  return s.retries === 1 ? "1 attempt left — the last one" : `${s.retries} attempts left`;
+  return s.retries === 1 ? "1 try left" : `${s.retries} tries left`;
 }
 
 // tamperedCopy is the Tampered banner (APP.md §13): what happened and what
@@ -980,7 +1035,7 @@ export const vaultCopy = {
   lastChanged: "Last changed",
   file: "File",
   password: "Password with every YubiKey",
-  // The order card 2 asks them in: the PIN, then the password (APP.md
+  // The order the PIN's step asks them in: the PIN, then the password (APP.md
   // §2.2; ruled 2026-10-17, it said "before its PIN").
   passwordOn: "On: every YubiKey asks for its PIN and then this password.",
   passwordOff: "Off: a YubiKey opens the vault with its PIN and touch alone.",
@@ -1007,9 +1062,10 @@ export const vaultCopy = {
 
 // ---- The lock screen (APP.md §6) -----------------------------------------
 //
-// The header's states (ruled 2026-10-17), then the card lines. A button
-// names the next thing that happens: card 2 is *Continue*; *Start again*
-// only where it does start again.
+// The header's states (ruled 2026-10-17), then the panel's lines (one
+// panel changing in place, ruled 2026-10-17). A button names the next
+// thing that happens: the PIN's is *Continue*, since a touch follows;
+// *Start again* only where it does start again.
 export const lockCopy = {
   regionLabel: "Enfold, vault locked",
   header: {
@@ -1022,60 +1078,118 @@ export const lockCopy = {
     settingUp: "Setting up",
     testing: "Testing a backup",
     creating: "Creating the vault",
-    busy: "Open in another Enfold",
+    // The panel's lead says where (busyLead); the header's word is short.
+    busy: "Open elsewhere",
     damaged: "Damaged",
     absent: "Not found",
     none: "No vault yet",
     broken: "Needs attention",
     setupNeeded: "Needs setting up",
+    // An unlock that stopped, while the panel says where.
+    failed: "Not unlocked",
   },
-  firstRunLead: "Create a vault, or restore one",
+  // A derivation that opens no vault says what it does (APP.md §6, ruled
+  // 2026-10-17): a create's makes the vault; a setup's or an import's,
+  // after the one that opened the vault or the backup, adds its first way
+  // in. An unlock's keeps the step's own "Opening the vault…".
+  derivingLead: {
+    creating: "Creating the vault…",
+    adding: "Adding the unlock method…",
+  },
+  firstRunLead: "Create your vault",
   firstRunLine: "A vault is one file: the keys to your archives, opened by a YubiKey, a password or a recovery key.",
   keptIn: "Enfold keeps it in",
-  restoreHint: "To restore from a backup, have its recovery key ready: a backup opens with nothing else.",
-  damagedLead: "The vault could not be opened",
-  absentLead: "The vault could not be found",
-  damagedHint: "A backup or a copy of this vault brings your archives back. Rebuilding starts a new vault and keeps the damaged file beside it.",
+  // The vault that is gone or damaged, named; the path is the line under
+  // it, in mono (ruled 2026-10-17).
+  damagedLead: (vault: string): string => `${vault} could not be opened`,
+  absentLead: (vault: string): string => `${vault} is not where Enfold left it`,
+  // The damaged vault's best remedy first: the vault a replacement
+  // retired, by the date it was retired (vault-replaced-<unix>-<n>.eks).
+  keptCopy: (date: string): string => (date ? `Enfold kept the vault it replaced on ${date}.` : "Enfold kept a vault it replaced."),
+  useThatCopy: "Use that copy…",
+  restoreOther: "Restore from another file…",
+  rebuildLine: "Rebuilding starts a new, empty vault and keeps the damaged file beside it. Archives locked to this vault then open only from a backup or a copy of it.",
+  findIt: "Find it…",
+  findPicker: "Find the vault",
   tryAgain: "Try again",
   // A dialog follows, so the ellipsis (the verb table's rule).
   createInstead: "Create a new vault instead…",
   // The replaced copy's bar, when no vault is kept: restoring it is the
   // first-run verb.
   restoreIt: "Restore it…",
-  stepWaiting: "Waiting for the YubiKey",
-  stepMethod: "Unlock method",
-  secretHint: "What this unlock method needs.",
-  tokenHint: "The YubiKey's PIN.",
-  tokenPasswordHint: "The YubiKey's PIN and the vault's password.",
+  // The step line, shown only while an unlock runs: the YubiKey's three
+  // steps (the second named as the PIN field's label is) and the
+  // recovery key's two. A password's way in is one step and draws none.
+  stepsLabel: "Unlock steps",
+  stepKey: "YubiKey",
+  stepTouch: "Touch",
+  stepUnlock: "Unlock",
+  // The rest panel's caption: the state, then the last unlock, relative
+  // because recency is the point (sinceText).
+  restLine: (when: string): string => (when ? `Locked · last unlocked ${when}` : "Locked"),
+  // A broken vault's caption names the header's state, not Locked.
+  brokenLine: (when: string): string => (when ? `Needs attention · last unlocked ${when}` : "Needs attention"),
+  // The PIN's step of a ceremony with no step line (a create, a setup, an
+  // import's proof): its own instruction, as the YubiKey's and the
+  // touch's steps have theirs.
+  pinLead: "Type your YubiKey's PIN",
+  // The password-only vault's lead, at rest and in its one step.
+  unlockVault: (vault: string): string => `Unlock ${vault}`,
+  // A YubiKey that is not this vault's, named for the vault (ruled
+  // 2026-10-17).
+  noMatch: (vault: string): string => `This YubiKey is not one of ${vault}'s unlock methods`,
+  // Open elsewhere (another Enfold has the vault): its own lead, never
+  // the rest panel's.
+  busyLead: (vault: string): string => `${vault} is open in another Enfold`,
+  busyLine: "Close it there, then try again.",
+  // The recovery key's panel: where the digits come from, and a refusal
+  // that points to the sheet's ID.
+  recoveryLine: "Type or paste the 48 digits from the sheet. The key ID at its top says which sheet it is.",
+  recoveryRefused: (vault: string): string => `These digits do not open ${vault}. If you have more than one sheet, check its key ID.`,
+  // Listening for the YubiKey; under reduced motion the LED stands still,
+  // so the lead says the waiting the breathing would.
+  insertLine: (vault: string): string => `Waiting for a YubiKey that unlocks ${vault}.`,
+  insertStill: "Waiting for your YubiKey…",
+  // A create's, a setup's or a backup's import: the YubiKey waited for
+  // is the one being added, which unlocks nothing yet.
+  insertAdd: "Waiting for the YubiKey to add to this vault.",
+  // The PIN's last try (ruled 2026-10-17): the consequence, then the way
+  // out, on an attention bar above the field.
+  lastTryHead: "Last try.",
+  lastTry: "A wrong PIN now blocks this YubiKey's PIN; then only the recovery key opens the vault.",
+  // The receipts under the touch's lead.
+  pinAccepted: "PIN accepted",
+  touched: "Touched",
+  // A touch that timed out, said on the touch's step and in neutral ink:
+  // nothing was refused (ruled 2026-10-17).
+  stoppedWaiting: "The YubiKey stopped waiting",
+  stoppedLine: "It waits only a short while for a touch.",
   setupLine: "This vault has only its recovery key so far. Choose its first unlock method; the recovery key is asked for first.",
-  lastUnlocked: (when: string): string => `Last unlocked ${when}`,
-  // Card 2 once the YubiKey is recognised (ruled 2026-10-17).
-  matched: (vault: string): string => `This YubiKey unlocks ${vault}.`,
-  touchWaits: "The YubiKey waits for a touch.",
-  opening: "Opening the vault…",
   continue: "Continue",
   startAgain: "Start again",
   useRecoveryKey: "Use recovery key",
   useRecoveryInstead: "Use recovery key instead",
-  recoveryOnly: "Unlock with the recovery key only",
+  unlockWithRecovery: "Unlock with recovery key",
+  // The two maintenance commands, out of the daily unlock and behind one
+  // quiet menu (ruled 2026-10-17).
+  backups: "Backups and copies…",
   reopen: "Reopen the vault",
-  // The recovery card's note and refusal are ceremonyCopy's, shared with
-  // the panel.
+  // The recovery key's note and refusal are ceremonyCopy's, shared with
+  // the Vault page's panel.
   testButton: "Test",
   replaced: "Replaced. Unlock it with one of its own unlock methods.",
   restored: "Restored. Unlock it with one of its own unlock methods.",
   restoredUnopened: "Restored, but the file could not be opened afterwards. Try again.",
   createdUnopened: "Created, but the file could not be opened afterwards. Try again.",
-  // Card 3's word when a ceremony ends, by kind.
+  // The panel's word when a ceremony ends, by kind.
   done: {
     unlock: "Unlocked",
+    created: "Created",
     replaced: "Replaced",
     restored: "Restored",
     setup: "Set up",
     verify: "Opens",
   },
-  // Card 1 at rest on a vault with no YubiKey among its unlock methods.
-  unlockTitle: "Unlock the vault",
   unlockWithYubiKey: "Unlock with YubiKey",
   unlockWithPassword: "Unlock with password",
   testPicker: "Test that a backup opens",
@@ -1089,13 +1203,15 @@ export const lockCopy = {
   usualPlace: "Use the usual place",
   rebuildConsent: "Keep a copy of the damaged file and start a new vault",
   finishTitle: "Finish setting up",
+  finishLead: (vault: string): string => `Finish setting up ${vault}`,
   finishBody: "The vault opens with its recovery key first; then the unlock method you choose here is added.",
   entangleTick: "Also require a password with every YubiKey in this vault",
   // The touch a cancelled ceremony left on the YubiKey (APP.md §2.2).
-  pendingTouch: "The YubiKey is still waiting for the touch you cancelled. Unlock again to pick it up, or touch it or pull it out to end it.",
-  // Card 1's name with no vault yet, and the Blocked card's.
-  stepStart: "Start",
-  stepBlocked: "Blocked",
+  // The primary says what pressing it does: it picks the touch up.
+  pendingTouch: "The YubiKey is still blinking from the unlock you cancelled. Continue, or touch it or pull it out to end it.",
+  continueUnlocking: "Continue unlocking",
+  // The gear beside the state word: Settings needs no vault.
+  settings: "Settings",
   // The vault file that is damaged or gone; the path stands between the
   // two halves, in mono.
   vaultAt: "Enfold keeps your vault at",
@@ -1152,7 +1268,7 @@ export const firstMethodCopy = {
     token: "Next: type the backup's recovery key, then insert the YubiKey, enter its PIN and touch it.",
     password: "Next: type the backup's recovery key.",
   },
-  // Card 2 while the password typed in the dialog answers the prompt.
+  // The panel while the password typed in the dialog answers the prompt.
   sent: "Using the password you chose.",
 };
 

@@ -26,6 +26,7 @@
   interface PinSide {
     label: string;
     hint?: string;
+    hintTone?: "" | "attention" | "danger";
     note?: string;
     error?: string;
   }
@@ -47,8 +48,19 @@
     // send: answer promptId at once from this field as it stands, with no
     // further click (the password prompt an accepted PIN brought).
     send?: boolean;
+    // The lock screen's panel (APP.md §6, ruled 2026-10-17): each field's
+    // one reserved line, the hint's ink, and *Cancel* as a standard button
+    // beside the accent *Continue* rather than a link far below it.
+    reserve?: boolean;
+    hintTone?: "" | "attention" | "danger";
+    cancel?: { label: string; run: () => void } | null;
+    // formId: the form's buttons are a dialog's, in its foot band (APP.md
+    // §6, Controls; ruled 2026-10-17): the form takes this id and draws
+    // none, and the foot's submit names it, so Enter in a field still
+    // presses it.
+    formId?: string;
   }
-  let { kind, promptId, label, hint = "", note = "", button = "Continue", choose = false, error = "", pin = null, send = false }: Props = $props();
+  let { kind, promptId, label, hint = "", note = "", button = "Continue", choose = false, error = "", pin = null, send = false, reserve = false, hintTone = "", cancel = null, formId }: Props = $props();
   let value = $state("");
   let el: HTMLInputElement | undefined = $state();
   // mark: the field is marked — left or pressed with something wrong, and
@@ -196,12 +208,14 @@
   }
 </script>
 
-<form class="field" onsubmit={submit} novalidate>
+<form class="field" id={formId} onsubmit={submit} novalidate>
   {#if pin}
     <SecretField
       id="secret-{promptId}-pin"
       label={pin.label}
       hint={pin.hint ?? ""}
+      hintTone={pin.hintTone ?? ""}
+      {reserve}
       rule={PIN_RULE}
       ruleBroken={pinShow && pinProblem === PIN_RULE}
       said={pinSaid}
@@ -214,13 +228,15 @@
       oninput={typedPin}
     />
     <div class="pairfield">
-      <SecretField id="secret-{promptId}" {label} {hint} said={said} invalid={show || refused} bind:value bind:el onblur={leftField} oninput={typed} />
+      <SecretField id="secret-{promptId}" {label} {hint} {reserve} said={said} invalid={show || refused} bind:value bind:el onblur={leftField} oninput={typed} />
     </div>
   {:else}
     <SecretField
       id="secret-{promptId}"
       {label}
       {hint}
+      {hintTone}
+      {reserve}
       {rule}
       {ruleBroken}
       said={said}
@@ -235,14 +251,25 @@
   {/if}
   {#if twice}
     <div class="pairfield">
-      <SecretField id="secret-{promptId}-again" label="Type it again" said={confirmSaid} invalid={!!confirmSaid} bind:value={confirm} onblur={leftConfirm} oninput={typedConfirm} />
+      <SecretField id="secret-{promptId}-again" label="Type it again" {reserve} said={confirmSaid} invalid={!!confirmSaid} bind:value={confirm} onblur={leftConfirm} oninput={typedConfirm} />
     </div>
   {/if}
   {#if note}<div class="pin-note">{note}</div>{/if}
-  <div class="submit"><button type="submit" class="btn accent wide">{button}</button></div>
+  {#if formId}
+    <!-- The submit is the dialog's foot's, which names this form. -->
+  {:else if cancel}
+    {@const c = cancel}
+    <div class="submit row" class:snug={reserve}><button type="submit" class="btn accent grow">{button}</button><button type="button" class="btn" onclick={() => c.run()}>{c.label}</button></div>
+  {:else}
+    <div class="submit"><button type="submit" class="btn accent wide">{button}</button></div>
+  {/if}
 </form>
 
 <style>
   .submit { margin-top: var(--s3); }
+  .submit.row { display: flex; gap: var(--s2); }
+  /* The reserved line above is already the space before the buttons. */
+  .submit.snug { margin-top: 0; }
+  .submit .grow { flex: 1; }
   .pairfield { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s1); }
 </style>

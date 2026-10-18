@@ -286,7 +286,7 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   entangled password, the PIN inside `ECDH`, an enrolment's PIN or management key — the ceremony
   probes the card every 3 s; the probe keeps the connection alive, heals a reset it meets
   (`piv` reconnects and repeats), and notices a key pulled during the prompt: the prompt ends,
-  the strip goes back to *WaitingForKey* with `token.no_card` as a note ("insert it again"), and
+  the panel goes back to *WaitingForKey* with `token.no_card` as a note ("insert it again"), and
   the flow — unlock, import's proof, enrolment, and the unlock half of every slot change — waits
   for the key again instead of failing. The prober is joined before a prompt returns, so no
   probe is on the card when the operation resumes; a key gone while its reader is still listed
@@ -377,7 +377,7 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   before the pull lands in, the agreement waiting for the touch, the open's own preflight. A
   return code outside the `SCARD_` facility from a call that addresses a card or a card handle
   is the key gone (`ErrNoCard`), in both PC/SC layers, and takes the removal's path: the PIN
-  never reached the card (no retry spent), the strip goes back to *WaitingForKey* with "insert
+  never reached the card (no retry spent), the panel goes back to *WaitingForKey* with "insert
   it again" — or the cancel wins — and never to "something went wrong"; the same code from the
   context or the reader list is the service or the session (`ErrNoService`: a remote session
   without smart-card redirection answers `ERROR_BROKEN_PIPE`), which the waiting state already
@@ -1254,40 +1254,194 @@ during which no program can reach the card anyway.
 
 ## 6. Screens (the Native look)
 
-Lock screen (one panel, three-step line, the states of §2.2 including TwoKeys, NoMatch, Busy,
-Blocked; `SwapKey` is the enrolment's alone since §13; on a vault whose entangled password is on,
-the YubiKey unlock method's card 2 is **PIN and password** (named in its fields' order, live,
-dim and at rest alike, and *PIN* alone on a vault that asks for no password; ruled 2026-10-17,
-it read *Password and PIN* live and *PIN* at rest): two fields under one *Continue*. The PIN goes
-first and is verified at the card before anything else (§2.2): a wrong PIN marks only the PIN
-field, with the retries, and nothing else moves — the password field keeps whatever was typed, as
-an ordinary masked field the user may still edit, and is sent only once the PIN is right, in the
-state it is in at that moment, by the page and with no further click. A wrong password, known
-only after the touch, comes back with the password field emptied and marked and the PIN not
-asked again (§2.2's cached `H`). The button reads *Unlock with YubiKey* whatever the switch, and
-the card's dim line says both are needed. The same two-field form serves every token ceremony on
-the Vault page. Secondary: recovery key, password, open a
-backup — never a second vault; the
-"workstation-lock detection unavailable" warning (the BitLocker warnings went with §9's checks,
-2026-09-13); while the status says
-`pendingTouch` from a cancelled unlock, one quiet line under the key card: the key is still
-waiting for the touch that was cancelled — unlock again to pick it up, or touch it or pull it
-out to end it; that line is the lock screen's only: on the Vault page the pending touch left by a
-cancelled change of unlock methods or reveal is said by the next ceremony's own `token.pending` note while it
-waits, and on the first-run card a create or an import begun while a cancelled create's touch
-stands is answered with `token.pending`, a toast; the header names the state — *Locked*,
-*Unlocking*, *Unlocked*, *Open in another Enfold*, *Damaged*, *Not found*, *No vault yet*,
-*Replacing the vault* (*Restoring a vault* at first run, where there is none to replace),
-*Creating the vault*, *Setting up*, *Testing a backup*, *Needs attention*, *Needs setting up* —
-the idle card's "Last unlocked" is relative ("today,
-03:24", "22 days ago"), card 2 says "This YubiKey unlocks <vault>." (ruled 2026-10-17; it said
-"This key") once an unlock's YubiKey is
-recognised (an import's, a create's or a setup's unlocks no vault kept here, so it gets no line)
-and its button always reads *Continue*, since a touch may still follow, and in an unlock a
-YubiKey that is not one of the vault's unlock methods offers *Use recovery key* beside
-*Cancel* (only an unlock can turn to the recovery key: an import's proof or a create says *Try
-another YubiKey.*, and the Vault page's ceremony panel says the same, having only *Cancel*);
-a failed unlock's *Start again* begins the same unlock method again; ruled 2026-10-17). Archives (list with details — **the details pane is a side pane of 300 px while the page's
+Lock screen (**one panel changing in place**, ruled 2026-10-17: the ruling of 2026-09-06 — "the
+ceremony is one panel changing in place … the touch moment is a full-surface takeover" — built
+at last; the three full-height cards side by side, two of them dim placeholders, which the build
+had taken from the mockup's storyboard and the rulings of 2026-09-07/08 then described, are
+gone, and so is their wording). One centred panel, `min(440px, 100%)` wide, 28 px in, a flat
+1 px stroke and the card's radius, its top at 14vh in every state (the header keeps its 20 px
+line whatever it holds, so nothing above the panel moves); the header's state word at the top
+right, and beside it, at rest and at first run, a gear that opens Settings, which needs no vault
+— the lock scene steps aside for the Settings page until the route moves on or the vault's state
+changes (ruled 2026-10-17); the brand where Motion's *Lock* anchors it; the notices — the warnings, the
+"workstation-lock detection unavailable" one among them (the BitLocker warnings went with §9's
+checks, 2026-09-13), the archives still open — above the panel at its width, never below its
+buttons. **The step line** draws the states of §2.2 that an unlock passes through: a YubiKey's
+three steps, *YubiKey · PIN and password · Touch* (*PIN* alone on a vault that asks for no
+password; the PIN's step is named in its fields' order, ruled 2026-10-17, it read *Password and
+PIN* live and *PIN* at rest), or the recovery key's two, *Recovery key · Unlock*. It is a caption
+above the panel and only while an unlock runs: a passed step's 16 px disc fills with the accent
+and a check and its name takes the second ink, the live one is ink at 600, those to come the
+third ink. A vault's password asked again after the touch (a wrong one is known only then,
+§2.2) makes the PIN's step live again while the touch keeps its check, and its button reads
+*Unlock*, since nothing follows it but the opening (ruled 2026-10-17). At rest, at first run
+and for a password's way in (one step), the create, the setup, the import and the backup test
+(no fixed steps: a one-step line would say nothing; ruled 2026-10-17), it is
+absent and its 16 px line is kept, so the panel never moves when it appears. Each state of §2.2 has its place on the panel — TwoKeys, NoMatch and Busy on the
+YubiKey's step, Blocked on the PIN's (`SwapKey` is the enrolment's alone since §13) — and the
+rest panel's heading is never borrowed by them. A view that replaces the one holding the focus
+gives the focus to its first button, its ring drawn only once the keyboard is used, so the
+keyboard keeps its place: the YubiKey's step its *Cancel*, No match's and Blocked's *Use recovery
+key* (their *Cancel* where nothing offers the recovery key), a failure its *Start again* or *Close* (ruled
+2026-10-17; the edge states left it on the document). A ceremony with no step line heads its PIN's
+step with its own instruction, "Type your YubiKey's PIN", as its YubiKey's and its touch's steps
+are headed, never with the act's name the header already says (ruled 2026-10-17; a create's PIN
+step alone read *Creating the vault*). Every wait for a YubiKey draws the key art,
+whatever the ceremony: an unlock's by the YubiKey, and a create's, a setup's or a backup's
+import's for the YubiKey it adds — `SwapKey` with nothing to remove, and any `WaitingForKey`
+after another step of the same ceremony, whatever method the core has named — captioned "Waiting
+for the YubiKey to add to this vault." Only the opening instant of a typed way in, which the core
+leaves at once, keeps what the panel showed (ruled 2026-10-17).
+
+**At rest**: the padlock, the vault's name (the sub size), "Locked · last unlocked yesterday,
+03:24" (relative — "today, 03:24", "22 days ago" — since recency is the point), *Unlock with
+YubiKey* (accent, the panel's width, focused as it arrives so Enter begins, its ring drawn only
+once the keyboard is used) and *Unlock with recovery key* (standard, the panel's width); the
+button reads *Unlock with YubiKey* whatever the switch — the PIN's step says which secrets it
+asks for. **An explicit Unlock starts the ceremony at once** (ruled 2026-10-17): the locked
+banner's, the foot's and the Vault page's *Unlock*, a file opened from Explorer while the vault
+is locked, and the tray's *Unlock…* (which begins it in the shell, §2.4) all bring the lock scene
+with the unlock already begun by the vault's everyday way in — the YubiKey where it has one, else
+its password — so the panel opens on the YubiKey's step, never on a button to press first. Only
+a vault at rest is begun: one that needs setting up, is open in another Enfold, is broken or is
+not there shows its own panel first, and an idle lock or a Windows lock never begins anything. A vault whose one everyday way in is a password reads "Unlock <vault>" over *Unlock with
+password*, and pressing it, or Enter, turns the panel into the password's field in place: one
+step, no step line, the padlock and the lead where they were, *Unlock* with *Cancel* beside it and
+*Unlock with recovery key* beneath, under the form rule. The maintenance commands leave the daily
+unlock (ruled 2026-10-17): one quiet subtle button, *Backups and copies…*, opens them as a menu —
+*Test that a backup opens…* and *Replace this vault with a copy…* — never a second vault. Quiet
+lines under the name carry what the status says: while it says `pendingTouch` from a cancelled
+unlock, the key art stands in for the padlock with its LED breathing — the YubiKey really is
+still waiting — the line says "The YubiKey is still blinking from the unlock you cancelled.
+Continue, or touch it or pull it out to end it.", and the primary reads *Continue unlocking*,
+since pressing it picks that touch up (§2.2; ruled 2026-10-17); that line is the lock screen's
+only: on the Vault page
+the pending touch left by a cancelled change of unlock methods or reveal is said by the next
+ceremony's own `token.pending` note while it waits, and on the first-run panel a create or an
+import begun while a cancelled create's touch stands is answered with `token.pending`, a toast;
+and the status's note when the five minutes from the touch ran out (§2.2). The states that are
+not a way in say their own lead, never the rest panel's (ruled 2026-10-17): *Open elsewhere* (the
+header's word; it read *Open in another Enfold*, which the lead now says) reads "<vault> is open in
+another Enfold" and "Close it there, then try again." over *Try again* (accent); a broken vault
+(§2.1) keeps the padlock and the name with the caption naming the header's state, "Needs attention ·
+last unlocked yesterday, 17:10" — never the rest's *Locked* — then the code's sentence on an
+attention line (the icon and the words in the attention ink, no box) over *Reopen the vault*
+(accent) (ruled 2026-10-17); a vault that needs setting up — an adopted backup's first way in — takes
+first run's shape, with no padlock: "Finish setting up <vault>" and its line over *Finish setting
+up…* (accent) and *Unlock with recovery key* (ruled 2026-10-17).
+
+**The YubiKey's step**: the key art — a port, the plug, the YubiKey and its LED in a ring — with
+the LED breathing while the app listens, "Insert your YubiKey" and "Waiting for a YubiKey that
+unlocks <vault>.", *Cancel* and the subtle "Use recovery key instead"; under reduced motion the
+LED stands still and the lead reads "Waiting for your YubiKey…". With the Smart Card service not
+running (`token.no_service`, said after ten seconds at this step) the LED stops breathing and
+holds dim, since nothing is heard from the reader, and the code's sentence stands on an
+attention line under the lead — the icon and the words in the attention ink, with no box, as the
+broken vault's; the boxed attention bar is kept for the last try and the damaged vault's kept copy
+(ruled 2026-10-17; it was a bar). The art stays for the YubiKey
+being read, its LED solid once it answered. Two YubiKeys in draw two, the second fading, under
+"Two YubiKeys are in" and "Remove one; Enfold carries on by itself.", with *Cancel* alone — the
+core carries on by itself once one is out. On a YubiKey that is not one of the vault's unlock
+methods the LED goes dark and the dashes between port and plug go, so the screen shows which
+object is wrong; the lead names the vault ("This YubiKey is not one of <vault>'s unlock
+methods"), and an unlock offers *Use recovery key* beside *Cancel* (ruled 2026-10-17) (only an unlock can turn to the recovery key: an import's proof or a create says *Try
+another YubiKey.*, and a ceremony in a dialog says the same, its foot band holding *Cancel*
+alone).
+
+**The PIN's step**: the YubiKey's name as a chip, then, on a vault whose entangled password is
+on, the PIN and the password as two fields under one *Continue* (the ruling of 2026-09-08). The
+PIN goes first and is verified at the card before anything else (§2.2): a wrong PIN marks only
+the PIN field, with the retries, and nothing else moves — the password field keeps whatever was
+typed, as an ordinary masked field the user may still edit, and is sent only once the PIN is
+right, in the state it is in at that moment, by the page and with no further click. A wrong
+password, known only after the touch, comes back with the password field emptied and marked and
+the PIN not asked again (§2.2's cached `H`). Each field has one reserved 16 px line under it,
+where its rule ("Up to 8 characters.") and what is wrong ("Wrong PIN.") cross-fade, so an error
+never pushes the fields and buttons below it; the retries stand in the PIN's label row — "3 tries
+left" in the second ink, attention at two, danger at one — and on the last try an attention bar
+above the field says "Last try. A wrong PIN now blocks this YubiKey's PIN; then only the recovery
+key opens the vault." with *Use recovery key* in it (ruled 2026-10-17: "1 attempt left — the last
+one" was the grey of three, and "The key counts wrong tries, not Enfold." is gone from here). The
+button reads *Continue*, since a touch still follows, its label centred in the width it grows to,
+with *Cancel* a standard button beside it and "Use recovery key instead" a subtle one beneath
+(ruled 2026-10-17; *Cancel* was an underlined link far below) — except on the last try, where the
+bar's *Use recovery key* is the one way out and the subtle one goes. Every two-button row of the
+panel is drawn so, the accent grown and *Cancel* at its own width beside it — No match's and
+Blocked's *Use recovery key*, a timeout's *Start again* — and a *Cancel* that stands alone, on a
+step that asks nothing here, is the same standard button, never a subtle one (ruled 2026-10-17;
+No match's and Blocked's accent stood at its own width, and the quiet steps' *Cancel* was
+subtle); the recovery key's cells alone keep *Unlock* at its width, the count at the row's end.
+The same two-field form serves every token ceremony on the Vault page, where the last try's bar
+says its consequence alone — "Last try. A wrong PIN now blocks this YubiKey's PIN until it is
+reset." — since a dialog offers no recovery key. Blocked stands on this step, under the YubiKey's
+chip, with its own lead that says whose PIN, "This YubiKey's PIN is blocked", then one sentence on
+a danger bar, what it means and, in an unlock, the way out — "It will not accept a PIN until it is
+reset; your recovery key still opens the vault." — and *Use recovery key* (accent, an unlock's
+alone) beside *Cancel* (ruled 2026-10-17; it was a title over a grey line, then a bar alone, then
+a lead that named no YubiKey over a caption and a bar that split one sentence).
+
+**The recovery key's step** (ruled 2026-10-17): the vault's name and "Type or paste the 48 digits
+from the sheet. The key ID at its top says which sheet it is.", the vault's recovery keys as a
+quiet list, the ID first, then the name's own words — "0303-0303 · printed, in the safe" — the
+kind the name repeats and the date left out, the date said only for a key named by its kind
+alone, "0404-0404 · added 2026-10-10" (ruled 2026-10-17; each line repeated "Recovery key —" and
+carried its date at the row's end, noisier than a list that says which sheet) — and the eight cells (Forms,
+below), drawn at the sub size in mono, unspaced, 40 px tall, four to a row — the six digits
+72 px wide in a cell of about 90, so its corners stay clear: a finished group that checks out
+wears a small accent tick in its top-right corner, 2 px in, one that fails a 2 px danger
+underline (not a frame),
+and the line under the cells names it — "Group 3 does not check out. Compare its six digits with
+the sheet." Then *Unlock* at its natural width (the backup test's *Test*), *Cancel* beside it, and
+"5 of 8 groups" in the second ink at the row's end once the typing has begun and while it is not
+done. A paste fills all eight. A key the vault refuses keeps its digits for retyping, and each
+cell keeps its own judgement — its tick when its group checks out, which is still true — while
+the refusal, the key's and no group's, is said once, by the line under the cells: "These digits
+do not open <vault>. If you have more than one sheet, check its key ID." (ruled 2026-10-17; every
+cell underlined in danger read as eight wrong groups, and the ticks had gone with it). The step line
+reads *Recovery key · Unlock*. Finishing setup asks the same cells first, with no step line and
+*Continue*, since its first way in follows.
+
+**The touch takes the stage**: the touch's green over the whole scene — however far a short
+window scrolls — the panel's fill and stroke fading into it, the header's state and the brand,
+its mark outlined, in the touch's soft ink in both themes, the 160 px rings pulsing, the hero "Touch your YubiKey now", "Touch it
+while it blinks. If it stops blinking, start again." in the touch's soft ink (no number: DESIGN.md
+trap 23) and the receipt "PIN accepted · <the YubiKey's name>". The derivation and the release
+keep the green and the layout — the rings held still at half, "Opening the vault…", "Touched ·
+<the YubiKey's name>" — and Done pops its check on the same green. **The green holds through
+whatever follows a touch in the same ceremony** (ruled 2026-10-17), whatever the act and
+whatever way the core named: a create's or a setup's YubiKey proves itself by its touch, and the
+derivation after it stays on the green, as an unlock's does — it was drawn neutral under
+"Opening the vault…", the wash leaving mid-ceremony for a vault that did not exist yet. A
+derivation says what it does: an unlock's "Opening the vault…", a create's "Creating the
+vault…", a setup's or an import's after the one that opened the vault or the backup "Adding the
+unlock method…". Only something asked after the touch — a prompt — takes the green away, and
+a password or a recovery key, which nothing touches, derives and ends on the neutral panel.
+**A failure stays where it
+happened**: a touch that timed out (the core's two rounds) says "The YubiKey stopped waiting" and
+"It waits only a short while for a touch." on the touch's step, in neutral ink with *Start again*
+and *Cancel* — red is kept for refusals — and the header says *Not unlocked*; any other failure
+of an unlock says its code on a danger bar on the step it stopped at; *Start again* begins the
+same unlock method again. The header names the state — *Locked*, *Unlocking*, *Not unlocked*,
+*Unlocked*, *Open elsewhere*, *Damaged*, *Not found*, *No vault yet*, *Replacing the
+vault* (*Restoring a vault* at first run, where there is none to replace), *Creating the vault*,
+*Setting up*, *Testing a backup*, *Needs attention*, *Needs setting up* — and its padlock agrees
+with its word: open on arrival, shut at rest, open again with *Unlocked* (ruled 2026-10-17). First run, an absent and
+a damaged vault use the same panel, with no step line, sized to its content (ruled 2026-10-17).
+**First run** reads "Create your vault" and the one sentence — "A vault is one file: the keys to
+your archives, opened by a YubiKey, a password or a recovery key." — over *Create a vault…*,
+*Restore from a vault or backup…* and the subtle *Test that a backup opens…*; what a restore needs
+(a backup's recovery key) is said in the restore dialog, where it applies. **An absent vault**
+reads "<vault> is not where Enfold left it" over its path in mono, then *Try again*, *Find it…* —
+a picker, then the import dialog with "use the file where it is" already taken, the route that
+already says what the file is — *Restore from a vault or backup…* and last the subtle *Create a
+new vault instead…*. **A damaged vault** reads "<vault> could not be opened" over its path, then
+its best remedy first: when Enfold kept a vault a replacement retired, an attention bar "Enfold
+kept the vault it replaced on <date>." (the date from the copy's name) with *Use that copy…*,
+which opens it in the import dialog; then *Try again* (the accent when there is no copy) and
+*Restore from another file…* side by side; *Rebuild the vault…* last, a subtle button in danger
+ink, with what it costs on its own line held under it at the lead's gap: "Rebuilding starts a new, empty vault and keeps
+the damaged file beside it. Archives locked to this vault then open only from a backup or a copy
+of it." Archives (list with details — **the details pane is a side pane of 300 px while the page's
 body is at least 1120 px wide, a fixed threshold rather than a proportion (ruled 2026-09-11:
 the width below which the side pane would squeeze the Name column shorter than *Last
 saved*); below it the details become a bottom panel** (refined 2026-09-12 after the first
@@ -1509,7 +1663,7 @@ its tick reads "keep a copy of the damaged file and start a new vault"); when a 
 exists and no vault is kept, it names the copy and offers to restore it (*Restore it…*). With a
 vault kept here the lock screen offers *Replace this vault with a copy…* and *Test that a backup
 opens…* (ruled 2026-10-17; they were *Import a backup or a copy of this vault…* and *Check that a
-backup opens…*), never a second vault. A vault with only its
+backup opens…*), behind its *Backups and copies…* menu (ruled 2026-10-17), never a second vault. A vault with only its
 recovery key shows *Finish setting up* as its one action, with "unlock with the recovery key
 only" beneath. Precedence on the lock screen: Busy, then Broken, then setup needed, then the
 ways in; Tampered is a banner over any.
@@ -1559,7 +1713,7 @@ prompt, the `Choose` password prompt, at once with the typed password — on the
 that prompt's id, never as an argument of the bound call (§1) — and forgets it. The store holds it
 from the press until that prompt and nowhere else, and drops it unsent at every other end: the
 call refused, the ceremony failed, blocked or cancelled first, the panel dismissed for another
-ceremony; a dialog closed without its button takes it nowhere. So card 2 never asks the `Choose`
+ceremony; a dialog closed without its button takes it nowhere. So the panel never asks the `Choose`
 prompt of a create in the normal case — it says "Using the password you chose." for the moment
 the answer is in flight — and asks it as before, two fields under one *Continue*, only when the
 core refuses the answer all the same (`vault.password_short`, which the dialog's judge makes
@@ -1625,9 +1779,11 @@ for a new name, "There is already something with that name here." **The
 recovery key is typed into eight cells**, plain digits — they are read back against paper, not
 hidden — each moving on when its six are in; a paste fills them all with the dashes stripped; a
 click lands on the first cell still to be typed, or, once all eight are in, where it was aimed
-with the group selected for retyping; the cells are one tab stop; a finished group that fails
-BitLocker's checksum (divisible by 11, below 720 896) turns red at once, before anything is
-sent; and when the core says the key did not open the vault, the digits come back for
+with the group selected for retyping; the cells are one tab stop; a finished group is judged
+against BitLocker's checksum (divisible by 11, below 720 896) at once, before anything is sent —
+a tick when it passes, a 2 px danger underline and its number in the line under the cells when
+it fails (ruled 2026-10-17; the whole cell turned red, and the line explained the checksum
+without saying which group); and when the core says the key did not open the vault, the digits come back for
 correction — the store keeps them across the derivation step, which unmounts the field.
 
 **Motion.** One vocabulary, in `lib/motion.ts` and the stylesheet's `--dur-*` tokens, kept
@@ -1638,25 +1794,47 @@ answers at once and settles when left), *leave* 100 ms, *fast* 140 ms (enter), *
 (`cubic-bezier(0.2, 0, 0, 1)`); a thing that travels away eases in; a crossfade's exit eases
 *out* — fast first, 80 ms for a page — so that no two texts share a spot at readable opacity,
 which is what a ghost is. Nothing travels more than 12 px; one thing moves at a time, staggered
-by at most 40 ms; nothing loops but the touch rings and the 14 px waiting ring of a preview on
-its way (ruled 2026-10-14), which stands still under reduced motion.
+by at most 40 ms; nothing loops but the touch rings, the 14 px waiting ring of a preview on
+its way (ruled 2026-10-14) and the YubiKey's LED on the lock screen while it listens (ruled
+2026-10-17: there the motion is the state), each standing still under reduced motion.
 `prefers-reduced-motion` zeroes every duration — the script reads the media query when a
 transition starts, the tokens collapse to 0 — and the settle with them.
-- *Unlock.* The third card turns the touch's green the moment it is live — the touch, the
-  derivation and the release alike, so it never flashes back to white between them (ruled
-  2026-10-14; it used to be green for the touch and Done alone) — and the turn eases its
-  opacity and shadow on the entering curve while the green itself switches, a gradient being
-  nothing a transition can carry.
-  At Done the third card stays the touch's green and becomes the success card: a
-  white disc with the accent's check pops in where the rings were (the core scales from 60%
-  with a little overshoot, 240 ms), the word — *Unlocked* — sits in the middle, the vault's name
-  under the open padlock at the foot; it stays for the settle, so the ceremony has a full stop
-  rather than a cut to a white card. Then the lock screen lifts
-  (8 px up, fading fast-first, 160 ms) and, a gap later, the shell arrives: the rail slides in
-  12 px from the left and the layer rises 8 px, 220 ms, the layer 40 ms behind. The store holds `settling` for the
-  settle after the state says Unlocked, and the lock screen keeps rendering the ceremony
-  meanwhile — the state's event lands a few milliseconds before the ceremony's Done, and without
-  the hold the screen fell back to its first card for that instant and the check was never seen.
+- *Unlock.* One panel changing in place (ruled 2026-10-17, in place of the three cards' motion;
+  every duration is a token of the vocabulary above, and reduced motion zeroes it):
+  - *Listening for the YubiKey*: the LED on the key art breathes, its opacity 0.35 to 1 and back,
+    a 1.6 s loop eased in and out; still under reduced motion, where the lead says "Waiting for
+    your YubiKey…".
+  - *The YubiKey found*: the LED holds solid for 200 ms while the step's disc pops its check
+    (180 ms, the pop curve); then the panel cross-fades to the PIN's step, the old content leaving
+    over 140 ms fast first and the new arriving over 140 ms a gap (60 ms) later — every view of
+    the panel crosses so, its views sharing one place. The leaving view leaves as it was: it never
+    redraws with the next step's facts (the PIN's fields stay as the touch arrives, the touch's
+    words as it times out). The panel's height eases from the old view's to the new one's over
+    the same 220 ms as a scene change, on the entering curve, what overhangs it clipped at its
+    stroke meanwhile; between crossings it is the view's own, so a line arriving inside a view
+    moves nothing late (ruled 2026-10-17; the bottom edge jumped at once to the taller view).
+  - *A wrong PIN*: "Wrong PIN." cross-fades into the field's reserved line, 140 ms; nothing below
+    moves.
+  - *The PIN accepted, the touch*: an overlay with the touch's gradient fades in over the whole
+    stage, 220 ms on the entering curve — its opacity moves, since a gradient cannot transition —
+    the panel's fill and stroke fade out with it, and the rings start their 2.4 s pulse.
+  - *Touched, opening*: the rings stop and hold at half; the lead and the receipt cross-fade,
+    140 ms. No colour changes: the green stays through the derivation and the release.
+  - *Done*: the check disc pops where the rings' core was (from 60% with a little overshoot,
+    240 ms on the pop curve), the word — *Unlocked* — in the middle and the vault's name under the
+    open padlock, and it stays for the settle (320 ms), so the ceremony has a full stop. Then the
+    lock screen lifts (8 px up, fading fast-first, 160 ms) and, a gap later, the shell arrives:
+    the rail slides in 12 px from the left and the layer rises 8 px, 220 ms, the layer 40 ms
+    behind. The store holds `settling` for the settle after the state says Unlocked, and the
+    lock screen keeps rendering the ceremony meanwhile — the state's event can land a few
+    milliseconds before the ceremony's Done, and without the hold the screen fell back to rest
+    for that instant and the check was never seen.
+  - *The touch timed out*: the rings stop, the overlay fades out over 160 ms on the exit's curve,
+    the stage's ink returning with it over the same 160 ms — dark words never stand on the green
+    — and the neutral message arrives on the panel, on the touch's step.
+  - *In a dialog* the same beats play inside the box (Controls, below): the found LED's hold, the
+    views crossing in one place, and the touch's wash filling the body with the box's stroke
+    fading — in over 220 ms, out over 160 — while the foot band stays (ruled 2026-10-17).
 - *Lock.* The reverse: the shell sinks 6 px and fades fast-first (120 ms) and, a gap later,
   the lock screen rises in (220 ms); the lock screen's header shows the open padlock and closes it over the first 160 ms.
   While unlocked the status chips show the open padlock. The brand — the mark and "Enfold" —
@@ -1813,11 +1991,64 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   The touch's lead is the hero in a ceremony dialog too, as on the lock screen (ruled
   2026-10-17; it was a 21 px size of its own there).
 - *Controls.* Every dialog and popover enters over 140 ms (the box also scales from 97%) and
-  leaves over 100 ms; a panel that swaps its content in place — the ceremony panel between
-  steps, the lock screen's three cards — fades the new content in over 140 ms and the cards
-  ease between live and dim (their opacity and shadow, on the entering curve). The ceremony
-  panel has no title line of its own: it always sits in a dialog whose title names the act
-  (ruled 2026-10-14, after the title was printed twice). *Toasts* are for what the page cannot say in place — an error the
+  leaves over 100 ms; a panel that swaps its content in place — the lock screen's one panel and
+  a dialog's ceremony panel, between steps (ruled 2026-10-17; the lock screen's was three cards
+  that eased between live and dim) — crosses its views in one place, the old leaving fast first
+  over 140 ms and the new arriving over 140 ms a gap later (Motion, *Unlock*). **A ceremony in a
+  dialog is the lock screen's stage at a dialog's size** (ruled 2026-10-17: the one panel of
+  2026-09-06, for the dialogs too) — the Vault page's acts (*Add an unlock method…*, *Remove…*,
+  *Re-key vault…*, *Show recovery key…*, *Export backup…*, the password with every YubiKey) and
+  the proof of *Import archives from a backup…* (§13). It has no title line of its own: the
+  dialog's title names the act (ruled 2026-10-14, after the title was printed twice). Its views
+  are the lock screen's, chosen by the same rule and turned the same way: the key art while a
+  YubiKey is waited for — "Insert a YubiKey that already unlocks this vault" over the vault's
+  YubiKeys by name, with "The new unlock method comes next." for an enrolment alone (the other
+  acts prove it is you and say nothing of a next step) — two YubiKeys and one that is not the
+  vault's as on the lock screen, the YubiKey's name as a chip, the PIN's fields with their
+  reserved lines and the retries' inks, the last try's bar, a blocked PIN's lead and danger bar,
+  a failure where it happened ("The YubiKey stopped waiting" in neutral ink after a timed-out
+  touch), and the end as what is now true ("Unlock method added", "Vault re-keyed") over the
+  accent check. A typed proof — a vault with no YubiKey proves it is you with its password —
+  heads as the YubiKey's wait does, with what to type and why: "Type a password that already
+  unlocks this vault" over "It proves it is you." ("The new unlock method comes next." for an
+  enrolment, whose line already says the proving) (ruled 2026-10-17; the field stood alone under
+  the dialog's title and said neither). The headings, a failure's among them, are the section
+  size (16/22), since the dialog's title already stands at 20/28 and a 20 px lead under it would
+  rank the step with the act; the touch's lead is the hero, as on the lock screen. An enrolment draws a
+  two-part line under the title, *Prove it is you · Add the new unlock method* — two halves, not
+  three steps — its first half passing at the core's `SwapKey` or at the new secret's prompt;
+  its swap is the key art over "Remove <the YubiKey that proved it>" and "Then insert the new
+  YubiKey. Enfold carries on by itself.", and its second half's wait reads "Now insert the new
+  YubiKey" (the core's own words for the swap, "the key to enroll", are never shown). **The
+  touch takes the box over** as it takes the lock's stage: the touch's gradient fills the body
+  under an opacity that moves (220 ms on the entering curve; 160 ms on the exit's), the box's
+  stroke fades with it, the title, the line and the words take the touch's inks, the rings, the
+  hero, its line and the receipt stand in the middle — and the foot band stays as it is, with its
+  *Cancel*. The green holds through whatever follows a touch with nothing asked since, as on
+  the lock screen: the proof's derivation ("Checking that it is you…", since the vault is open
+  already) and a proof's Done, and the new YubiKey's touch in an enrolment's second half — the
+  core has the new YubiKey prove itself by its PIN and its touch before the vault depends on it —
+  through the Done after it (ruled 2026-10-17; the green used to leave as that Done's check
+  popped, on the false ground that nothing was touched there). What has no touch behind it is
+  drawn on the neutral panel: a typed proof's derivation and Done, the key made on the new
+  YubiKey before its touch ("Adding the unlock method…"), and a Done after a prompt that came
+  between the proof's touch and the end — a new password chosen — where the green would arrive
+  only to leave. **The buttons are the dialog's foot
+  band's** (ruled 2026-10-17; the panel's own *Cancel* in the body was the last of the web
+  modal's shapes): *Continue* beside *Cancel* while a prompt is up — the submit of the step's
+  form by its id, so Enter in a field still presses it — *Cancel* alone while nothing is asked;
+  after a failure the user did not choose — the YubiKey stopped waiting, a refusal — *Start
+  again* (accent) beside *Cancel*, as the lock screen's failure has them (ruled 2026-10-17; the
+  dialog offered only *Close*, and the act had to be found on the page and begun anew): the page
+  begins the same act with what it was begun with — the same new unlock method and name, the
+  same unlock method to remove, the same backup file — in the same dialog, which stays open, the
+  failure standing until the new ceremony's first event takes its place; *Close* once the
+  ceremony has otherwise ended. Escape is *Cancel* while it runs and closes the dialog after. The panel
+  keeps one height for every step, the tallest's — the PIN's last try under an enrolment's line,
+  354 px measured in Edge, 356 on the 4 px grid — so the box, 519 px, never jumps as the steps
+  swap (ruled 2026-10-17; it was the mock's 380, which left 26 px of nothing under the tallest).
+  A button that grows to share a row centres its label, as a wide one does
+  (*Continue*, *Unlock*, *Start again*). *Toasts* are for what the page cannot say in place — an error the
   action's own surface is gone for — never a confirmation of something the page already shows
   (a saved setting is the bar leaving). Where they go, ruled 2026-09-07 for whatever toasts come
   next: at the top of the window, centred on the window — not on the content layer — dropping
@@ -1827,8 +2058,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   (ruled 2026-10-17, from WinUI's values; the mockup's stills of WinUI states had become the
   states themselves). One rule for what looks like a link: a command is a button — *Cancel*,
   *Lock now*, "Use recovery key instead" are subtle buttons, 24 px high in the layer's foot —
-  the lock screen's further commands too (*Test that a backup opens…*, *Replace this vault with
-  a copy…*, *Rebuild the vault…*, the card's *Cancel*: 28 px) and the replaced copy's *Restore
+  the lock screen's further commands too (*Backups and copies…*, *Rebuild the vault…*, "Use
+  recovery key instead": 28 px; the panel's *Cancel* is a standard button beside its primary) and the replaced copy's *Restore
   it…*, a small button on its bar's 40 px line (ruled 2026-10-17; each was a link) —
   and a hyperlink button (*Show in Explorer*, *Locate…*, *Technical details…*) is kept for going somewhere
   or revealing something, and for the create dialog's *Keep it elsewhere…* and *Use the usual
@@ -2192,6 +2423,25 @@ absent, zero, ahead of the clock, or carrying another vault's id, and *never* ma
 confirmations above say that no backup is recorded here rather than name a date. It is a local,
 unauthenticated convenience: it chooses wording and pre-selects the rotate dialog's backup
 checkbox, and it never gates a cryptographic operation.
+
+**The acts run their ceremony in a dialog of their own** (ruled 2026-10-17). Once *Add an unlock
+method*, *Remove <name>?*, the rotate dialog or the password's own dialog is answered, once
+*Export backup…*'s Save dialog has named a place, and at once for *Show recovery key…*, the
+act's ceremony stands in a dialog that
+bears its name — *Add an unlock method*, *Remove an unlock method*, *Re-key the vault*, *Show the
+recovery key*, *Export a backup*, *Password with every YubiKey* — drawn as §6, *Controls*, says:
+the lock screen's views at a dialog's size, one height for every step, the touch's green over the
+body, and its buttons in the foot band. The proof is the core's way in for a slot change — the
+YubiKey where the vault has one, else its password (`acquireUnlocked`) — so the dialog opens on
+the YubiKey's wait at once rather than on a quiet instant. The enrolment's is the one two-part
+line (*Prove it is you · Add the new unlock method*); a recovery key enrolled, and the reveal,
+end in the recovery key's dialog (§6), which takes over from the act's. The proof of *Import
+archives from a backup…* runs the same panel inside that dialog, between its proof step and its
+list, the foot band's *Continue* and *Cancel* then the panel's. A proof typed on a vault with no
+YubiKey heads with what to type and why, as the YubiKey's wait does; a failure the user did not
+choose offers *Start again* beside *Cancel* in the act's own dialog, which begins the act again
+with what it was begun with — the rotation after a failed backup begins with the backup again,
+to the same file, since no backup means no rotation (ruled 2026-10-17).
 
 **What changes in §3.** `VaultStatus` gains `Entangled`, `VaultFileSize` and `TamperedReason`
 (`vault.tampered_hash` · `vault.tampered_generation`, so the warning can tell a damaged file from a

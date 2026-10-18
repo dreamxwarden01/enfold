@@ -919,7 +919,7 @@
            has no timeout of its own, and what it owes the vault is
            already said by the status strip. -->
       <span class="grow">{archivePageCopy.lockedBanner}</span>
-      <button type="button" class="btn sm accent" onclick={() => store.go("lock")}>{commandCopy.unlock}</button>
+      <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
     </div>
   {/if}
   {#if stat?.state === "needs_reopen"}

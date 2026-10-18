@@ -7,6 +7,8 @@ import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, Entang
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, moreNotOpened, openElsewhereText, purgedText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
+import { NOT_PASSED, explicitMethod, passedAfter } from "./lockscreen";
+import type { Passed } from "./lockscreen";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
 import { hasTrouble, summaryLine, tally } from "./results";
@@ -74,6 +76,14 @@ export interface RecordDraft {
 class Store {
   status = $state<VaultStatus | null>(null);
   ceremony = $state<CeremonyState | null>(null);
+  // ceremonyPassed: whether the running ceremony has left its opening
+  // WaitingForKey, followed here on every event accepted, so that a wait
+  // for a YubiKey after it is drawn as one however fast the events come;
+  // with it, whether a touch is behind the ceremony with nothing asked
+  // since, so that the green holds through what follows the touch, and
+  // whether a derivation is behind it (lib/lockscreen passedAfter; APP.md
+  // §6). Raw: replaced whole.
+  ceremonyPassed = $state.raw<Passed>(NOT_PASSED);
   // recoveryDraft: the eight groups as typed, kept across the derivation
   // step so that a key the core refused comes back for correction
   // (APP.md §6); dropped when the ceremony ends.
@@ -93,7 +103,7 @@ class Store {
   // chosenSent: the prompt the page answered from the dialog. Card 2
   // shows no field for it, so a password vault never shows the Choose
   // prompt in the normal case; a refusal of the answer (secret.refused)
-  // clears it, the prompt stands, and card 2 asks it as before.
+  // clears it, the prompt stands, and the panel's password step asks it as before.
   chosenSent = $state("");
   ops = $state<Record<string, OpView>>({});
   archives = $state<ArchiveSummary[]>([]);
@@ -406,8 +416,8 @@ class Store {
     });
     Events.On("secret.refused", (e) => {
       const r = e.data as { code: string };
-      // The prompt the dialog's password answered still stands: card 2
-      // asks it now (APP.md §6, ruled 2026-10-17).
+      // The prompt the dialog's password answered still stands: the panel's
+      // password step asks it now (APP.md §6, ruled 2026-10-17).
       this.chosenSent = "";
       this.toast(codeText(r.code), "error");
     });
@@ -590,7 +600,10 @@ class Store {
         }
         this.openWhenUnlocked = path;
         this.openWhenUnlockedSeq = seq;
-        this.setRoute("lock");
+        // A file opened from Explorer is an explicit Unlock: the lock
+        // scene opens on the ceremony already begun (APP.md §6, ruled
+        // 2026-10-17).
+        this.unlock();
         return;
       }
       this.openWhenUnlocked = "";
@@ -693,6 +706,10 @@ class Store {
     // scene for the settle before this guard (APP.md §2.4, ruled
     // 2026-09-10). What the scene needs read is refreshAll's to fetch.
     if (before !== undefined && before !== s.state) {
+      // Settings opened from the lock scene was a visit to it at rest; a
+      // lock, an unlock or a ceremony begun elsewhere ends the visit, so
+      // the scene the new state names is drawn.
+      this.settingsLocked = false;
       // The unlock's full stop (APP.md §6, Motion): the lock screen keeps
       // showing the ceremony's last frame for the settle after the state
       // says Unlocked — the Done event lands a few milliseconds after the
@@ -759,11 +776,13 @@ class Store {
   private noteOutcome(c: CeremonyState): void {
     this.outcome = outcomeAfter(this.outcome, c);
     this.unlockMethod = methodAfter(this.unlockMethod, c);
+    this.ceremonyPassed = passedAfter(this.ceremonyPassed, c);
   }
 
   // dismissCeremony clears a finished panel; the core has already forgotten it.
   dismissCeremony(): void {
     this.ceremony = null;
+    this.ceremonyPassed = NOT_PASSED;
     this.recoveryDraft = null;
     this.dropChosen();
   }
@@ -1374,6 +1393,37 @@ class Store {
     this.setRoute(route);
   }
 
+  // settingsLocked: Settings was opened from the lock scene's gear, which
+  // it can be — Settings is this PC's and needs no vault (APP.md §6,
+  // ruled 2026-10-17). The scene steps aside for the Settings page until
+  // the route moves on or the vault's state changes.
+  settingsLocked = $state(false);
+
+  openSettingsLocked(): void {
+    this.setRoute("settings");
+    this.settingsLocked = true;
+  }
+
+  // unlock is an explicit Unlock — the locked banner's, the foot's, the
+  // Vault page's, a file opened from Explorer: the lock scene, with the
+  // ceremony already begun by the vault's everyday way in, as the tray's
+  // Unlock… begins it in the shell (APP.md §6, ruled 2026-10-17). A vault
+  // that needs setting up, or is not at rest, gets the scene alone, its
+  // panel saying what comes first; an idle lock never comes this way. A
+  // refusal is the lock screen's to say, as its own buttons say it.
+  unlock(): void {
+    this.setRoute("lock");
+    const method = explicitMethod(this.status);
+    if (!method) return;
+    void (async () => {
+      try {
+        await Vault.BeginUnlock(method);
+      } catch (e) {
+        this.toast(codeText(errorOf(e).code), "error");
+      }
+    })();
+  }
+
   // settingsDraft holds the settings page's staged edits, key by key, so
   // that they survive a visit to another page; the page diffs it against
   // the saved settings (APP.md §6, the save bar).
@@ -1400,6 +1450,7 @@ class Store {
   private setRoute(route: Route): void {
     const from = this.route;
     if (from === "archive" && route !== "archive" && route !== "lock" && this.current) void this.dropArchive(false);
+    if (route !== "settings") this.settingsLocked = false;
     this.nav = from === "archives" && route === "archive" ? 1 : from === "archive" && route === "archives" ? -1 : 0;
     this.route = route;
   }

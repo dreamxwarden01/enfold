@@ -177,3 +177,16 @@ export function recoveryGroupProblem(group: string): string {
   return n < RECOVERY_GROUP_MAX && n % 11 === 0 ? "" : GROUP_MISTYPED;
 }
 
+// GroupMark is what one of the recovery key's cells wears (APP.md §6,
+// ruled 2026-10-17): a small tick on a finished group that checks out,
+// the 2 px danger underline on one that fails, nothing while it is typed.
+export type GroupMark = "tick" | "bad" | "";
+
+// recoveryGroupMarks judges each group by its own check digit and nothing
+// else: a key the vault refused is said as a whole, by the line under the
+// cells (RecoveryInput), never by underlining every cell — that read as
+// eight wrong groups when each one checked out.
+export function recoveryGroupMarks(groups: string[]): GroupMark[] {
+  return groups.map((g) => (recoveryGroupProblem(g) ? "bad" : g.length === RECOVERY_GROUP_LEN ? "tick" : ""));
+}
+

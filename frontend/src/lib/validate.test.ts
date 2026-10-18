@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem, NAME_TAKEN, newNameProblem, NAME_LONG, NAME_CONTROL, NAME_TRAILING, NAME_RESERVED } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, recoveryGroupMarks, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem, NAME_TAKEN, newNameProblem, NAME_LONG, NAME_CONTROL, NAME_TRAILING, NAME_RESERVED } from "./validate";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -106,6 +106,17 @@ describe("nameProblem", () => {
     expect(nameProblem("a".repeat(NAME_MAX))).toBe("");
     expect(nameProblem("a".repeat(NAME_MAX + 1))).toBe(NAME_RULE);
     expect(nameProblem("\u{1F600}".repeat(300))).toBe(NAME_RULE); // 300 characters, 1 200 bytes
+  });
+});
+
+describe("recoveryGroupMarks", () => {
+  it("judges each group by its own check digit alone", () => {
+    // 123453 and 401236 are multiples of 11; 345671 is not.
+    expect(recoveryGroupMarks(["123453", "345671", "40", ""])).toEqual(["tick", "bad", "", ""]);
+  });
+  it("ticks every group of a key that checks out, whatever the vault says of it", () => {
+    // A refused key is marked as a whole by its line, not cell by cell.
+    expect(recoveryGroupMarks(Array(8).fill("123453"))).toEqual(Array(8).fill("tick"));
   });
 });
 

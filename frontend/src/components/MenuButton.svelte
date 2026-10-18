@@ -21,8 +21,11 @@
     icon?: string;
     items: MenuItem[];
     disabled?: boolean;
+    // small: the 28 px subtle button, for a quiet command among others
+    // (the lock screen's *Backups and copies…*).
+    small?: boolean;
   }
-  let { id, label, icon = "", items, disabled = false }: Props = $props();
+  let { id, label, icon = "", items, disabled = false, small = false }: Props = $props();
 
   let open = $state(false);
   let active = $state(-1);
@@ -93,7 +96,7 @@
 
 <div class="menu-wrap" bind:this={wrap}>
   <button
-    type="button" class="btn subtle" {id} bind:this={button} {disabled}
+    type="button" class="btn subtle" class:sm={small} {id} bind:this={button} {disabled}
     aria-haspopup="menu" aria-expanded={open} aria-controls="{id}-menu"
     onclick={toggle} onkeydown={key}
   >

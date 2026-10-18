@@ -46,10 +46,18 @@
 
   // Every ceremony this page starts can change the unlock methods or the
   // vault's switch, so both are read again when it ends (APP.md §13).
-  async function begin(p: Promise<unknown>) {
-    store.dismissCeremony();
+  // `again` keeps the act last begun, with what it was begun with, for
+  // the dialog's Start again after a failure the user did not choose
+  // (CeremonyPanel onagain; ruled 2026-10-17). Begun again, the failed
+  // ceremony is left on the panel until the new one's first event takes
+  // its place, so the dialog stays open and does not close and reopen.
+  let again = $state<(() => Promise<unknown>) | null>(null);
+
+  async function begin(run: () => Promise<unknown>, keep = false) {
+    again = () => begin(run, true);
+    if (!keep) store.dismissCeremony();
     try {
-      await p;
+      await run();
     } catch (e) {
       fail(e);
     }
@@ -80,10 +88,22 @@
     adding = true;
   }
 
-  async function exportBackup(): Promise<boolean> {
-    const p = await Shell.SaveFile("Export a backup of the vault", `backup-${new Date().toISOString().slice(0, 10)}.eks`, "");
-    if (!p) return false;
-    store.dismissCeremony();
+  // The file a backup is saved to, as the user picks it; empty when the
+  // picker was cancelled.
+  async function pickBackup(): Promise<string> {
+    return (await Shell.SaveFile("Export a backup of the vault", `backup-${new Date().toISOString().slice(0, 10)}.eks`, "")) || "";
+  }
+
+  async function exportBackup() {
+    const p = await pickBackup();
+    if (p) await exportTo(p);
+  }
+
+  // The export itself, apart from the file picked for it, so that Start
+  // again saves to the same file.
+  async function exportTo(p: string, keep = false): Promise<boolean> {
+    again = () => exportTo(p, true);
+    if (!keep) store.dismissCeremony();
     try {
       await Keys.ExportBackup(p);
     } catch (e) {
@@ -109,8 +129,20 @@
 
   async function doRotate() {
     rotating = false;
-    if (rotateBackup && !(await exportBackup())) return; // no backup, no rotation
-    await begin(Keys.RotateNow());
+    if (!rotateBackup) return begin(() => Keys.RotateNow());
+    const p = await pickBackup();
+    if (p) await rekey(p);
+  }
+
+  // The backup the rotate dialog asked for, then the rotation: no backup,
+  // no rotation, and Start again after a failed backup begins with the
+  // backup again, to the same file.
+  async function rekey(p: string, keep = false) {
+    if (!(await exportTo(p, keep))) {
+      again = () => rekey(p, true);
+      return;
+    }
+    await begin(() => Keys.RotateNow());
   }
 
   // Inspect a backup… reads the file's label; proving it opens is the
@@ -156,7 +188,7 @@
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy("vault.tampered", st?.tamperedReason)}</span></div>
   {/if}
   {#if !unlocked}
-    <div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.go("lock")}>{commandCopy.unlock}</button></div>
+    <div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button></div>
   {:else if st?.setupNeeded}
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine}</span></div>
   {/if}
@@ -183,7 +215,7 @@
         <button type="button" class="btn accent" disabled={!unlocked || tampered} title={greyed} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.addUnlockMethod}</button>
         <button type="button" class="btn" disabled={!sel || !sel.removable || !unlocked || tampered} title={greyed ?? (sel && !sel.removable ? vaultCopy.rule : undefined)} onclick={() => (removing = true)}>{commandCopy.removeUnlockMethod}</button>
         {#if sel?.type === "recovery"}
-          <button type="button" class="btn" disabled={!unlocked} title={unlocked ? undefined : greyed} onclick={() => sel && begin(Keys.RevealRecoveryKey(sel.recipientId))}><svg class="i i-14"><use href="#i-recovery" /></svg>{commandCopy.showRecoveryKey}</button>
+          <button type="button" class="btn" disabled={!unlocked} title={unlocked ? undefined : greyed} onclick={() => { const id = sel?.recipientId; if (id) void begin(() => Keys.RevealRecoveryKey(id)); }}><svg class="i i-14"><use href="#i-recovery" /></svg>{commandCopy.showRecoveryKey}</button>
         {/if}
         <button type="button" class="btn" disabled={!unlocked || tampered} title={greyed} onclick={openRotate}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyVault}</button>
       </div>
@@ -303,7 +335,7 @@
       <p>{dialogCopy.addUnlockMethod.passwordInherited}</p>
     {/if}
     {#snippet actions()}
-      <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} title={!addLabel && addKind === "recovery" ? dialogCopy.addUnlockMethod.needName : undefined} onclick={() => { adding = false; void begin(Keys.BeginEnroll(addKind, addKind === "password" ? "Password" : addLabel)); addLabel = ""; }}>{dialogCopy.addUnlockMethod.primary}</button>
+      <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} title={!addLabel && addKind === "recovery" ? dialogCopy.addUnlockMethod.needName : undefined} onclick={() => { adding = false; const kind = addKind, label = addKind === "password" ? "Password" : addLabel; void begin(() => Keys.BeginEnroll(kind, label)); addLabel = ""; }}>{dialogCopy.addUnlockMethod.primary}</button>
       <button type="button" class="btn" onclick={() => (adding = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
@@ -316,7 +348,7 @@
     <p>{dialogCopy.removeUnlockMethod.body(sel.label)}</p>
     <details class="how"><summary>{dialogCopy.howThisWorks}</summary><p>{dialogCopy.removeUnlockMethod.how}</p></details>
     {#snippet actions()}
-      <button type="button" class="btn danger-fill" onclick={() => { removing = false; void begin(Keys.RemoveSlot(sel.recipientId)); }}>{dialogCopy.removeUnlockMethod.primary}</button>
+      <button type="button" class="btn danger-fill" onclick={() => { removing = false; const id = sel.recipientId; void begin(() => Keys.RemoveSlot(id)); }}>{dialogCopy.removeUnlockMethod.primary}</button>
       <button type="button" class="btn" onclick={() => (removing = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
@@ -338,14 +370,14 @@
 {/if}
 
 {#if entangling && ent}
-  <EntangledDialog mode={entangling} onclose={() => (entangling = "")} />
+  <EntangledDialog mode={entangling} onclose={() => (entangling = "")} {begin} />
 {/if}
 
 {#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel}
   <!-- the recovery key is revealed by App, above every route -->
 {:else if c}
   <Dialog title={vaultCopy.ceremonyTitle[c.kind] ?? vaultCopy.ceremonyTitle.export} onclose={escapeCeremony} dismissable={store.ceremonyIsOver}>
-    <CeremonyPanel {c} onclose={closeCeremony} />
+    <CeremonyPanel {c} onclose={closeCeremony} onagain={again ? () => void again?.() : undefined} />
   </Dialog>
 {/if}
 

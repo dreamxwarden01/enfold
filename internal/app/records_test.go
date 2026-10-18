@@ -879,7 +879,7 @@ func TestListNeverStatsAFile(t *testing.T) {
 		t.Fatalf("an unmeasured record carries a note: %+v", list)
 	}
 	// The pass is what fills the cell.
-	if e := h.c.CheckFiles(); e != nil {
+	if _, e := h.c.CheckFiles(); e != nil {
 		t.Fatal(e)
 	}
 	h.waitPresencePass()
@@ -920,7 +920,7 @@ func (h *harness) waitPresencePass() {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		h.c.mu.Lock()
-		running := h.c.presencePass
+		running := h.c.presencePass != nil
 		h.c.mu.Unlock()
 		if !running {
 			return
@@ -952,7 +952,7 @@ func TestPresencePassSkipsUNCAndNonFixedVolumes(t *testing.T) {
 	saved := probePath
 	probePath = func(p string) error { log.note(p); return os.ErrNotExist }
 	defer func() { probePath = saved }()
-	if e := h.c.CheckFiles(); e != nil {
+	if _, e := h.c.CheckFiles(); e != nil {
 		t.Fatal(e)
 	}
 	h.waitPresencePass()
@@ -974,6 +974,133 @@ func TestPresencePassSkipsUNCAndNonFixedVolumes(t *testing.T) {
 		}
 		if (row.Path == uncPath || row.Path == stickPath) && row.Note != "" {
 			t.Fatalf("an unmeasured row carries a note: %+v", row)
+		}
+	}
+}
+
+// CheckFiles answers when its pass has ended, with what the pass measured
+// and what it found missing, for *Find missing files*' line (APP.md §13,
+// direction 4): three records on local fixed paths, one of them gone, are
+// three probed and one missing; a UNC path and a path off a fixed volume are
+// never probed and so are counted in neither figure. The rows say the same
+// thing the report does by the time the call has answered — the call does
+// not return ahead of its own pass.
+func TestCheckFilesReportsWhatThePassMeasured(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	h.waitPresencePass()
+	_, ap := h.newArchive("A")
+	_, bp := h.newArchive("B")
+	_, cp := h.newArchive("C")
+	unc, _ := h.newArchive("Share")
+	stick, _ := h.newArchive("Stick")
+	uncPath := `\\host\share\Share.enf`
+	stickPath := filepath.Join(h.dir, "removable", "Stick.enf")
+	h.editRecord(unc, func(a *format.ArchiveRecord, _ int64) { a.LastPath = uncPath })
+	h.editRecord(stick, func(a *format.ArchiveRecord, _ int64) { a.LastPath = stickPath })
+	h.c.mu.Lock()
+	h.c.deps.Volumes = &fakeVolumes{fixed: map[string]bool{ap: true, bp: true, cp: true}}
+	h.c.mu.Unlock()
+	if err := os.Remove(bp); err != nil {
+		t.Fatal(err)
+	}
+	log := newProbeLog()
+	saved := probePath
+	probePath = func(p string) error { log.note(p); return saved(p) }
+	defer func() { probePath = saved }()
+
+	r, e := h.c.CheckFiles()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if r != (CheckReport{Probed: 3, Missing: 1}) {
+		t.Fatalf("the report: %+v", r)
+	}
+	if log.count(uncPath) != 0 || log.count(stickPath) != 0 {
+		t.Fatal("a path off a local fixed volume was probed")
+	}
+	h.c.mu.Lock()
+	running := h.c.presencePass != nil
+	h.c.mu.Unlock()
+	if running {
+		t.Fatal("CheckFiles answered while its pass was still running")
+	}
+	list, _ := h.c.ListArchives(false)
+	missing := 0
+	for _, row := range list {
+		if row.Note == CodeArchiveMissing {
+			missing++
+			if row.Path != bp {
+				t.Fatalf("a present file was reported missing: %+v", row)
+			}
+		}
+	}
+	if missing != 1 {
+		t.Fatalf("%d rows say missing after a pass that found one", missing)
+	}
+
+	// The file put back, the next call says all present, still three.
+	if err := os.WriteFile(bp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r, e := h.c.CheckFiles(); e != nil || r != (CheckReport{Probed: 3}) {
+		t.Fatalf("after the file came back: %+v %v", r, e)
+	}
+}
+
+// A CheckFiles that lands while a pass is running joins it rather than begin
+// a second — one pass at a time is what bounds the probes it abandons — and
+// answers what that pass found, not an empty report ahead of it.
+func TestCheckFilesJoinsTheRunningPass(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	h.waitPresencePass()
+	_, ap := h.newArchive("A")
+	h.c.mu.Lock()
+	h.c.deps.Volumes = &fakeVolumes{fixed: map[string]bool{ap: true}}
+	h.c.mu.Unlock()
+	// The first probe is held until the test lets it go; any later one — a
+	// second call that came too late to join — answers at once, so a slow
+	// scheduler makes this test weaker and never hangs it.
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var asked sync.Once
+	saved := probePath
+	probePath = func(p string) error {
+		asked.Do(func() {
+			entered <- struct{}{}
+			<-release
+		})
+		return os.ErrNotExist
+	}
+	defer func() { probePath = saved }()
+
+	answers := make(chan CheckReport, 2)
+	call := func() {
+		r, e := h.c.CheckFiles()
+		if e != nil {
+			t.Error(e)
+		}
+		answers <- r
+	}
+	go call()
+	<-entered
+	go call()
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case r := <-answers:
+		t.Fatalf("a call answered %+v while its pass was still measuring", r)
+	default:
+	}
+	close(release)
+	for range 2 {
+		select {
+		case r := <-answers:
+			if r != (CheckReport{Probed: 1, Missing: 1}) {
+				t.Fatalf("a call answered %+v", r)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a CheckFiles never answered")
 		}
 	}
 }
@@ -1000,12 +1127,34 @@ func TestCheckFilesAbandonsAPathOverBudget(t *testing.T) {
 	}
 	unblock := sync.OnceFunc(func() { close(block) })
 	defer func() { probePath = saved; unblock() }()
-	if e := h.c.CheckFiles(); e != nil {
-		t.Fatal(e)
+	// CheckFiles answers when the pass has ended, and this pass ends only
+	// once the budget the test holds has run out: the call is made from a
+	// goroutine of its own and its answer read after the clock is advanced.
+	type answer struct {
+		r CheckReport
+		e *Error
 	}
+	first := make(chan answer, 1)
+	go func() {
+		r, e := h.c.CheckFiles()
+		first <- answer{r, e}
+	}()
 	<-entered
 	// The budget is the core's clock, armed before the question was asked.
 	h.clk.Advance(presenceBudget)
+	select {
+	case a := <-first:
+		if a.e != nil {
+			t.Fatal(a.e)
+		}
+		// Neither path was measured — the one abandoned, the other never
+		// asked — so neither is counted (CheckReport).
+		if a.r != (CheckReport{}) {
+			t.Fatalf("a pass that measured nothing reported %+v", a.r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("CheckFiles did not answer once the probe was abandoned")
+	}
 	h.waitPresencePass()
 	list, _ := h.c.ListArchives(false)
 	for _, row := range list {
@@ -1026,9 +1175,10 @@ func TestCheckFilesAbandonsAPathOverBudget(t *testing.T) {
 	if n := log.count(qp); n != 0 {
 		t.Fatalf("a second probe was started while the first was blocked: %s asked %d time(s)", qp, n)
 	}
-	// Nor does a second pass start one.
-	if e := h.c.CheckFiles(); e != nil {
-		t.Fatal(e)
+	// Nor does a second pass start one, and a pass that measured nothing
+	// says so.
+	if r, e := h.c.CheckFiles(); e != nil || r != (CheckReport{}) {
+		t.Fatalf("a pass behind the held slot: %+v %v", r, e)
 	}
 	h.waitPresencePass()
 	if n := log.count(sp); n != 1 {
@@ -1056,12 +1206,16 @@ func TestCheckFilesAbandonsAPathOverBudget(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	if e := h.c.CheckFiles(); e != nil {
+	r, e := h.c.CheckFiles()
+	if e != nil {
 		t.Fatal(e)
 	}
 	h.waitPresencePass()
 	if n := log.count(qp); n != 1 {
 		t.Fatalf("the path was not measured once the slot was free: %d", n)
+	}
+	if r != (CheckReport{Probed: 2}) {
+		t.Fatalf("the pass that measured both paths reported %+v", r)
 	}
 	_, _ = slow, quick
 }

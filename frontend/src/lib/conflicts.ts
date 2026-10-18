@@ -10,7 +10,8 @@
 // component.
 import type { FileOutcome } from "./api";
 import { leaf } from "./format";
-import { compareCountText, skipSameText } from "./strings";
+import { collisionCopy, compareGoText, skipSameText } from "./strings";
+import type { KindCount } from "./strings";
 
 // One conflict as the core reported it: id is the record's, which is what
 // the re-issue names; path is the record's path inside the archive and
@@ -72,11 +73,11 @@ export function skipSameLabel(rows: ConflictRow[]): string {
 // default became ask on 2026-10-14, but this list is reached by choosing
 // to decide, and extracting into a folder that already has the files is,
 // most of the time, putting new copies over old ones; adding only what is
-// missing is the rarer wish, and it is one click a row, or *Skip all*
-// before the list, or *Cancel* in it.
+// missing is the rarer wish, and it is one click a row, or *Skip these
+// files* before the list, or *Cancel* in it.
 // Starting with nothing ticked and Continue held until every row is
 // answered was weighed and not taken: it taxes the common case to guard
-// the rare one. The foot's count says what Continue will do.
+// the rare one. *Continue* itself says what it will do (continueLabel).
 export function startingDecisions(rows: ConflictRow[]): Record<string, Decision> {
   const out: Record<string, Decision> = {};
   for (const r of rows) out[r.path] = sameDateAndSize(r) ? "skip" : "replace";
@@ -147,10 +148,12 @@ export function summarise(rows: ConflictRow[], decisions: Record<string, Decisio
   return { replace, both, skip: rows.length - replace - both };
 }
 
-// countLine is the foot's count in words, beside the same-date-and-size
-// box (ruled 2026-10-17).
-export function countLine(rows: ConflictRow[], decisions: Record<string, Decision>): string {
-  return compareCountText(summarise(rows, decisions));
+// continueLabel is *Continue* reading what it will do with the ticks as
+// they stand (direction 7): "Extract 2, skip 1", "Extract 3", "Skip 3" —
+// the button says it, so no count line under the list repeats it (the
+// 2026-10-17 count beside the foot's tick moved into the button).
+export function continueLabel(rows: ConflictRow[], decisions: Record<string, Decision>): string {
+  return compareGoText(summarise(rows, decisions));
 }
 
 // namesFor is what a conflict's re-issue carries in `names`: of the names
@@ -174,4 +177,89 @@ export function allOf(rows: ConflictRow[], d: Decision): Record<string, Decision
   const out: Record<string, Decision> = {};
   for (const r of rows) out[r.path] = d;
   return out;
+}
+
+// The add collisions (APP.md §3, CheckNames) as the dialog says them. A
+// folder that meets a folder is a merge, not a clash: the add enters it
+// whatever the policy, and the policy reaches only the files inside
+// (internal/app/ops.go planNodes). So the title counts every name already
+// there, but the rows count and speak of the clashes alone — files that
+// meet files, and a file that meets a folder — and Replace is greyed
+// whenever one of those is a file meeting a folder. With merges a note
+// says what the choice does inside them; when every name is a merge the
+// rows speak only of the files inside, which CheckNames cannot see.
+export interface NameMeet {
+  name: string;
+  isDir: boolean;
+  existingIsDir: boolean;
+}
+
+export interface PlanRow {
+  label: string;
+  says: string;
+  off?: string;
+}
+
+export interface CollisionPlan {
+  title: string;
+  note: string;
+  replace: PlanRow;
+  keepBoth: PlanRow;
+  skip: PlanRow;
+}
+
+function kindsOf(list: readonly NameMeet[]): KindCount {
+  const c = { files: 0, folders: 0 };
+  for (const m of list) {
+    if (m.existingIsDir) c.folders++;
+    else c.files++;
+  }
+  return c;
+}
+
+// shownName is a collision's name as the dialog says it: CheckNames hands
+// back the name as offered, and a folder is offered with a trailing "/".
+export function shownName(name: string): string {
+  return name.endsWith("/") ? name.slice(0, -1) : name;
+}
+
+export function isMerge(m: NameMeet): boolean {
+  return m.isDir && m.existingIsDir;
+}
+
+export function collisionPlan(list: readonly NameMeet[], offered: number, place: string): CollisionPlan {
+  const clashes = list.filter((m) => !isMerge(m));
+  const merges = list.length - clashes.length;
+  const title = collisionCopy.title(kindsOf(list), shownName(list[0]?.name ?? ""), place);
+  const note = merges > 0 ? collisionCopy.mergeNote(merges, clashes.length) : "";
+  if (clashes.length === 0) {
+    return {
+      title,
+      note,
+      replace: { label: collisionCopy.replaceInside, says: collisionCopy.replaceInsideSays },
+      keepBoth: { label: collisionCopy.keepBoth, says: collisionCopy.keepBothInsideSays },
+      skip: { label: collisionCopy.skipInside, says: collisionCopy.skipInsideSays },
+    };
+  }
+  const n = clashes.length;
+  const kinds = kindsOf(clashes);
+  const differ = clashes.some((m) => m.isDir !== m.existingIsDir);
+  return {
+    title,
+    note,
+    replace: { label: collisionCopy.replace(kinds, place), says: collisionCopy.replaceSays(n), off: differ ? collisionCopy.replaceOff : undefined },
+    keepBoth: { label: collisionCopy.keepBoth, says: collisionCopy.keepBothSays(n) },
+    skip: { label: collisionCopy.skip(kinds), says: collisionCopy.skipSays(kinds, offered - n) },
+  };
+}
+
+// restExtracted is what the conflict question's Skip may call "the rest
+// were extracted" (direction 7): the files the extract wrote besides the
+// conflicts — or 0, so the clause is not said, when the same op also
+// refused a name or a path or failed a file, since then the rest were not
+// all extracted (those are asked about or named after the conflicts).
+export function restExtracted(results: readonly FileOutcome[] | null | undefined): number {
+  const rs = results ?? [];
+  if (rs.some((r) => r.outcome === "failed" || r.outcome === "name_refused" || r.outcome === "path_refused")) return 0;
+  return rs.filter((r) => r.outcome === "extracted").length;
 }

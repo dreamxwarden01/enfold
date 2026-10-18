@@ -1,9 +1,10 @@
-// The extract dialog's destination field (APP.md §3, the extract dialog,
-// ruled 2026-09-10). The core keeps no folder from the last time, so the
-// field is prefilled by one rule: *Extract all…* goes to the archive's own
-// folder plus a folder named after the archive, a selection to the
-// archive's own folder with no extra level. Everything the field does to a
-// string is here, so it can be tested without a DOM.
+// The extract dialog's scope and destination field (APP.md §3, the
+// extract dialog, ruled 2026-09-10; one Extract… with a scope, direction
+// 7). The core keeps no folder from the last time, so the field is
+// prefilled by one rule per scope: everything in the archive goes to the
+// archive's own folder plus a folder named after the archive, a selection
+// to the archive's own folder with no extra level. Everything the dialog
+// does to a string is here, so it can be tested without a DOM.
 import { policyLabels } from "./strings";
 
 // The characters Windows refuses in a path element (APP.md §3 names these
@@ -51,7 +52,7 @@ export function appendArchiveFolder(dest: string, archiveName: string): string {
   return `${base}\\${folder}`;
 }
 
-// destinationFor is the prefill rule of APP.md §3 whole: *Extract all…* goes
+// destinationFor is the prefill rule of APP.md §3 whole: everything goes
 // to the archive's folder plus a folder named after the archive
 // ("D:\Archives\ECON 280" for "D:\Archives\ECON 280.efd"), a selection to
 // the archive's folder itself. An archive whose path is not known leaves
@@ -59,6 +60,34 @@ export function appendArchiveFolder(dest: string, archiveName: string): string {
 export function destinationFor(archivePath: string, archiveName: string, all: boolean): string {
   const folder = parentFolder(archivePath);
   return all ? appendArchiveFolder(folder, archiveName) : folder;
+}
+
+// The dialog's scope line (direction 7): the toolbar's one *Extract…* —
+// and Ctrl+E, and the pane's *Extract…* — opens one dialog whose first
+// question is what to extract: the selection, or everything in the
+// archive. *Everything* sends the root id alone, so the page walks
+// nothing (APP.md §3).
+export type ExtractScope = "selection" | "all";
+
+// startingScope: the selection when there is one, everything when there
+// is none — the selection's radio is greyed then, with its reason.
+export function startingScope(selectedCount: number): ExtractScope {
+  return selectedCount > 0 ? "selection" : "all";
+}
+
+// destinationForScope is the 2026-09-10 rule applied to a scope.
+export function destinationForScope(archivePath: string, archiveName: string, scope: ExtractScope): string {
+  return destinationFor(archivePath, archiveName, scope === "all");
+}
+
+// followScope is the field when the scope changes: the new scope's
+// prefill while the field still holds the old scope's, and the field as
+// the user left it once they have typed or browsed something else — the
+// field is the user's from the first change they make, and a scope
+// change never takes it back. A field emptied by the user is theirs too.
+export function followScope(dir: string, from: ExtractScope, to: ExtractScope, archivePath: string, archiveName: string): string {
+  if (dir !== destinationForScope(archivePath, archiveName, from)) return dir;
+  return destinationForScope(archivePath, archiveName, to);
 }
 
 // The four policies of APP.md §3, in the order the dialog offers them —

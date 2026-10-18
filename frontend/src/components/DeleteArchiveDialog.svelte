@@ -18,7 +18,9 @@
   // destroy the keys of an archive nobody could open again.
   import { Archives, Shell, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivesCopy, codeText, commandCopy, dialogCopy } from "../lib/strings";
+  import { archivesCopy, codeText, commandCopy, dialogCopy, pendingCopy } from "../lib/strings";
+  import { pending } from "../lib/pending";
+  import PendingLabel from "./PendingLabel.svelte";
   import { date } from "../lib/format";
   import { RETENTION_SECONDS } from "../lib/retention";
   import { nextMark, onLeave } from "../lib/forms";
@@ -48,6 +50,8 @@
 
   type Phase = "consent" | "busy" | "done" | "mismatch" | "mismatch-confirm" | "unreachable" | "unreadable" | "failed" | "error";
   let phase = $state<Phase>("consent");
+  // The act has been waited on for 300 ms (lib/pending.ts).
+  let busyArmed = $state(false);
   let problem = $state("");
   let typed = $state("");
   // mark: the typed name is marked under the form rule (APP.md §6,
@@ -256,7 +260,10 @@
            a primary is never disabled for an empty field; a press marks
            the field instead). The mock's greyed primary is wrong by the
            spec, and is not followed. -->
-      <button type="submit" class="btn danger-fill" disabled={phase === "busy"}>{phase === "busy" ? dialogCopy.working : mode === "forget" ? dialogCopy.forgetArchive.primary : dialogCopy.deleteArchive.primary}</button>
+      <!-- The wait is the one pending primitive (direction 4): greyed from
+           the press, the ring after 300 ms, and *Deleting…* for a delete,
+           which is the label's news; a forget keeps its words. -->
+      <button type="submit" class="btn danger-fill" disabled={phase === "busy"} use:pending={{ on: phase === "busy", armed: (b) => (busyArmed = b) }}>{#if mode === "delete"}<PendingLabel armed={busyArmed} rest={dialogCopy.deleteArchive.primary} busy={pendingCopy.deleting} />{:else}{dialogCopy.forgetArchive.primary}{/if}</button>
       <button type="button" class="btn" disabled={phase === "busy"} onclick={onclose}>{dialogCopy.cancel}</button>
     {:else if phase === "done"}
       <button type="button" class="btn accent" onclick={onclose}>{dialogCopy.close}</button>

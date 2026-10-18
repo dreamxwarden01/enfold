@@ -11,7 +11,7 @@ import { NOT_PASSED, explicitMethod, passedAfter } from "./lockscreen";
 import type { Passed } from "./lockscreen";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
-import { hasTrouble, summaryLine, tally } from "./results";
+import { hasTrouble } from "./results";
 import { hasConflicts } from "./conflicts";
 import { hasRefusals } from "./refused";
 import { DEFAULT_SORT, sortString } from "./sort";
@@ -20,14 +20,19 @@ import { clickRow, emptySelection, selectAll, survive, toggleRow } from "./selec
 import type { Modifiers, Selection } from "./selection";
 import { PAGE_LIMIT, applyReply, hasMore, liveIds, nextOffset } from "./paging";
 import type { Listing } from "./paging";
-import { opErrorLine, opLabel, reclaimedLine } from "./ops";
+import { opErrorLine } from "./ops";
+import { clearsDone, doneLine, nextDone, sayDone } from "./foot";
+import type { DoneLine, DoneTurn } from "./foot";
 import type { Outcome } from "./outcome";
 import { answer as answerDrag, baseName, beginFlight, land, ownDrop } from "./dragout";
 import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
 import type { Decision } from "./closing";
 import { droppedArchives } from "./archlist";
-import { tamperedShown } from "./notices";
+import { tamperedShown, tier } from "./notices";
 import { dialogIsUp } from "./dialogs";
+
+// How long a done line holds in the foot (direction 4).
+const DONE_MS = 6000;
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
 
@@ -153,6 +158,16 @@ class Store {
   // whole (a failed or skipped item): the page shows what happened once,
   // and clears it (APP.md §3, FileOutcome).
   results = $state<OpView | null>(null);
+  // The done line (direction 4, phase 3): how the last operation ended,
+  // said in the layer's foot on whichever page is up, for DONE_MS or until
+  // the next press in a page's body (LayerFoot). One at a time: an ending
+  // that arrives while another is up waits its turn (lib/foot.ts sayDone),
+  // so two operations ending together are both said. The id is the
+  // cross-fade's key.
+  done = $state<(DoneLine & { id: number }) | null>(null);
+  private doneWaiting: (DoneLine & { id: number })[] = [];
+  private doneId = 0;
+  private doneTimer: ReturnType<typeof setTimeout> | undefined;
   // The extracts whose conflicts the page has answered or dismissed, by op
   // id. The question itself is never stored: it is derived from the ops
   // (conflictQuestion), so it survives the page's remount across the lock
@@ -393,7 +408,9 @@ class Store {
     Events.On("vault.ceremony", (e) => this.applyCeremony(e.data as CeremonyState));
     Events.On("vault.warning", (e) => {
       const w = e.data as { code: string };
-      this.toast(warningCopy(w.code), "error");
+      // The moment one arrives is still a toast (ruled 2026-10-13); its
+      // kind follows the tier (direction 9): an info notice is never red.
+      this.toast(warningCopy(w.code), tier(w.code) === "info" ? "info" : "error");
     });
     Events.On("archives.changed", (e) => {
       // The purge names what it dropped at the end of an unlock; every
@@ -724,6 +741,9 @@ class Store {
         // ever un-finishes an operation that has ended.
         const known = this.ops[o.id];
         if (known && (!snapshot || known.finished)) continue;
+        // A status can bring a new operation before its first op.progress
+        // does; its start clears the done line here as it would there.
+        if (!o.finished) this.opBegins(o);
         this.ops[o.id] = o;
       }
     }
@@ -732,6 +752,7 @@ class Store {
       this.sendChosen(s.ceremony);
       this.ceremony = s.ceremony;
       this.noteOutcome(s.ceremony);
+      this.exportEnded(s.ceremony);
     }
     // The first status accepted is a scene drawn, not a transition: a
     // window opened from the tray on an unlocked vault showed the lock
@@ -808,9 +829,20 @@ class Store {
     // read, nothing to close.
     this.ceremony = c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled ? null : c;
     this.noteOutcome(c);
+    this.exportEnded(c);
     if (c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || (c.step === CeremonyStep.StepRecovery && !c.promptId)) {
       this.recoveryDraft = null;
     }
+  }
+
+  // exportEnded: an export records its date as it ends, inside the
+  // ceremony; the read made when ExportBackup returned came before it
+  // (that call only begins the ceremony), so the backups card is read
+  // again at the Done, or it keeps the old date (APP.md §6, The backups
+  // card). Both ways a ceremony step arrives — the status and its own
+  // event — come through here, each step once (the seq).
+  private exportEnded(c: CeremonyState): void {
+    if (c.kind === "export" && c.step === CeremonyStep.StepDone) void this.refreshLastExport();
   }
 
   private noteOutcome(c: CeremonyState): void {
@@ -866,25 +898,29 @@ class Store {
   }
 
   private applyOp(o: OpView, done = false): void {
+    // A new operation takes the last done line away as it begins, so the
+    // foot answers the press that started it, never with an old ending
+    // (direction 4). One the core starts itself — the reclaim a commit's
+    // ending can set off at once — leaves the line and the queue alone
+    // (clearsDone, APP.md §6 *The foot*).
+    if (!done) this.opBegins(o);
     this.ops[o.id] = o;
     if (!done) return;
-    if (o.error) {
-      // The user's own Cancel is an ending they chose, not a failure: a
-      // neutral "Stopped." line (ops.ts opErrorLine), never the red toast
-      // an error gets (ruled 2026-10-14).
-      this.toast(opErrorLine(o.kind, o.items, o.error, codeText(o.error)), o.error === Code.CodeOpCancelled ? "info" : "error");
-    } else if (reclaimedLine(o)) {
-      // A reclaim reports what came back, on whichever page is up: the
-      // strip that showed it running has gone with it.
-      this.toast(reclaimedLine(o));
-    } else if (hasTrouble(o.results)) {
-      // Something was left out — a kind that differs, a name the tree
-      // cannot hold, a skipped subtree. The page it happened on says what
-      // happened, item by item; another archive's op gets the summary as a
-      // toast, since its own surface is not on screen.
-      if (o.archiveId && o.archiveId === this.current) this.results = o;
-      else this.toast(`${opLabel(o.kind, o.items)}: ${summaryLine(tally(o.results))}`, "error");
+    // A failure is still an error toast until InfoBars (phase 4); the
+    // user's own Cancel is not a failure, and says what is left in the
+    // foot's done line instead (direction 4; it was a neutral "Stopped."
+    // toast, ruled 2026-10-14).
+    if (o.error && o.error !== Code.CodeOpCancelled) {
+      this.toast(opErrorLine(o.kind, o.items, o.error, codeText(o.error)), "error");
     }
+    const here = !!o.archiveId && o.archiveId === this.current;
+    const line = doneLine(o, new Map(this.archives.map((a) => [a.id, a.name])));
+    if (line) this.showDone(line);
+    // Something was left out — a kind that differs, a name the tree
+    // cannot hold, a skipped subtree. The page it happened on says what
+    // happened, item by item, at once (APP.md §3); anywhere else the done
+    // line's Details opens the same dialog.
+    if (!o.error && hasTrouble(o.results) && here) this.results = o;
     if (o.archiveId && o.archiveId === this.current) void this.refreshArchive();
     void this.refreshArchives();
     // An extract records nothing: the destination is prefilled by the rule
@@ -1565,6 +1601,42 @@ class Store {
     if (route !== "lock") this.replaceAsked = false;
     this.nav = from === "archives" && route === "archive" ? 1 : from === "archive" && route === "archives" ? -1 : 0;
     this.route = route;
+  }
+
+  // showDone puts a done line in the foot (direction 4): an operation's
+  // ending (applyOp), Find missing files' count, a backup saved. It holds
+  // DONE_MS; one that arrives while another is up waits its turn.
+  showDone(line: DoneLine): void {
+    const q = sayDone<DoneLine & { id: number }>({ shown: this.done, waiting: this.doneWaiting }, { ...line, id: ++this.doneId });
+    this.turnDone(q);
+  }
+
+  // clearDone ends the line up now, and the next waiting one is said: the
+  // next press in a page's body (LayerFoot) is the user moving on from it.
+  clearDone(): void {
+    this.turnDone(nextDone({ shown: this.done, waiting: this.doneWaiting }));
+  }
+
+  // opBegins reads an operation the store has not seen before (from an
+  // op.progress or a status) as its start: one the user started ends the
+  // line and everything waiting, the foot answering the press with the
+  // operation itself; one the core started (clearsDone) leaves them, and
+  // shows once their turn is over. An op already known is no start.
+  private opBegins(o: OpView): void {
+    if (o.id in this.ops || !clearsDone(o)) return;
+    this.turnDone({ shown: null, waiting: [] });
+  }
+
+  private turnDone(q: DoneTurn<DoneLine & { id: number }>): void {
+    this.doneWaiting = q.waiting;
+    if (q.shown === this.done) return;
+    clearTimeout(this.doneTimer);
+    this.done = q.shown;
+    const id = q.shown?.id;
+    if (id === undefined) return;
+    this.doneTimer = setTimeout(() => {
+      if (this.done?.id === id) this.clearDone();
+    }, DONE_MS);
   }
 
   toast(text: string, kind: "info" | "error" = "info"): void {

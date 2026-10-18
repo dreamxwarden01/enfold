@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CeremonyStep, Code } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
 import * as strings from "./strings";
 import * as validate from "./validate";
-import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, commandCopy, compressedText, lockedOpenText, dialogCopy, extensionNames, extractCopy, lockCopy, purgedText, reclaimedText, retriesText, revealCopy, sinceText, stepCopy, tamperedCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
+import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, collisionCopy, commandCopy, compareCopy, compressedText, conflictCopy, refusedCopy, lockedOpenText, dialogCopy, extensionNames, extractCopy, lockCopy, purgedText, reclaimedText, retriesText, revealCopy, sinceText, stepCopy, tamperedCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
 
 // ---- One word per thing (APP.md §7, ruled 2026-10-17) -------------------
 //
@@ -335,6 +335,11 @@ describe("the receipts' words", () => {
       ...Object.values(revealCopy).filter((v): v is string => typeof v === "string"), revealCopy.digitsLine(48), revealCopy.savedTo("E:\\key.txt"),
       bootCopy.title, bootCopy.openFolder, bootCopy.copied, extractCopy.ordinaryFiles, dialogCopy.passwordOff.body, archivesCopy.fingerprint({ kind: "behind", behind: 2 }), archivesCopy.fingerprint({ kind: "none", behind: 0 }), archivesCopy.fingerprint({ kind: "owed", behind: 0 }),
       technicalCopy.fingerprintNote, lockCopy.tamperedWhyTitle,
+      // One Extract… and its questions (direction 7).
+      extractCopy.title("Photos 2024"), extractCopy.scopeLegend, extractCopy.scopeSelection(4), extractCopy.scopeAll("Photos 2024"),
+      conflictCopy.replaceSays(3), conflictCopy.skipSays(3, 9), conflictCopy.skipSays(1, 0), conflictCopy.decideSays(3), compareCopy.keepBoth,
+      collisionCopy.kind(true, false), collisionCopy.replaceSays(2), collisionCopy.keepBothSays(2), collisionCopy.skipSays({ files: 2, folders: 0 }, 1), collisionCopy.replaceOff, collisionCopy.kind(true, true), collisionCopy.mergeNote(1, 0), collisionCopy.mergeNote(2, 1), collisionCopy.replaceInside, collisionCopy.replaceInsideSays, collisionCopy.keepBothInsideSays, collisionCopy.skipInside, collisionCopy.skipInsideSays,
+      refusedCopy.notWritten("a.jpg"), refusedCopy.how, refusedCopy.sameForRest(3),
     ];
     for (const s of said) expect(s, s).not.toMatch(house);
   });

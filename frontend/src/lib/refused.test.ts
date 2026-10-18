@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Code } from "./api";
 import type { FileOutcome } from "./api";
-import { hasRefusals, nextUndecided, planIsEmpty, refusedOf, refusedPlan, shorten, skipAllLike, splitName } from "./refused";
+import { applyToRest, hasRefusals, nextUndecided, planIsEmpty, refusedOf, refusedPlan, restLike, shorten, skipAllLike, splitName } from "./refused";
 import type { RefusedRow } from "./refused";
+import { refusedCopy } from "./strings";
 
 // A name the destination refuses (APP.md §3, ruled 2026-09-10): the page
 // asks per refused record — Shorten, Rename…, Skip — and re-issues with
@@ -140,5 +141,42 @@ describe("the re-issue", () => {
     expect(nextUndecided([a, b], {})).toBe(0);
     expect(nextUndecided([a, b], { [a.id]: { kind: "skip" } })).toBe(1);
     expect(nextUndecided([a, b], { [a.id]: { kind: "skip" }, [b.id]: { kind: "skip" } })).toBe(-1);
+  });
+});
+
+// "Do the same for the other N" (direction 7): Use this name or Skip,
+// given to every refused name of the same kind still waiting; Rename… is
+// one record's alone.
+describe("the answer for the rest", () => {
+  const row = (c: string, kind: "name" | "path" = "name"): RefusedRow => ({ id: c.repeat(32), kind, path: `${c} a very long name.jpg`, leaf: `${c} a very long name.jpg`, isDir: false });
+  const [a, b, c, p] = [row("a"), row("b"), row("c"), row("p", "path")];
+
+  it("counts the others of the same kind still waiting", () => {
+    expect(restLike([a, b, c, p], {}, a)).toBe(2);
+    expect(restLike([a, b, c, p], { [b.id]: { kind: "skip" } }, a)).toBe(1);
+    expect(restLike([a, p], {}, a)).toBe(0);
+    expect(refusedCopy.sameForRest(3)).toBe("Do the same for the other 3");
+  });
+
+  it("gives Use this name to the rest of the same kind, and each its own shorter name", () => {
+    const d = applyToRest([a, b, c, p], {}, a, { kind: "shorten" });
+    expect(d[a.id]).toEqual({ kind: "shorten" });
+    expect(d[b.id]).toEqual({ kind: "shorten" });
+    expect(d[c.id]).toEqual({ kind: "shorten" });
+    expect(p.id in d).toBe(false);
+    expect(nextUndecided([a, b, c, p], d)).toBe(3);
+    expect(refusedPlan([a, b, c], d).names).toEqual({ [a.id]: shorten(a.leaf), [b.id]: shorten(b.leaf), [c.id]: shorten(c.leaf) });
+  });
+
+  it("gives Skip to the rest, and keeps an answer already given", () => {
+    const d = applyToRest([a, b, c], { [b.id]: { kind: "rename", to: "beta.jpg" } }, a, { kind: "skip" });
+    expect(d[a.id]).toEqual({ kind: "skip" });
+    expect(d[b.id]).toEqual({ kind: "rename", to: "beta.jpg" });
+    expect(d[c.id]).toEqual({ kind: "skip" });
+  });
+
+  it("never gives Rename… to the others", () => {
+    const d = applyToRest([a, b], {}, a, { kind: "rename", to: "alpha.jpg" });
+    expect(d).toEqual({ [a.id]: { kind: "rename", to: "alpha.jpg" } });
   });
 });

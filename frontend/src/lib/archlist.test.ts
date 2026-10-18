@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clickShownHeader, compacting, droppedArchives, fingerprintOf, paneRow, rowRefusal, shownTicked } from "./archlist";
+import { clickShownHeader, compacting, droppedArchives, fingerprintOf, paneRow, rowRefusal, runningKind, shownTicked } from "./archlist";
 import { clickRow, emptySelection, toggleRow } from "./selection";
 
 // The Archives list's ticks (APP.md §6, ruled 2026-09-10): the header
@@ -84,6 +84,14 @@ describe("what stops an action on a row", () => {
   it("reads a compaction off the handle's state or off a running Compact of that archive", () => {
     expect(rowRefusal({ ...row, state: "compacting" }, [])).toBe("archive.compacting");
     expect(rowRefusal(row, [compact])).toBe("archive.compacting");
+  });
+
+  it("names a refresh or a re-key running on the row, and nothing else", () => {
+    expect(runningKind(row, [{ kind: "verify", archiveId: "a", finished: false }])).toBe("verify");
+    expect(runningKind(row, [{ kind: "rotate", archiveId: "a", finished: false }])).toBe("rotate");
+    expect(runningKind(row, [{ kind: "rotate", archiveId: "a", finished: true }])).toBe("");
+    expect(runningKind(row, [{ kind: "verify", archiveId: "b", finished: false }])).toBe("");
+    expect(runningKind(row, [compact])).toBe("");
   });
 
   it("ignores a finished Compact, another archive's, and another kind of operation", () => {

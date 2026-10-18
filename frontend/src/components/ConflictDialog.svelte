@@ -3,10 +3,11 @@
   // file with the type's icon, *Files from the archive* on the left and
   // *Files already in the destination* on the right, each side's date and
   // size, a tick on either or both — both keeps both, which is the
-  // `rename` policy — and "Skip N files with the same date and size" at
-  // the foot, pre-ticked for the copies that match, with a count beside it
-  // of what *Continue* will do (ruled 2026-10-17). *Continue* re-issues
-  // the extract for the ids the ticks chose.
+  // `rename` policy, said once over the ticks — and "Skip N files with the
+  // same date and size" at the foot, pre-ticked for the copies that match
+  // (ruled 2026-10-17). *Continue* reads what it will do — "Extract 2,
+  // skip 1" (direction 7) — and re-issues the extract for the ids the
+  // ticks chose.
   //
   // Every rule it obeys is in lib/conflicts.ts and every word it says is
   // the strings table's (APP.md §7); this file draws it.
@@ -14,7 +15,7 @@
   import Dialog from "./Dialog.svelte";
   import { bytes, dateTime, fileIcon } from "../lib/format";
   import { compareCopy } from "../lib/strings";
-  import { countLine, sameDateAndSize, skipSameLabel, startingDecisions, ticks, toggle, withSkipSame } from "../lib/conflicts";
+  import { continueLabel, sameDateAndSize, skipSameLabel, startingDecisions, ticks, toggle, withSkipSame } from "../lib/conflicts";
   import type { ConflictRow, Decision } from "../lib/conflicts";
 
   interface Props {
@@ -31,8 +32,9 @@
   // The foot's box is ticked while every matching copy is being skipped,
   // which is how it starts.
   const skipSame = $derived(rows.filter(sameDateAndSize).every((r) => decisions[r.path] === "skip"));
-  // What Continue will do, said before it does it; it follows every tick.
-  const count = $derived(countLine(rows, decisions));
+  // What Continue will do, said on Continue itself before it does it; it
+  // follows every tick.
+  const go = $derived(continueLabel(rows, decisions));
 
   function hit(path: string, side: "left" | "right") {
     decisions = { ...decisions, [path]: toggle(decisions[path] ?? "replace", side) };
@@ -45,6 +47,8 @@
   <div class="cmp-head">
     <span class="ch">{compareCopy.fromArchive}</span>
     <span class="ch">{compareCopy.inDestination}</span>
+    <!-- The ticks' one rule, said once over them (direction 7). -->
+    <span class="tickrule">{compareCopy.keepBoth}</span>
   </div>
   <ul class="cmp">
     {#each rows as r (r.path)}
@@ -70,16 +74,12 @@
     {/each}
   </ul>
 
-  <div class="foot">
-    {#if sameLabel}
-      <label class="check"><input type="checkbox" checked={skipSame} onchange={(e) => (decisions = withSkipSame(rows, decisions, e.currentTarget.checked))} />{sameLabel}</label>
-    {/if}
-    <span class="count" aria-live="polite">{count}</span>
-  </div>
-  <p class="dim">{compareCopy.note}</p>
+  {#if sameLabel}
+    <label class="check"><input type="checkbox" checked={skipSame} onchange={(e) => (decisions = withSkipSame(rows, decisions, e.currentTarget.checked))} />{sameLabel}</label>
+  {/if}
 
   {#snippet actions()}
-    <button type="button" class="btn accent" onclick={() => oncontinue(decisions)}>{compareCopy.go}</button>
+    <button type="button" class="btn accent" onclick={() => oncontinue(decisions)}>{go}</button>
     <button type="button" class="btn" onclick={oncancel}>{compareCopy.cancel}</button>
   {/snippet}
 </Dialog>
@@ -89,8 +89,10 @@
      the two heads strong, a name body over its date and size in caption
      (.two-line), and every gap a step of 4. The parts of the dialog stand
      12 apart by the dialog's own gap. */
-  .cmp-head { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+  .cmp-head { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--s3); }
   .ch { font: var(--t-strong); color: var(--ink); }
+  /* Centred across both heads, so it reads as the rule over both columns. */
+  .tickrule { grid-column: 1 / -1; text-align: center; font: var(--t-cap); color: var(--ink-2); }
   .cmp { list-style: none; margin: 0; padding: 0; max-height: 44vh; overflow-y: auto; }
   .cmp li { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); padding: var(--s1) 0; border-top: 1px solid var(--stroke); }
   .side { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
@@ -98,6 +100,4 @@
   .side .i { flex: none; color: var(--ink-3); }
   /* One line each, cut with an ellipsis: the whole path is the name's title. */
   .who > * { white-space: nowrap; }
-  .foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); }
-  .count { margin-left: auto; color: var(--ink-2); }
 </style>

@@ -225,9 +225,14 @@ func (a *Archives) Delete(id string, alsoFile bool) error {
 	return asErr(a.c.DeleteArchive(id, alsoFile))
 }
 
-// CheckFiles refreshes the presence of every record's last_path; the list's
-// Status column follows on archives.changed.
-func (a *Archives) CheckFiles() error { return asErr(a.c.CheckFiles()) }
+// CheckFiles refreshes the presence of every record's last_path and answers
+// when the pass has ended, with what it measured and what it found missing,
+// for *Find missing files*' line (APP.md §13); the list's Status column
+// follows on archives.changed.
+func (a *Archives) CheckFiles() (app.CheckReport, error) {
+	r, e := a.c.CheckFiles()
+	return r, asErr(e)
+}
 
 // Archive is an open archive.
 type Archive struct {

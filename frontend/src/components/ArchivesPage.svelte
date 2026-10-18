@@ -16,15 +16,22 @@
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, listCopy, vaultCopy } from "../lib/strings";
+  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, keyTitles, listCopy, pendingCopy, vaultCopy } from "../lib/strings";
   import { bytes, count, date, dateTime, plural } from "../lib/format";
   import { clickRow, emptySelection, selectAll, survive, toggleRow } from "../lib/selection";
   import type { Selection } from "../lib/selection";
-  import { clickShownHeader, compacting, fingerprintOf, paneRow, rowRefusal, shownTicked } from "../lib/archlist";
-  import { CLOSED, canExpand, collapse, edgeY, escape, inContact, naturalEnd, openHeight, overScroll, picked, pushScroll, reveals, rideReachesHome, rideScroll, springScroll, toggle } from "../lib/archbar";
+  import { clickShownHeader, compacting, fingerprintOf, paneRow, rowRefusal, shownTicked, runningKind } from "../lib/archlist";
+  import { CLOSED, canExpand, collapse, edgeY, escape, expand, inContact, naturalEnd, openHeight, overScroll, picked, pushScroll, reveals, rideReachesHome, rideScroll, springScroll, toggle } from "../lib/archbar";
   import type { BarState, ListMetrics } from "../lib/archbar";
   import { MOVE, enter, motion } from "../lib/motion";
-  import { dialogIsUp } from "../lib/dialogs";
+  import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
+  // The pending action, by another name: `pending` here is the save bar's
+  // list of staged edits.
+  import { pending as waiting } from "../lib/pending";
+  import PendingLabel from "./PendingLabel.svelte";
+  import { checkedLine } from "../lib/foot";
+  import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, pageRows, target, typeahead } from "../lib/listkeys";
+  import type { Intent } from "../lib/listkeys";
   import { freeWorthShowing } from "../lib/status";
   import { DEFAULT_METHOD, METHODS, METHOD_NOTE, methodWord } from "../lib/method";
   import { foreignPath } from "../lib/paths";
@@ -33,7 +40,6 @@
   import Dialog from "./Dialog.svelte";
   import Segmented from "./Segmented.svelte";
   import TextField from "./TextField.svelte";
-  import OpsBar from "./OpsBar.svelte";
   import SaveBar from "./SaveBar.svelte";
   import type { PendingItem } from "./SaveBar.svelte";
   import ArchiveDetailsDialog from "./ArchiveDetailsDialog.svelte";
@@ -145,6 +151,10 @@
     // A compaction refuses the open and every operation until it ends, so
     // the row says so beside the greyed commands (ruled 2026-10-14).
     if (compacting(a, store.runningOps)) out.push({ label: chipCopy.compacting, tone: "busy", title: codeText(Code.CodeArchiveCompacting) });
+    // A refresh or a re-key is queued behind the handle, never refused, so
+    // the row says what runs and nothing is greyed for it (direction 4).
+    else if (runningKind(a, store.runningOps) === "verify") out.push({ label: chipCopy.refreshing, tone: "busy" });
+    else if (runningKind(a, store.runningOps) === "rotate") out.push({ label: chipCopy.rekeying, tone: "busy" });
     else if (a.open) out.push({ label: chipCopy.open, tone: "open" });
     // Never computed here: the core keeps a presence per record and the
     // note is the only thing that says a file is gone (APP.md §13).
@@ -259,37 +269,171 @@
     }
   }
 
-  // Ctrl+A ticks the rows the filter shows when the focus is in the list
-  // or on the page's body — never in the filter input, which keeps its
-  // own select-all — and not while a dialog is up (lib/dialogs.ts).
+  // ---- the keys (lib/listkeys.ts; direction 7, APP.md §6) --------------
+  // Every key of the list and of the page is taken here, in one handler,
+  // through the one keymap. The list is single-select for the keys: an
+  // arrow, Home, End, PgUp, PgDn or a typed name selects that one row and
+  // the details pane follows (reversing 2026-09-10's "arrows move the
+  // focus"); the ticks stay the ticks for the mouse, and Ctrl+A still
+  // ticks the rows the filter shows. The list's own keys are taken while
+  // the focus is in the list or on the page's body; the page's commands
+  // from anywhere on it but a text field — Esc and Ctrl+O even from the
+  // Filter, since neither edits text (ruled 2026-09-11, 2026-10-14).
+  // Nothing is taken while a dialog is up (lib/dialogs.ts) or from an
+  // open menu, whose keys are its own.
   let listEl = $state<HTMLDivElement | undefined>();
-  function shortcut(e: KeyboardEvent) {
-    // Esc collapses the panel (APP.md §6, ruled 2026-09-11). A dialog's
-    // Esc is the dialog's, and a key that moves nothing here is left
-    // alone rather than swallowed.
-    if (e.key === "Escape") {
-      if (dialogIsUp()) return;
+  let filterEl = $state<HTMLInputElement | undefined>();
+  // The type-ahead's buffer and when its last character came (700 ms).
+  let typed = "";
+  let typedAt = 0;
+
+  function onKey(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.isComposing) return;
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    if (t?.closest(`[role="menu"], [${POPOVER_ATTR}]`)) return;
+    const now = Date.now();
+    const i = intent(
+      { key: e.key, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey },
+      {
+        list: "archives",
+        onUp: false,
+        inField: !!t && isTextEntry(t.tagName, t.getAttribute("type") ?? "", t.isContentEditable),
+        dialogUp: dialogIsUp(),
+        typing: typed !== "" && now - typedAt <= TYPEAHEAD_MS,
+        // A sort button, the tick-all box (and on the Archives page the
+        // empty vault's buttons) sit in the list's region but keep their
+        // own Enter and Space.
+        onControl: controlKeepsKeys(t),
+      },
+    );
+    // Ctrl+L is the foot's (LayerFoot): Lock now on every page.
+    if (i.kind === "none" || i.kind === "lock") return;
+    const inList = !t || t === document.body || !!listEl?.contains(t);
+    if (listScoped(i) && !inList) return;
+    // Esc collapses the panel (APP.md §6, ruled 2026-09-11), and is the
+    // page's to swallow only when it did: a key that moves nothing here is
+    // left alone, so the Filter's own Esc still clears it.
+    if (i.kind === "clear") {
       const next = escape(bar);
       if (next === bar) return;
       e.preventDefault();
       moveBar(next);
       return;
     }
-    // Ctrl+O is Open file… from anywhere on the page, the filter included
-    // — it edits no text (ruled 2026-10-14).
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "o" || e.key === "O")) {
-      if (dialogIsUp()) return;
-      e.preventDefault();
-      void openFile();
-      return;
-    }
-    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || (e.key !== "a" && e.key !== "A")) return;
-    const t = e.target as HTMLElement | null;
-    if (!t || t.closest("input, textarea, select, [contenteditable]")) return;
-    if (t !== document.body && !listEl?.contains(t)) return;
-    if (dialogIsUp()) return;
     e.preventDefault();
-    sel = selectAll(sel, order);
+    act(i, focusIndex(t), now);
+  }
+
+  // focusIndex: the row the keys start from — the focused row, else, with
+  // the focus on the page's body, the pane's; else none.
+  function focusIndex(t: HTMLElement | null): number | null {
+    const tr = t && listEl?.contains(t) ? t.closest("tr") : null;
+    const id = tr?.getAttribute("data-id") ?? paneId;
+    if (!id) return null;
+    const at = order.indexOf(id);
+    return at >= 0 ? at : null;
+  }
+
+  function act(i: Intent, from: number | null, now: number) {
+    const atRow = from !== null && from >= 0 ? rows[from] : null;
+    switch (i.kind) {
+      case "move":
+        land(target(from, i.by, rows.length, pageSize(), false));
+        break;
+      case "select":
+        if (atRow) pick(atRow.id);
+        break;
+      case "selectAll":
+        sel = selectAll(sel, order);
+        break;
+      case "open":
+        if (!atRow) break;
+        pick(atRow.id);
+        openRow(atRow.id);
+        break;
+      case "details":
+        // Technical details… for the selected row, as its hyperlink button.
+        if (det && one) showDetails = true;
+        break;
+      case "newArchive":
+        if (unlocked && !tampered) openCreate();
+        break;
+      case "openFile":
+        void openFile();
+        break;
+      case "filter":
+        filterEl?.focus();
+        filterEl?.select();
+        break;
+      case "delete":
+        // Delete archive… for the selected row, greyed by the same rule as
+        // the command bar's.
+        if (one && unlocked && !tampered && !compactStop) startDelete("delete");
+        break;
+      case "rename":
+        editName();
+        break;
+      case "refresh":
+        void store.refreshArchives();
+        break;
+      case "typeahead": {
+        typed = typeahead(typed, i.char, now, typedAt);
+        typedAt = now;
+        const to = jump(rows.map((a) => a.name), typed, atRow ? from : null);
+        if (to >= 0) land(to);
+        break;
+      }
+    }
+  }
+
+  // land: the row a key arrived at becomes the one selected row, the
+  // anchor and the pane's, and takes the focus. With the narrow panel up,
+  // the panel brings it to the list's first line itself (lib/archbar.ts);
+  // otherwise it is brought into view the nearest way, clear of the
+  // sticky header row.
+  function land(to: number | null) {
+    if (to === null || to < 0) return;
+    const id = rows[to].id;
+    pick(id);
+    void tick().then(() => {
+      const el = listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(id)}"]`);
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      if (!(narrow && bar.open)) reveal(el);
+    });
+  }
+
+  function reveal(el: HTMLElement) {
+    const box = listEl;
+    if (!box) return;
+    const head = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    const r = el.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    if (r.top < b.top + head) box.scrollTop -= b.top + head - r.top;
+    else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+  }
+
+  // PgUp and PgDn move by the rows that fit (lib/listkeys.ts pageRows);
+  // a row here is the ruled 36 px too, the description its second line.
+  function pageSize(): number {
+    const box = listEl;
+    if (!box) return 1;
+    const row = box.querySelector("tbody tr")?.getBoundingClientRect().height ?? 36;
+    return pageRows(box.clientHeight, box.querySelector("thead")?.getBoundingClientRect().height ?? 0, row);
+  }
+
+  // F2 edits the name (direction 7): the pane's Name field takes the
+  // focus with the name selected, the narrow panel opening first when it
+  // is down. A field greyed for the row — forgotten, locked — takes none.
+  function editName() {
+    if (!one) return;
+    if (narrow && !bar.open) moveBar(expand(bar));
+    void tick().then(() => {
+      const el = document.getElementById("ar-name") as HTMLInputElement | null;
+      if (!el || el.disabled) return;
+      el.focus({ preventScroll: true });
+      el.select();
+    });
   }
 
   // ---- the bottom panel (lib/archbar.ts) --------------------------------
@@ -650,8 +794,8 @@
       if (narrow && bar.open && bar.id) resettle(bar.id);
     });
     seen.observe(layer);
-    // The split as well as the body: a banner or an operation strip
-    // appearing above the list moves the list down without changing the
+    // The split as well as the body: a banner appearing above the list
+    // (the operations are the foot's since direction 4, and never move it) moves the list down without changing the
     // size of the body it sits in — nor of the scroller, which the panel
     // holds at its height while it is up — and the card would be left
     // over the row.
@@ -833,14 +977,25 @@
   // standing; only a create that succeeded closes it, and the new archive
   // is then opened on its empty root, where the next thing to do is to
   // add to it (ruled 2026-10-14) — not left as a ticked row.
+  // The create itself, once the place is chosen: the dialog's primary
+  // waits on it with the ring (direction 4), and a second press meanwhile
+  // is ignored.
+  let createWait = $state<Promise<unknown> | null>(null);
   async function create() {
+    if (createWait) return;
     newAttempt++;
     if (!newNameValid) return;
     const name = newName.trim();
     const p = await Shell.SaveFile("Where to keep the archive", `${name}.efd`, store.settings?.lastArchiveFolder ?? "");
     if (!p) return;
+    const made = Archives.Create(p, name, newMethod);
+    createWait = made;
+    void made.then(
+      () => (createWait = null),
+      () => (createWait = null),
+    );
     try {
-      const id = await Archives.Create(p, name, newMethod);
+      const id = await made;
       creating = false;
       newExists = "";
       await store.refreshArchives();
@@ -930,40 +1085,50 @@
     await store.refreshArchives();
   }
 
-  // The keyboard path: Space selects, Enter selects and opens, the arrows
-  // move focus.
-  function rowKey(e: KeyboardEvent, id: string) {
-    const el = e.currentTarget as HTMLElement;
-    switch (e.key) {
-      case " ":
-        e.preventDefault();
-        sel = clickRow(sel, order, id);
-        lastClicked = id;
-        break;
-      case "Enter":
-        e.preventDefault();
-        sel = clickRow(sel, order, id);
-        lastClicked = id;
-        openRow(id);
-        break;
-      case "ArrowDown":
-        e.preventDefault();
-        (el.nextElementSibling as HTMLElement | null)?.focus();
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        (el.previousElementSibling as HTMLElement | null)?.focus();
-        break;
-    }
-  }
-
   // openRow is a row's double-click and Enter: nothing for a row whose
   // Open is greyed — forgotten, or being compacted — since the command
   // already says why (ruled 2026-10-14) and the core would only refuse.
   function openRow(id: string) {
     const a = store.archives.find((x) => x.id === id);
     if (!a || rowRefusal(a, store.runningOps) || (!unlocked && !a.open)) return;
-    void store.openArchive(id);
+    openArchive(id);
+  }
+
+  // One open at a time (direction 4, the pending primitive): the row's
+  // status cell wears the ring once the open has taken 300 ms, and the
+  // Open buttons say *Opening…*; a second double-click, Enter or Open
+  // while one is on its way is ignored rather than queued behind it.
+  let opening = $state<{ id: string; p: Promise<boolean> } | null>(null);
+  let openArmed = $state(false);
+  function openArchive(id: string) {
+    if (opening) return;
+    const p = store.openArchive(id);
+    opening = { id, p };
+    void p.finally(() => {
+      if (opening?.p === p) opening = null;
+    });
+  }
+
+  // Find missing files (APP.md §13): the core answers once its pass has
+  // ended, with what it looked at and what it found (CheckReport), and
+  // the foot says so (direction 4) — the Missing chips in the list are the
+  // way on. The button waits with the ring; a second press meanwhile is
+  // ignored.
+  let checking = $state<Promise<unknown> | null>(null);
+  let checkArmed = $state(false);
+  async function findMissing() {
+    if (checking) return;
+    const p = Archives.CheckFiles();
+    checking = p;
+    try {
+      const r = await p;
+      store.showDone(checkedLine(r));
+      await store.refreshArchives();
+    } catch (e) {
+      fail(e);
+    } finally {
+      checking = null;
+    }
   }
 
   // What stops a record-level operation, said on the button itself. The
@@ -1007,7 +1172,7 @@
   });
 </script>
 
-<svelte:window onkeydown={shortcut} />
+<svelte:window onkeydown={onKey} />
 
 <div class="layer-head">
   <h1 class="t-title">{st?.displayName || "Vault"}</h1>
@@ -1034,12 +1199,12 @@
   <div class="cmdbar">
     <!-- Every action that takes one archive works on the pane's row and is
          greyed unless exactly one is ticked (APP.md §6, ruled 2026-09-10). -->
-    <button type="button" class="btn accent" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>{commandCopy.open}</button>
-    <button type="button" class="btn" disabled={!unlocked || tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
+    <button type="button" class="btn accent" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && openArchive(one.id)} use:waiting={{ on: opening?.p ?? null, armed: (b) => (openArmed = b) }}><PendingLabel armed={openArmed} icon="i-open" rest={commandCopy.open} busy={pendingCopy.opening} /></button>
+    <button type="button" class="btn" disabled={!unlocked || tampered} title={opReason ?? keyTitles.newArchive} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
     <!-- Never greyed: the chain answers a locked vault with the lock
          scene, and a file whose key is not here with its own dialog, as
          for a double-click in Explorer (APP.md §14). -->
-    <button type="button" class="btn subtle" title="Ctrl+O" onclick={() => void openFile()}><svg class="i i-14"><use href="#i-folder" /></svg>{archivesCopy.openFile}</button>
+    <button type="button" class="btn subtle" title={keyTitles.openFile} onclick={() => void openFile()}><svg class="i i-14"><use href="#i-folder" /></svg>{archivesCopy.openFile}</button>
     <div class="sep"></div>
     <!-- Never gated on the archive being open (APP.md §2.3, ruled
          2026-09-10): the core opens it for the operation and closes it
@@ -1049,13 +1214,13 @@
     <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && run(Archives.Verify(one.id))}>{commandCopy.refreshFingerprint}</button>
     <button type="button" class="btn subtle" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && run(one.hidden ? Archives.Unhide(one.id) : Archives.Hide(one.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{one?.hidden ? commandCopy.unhide : commandCopy.hide}</button>
     <div class="sep"></div>
-    <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => run(Archives.CheckFiles())}>{commandCopy.findMissing}</button>
+    <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => void findMissing()} use:waiting={{ on: checking, armed: (b) => (checkArmed = b) }}><PendingLabel armed={checkArmed} rest={commandCopy.findMissing} busy={pendingCopy.checking} /></button>
     <button type="button" class="btn subtle" disabled={!unlocked || tampered} onclick={importRecords}><svg class="i i-14"><use href="#i-backup" /></svg>{commandCopy.importArchives}</button>
     <div class="sep"></div>
     <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || one.forgottenAt > 0 || compactStop} title={compactWhy} onclick={() => void startDelete("forget")}>{commandCopy.forgetArchive}</button>
-    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || compactStop} title={compactWhy} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.deleteArchive}</button>
+    <button type="button" class="btn subtle danger" disabled={!one || !unlocked || tampered || compactStop} title={!one ? undefined : (opReason ?? compactWhy ?? keyTitles.deleteArchive)} onclick={() => void startDelete("delete")}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.deleteArchive}</button>
     <div class="grow"></div>
-    <label class="filterbox"><span class="vh">{archivesCopy.filter}</span><input class="input" type="search" placeholder={archivesCopy.filter} bind:value={filter} /></label>
+    <label class="filterbox"><span class="vh">{archivesCopy.filter}</span><input class="input" type="search" placeholder={archivesCopy.filter} title={keyTitles.filter} bind:this={filterEl} bind:value={filter} /></label>
     <label class="check"><input type="checkbox" bind:checked={store.showHidden} onchange={() => store.refreshArchives()} />{archivesCopy.showHidden}</label>
   </div>
 
@@ -1074,7 +1239,6 @@
       <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
     </div>
   {/if}
-  <OpsBar />
 
   <div class="arch-split" bind:this={splitEl}>
     <div class="arch-list">
@@ -1124,10 +1288,11 @@
             </thead>
             <tbody>
               {#each rows as a, i (a.id)}
-                <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
                 <!-- data-id: how the panel finds the row it must bring to
-                     the list's first line (lib/archbar.ts). -->
-                <tr data-id={a.id} tabindex={paneId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={sel.ids.has(a.id)} class:forgotten={a.forgottenAt > 0} onclick={(e) => click(e, a.id)} ondblclick={() => openRow(a.id)} onkeydown={(e) => rowKey(e, a.id)}>
+                     the list's first line (lib/archbar.ts). The keys are
+                     the page's one handler (onKey), not the row's. -->
+                <tr data-id={a.id} tabindex={paneId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={sel.ids.has(a.id)} class:forgotten={a.forgottenAt > 0} onclick={(e) => click(e, a.id)} ondblclick={() => openRow(a.id)}>
                   <td class="chk"><input type="checkbox" checked={sel.ids.has(a.id)} tabindex="-1" aria-label={listCopy.tickRow(a.name)} onclick={(e) => tick1(e, a.id)} ondblclick={(e) => e.stopPropagation()} /></td>
                   <td class="sel-mark">
                     <div class="fname">
@@ -1140,8 +1305,18 @@
                   <td class="num">{a.storedSize ? bytes(a.storedSize) : "—"}</td>
                   <td><span class="num">{dateTime(a.lastWrittenAt)}</span></td>
                   <td>
-                    <div class="status-cell">
-                      {#each statuses(a) as s (s.label)}<span class="st {s.tone}" title={s.title}>{s.label}</span>{/each}
+                    <div class="status-cell" use:waiting={opening?.id === a.id ? opening.p : null}>
+                      <!-- The Missing chip is a button that runs Locate… for
+                           its row (direction 7): the chip names the
+                           trouble, the button is its cure. It is drawn as
+                           the chip is, and greyed by Locate…'s own rule. -->
+                      {#each statuses(a) as s (s.label)}
+                        {#if s.tone === "missing"}
+                          <button type="button" class="st missing" tabindex="-1" disabled={!unlocked || a.forgottenAt > 0} title={!unlocked ? codeText(Code.CodeVaultLocked) : a.forgottenAt > 0 ? codeText(Code.CodeArchiveForgotten) : archivesCopy.missingChip(codeText(a.note))} onclick={(e) => { e.stopPropagation(); pick(a.id); void locate(a); }} ondblclick={(e) => e.stopPropagation()}>{s.label}</button>
+                        {:else}
+                          <span class="st {s.tone}" title={s.title}>{s.label}</span>
+                        {/if}
+                      {/each}
                     </div>
                   </td>
                 </tr>
@@ -1272,7 +1447,7 @@
                  hyperlink button under them, as *Show in Explorer* and
                  *Locate…* are under the path (APP.md §6, Controls; ruled
                  2026-10-17: it was a standard button beside *Close*). -->
-            <div class="pad"><button type="button" class="btn link" disabled={!det || !one} onclick={() => (showDetails = true)}>{archivesCopy.technicalDetails}</button></div>
+            <div class="pad"><button type="button" class="btn link" disabled={!det || !one} title={det && one ? keyTitles.technicalDetails : undefined} onclick={() => (showDetails = true)}>{archivesCopy.technicalDetails}</button></div>
 
             <!-- A path is the stacked form: its label over it, and the
                  path wrapping rather than cut (APP.md §6, §13). -->
@@ -1291,7 +1466,7 @@
             <div class="details-actions">
               <!-- A standard button: the bar's Open is the one accent on
                    screen (ruled 2026-10-14). -->
-              <button type="button" class="btn wide" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && store.openArchive(one.id)}><svg class="i i-14"><use href="#i-open" /></svg>{commandCopy.open}</button>
+              <button type="button" class="btn wide" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={rowWhy} onclick={() => one && openArchive(one.id)} use:waiting={opening?.p ?? null}><PendingLabel armed={openArmed} icon="i-open" rest={commandCopy.open} busy={pendingCopy.opening} /></button>
               {#if pane.open}
                 <div class="row2">
                   <button type="button" class="btn" disabled={!one || compactStop} title={compactWhy} onclick={() => one && run(Archives.Close(one.id)).then(() => store.refreshArchives())}>{commandCopy.close}</button>
@@ -1335,7 +1510,7 @@
     <p>{dialogCopy.newArchive.body}</p>
     {#snippet actions()}
       <!-- The one primary that keeps its "…": the save dialog follows. -->
-      <button type="button" class="btn accent" onclick={create}>{dialogCopy.newArchive.primary}</button>
+      <button type="button" class="btn accent" onclick={create} use:waiting={createWait}>{dialogCopy.newArchive.primary}</button>
       <button type="button" class="btn" onclick={() => (creating = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
@@ -1394,6 +1569,11 @@
   .layer-head .chip { align-self: center; }
   .meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The compacting badge: the open badge's shape in the attention tone. */
+  /* The Missing chip as a button: the chip's own box and words, a pointer,
+     and the danger ink's stroke on hover; greyed, it is the chip again. */
+  .status-cell button.st { cursor: pointer; transition: border-color var(--dur-hover) var(--ease-enter); }
+  .status-cell button.st.missing:hover:not(:disabled) { border-color: var(--danger); }
+  .status-cell button.st:disabled { cursor: default; }
   .status-cell .st.busy { background: var(--attention-wash); border-color: var(--attention-line); color: var(--attention); }
   /* The empty vault's block: centred, the two buttons on one line and the
      import a small subtle button under them. */

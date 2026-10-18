@@ -481,7 +481,9 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   publishing one, places its own index outside the run that follow-up will cut, appending it
   if no other hole holds it, so what comes back is never less than the plan promised (the
   adversarial proof of 2026-09-10). Progress is by bytes moved, and what came back is said
-  separately ("Reclaimed 1.2 GB"); a cancel is honoured at any chunk of the copy — an aborted
+  separately, as `OpView.Returned` (§3) in the foot's done line ("Reclaimed 1.2 GB"; a run that
+  gave nothing back says nothing, since the run was the core's own — §6, *The foot*; it was a
+  toast until 2026-10-18); a cancel is honoured at any chunk of the copy — an aborted
   commit leaves the originals live and its copies in free space — and *Close archive* cancels
   it too, the archive consistent and simply less compacted, the run resumed by the next
   qualifying commit. A reclaim that fails after the user's own edit committed reports the edit
@@ -503,6 +505,36 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   the next unlock) and is adopted, the next registry write recording it; the file's size is not
   compared — an aborted transaction's tail leaves the file larger at the same `seq`, and the
   archive layer reclaims it.
+- **What a cancel means, by kind** (ruled 2026-10-18, phase 3 of the design review's direction
+  4). The core can stop any operation through `CancelOp` (a context the work checks), and a
+  commit is never cancelled (`op.committing`, §3); which ones the page offers to stop is the
+  page's rule, `lib/ops.ts` `cancellable`. It read, until this ruling: "A compaction they did ask
+  for, a rotation and a verify are not the user's to abort halfway, and an extract has already
+  written files on disk" — so *Cancel* was withheld from a verify and an extract by choice,
+  though the core stops both. *Cancel* is now offered for an add, a replace, a reclaim, a
+  *Refresh fingerprint* and an extract, and for a drag out while it stages (§3):
+  - an add or a replace is `Abort`: nothing is published (above);
+  - a reclaim stops at the next chunk, the archive consistent and less compacted (above);
+  - a *Refresh fingerprint* (`Verify`) stops at the next MiB its hash reads, and records nothing:
+    `LastCiphertextHash`, `HashAtSeq`, `LastSeq` and `LastStoredSize` stay as they were, so the
+    fingerprint is the one there was before;
+  - an extract stops between files, each file being all-or-nothing, so no half-written file is
+    left; it ends `op.cancelled` with the outcomes of the files written before the cancel in its
+    `Results`, nothing after the cancel is attempted, and what it wrote stays where it is, since
+    those are the ordinary files the user asked for — the done line counts them: "Stopped. 6 of
+    15 files were written to D:\Archives\Photos 2024" with *Show in Explorer*, or "Stopped.
+    Nothing was written" (§6, *The foot*).
+  A compaction the user asked for and a re-key run to the end — the rule's own words, kept for
+  these two: they "are not theirs to abort halfway". A compaction rewrites the whole file and a
+  re-key is two registry writes around a file write (R33, below), and an end halfway serves no
+  one. The core can still cancel one for reasons of its own — a kill switch, the shutdown (§5) —
+  and a compaction or a re-key that ends `op.cancelled` so is said as a stop, "Stopped. Photos
+  2024 is as it was". The two dialogs say so before they start
+  — *Compact* "… It runs to the end once started.", *Re-key archive* the same second sentence —
+  the foot shows no *Cancel* while one runs, and the operations' flyout says *Runs to the end*
+  where its *Cancel* would stand (§6, *The foot*). A user's *Cancel* ends in a neutral line in the
+  foot, never a toast (ruled 2026-10-18; it was the neutral "Adding 3 files: Stopped." toast of
+  2026-10-14).
 - **An open archive has no timeout of its own** (ruled 2026-09-10; DESIGN §10 amended). It stays
   open — its keys in memory — for as long as its page is shown in Enfold, whether or not the
   vault is locked: a lock locks the keystore, not an archive already open, and a timer that
@@ -570,7 +602,12 @@ which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the sh
   state without touching the handle; progress is coalesced to ~10 Hz; any return from `Compact`
   means the handle is finished: `Close`, reopen the path, decide from the file (the new hash and
   size go to the registry with `HashAtSeq = LastSeq`). Compact is refused when the estimate
-  (live bytes over measured throughput) does not fit before the absolute cap.
+  (live bytes over measured throughput) does not fit before the absolute cap. **A compaction
+  says what it gave back** (ruled 2026-10-18; only a reclaim did): its `OpView.Returned` (§3) is
+  the file's size as the compaction started less the fresh file's, recorded once the fresh
+  file's receipt is and before the reopen, so a reopen that fails does not lose it — 0 for a
+  compaction that failed or whose file did not come out smaller — and the done line says it,
+  "Compacted Photos 2024: 2.9 GB given back", or "Compacted Photos 2024" at 0 (§6, *The foot*).
 - **RotateKey** is registry-first (FORMAT R33, DESIGN trap 21): gate (open, writable, clean,
   readers drained); new key and kid; registry write #1 — append the current version, retire the
   old with `RetiredAt`, move `CurrentKID`, in one update; `archive.RotateKey`; registry write #2
@@ -596,7 +633,7 @@ which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the sh
   `archive.copy_mismatch` note says so in its second sentence — "This is not the copy the vault
   saved last; maybe an older backup. Your next save, or Refresh fingerprint, makes it the current
   one." — and on the Archive page carries a small standard *Refresh fingerprint* at the bar's end
-  that runs `Verify` on that archive, the operation strip showing it, greyed while Locked
+  that runs `Verify` on that archive, the layer's foot showing it (§6, *The foot*), greyed while Locked
   (`vault.locked`'s sentence as its title) or Tampered (the Tampered banner's title, §6) as the
   Archives page's command is. Only Verify and Compact take a fingerprint: a create records
   `LastSeq` 1 with `HashAtSeq` 0 and an ordinary save moves `LastSeq` alone, so most records have
@@ -770,7 +807,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `NoCompression`); a path where a file already exists is refused with `archive.exists` — the
   archive layer creates with `O_EXCL`, Enfold never overwrites a file it did not make (DESIGN
   trap 28) — and the inspector's `Rename`,
-  `SetDescription`, `Details`, `Forget`, `Restore`, `Delete` and `CheckFiles` of §13, where
+  `SetDescription`, `Details`, `Forget`, `Restore`, `Delete` and `CheckFiles() CheckReport{Probed,
+  Missing}` of §13 (it answered only an error until 2026-10-18; it now answers once its pass has
+  ended, with what the pass measured and what it found), where
   Forget and Delete — the registry record holds the only copy of the archive keys, so dropping
   it destroys the archive — are specified with their brakes.
 - Events: `archives.changed`, `op.progress {OpID, Done, Total, Phase}`, `op.done {OpID, Error,
@@ -845,9 +884,36 @@ sentinel of every package with a catch-all `internal` — and services are regis
   existing directory descended into); a subtree left out is one `skipped` entry, for its top.
   `CheckNames(id, parentID, names) []Collision` lets the UI ask once; `Collision` carries the
   kind on both sides — what is being offered and what is in the way, `Existing` being the record
-  id it collides with — so the dialog can say "*Photos* is a file here" and grey *Replace*
-  whenever the two differ; its *Cancel*, *Skip those*, *Keep both* and *Replace* are all standard
-  buttons, the accent on none, so the overwrite never looks like the default (ruled 2026-10-14). `Replace(id, fileID, path)
+  id it collides with — and nothing else: no size and no date, so the dialog shows none (the
+  research's mock drew each pair's size and date; a collision cannot say them, and nothing is
+  invented). A folder's `Name` comes back with the trailing `/` it was offered with, which the
+  page never shows. **The dialog** (ruled 2026-10-18, in the shape of the extract's conflict
+  question below, Explorer's "Replace or Skip Files"; it read "*Photos* is a file here" over
+  *Cancel*, *Skip those*, *Keep both* and *Replace*, all standard since 2026-10-14). A folder that
+  meets a folder is a **merge**, not a clash to answer: the add enters it and merges the two
+  whatever the policy, which reaches only the files inside (above). The title counts every name
+  already there, by its kind, and names the folder shown or the folder a drop landed on — "2 files
+  with the same names are already in Photos 2024", "A folder named 2024 is already in Photos
+  2024", *items* when the kinds are mixed. The first 6 names follow, each with its type's icon and
+  its kind: "File"; "Folder; the two are merged"; or, where a file meets a folder, "A folder here;
+  a file is being added" or "A file here; a folder is being added", in the attention ink — then
+  "and N more". When a merge is among them, a caption under the names says what it does: beside
+  clashes, "The folder of the same name is merged with the one already here, and the choice below
+  also applies to the files inside it."; alone, "The folder is merged with the one already here.
+  The choice below is for any file inside it with the same name as one already there." (each with
+  its plural). Then three command rows of equal weight — full-width standard buttons, each a
+  strong line over its consequence in caption, the accent on none — counting the clashes alone:
+  *Replace the 2 files in Photos 2024* / "The copies already in the archive are overwritten.",
+  greyed, with "A file and a folder never replace one another." in place of its consequence and as
+  its title, while any clash is a file meeting a folder; *Keep both* / "The new ones get a number in
+  their names."; *Skip these files* / "The 2 files already here stay; the rest are added." ("…;
+  nothing is added." when every name offered clashes). When every name is a merge the dialog still
+  asks, since `CheckNames` sees the top level only and a policy chosen silently could overwrite
+  or skip a file inside unasked; its rows then speak of the files inside: *Replace files with the
+  same names* / "Those copies already in the archive are overwritten."; *Keep both* / "The new
+  ones get a number in their names."; *Skip files with the same names* / "Those copies already in
+  the archive stay; the other files are added.". *Cancel* stays in the foot band and adds nothing,
+  and Esc is *Cancel*. The policy each row sends is unchanged: `replace`, `keep-both`, `skip`. `Replace(id, fileID, path)
   opID` is the in-place edit (never Delete + Add). `Delete(id, recordIDs)` — a directory takes its subtree as the index has it, tombstoned in the
   same commit (FORMAT R39, R32); the page asks first, naming files and folders apart and saying a
   folder takes everything beneath it and that this cannot be undone, and the operation then runs
@@ -872,14 +938,14 @@ sentinel of every package with a catch-all `internal` — and services are regis
   folder's time is the folder's own (FORMAT §11). `file.kind_mismatch`, `file.move_into_self` and
   `file.tree_bounds` are per-item codes in the `file.*` namespace, declared here where they are
   used. `Extract(id, recordIDs, dir, policy, names) opID` — `names`, usually empty, maps a record id
-  to the one path element to write it under *in this extract only* (what *Shorten* and
+  to the one path element to write it under *in this extract only* (what *Use this name* and
   *Rename…* send after a `name_refused`, below): the record is untouched, a name that breaks
   R20 is `params`, a directory's new name carries its subtree under it, a collision under the
   new name follows `policy`, and the outcome carries the path actually written — the plan is a
   **set** of records live in the
   merged view: each selected record, every live record beneath a selected directory, and the
   ancestor directories of all of them up to the root (the all-zero id among `recordIDs` is the
-  root and extracts everything — the page's *Extract all…* — which makes any other id in the call
+  root and extracts everything — the extract dialog's *Everything in <archive>* — which makes any other id in the call
   redundant; an empty `recordIDs` is `params`, never everything). A record reached twice is planned once. The plan is ordered **parents before
   anything under them**, and a directory is in it because its record is live, never because a
   file needed a parent (DESIGN trap 31): an empty folder extracts as an empty folder, and no path
@@ -899,20 +965,29 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Enfold does not alter what it did not make), and a time that will not set leaves the folder
   `created` with `io` in its `Code`. Directories appear in `Results` as `created | skipped |
   failed` and add no bytes to the progress `Total`, which counts file plaintext only, so a plan
-  of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not). **The extract dialog** (the page's, for the pane's *Extract…* and the toolbar's *Extract all…*
-  alike; a form, so Enter in the destination extracts and the field has the focus as it opens;
-  titled with what it extracts and, for *Extract all…*, the archive by name — "Extract
-  everything in Photos 2024" — and its field's hint in sentence case, "Created if it is not
-  there yet", ruled 2026-10-17; and, on every extract, one info line under the policies and above
-  the band, with no box — the info icon and "The extracted copies are ordinary files, outside
-  Enfold's protection." in the second ink — ruled 2026-10-18: true of any destination, where a
-  check of the drive's type would miss a folder that syncs; a sentence, not a gate, and
-  *Extract* stays the accent)
-  holds an editable destination prefilled by one rule (ruled 2026-09-10): for *Extract
-  all…*, the archive's own folder plus a folder named after the archive — `D:\Archives\ECON 280\`
-  for `D:\Archives\ECON 280.efd` — created when the extract starts; for a selection, the archive's
-  own folder, with no extra level. *Browse…* opens the native folder picker into it; the
-  destination is created if it does not exist. **The policy for a file already there is
+  of folders alone runs with `Total` 0; each file is all-or-nothing, the batch not). **The extract dialog** is one dialog for one command (ruled 2026-10-18, phase 3 of the
+  design review's direction 7: the toolbar's *Extract all…* took the whole archive whatever was
+  selected, and the selection's *Extract…* stood at the foot of the preview pane): the toolbar's
+  *Extract…*, Ctrl+E and the pane's *Extract…* all open it (§6). It is a form, so Enter in the
+  destination extracts and the field has the focus as it opens; it is titled with the archive by
+  name — "Extract from Photos 2024" — and its field's hint is in sentence case, "Created if it is
+  not there yet" (ruled 2026-10-17); and on every extract one info line stands under the
+  policies and above the band, with no box — the info icon and "The extracted copies are ordinary
+  files, outside Enfold's protection." in the second ink — ruled 2026-10-18: true of any
+  destination, where a check of the drive's type would miss a folder that syncs; a sentence, not
+  a gate, and *Extract* stays the accent. **The scope line** comes first, *What to extract*, two
+  radios: *The 4 selected items* ("The selected item" for one; files and folders counted as the
+  pane counts them) and *Everything in Photos 2024*. It opens on the selection when there is one;
+  with nothing selected it opens on *Everything*, the first radio greyed with "Select what to
+  extract" as its reason. *Everything* sends the all-zero id alone, so the page walks nothing;
+  the selection sends the ids selected as the dialog opened. The dialog holds an editable
+  destination prefilled by one rule per scope (ruled 2026-09-10): for *Everything*, the archive's
+  own folder plus a folder named after the archive — `D:\Archives\ECON 280\` for
+  `D:\Archives\ECON 280.efd` — created when the extract starts; for a selection, the archive's own
+  folder, with no extra level. A change of scope moves the field to the new scope's prefill only
+  while it still holds the old scope's: once the user has typed, browsed or emptied it, the field
+  is theirs and stays (`lib/extract.ts` `followScope`). *Browse…* opens the native folder picker
+  into it; the destination is created if it does not exist. **The policy for a file already there is
   `ask` by default** (ruled 2026-10-14, reversing 2026-09-10's `replace`, "the wizard default of
   every archiver": WinRAR's own help marks *Ask before overwrite* as its default, and Explorer's
   Extract All asks per conflict), offered first, with `replace`, `skip` and `rename` (keep both,
@@ -926,20 +1001,38 @@ sentinel of every package with a catch-all `internal` — and services are regis
   collision was seen, by the cheap pre-check or by the exclusive create's refusal, and never one
   that decides a write: nothing is ever placed over a file on a stat's word — so the page has
   everything the compare list shows and every id the re-issue needs without walking the tree;
-  and the page then asks — for one:
-  "The destination already has a file named <name>" with *Replace*, *Skip* and *Compare both
-  files*; for several: "The destination has N files with the same names" with *Replace all*,
-  *Skip all* and *Let me decide for each file* — every one a standard button, none in the
-  accent, so the button that looks like the default is never the overwrite (ruled 2026-10-14) —
-  and re-issues `Extract` for the chosen ids with
-  `replace` or `rename`. *Compare* and *Let me decide* are one dialog after Windows Explorer's:
-  a row per file with the type's icon, *Files from the archive* on the left and *Files already
-  in the destination* on the right, each side's date and size, a tick on either or both (both =
-  keep both), and "Skip N files with the same date and size" at the foot, pre-ticked. The rows
-  whose date or size differs start on replace (ruled 2026-10-17, after the extract dialog's own
-  default became `ask`: the list is entered by choosing to decide, and extracting into a folder is
-  usually updating it), and the foot counts what *Continue* will do — "3 will be replaced ·
-  2 skipped". **A name the
+  and the page then asks. **The conflict question** (ruled 2026-10-18, in the shape of
+  Explorer's own "Replace or Skip Files"; it was a title over *Replace all*, *Skip all* and *Let
+  me decide for each file* — *Replace*, *Skip* and *Compare both files* for one — in the foot
+  band): the title counts and names the destination, "3 files with the same names are already in
+  D:\Archives\Photos 2024", or for one, "A file named itinerary.pdf is already in
+  D:\Archives\Photos 2024"; then three command rows of equal weight in the body — full-width
+  standard buttons, each a strong line over its consequence in caption, none of them the accent,
+  so the button that looks like the default is never the overwrite (ruled 2026-10-14, kept):
+  *Replace the files in the destination* / "The 3 files already there are overwritten." (*Replace
+  the file in the destination* / "The file already there is overwritten." for one); *Skip these
+  files* / "The 3 files stay as they are in the destination; the rest were extracted." — the
+  clause after the semicolon said only when the extract wrote other files and refused or failed
+  none, so it never speaks of a rest that is not there; and *Let me decide for each file* /
+  "Compare the two copies side by side." (*Compare both files* / "See their dates and sizes side
+  by side." for one). There is no foot band and no *Cancel*: Esc and the corner close button are
+  *Skip*, which re-issues nothing, and the backdrop is nothing. *Replace* re-issues `Extract`
+  for every conflicting id with `replace`. While the question stands the foot says nothing of an
+  extract that wrote nothing, since the question is its news; one that wrote some says so,
+  "Extracted 9 of 13 files to …", and each re-issue has its own line (§6, *The foot*).
+  **The compare list** — *Compare both files* and *Let me decide* are one dialog after Windows
+  Explorer's: a row per file with the type's icon, *Files from the archive* on the left and *Files
+  already in the destination* on the right, each side's date and size, a tick on either or both,
+  the ticks' rule said once in a caption under the two heads, "Tick both to keep both copies"
+  (`rename`, the archive's copy numbered), and "Skip N files with the same date and size" at the
+  foot, pre-ticked. The rows whose date or size differs start on replace (ruled 2026-10-17, after
+  the extract dialog's own default became `ask`: the list is entered by choosing to decide, and
+  extracting into a folder is usually updating it). *Continue*, the accent, reads what it will do
+  with the ticks as they stand — "Extract 2, skip 1", "Extract 3", "Skip 3", a copy kept beside
+  the one there counted as extracted — and re-issues `Extract` for the ids the ticks chose with
+  `replace` or `rename` (ruled 2026-10-18; this replaces 2026-10-17's count beside the foot's
+  tick, "3 will be replaced · 2 skipped", and the note under the list). *Cancel* skips them all,
+  and so does Esc. **A name the
   destination refuses** (ruled 2026-09-10) is the same shape: a name is checked on the way *in*
   against R20 — Windows' own rules, 255 code units, no reserved name, no forbidden character —
   so what went in can come out on any Windows volume as far as the name itself goes, but the
@@ -950,19 +1043,32 @@ sentinel of every package with a catch-all `internal` — and services are regis
   reported once, for its top, as a skipped subtree is — with the rest of the batch written,
   never a failed batch, never a hang; the destination itself refusing (the root the call was
   given) is the operation's error, before any outcome, as today. The page then asks per refused
-  record — "The destination cannot take a name this long" — with *Shorten*, *Rename…* and
-  *Skip*, and re-issues `Extract` for the chosen ids with `names`: *Shorten* keeps the
-  extension whole (the part after the last dot; none when the dot is the first character or
-  there is none) and halves the stem at rune boundaries — never inside a surrogate pair — down
-  to one rune, trying until the volume accepts one, a name that then collides following
-  `policy`; when what was refused is the temporary the extract writes through (a fixed short
+  record, titled "The destination cannot take a name this long", and **shows the name it would
+  write** (ruled 2026-10-18; it explained the rule in a paragraph — "Shorten halves it, keeping
+  the extension…" — under *Shorten*, *Rename…* and *Skip*): "<name> was not written." and "Write
+  it as <the shorter name>?", the shorter name strong and free to break anywhere, a name too long
+  for the destination being long in the dialog too; then *Use this name* (the old *Shorten*),
+  *Rename…* and *Skip*, all standard buttons in the band, and the page re-issues `Extract` for
+  the chosen ids with `names`. *Use this name* writes the name shown: the extension kept whole
+  (the part after the last dot; none when the dot is the first character or there is none) and
+  the stem halved at rune boundaries — never inside a surrogate pair — a name that then collides
+  following `policy`; it is greyed, with "The name is down to 1 character and cannot be shortened
+  further." in place of the question and as its title, when nothing is left to halve. How a name
+  is shortened stands behind a disclosure, *How names are shortened*. With more refused names
+  waiting, the dialog counts where it is ("2 of 4") and a tick above the band, "Do the same for
+  the other 3", gives the answer pressed — *Use this name*, each record under its own shorter
+  name, or *Skip* — to every refused name still waiting; *Rename…* is one record's and is never
+  given to others, and a record already answered keeps its answer. The tick is off each time a
+  question opens, the one after a *Rename…* included, so every name is asked about unless the
+  user says otherwise; with it on, Esc is *Skip* and so skips them all too (ruled, not an
+  accident). When what was refused is the temporary the extract writes through (a fixed short
   name in the same folder), the path and not the leaf is what the volume refuses and no name helps — the outcome is then
-  `path_refused` (`file.path_refused`) — so *Shorten* is not offered and the dialog says so — "The folder's path is too long
+  `path_refused` (`file.path_refused`) — so no name is offered and the dialog says so — "The folder's path is too long
   for this destination" — with *Skip* and *Skip all like it*; a name refused again after
-  *Shorten* or *Rename…* asks again, *Skip* always there. No loop over names runs unbounded anywhere: keep-both numbering already stops at a bounded
+  *Use this name* or *Rename…* is asked about again, as a new question, *Skip* always there. No loop over names runs unbounded anywhere: keep-both numbering already stops at a bounded
   count — and when every name to `(999)` is taken the outcome is `failed` with `file.exists`,
   not `skipped` — and at the first refusal that is not "already exists" (checked 2026-09-10),
-  and *Shorten* stops at one rune. **A drag out of the window** onto the desktop or an Explorer folder (ruled 2026-09-10, late,
+  and *Use this name* stops at one rune. **A drag out of the window** onto the desktop or an Explorer folder (ruled 2026-09-10, late,
   after three research passes and two real drops — DECISIONS has them): **the staged route**,
   7-Zip's and WinRAR's, with what their authors and users learnt folded in. **One gesture serves
   the list's own moves and the drag out** (ruled 2026-09-11): rows are not HTML5-draggable —
@@ -996,11 +1102,11 @@ sentinel of every package with a catch-all `internal` — and services are regis
   is handed to Explorer's own engine and runs on after the return); with it Explorer had copied in the background, never called `EndOperation`,
   and after a *Skip* neither read, nor moved, nor let the object go, so nothing could say the
   drop was over. Nothing of Enfold's is held while `DoDragDrop` runs: it runs on its own thread, the page is
-  alive, and the operation strip is the only sign — there is no moment to hold the window for,
+  alive, and the running line in the layer's foot is the only sign (§6, *The foot*) — there is no moment to hold the window for,
   because (measured) Explorer's `Drop` hands a cross-volume copy to its own engine and returns
   before the bytes have moved (a staged file was still being read eighteen seconds after the
   return), while a same-volume drop is one rename inside `Drop`; what WinRAR holds its window
-  for is its own extraction dialog, which for Enfold is the strip with its *Cancel*: the staged copy is
+  for is its own extraction dialog, which for Enfold is the foot's line with its *Cancel*: the staged copy is
   disposable, so a drop on the same volume — the desktop, from `%LOCALAPPDATA%` — is one rename,
   no second pass over the bytes and nothing left to clean, and a drop on another volume is
   Explorer's copy followed by Explorer's own deletion of the staging; **a move never touches the
@@ -1027,21 +1133,24 @@ sentinel of every package with a catch-all `internal` — and services are regis
   destination's) — **and that phase is visible** (ruled
   2026-09-11 after the measured 5 GiB drop: Explorer shows nothing until the request returns,
   and a user who sees nothing move thinks the program is dead — the reason WinRAR and 7-Zip
-  put a progress window on the screen at that moment): the page's operation strip is there from the moment the drag starts (ruled 2026-09-11, after
-  a first real drag whose staging was over before the strip appeared): the hover shows the label alone, **Dragging N items**, since nothing is chosen yet — the user may still drop it back or press Escape (ruled 2026-10-14, refining 2026-09-11's one label throughout: "Extracting" over the hover stated an outcome nobody had chosen) — and from the drop on the label is **Extracting N items**: the staging shows a bar that moves by bytes with *Cancel*, and when the staging is done the bar
+  put a progress window on the screen at that moment): the drag's running line is in the layer's foot from the moment the drag starts (ruled 2026-09-11, after
+  a first real drag whose staging was over before the strip appeared; the foot since 2026-10-18, when the operation strip above the list was retired, §6 *The foot*): the hover shows the label alone, **Dragging N items**, since nothing is chosen yet — the user may still drop it back or press Escape (ruled 2026-10-14, refining 2026-09-11's one label throughout: "Extracting" over the hover stated an outcome nobody had chosen) — and from the drop on the label is **Extracting N items**: the staging shows a bar that moves by bytes with *Cancel*, and when the staging is done the bar
   simply stays full and *Cancel* stays where it is, greyed and unclickable (ruled 2026-09-11:
-  a button that vanishes reflows the strip; a greyed one keeps its shape), with no new words: from then on Explorer's own window is in front
-  and the only control there is — so a fast staging is a change inside a strip already on the
-  screen, never a strip that flashes; the window never freezes, since the request runs on Explorer's thread (the object being agile)
+  a button that vanishes reflows the strip; a greyed one keeps its shape — restated for the foot on 2026-10-18: its slot never
+  reflows at all, and nothing above it moves, since the foot is 34 px whatever it says), with no new words: from then on Explorer's own window is in front
+  and the only control there is — so a fast staging is a change inside a line already on the
+  screen, never a line that flashes; the window never freezes, since the request runs on Explorer's thread (the object being agile)
   and the WebView's stays free; a cancel fails the request and Explorer abandons the drop.
-  When the request has returned and Explorer has the paths, the strip stays at its full bar
+  When the request has returned and Explorer has the paths, the line stays at its full bar
   exactly as long as `DoDragDrop` has not returned — usually a moment — and is taken down when
   it does (ruled 2026-09-11: "the bar is ours — the staging; whatever the user does after, they
   do in Explorer's window"); a copy Explorer still has to make shows in Explorer's own dialog: the drop is then over for Enfold, whatever the user answered Explorer — *Replace*, *Skip*, a
   cancel half-way — and the result says which: *moved* (the effect was *move* and the items
   are gone), *copied* (*copy*), *cancelled* (no effect: Escape, a release over nothing, *Skip*,
   Explorer's cancel), *refused* (the target never asked for the paths), *self-drop*, or *failed*
-  (the extraction). The folder's fate: deleted at the return only when a *move* took every
+  (the extraction); a *moved* or *copied* drag out ends in the foot's done line, "4 items left
+  Enfold as ordinary files", a failed one in its error toast, and the rest say nothing, since
+  nothing was chosen or nothing left (§6, *The foot*). The folder's fate: deleted at the return only when a *move* took every
   item, when it was a self-drop, or when nothing was written; **never by the target's window
   class** — the return says nothing about a copy still running in Explorer's engine (measured
   across volumes) — so every other folder stays manifested for the scavenge, which is the
@@ -1066,11 +1175,12 @@ sentinel of every package with a catch-all `internal` — and services are regis
   folder without our manifest. Delete-at-reboot (`MOVEFILE_DELAY_UNTIL_REBOOT`) is not relied
   on: it needs an administrator, and Chromium's use of it is an attempt, not a guarantee. The
   explicit *Extract…* stays for what staging serves badly — a large transfer to a network
-  share, the whole archive (*Extract all…*). Everything is logged per drag: the formats asked
+  share, the whole archive (*Extract…* with *Everything*). Everything is logged per drag: the formats asked
   for and when, the extraction's start, end, result and bytes, `DoDragDrop`'s result and effect, the class of the window under the release (logged, deciding
   nothing), every deletion attempt with the Windows error, never a file name. `Extract` with the all-zero id extracts everything from the root straight into the
-  destination and is greyed while `ArchiveStat.Records` is zero (live files and folders
-  together; the file count alone cannot say whether the tree holds anything). `PreviewURL(id,
+  destination, and the toolbar's *Extract…* is greyed, "This archive holds nothing yet", while
+  `ArchiveStat.Records` is zero (live files and folders together; the file count alone cannot
+  say whether the tree holds anything). `PreviewURL(id,
   fileID)`, `PreviewText(id, fileID, maxBytes) {Text, Truncated}` (over
   `OpenReader` + `LimitReader`; no cross-origin fetch exists). `Stat` carries `CopyMismatch` and the
   list a `Note` of `archive.copy_mismatch` when the file's seq is not the one the registry last
@@ -1080,16 +1190,24 @@ sentinel of every package with a catch-all `internal` — and services are regis
   own index (FORMAT R39), and nothing is looked up by a path — there is no whole-name lookup any
   more.
 - Events: `archive.changed {ID, Seq}` and progress as above. `OpView` carries `Items`, the files an
-  add, a replace or an extract plans, known once the plan is made, so the strip can say *Adding 3
+  add, a replace or an extract plans, known once the plan is made, so the foot can say *Adding 3
   files* rather than the phase word, and, for an extract, its `Policy` and `Destination`, so the
   conflict question is derived from the operation itself in the store — it survives the page's
   remount across the lock scene and cannot be lost to a race between the call's return and the
-  operation's end; a count of one is singular everywhere the page counts.
+  operation's end — and so the done line can name where the files went; a count of one is
+  singular everywhere the page counts. `Returned` is what a reclaim or, since 2026-10-18, a
+  compaction gave the file system back once it ended: the file's size before less its size
+  after, never the bytes moved or written; 0 for every other kind, for a run that ended before
+  its first commit, for a compaction that failed and for one whose file did not come out smaller
+  (§2.3). The done line says it ("Reclaimed 1.2 GB", "Compacted Photos 2024: 2.9 GB given
+  back").
   Progress is by **bytes**, not by file: an add, a replace and an extract count the bytes read of the file in hand, so a single
   large file moves the bar (at most ten events a second, as before); `Done`/`Total` are plaintext
   bytes. `ArchiveStat` loses `Dirty`, `CapAt` and `SessionAlive` and gains `Records` (live files
   and directories); `Save`, `Discard` and `KeepOpen` are gone; `CancelOp` on a running Add or
-  Replace aborts its transaction — and a cancel that arrives once the operation has entered its
+  Replace aborts its transaction, and on a Verify, an Extract or a reclaim stops the work at its
+  next check (§2.3, *What a cancel means, by kind*; the page offers none for a Compact or a
+  RotateKey) — and a cancel that arrives once the operation has entered its
   commit is refused with `op.committing` ("The operation is already being saved; it will
   finish."), the operation's own result then being the committed one. The two are one decision
   under the core's state mutex: either the cancel lands first and nothing is published, or the
@@ -1599,12 +1717,12 @@ is opened at once, on its empty root with the Add menu open, rather than left as
 *Open file…* (Ctrl+O) picks a file from anywhere — the picker is §3's `PickFiles`, unfiltered, and
 a file that is not an archive is the core's `archive.not_an_archive` — and opens it by §14's path, and an `.efd`
 dropped on the page opens the same way — the first of several, the rest named in a toast — while
-a drop of anything else there does nothing (ruled 2026-10-14) — the Tampered state, the status strip with the countdown and Lock). Archive (**the heading is the archive's name alone**, a button to the root (ruled 2026-09-10:
+a drop of anything else there does nothing (ruled 2026-10-14) — the Tampered state, the layer's foot with the countdown and Lock). Archive (**the heading is the archive's name alone**, a button to the root (ruled 2026-09-10:
 no folder crumbs after it; `Crumbs` stays in `Page` for the walk upwards when a folder went);
 **the list**: in a folder its first row is `..`, up one level, pinned at the top under every
-sort, with no checkbox, never selected — it takes keyboard focus like any row: Tab and the arrows
-reach it, Enter or Space goes up, and after going up focus lands on the row of the folder just
-left; in an empty folder it is the only row — not counted by Ctrl+A, absent at the root — and
+sort, with no checkbox, never selected — it takes the arrows like any row but is never
+selected by them, Enter or Space on it goes up, and after going up the folder just left is
+selected and focused (*The lists' keys*, below); in an empty folder it is the only row — not counted by Ctrl+A, absent at the root — and
 under it one line names the folder and both ways to fill it, "Trips is empty. Drop files here, or
 use Add.", the root by the archive's name (ruled 2026-10-14); then the
 rows in `sort`'s order (§3), directories first; **four columns — Name, Size, Type, Modified**
@@ -1634,7 +1752,7 @@ the selection holds every one of the folder's `Total` ids, never a third state a
 empty folder; ticks are the selection and the selection is the ticks — a click on the list's blank area, entering a
 folder or going up clears both, nothing persists; **Ctrl+A** selects the whole folder but `..` (through `Children`) when the focus is in the list
 or on the page's body — an input keeps its own select-all, and while a dialog is up the page
-behind it is inert and takes no shortcut; **Shift+click** extends from the anchor — the last row clicked without Shift — and with
+behind it is inert and takes no shortcut; the rest of the keys are *The lists' keys*, below; **Shift+click** extends from the anchor — the last row clicked without Shift — and with
 nothing selected there is no anchor, so it selects the clicked row alone; the list always keeps
 one row's height of empty space under its last row, also when it scrolls, so the last row can be
 brought clear of the pane's edge; preview pane — image, video, audio through the loopback URL,
@@ -1642,17 +1760,16 @@ text through `PreviewText`, everything else "Extract…"; the kind comes from th
 and while its URL or text is on its way the art box keeps its size and says nothing — a 14 px
 ring, 2 px of the accent turning once a second, appears only once the wait passes 300 ms — so
 "No preview for this type" is said only of a kind the pane cannot show, and a call that fails
-says so in the pane beside its toast (ruled 2026-10-14) — the operation strip (the running operation's name with its count and its archive — *Adding 3 files
-to Photos 2024*, *Adding 1 file to …*, *Refreshing the fingerprint of Photos 2024* (*Verifying …* until 2026-10-18, §2.3), *Reclaiming space in Photos 2024*,
-*Re-keying Photos 2024* (ruled 2026-10-17: the button's verb, not "Rotating the key of")
-— since the strip shows every running operation, the Archives page's included, where the verb
-alone did not say whose it was (ruled 2026-10-14); a bar that moves by bytes, *Cancel* for an add,
-a replace or a reclaim, which reads *Cancelling…*, greyed, from the press until the operation
-ends, and whose end is a neutral toast — "Adding 3 files: Stopped." — never the red one a failure
-gets (ruled 2026-10-14: the user's own Cancel ended in an error toast); no pending
-bar, no Save, no Discard: every operation commits at its end, §2.3), the toolbar:
+says so in the pane beside its toast (ruled 2026-10-14) — the running operation and how it
+ended are said in the layer's foot, the window's status bar, so an operation never moves the
+list (*The foot*, below; the 42 px operation strip that stood above the list is retired, ruled
+2026-10-18); no pending bar, no Save, no Discard: every operation commits at its end, §2.3), the toolbar:
 one *Add* button whose menu holds *Add files…*, *Add folder…* and *Create folder…* (a staged
-directory record, written at save whether or not a file was added into it — FORMAT R39), *Extract all…* (the whole archive, whatever is selected — the pane's *Extract…* is the
+directory record, written at save whether or not a file was added into it — FORMAT R39),
+*Extract…* (one command for the selection or the whole archive, the extract dialog's scope line
+asking which, §3; titled *Extract… (Ctrl+E)*, greyed with "This archive holds nothing yet"
+while the archive holds no record; ruled 2026-10-18, retiring *Extract all…*, which took the
+whole archive whatever was selected, and the rule that the pane's *Extract…* was the
 selection's), *Rename…* (a form: the field opens on the name with its stem — the part before
 the last dot; the whole name when there is no dot, the dot is first, or it is a folder —
 selected, judged as *Create folder*'s is against every name here but its own; ruled
@@ -1662,18 +1779,21 @@ field's label kept, ruled 2026-10-17), *Delete…* (a dialog first — "Permanen
 folder takes everything beneath it. This cannot be undone." — whose *Delete* is a filled red
 button, the danger colour as ground and white ink, never the accent's green under red text —
 then the operation), the pane's
-*Extract…* and the toolbar's *Extract all…* through the extract dialog (§3; its one info line,
-on every extract, says the copies are ordinary files outside Enfold's protection) — every command
-here that opens a dialog or a picker ends with an ellipsis (ruled 2026-10-14), and one that is
-greyed says why in its title — "Select what to extract", "Select one item to rename" (ruled
-2026-10-17); a drag of the
+*Extract…* — the selection's shortcut, the pane's accent, greyed with "Select what to extract"
+while nothing is selected — opening the same extract dialog as the toolbar's and Ctrl+E (§3;
+its one info line, on every extract, says the copies are ordinary files outside Enfold's
+protection) — every command
+here that opens a dialog or a picker ends with an ellipsis (ruled 2026-10-14), one whose key
+exists says it in its title (*The lists' keys*, below), and one that is
+greyed says why in its title instead — "Select what to extract", "Select one item to rename",
+"Select what to delete" (ruled 2026-10-17); a drag of the
 selection onto a folder row, onto the `..` row (up one level) or onto the heading (to the
 root) is `Move`,
 refused in place with the reason (§3) and never a half-moved selection — the reason sits under
 the target row until the next click; an op of the open archive that reports a failed or skipped
-item opens a *What happened* dialog listing each with its code's copy, beside the summary line
-("2 files added · 1 folder created · 1 skipped"), and an op of another archive gets the summary
-as a toast; a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
+item opens the results dialog at once, and an op of another archive says it in the foot's done
+line, whose *Details* opens the same dialog from any page (*The foot*, below; ruled 2026-10-18 —
+it was a *What happened* dialog here and the summary as a toast elsewhere); a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
 is said by a toast naming it, the page having walked its crumbs upwards; the name column takes the width the others do not need — Size, Type and Modified are fixed;
 drag-and-drop in (§3's drop) and out (§3's drag out — the staged route; the same native drag
 serves the list's own moves, a self-drop being a `Move`); the extract dialog and the conflict dialogs of §3; the
@@ -1698,6 +1818,187 @@ does a vault left half set up; a vault whose file is present and refused offers 
 the import and *Rebuild the vault…* — the create dialog in its rebuild form). Dialogs: new archive (path, name,
 compression), enrollment, the recovery key's (below), remove slot, rotate, progress, extract
 destination and policy, collisions, errors, import.
+
+**The lists' keys** (ruled 2026-10-18, phase 3 of the design review's direction 7, Explorer's
+habits; one pure keymap, `lib/listkeys.ts`, from a key and where it was pressed to what it
+means, so vitest covers the whole table). **Arrows move the selection**, Explorer's way — this
+reverses 2026-09-10's "Space selects, arrows move the focus", a checkbox list's habit that left
+the preview behind every arrow. Both lists:
+- ArrowUp and ArrowDown, Home, End, PgUp and PgDn make the row arrived at the one selected row
+  and the anchor; the focus moves with it, the row is brought into view clear of the sticky
+  header, and the pane follows. PgUp and PgDn move by the rows that fit under the header, less
+  one, so the row left stays in view (at least one); End reaches the last row loaded. A step
+  starts from the focused row; with the focus on the page's body, from the anchor in the file
+  list and from the pane's row in the Archives list; with neither, every step lands on the first
+  row but End, which lands on the last.
+- Type-ahead: characters typed within 700 ms of each other build a prefix, case-folded, which
+  selects the first name starting with it. One character, or the same one typed again and again,
+  steps through the names starting with it from the focused row on, wrapping; a longer prefix
+  searches from the focused row itself, so the row found stays found as the name is typed on.
+  While a name is being typed, Space belongs to it; a character typed with AltGr (Ctrl+Alt on
+  Windows) counts as one.
+- Ctrl+L is *Lock now* on every page while unlocked (*The foot*, below).
+The file list:
+- Selection: Shift with an arrow, Home, End, PgUp or PgDn extends from the anchor by the click's
+  Shift rule; Ctrl with them moves the focus alone; Space selects the focused row alone, as a
+  click does; Ctrl+Space toggles it; Ctrl+A selects the folder (above); Esc clears the selection.
+- The `..` row takes the arrows like a row and is never selected: ArrowUp or PgUp from the first
+  row reaches it and leaves nothing selected; Home and End go to the first and last rows that can
+  be selected; Enter or Space on it goes up.
+- Opening: Enter on a folder opens it, and a second Enter or double-click while a folder is still
+  opening is ignored. Enter on a file selects it and does nothing more until the viewer (phase 4)
+  — it is never *Extract*, which is always a named command (ruled 2026-10-17). Going up —
+  Backspace, Alt+Up or `..`, by key or by mouse — focuses the folder just left once its row is
+  on screen, and selects it unless something else has been selected by then (in a long parent the row
+  may arrive a page later, and a choice made meanwhile is not taken away).
+- Commands: Backspace or Alt+Up goes to the parent; Alt+Left goes back to the Archives list,
+  leaving the archive as the rail does; Ctrl+E opens *Extract…* (on the selection, or on
+  *Everything* when nothing is selected, §3); Del opens *Delete…* for the selection; F2 opens
+  *Rename…* for one selected row; Ctrl+Shift+N opens *Create folder…*; F5 reads the archive
+  again. Alt+Enter does nothing here until phase 4.
+The Archives list is single-select for the keys: Shift or Ctrl with the arrows, and Ctrl+Space,
+do nothing there; the ticks stay the mouse's, and Ctrl+A ticks the rows shown. Enter opens the
+row; Ctrl+N opens *New archive…*; Ctrl+O opens *Open file…* from anywhere on the page, the Filter
+included (2026-10-14, a named exception to "a field keeps its keys"); Del opens *Delete archive…*
+for the selected row, greyed by the command bar's rule; F2 puts the focus in the details' Name
+field with the name selected, raising the narrow panel first when it is down; Ctrl+F focuses the
+Filter; Alt+Enter opens *Technical details…* for the selected row; F5 reads the list again; Esc
+collapses the panel when it is up (ruled 2026-09-11) and is otherwise left alone, so the Filter's
+own Esc still clears it.
+**Where a key acts**: a list's own keys — the moves, select, toggle, select-all, open and
+type-ahead — act while the focus is in the list or on the page's body; a page's commands act
+from anywhere in the window but a text field, which keeps its own keys, Esc and the Archives
+page's Ctrl+O excepted — the rail and the foot included, since the page reads its keys on the
+window. A control of its own inside the list's region — a column's sort button,
+the tick-all box, the empty vault's *New archive…*, *Open an .efd file…* and *Import…*, the
+Missing chip — keeps its own Enter and Space, so the headers sort and the boxes tick from the
+keyboard; a row's own tick box (outside the Tab order, reached by a click) is part of its row,
+so Space there selects as on the row. While a dialog is up, or from an open menu or popover, no
+list key acts. The focus ring is `:focus-visible`'s (*The focus ring on a selectable row*,
+Motion). **A command whose key exists says it in its title** as "Label (Key)" (`strings.ts`
+`keyHint`, `keyTitles`): *Extract… (Ctrl+E)*, *Delete… (Del)*, *Rename… (F2)*, *New archive…
+(Ctrl+N)*, *Open file… (Ctrl+O)*, *Delete archive… (Del)*, *Technical details… (Alt+Enter)*,
+*Filter (Ctrl+F)* and *Lock now (Ctrl+L)*; a greyed command keeps its reason as its title
+instead. *Create folder… (Ctrl+Shift+N)* is written but not yet shown, since its one control is
+an item of the *Add* menu and a menu item has no title yet.
+
+**The foot: the window's status bar** (ruled 2026-10-18, phase 3 of the design review's
+direction 4, "status gets a home and an ending"). The layer's foot (`LayerFoot`; Motion, *Pages*)
+is 34 px and always there, and it is where status lives, so an operation never moves the list:
+the 42 px operation strip that stood above the list, and pushed it down as an operation began,
+is retired. 2026-09-11's rule for the drag out's strip, "a button that vanishes reflows the
+strip; a greyed one keeps its shape", is kept by a slot that never reflows at all.
+- **The left slot** says the page's note at rest; the running operation while one runs; then how
+  it ended, the done line; then the note again — one at a time, cross-fading in 140 ms and out
+  in 100 ms. A done line holds its time even while another operation still runs, and the slot's
+  *Cancel* and *+N* wait behind it; a flyout already open keeps the running operations' *Cancel*
+  meanwhile.
+- **The running line**: the operation's name with its count and its archive (`lib/ops.ts`
+  `opLabel`) — *Adding 3 files to Photos 2024*, *Adding 1 file to …*, *Refreshing the
+  fingerprint of Photos 2024* (*Verifying …* until 2026-10-18, §2.3), *Reclaiming space in
+  Photos 2024*, *Re-keying Photos 2024* (ruled 2026-10-17: the button's verb), *Compacting
+  Family videos*, *Extracting 13 files from Photos 2024* — since the foot shows every running
+  operation, the Archives page's included, on whichever page is up (ruled 2026-10-14: the verb
+  alone did not say whose it was); then a 160 × 3 px progress line, the accent filling
+  `--fill-2` by bytes, a moving 40 px segment while the total is not known and a still pale line
+  under reduced motion; then "9.4 MB of 28 MB · about 2 min left" or "· less than a minute
+  left". The rate is the bytes the last 5 s moved over those 5 s; it is said only after 3 s and
+  only while more than 10 s remain, and the minutes round up, so "about 2 min" is never a
+  promise kept late. Then a 24 px subtle *Cancel* where a cancel means something (§2.3, *What a
+  cancel means*), which reads *Cancelling…*, greyed, from the press until the operation ends
+  (ruled 2026-10-14) — a refusal (`op.committing`) gives it back, with its toast. A compaction
+  and a re-key show no *Cancel*. When the foot is narrow the extras give way so the name stays
+  whole: first the time left, then the line's length (160 px down to 64), and only then does the
+  name take an ellipsis (measured whole at a 1024 px window).
+- **The drag out** in the foot keeps its three phases (§3): the hover, *Dragging 4 items from
+  Photos 2024*, the label alone; the staging, *Extracting 4 items*, with the line by bytes and *Cancel*; Explorer's
+  wait, the line full and *Cancel* greyed in place, until `DoDragDrop` returns.
+- **Two or more running**: the latest begun shows, with a subtle *+1* (*+N*) after it, which
+  opens the operations' flyout — a 360 px popover over the foot at its left, the menu's surface,
+  stroke and shadow — one 40 px row per operation, ruled off from the next: its name, under it
+  the bytes and its own time left, under both its line across the text's width, and at the right
+  its *Cancel*, or *Runs to the end* for a compaction or a re-key. Esc, a press outside, or fewer
+  than two running closes it.
+- **The done line**: how an operation ended, said in the foot on whichever page is up — an
+  accent check (it went as asked) or the info circle in the second ink (a stop, or an ending that
+  left something out), one sentence with no closing full stop, as a status bar says it, and at
+  most one hyperlink button: *Show in Explorer* (`Shell.Reveal`) or *Details*. It holds 6 s, or
+  until the next press in a page's body; an ending that arrives while another is up waits its
+  turn and is said when that one's time is up or a press moves past it, at most 3 waiting (past
+  that the oldest waiting goes unsaid); a new operation's start clears the line and everything
+  waiting, so the press that started it is answered by it, never by an old ending. An operation
+  the core starts itself — the reclaim a commit's ending can set off at once — does not clear the
+  line or the queue (`lib/foot.ts` `clearsDone`); it shows once their turn is over. The
+  sentences are `lib/foot.ts` `doneLine` and `strings.ts` `doneCopy`: "Extracted 15 files to
+  D:\Archives\Photos 2024" [*Show in Explorer*]; "Extracted 12 of 15 files to …" [*Details*] when
+  some were left out; "Added 2 files to Photos 2024", "Added 2 of 4 files to Photos 2024"
+  [*Details*], "Added 1 folder to …" when only folders were made (folders made along the way are
+  never counted as files), "Replaced 1 file in …"; "Compacted Photos 2024: 2.9 GB given back"
+  (§2.3); "Reclaimed 1.2 GB", said only when something came back; "Fingerprint refreshed for
+  Photos 2024"; "Re-keyed Photos 2024"; "4 items left Enfold as ordinary files" for a drag out
+  that moved or copied. A user's stop, neutral: "Stopped. 6 of 15 files were written to …"
+  [*Show in Explorer*] or "Stopped. Nothing was written"; "Stopped. Nothing was added to Photos
+  2024"; "Stopped. Nothing was replaced in …"; "Stopped. The fingerprint of Photos 2024 was not
+  refreshed"; "Stopped. Reclaiming space in Photos 2024 did not finish"; "Stopped. Photos 2024
+  is as it was" for a compaction or a re-key the core stopped. This retires 2026-10-14's neutral
+  "Adding 3 files: Stopped." toast; a reclaim's figure moves from its toast to the line; another
+  archive's trouble, a toast until now, is the line with *Details*. A failure keeps its error
+  toast and gets no line (InfoBars are phase 4). An extract under *Ask* that wrote nothing and
+  comes back with a question — a conflict, a refused name or path — says nothing, the question
+  being its news; one that wrote some says "Extracted 9 of 13 files to …" [*Show in Explorer*]
+  under its question, and each re-issue its answer makes has a line of its own. Two endings of
+  the page's own also take the line: *Find missing files* (§13) and a backup export, "Backup saved
+  to E:\backup-2026-10-18.eks" [*Show in Explorer*], said once the export's dialog is closed on
+  its Done (a backup taken before a re-key says none: the re-key is the act that ends there).
+- **The results dialog** (`ResultsDialog`; §3, `FileOutcome`) says what a batch left out. It
+  stands above every route: it opens at once on the archive's page where the batch ran, and from
+  the done line's *Details* on any page. Its title is the outcome, counted — "2 files were not
+  added", "1 file was skipped", "2 files were not added and 1 was skipped", the verb the kind's
+  (added, replaced, extracted), *folders* when every row is a folder and *items* when they mix —
+  with the summary line under it as a caption ("2 files added · 1 folder created · 1 skipped").
+  Each row reads the name strong, then a colon and the code's copy ("thumbs.db: …"), a folder as
+  "Trips (folder)", an unknown code's fallback with the code in mono, and *Show in Explorer*
+  where the item is a file on disk this machine can open — an add's or a replace's source, or an
+  extract's skipped file, which is the one already in the destination; never an archive path. The
+  first 12 rows and a count of the rest. *Copy details* and *Close* are equal standard buttons,
+  nothing here being the suggested act; *Copy details* writes the title, the summary and every row
+  through the runtime's clipboard (`Clipboard.SetText`, as every Copy does) and toasts "Details
+  copied". It closes on the backdrop as well, its one act being *Close* (ruled 2026-10-18: it was
+  *What happened*, the count first, rows as "name — reason", with *Close* the accent).
+- **The rail's mark**: while anything runs, the rail's *Archives* item wears an 8 px accent dot
+  at its right edge, 12 px in and centred in its 36 px row, seen from every page — a 48 GB
+  extract started before going to the Vault page stays in sight; while exactly one runs with a
+  known total, the dot is instead a 14 px ring, 2 px wide, filled to its percentage (the accent
+  over `--fill-2`, moving over the fast duration).
+- **The pending ring**: a wait the user started marks the control that started it only once it
+  has lasted 300 ms, so a quick answer never flashes anything (`lib/pending.ts`, one primitive):
+  the 14 px ring — 2 px of the accent on its pale line, one turn a second, still under reduced
+  motion, in the ink of a filled button over one — standing where the button's icon was, and
+  `aria-busy`. The label changes only where the verb adds something, and only to the one verb set
+  (`strings.ts` `pendingCopy`): *Opening…* (the Archives page's two *Open* buttons), *Checking…*
+  (*Find missing files*), *Deleting…* (*Delete archive*'s primary), *Merging…* (the import's
+  merge, which read *Working…*) and *Saving…* (the save bar's *Save changes*, greyed from the
+  press). A control whose label changes is as wide as the wider of its two labels from the
+  start, so nothing beside it moves. *Forget archive*'s primary and *New archive*'s *Create
+  archive…* keep their labels and show the ring alone. *Open* from the list — a double-click or
+  Enter on a row — puts the ring in the row's status cell and ignores repeats while one is in
+  flight. The preview pane's wait is the same ring under the same 300 ms (above).
+- **The right slot** is the lock state, as Motion's *Pages* says, with two additions. In the
+  last 60 s of the idle deadline only — when it is the nearer one, the count in the attention
+  ink — a subtle *Stay unlocked* stands before *Lock now* and sends `Vault.Activity()` at once,
+  which moves the idle deadline and nothing else; the absolute cap's last minute offers nothing,
+  since nothing extends it, and the too-slow refusal (`op.too_slow_for_session`) says the way
+  out: "This would not finish before the session ends. Lock and unlock to start a fresh
+  session, then try again." (it said "Extend the session first", which nothing can). And while
+  unlocked, the **standing notices** — the status's warnings, the Tampered ones left out, since
+  their banner is the page's own — gather behind a subtle *1 notice* / *2 notices* button with a
+  6 px attention dot, before the lock chip; it opens the same popover at the foot's right, one row
+  per warning ranked by tier (*Notices and their tiers*, below), each with its tier's icon in its
+  tier's colour and its words. The `vault.warning` toast still marks the moment one arrives
+  (ruled 2026-10-13), and the lock screen keeps its list. One popover at a time. Ctrl+L presses
+  *Lock now* on every page while unlocked: the key is read by the foot, the one place on every
+  page, through the lists' keymap (`lib/listkeys.ts` `locksNow`), so a text field, a dialog, a
+  menu or a popover keeps it, and the button is titled *Lock now (Ctrl+L)*.
 
 **The import dialog** (lock screen and first run; titled *Replace this vault with a copy* on the
 lock screen and *Restore from a vault or backup* at first run, after the commands that open it —
@@ -1911,8 +2212,10 @@ the archives still open rank among them as attention, under the Tampered banner 
 line. While the vault is unlocked the Tampered banner is the first element of a page's body,
 above its command bar (*The Tampered banner*, below); a page's other notices keep their places —
 on an archive's page the locked line, `archive.needs_reopen` and `archive.copy_mismatch` stand
-under the command bar — and a status warning that arrives meanwhile is still the `vault.warning`
-toast (the foot's notice popover, which would gather them, is direction 4, later). The notices
+under the command bar — and the status's standing warnings, the Tampered ones aside, are
+gathered behind the foot's *1 notice* button, whose popover lists them in this ranked order with
+each tier's icon and colour (*The foot*, above; ruled 2026-10-18, direction 4 — it was "later"
+here), while a warning that arrives meanwhile is still marked by the `vault.warning` toast. The notices
 that carry a lead open with their first sentence in the strong weight (600, the ink), the rest
 following in the body weight: the Tampered banner, the locked lines of the Archives page and an
 archive's page, the archives-open notice and the backups card's bar. The split is written into
@@ -2034,7 +2337,8 @@ answers at once and settles when left), *leave* 100 ms, *fast* 140 ms (enter), *
 *out* — fast first, 80 ms for a page — so that no two texts share a spot at readable opacity,
 which is what a ghost is. Nothing travels more than 12 px; one thing moves at a time, staggered
 by at most 40 ms; nothing loops but the touch rings, the 14 px waiting ring of a preview on
-its way (ruled 2026-10-14) and the YubiKey's LED on the lock screen while it listens (ruled
+its way (ruled 2026-10-14) and of every other wait the user started (the pending ring, *The
+foot*, ruled 2026-10-18), the foot's moving segment while an operation's total is not known, and the YubiKey's LED on the lock screen while it listens (ruled
 2026-10-17: there the motion is the state), each standing still under reduced motion.
 `prefers-reduced-motion` zeroes every duration — the script reads the media query when a
 transition starts, the tokens collapse to 0 — and the settle with them.
@@ -2084,8 +2388,10 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   fades and travels 160 ms — from the right 10 px going into an archive, from the left 10 px
   coming back, up 6 px for a rail switch — in the old one's place, the layer being a grid so
   nothing jumps. The layer's foot is not part of the page and does not travel with it: one bar
-  below the pages (`LayerFoot`), the page's note on the left — set by the page
-  (`store.footNote`), faded in when the page changes and updated in place otherwise — and the
+  below the pages (`LayerFoot`), 34 px and the window's status bar (*The foot*, above; ruled
+  2026-10-18), the page's note on the left at rest — set by the page
+  (`store.footNote`), faded in when the page changes and updated in place otherwise — giving its
+  place to the running operation and the done line in turn, and the
   lock state on the right, always: the open padlock, the nearer of the idle
   and the absolute deadline, since the absolute cap locks regardless of activity (ruled
   2026-09-12 after a review found the foot reading the idle deadline alone), said quietly
@@ -2095,8 +2401,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   and only in the last 60 seconds a count, *Locks in 0:42* or *Session ends in 0:42*, in the
   attention colour (`lib/format.ts` `lockLine`; the minutes are the status's
   `IdleEffectiveMinutes`, ruled 2026-10-17; the page's clock still moves once a second,
-  the text only when its form or the count changes) — and *Lock now*
-  while unlocked; the closed padlock, *Locked* and *Unlock* while locked with archives still
+  the text only when its form or the count changes), *Stay unlocked* in the idle deadline's last
+  minute — and *Lock now*
+  while unlocked, the standing notices' button before them; the closed padlock, *Locked* and *Unlock* while locked with archives still
   open (ruled 2026-10-17: it read *Keystore locked*).
 - *Rail.* The rail is a NavigationView (ruled 2026-10-17): an item has no card of its own —
   the current one used to be a raised white card with a border, a shadow and bold text. The
@@ -2108,7 +2415,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   is open, every rail item's title says that a click leaves it — "Leaves Photos 2024" — the
   current *Archives* item too, since any route change away from the page leaves the archive
   (§2.3); an interim hint until the rail shows the open archive as a place of its own (ruled
-  2026-10-14).
+  2026-10-14). While an operation runs, *Archives* wears the dot or the ring of *The foot*
+  (above; ruled 2026-10-18), whose ring moves to its percentage over the fast duration.
 - *Menus.* The `<select>` stays native and its picker is styled (`appearance: base-select`,
   Chromium 135+; WebView2 152 here): the list appears whole, falling 4 px and fading in over
   140 ms, rows tint on hover (120 ms), the chosen row wears the accent wash while the list
@@ -2138,8 +2446,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   folded ones (fast, scaled from 97%; leave). Then *Discard* and the accent *Save changes*.
   Invalid input greys Save and says why in one red sentence at the bar's left, with the bar
   framed in the danger line; the field is marked in place too (`aria-invalid`), so the greyed
-  button is never the only signal; Discard stays enabled. Saving swaps the label to *Saving…*
-  and disables both; no spinner. Success is the bar leaving — nothing else says so; failure is
+  button is never the only signal; Discard stays enabled. Saving disables both from the press,
+  and once the save has taken 300 ms *Save changes* shows the pending ring and reads *Saving…*,
+  as wide as it was (*The foot*'s pending ring, ruled 2026-10-18; it swapped the label at once
+  and showed no ring). Success is the bar leaving — nothing else says so, a settings save being
+  no operation with an ending to report; failure is
   the page's toast, and the draft stays, so Save can be pressed again. Discard is one
   action, instant, unconfirmed. Ctrl+S saves while the bar is up and valid. The draft survives a
   visit to another page (the store keeps it). Validation is delta-aware where that applies:
@@ -2170,9 +2481,12 @@ transition starts, the tokens collapse to 0 — and the settle with them.
 - *Dialogs stay put.* A dialog that offers a choice — a *Cancel*, a *Skip*, a *Replace* —
   does not close on a click outside it: the click is nothing (ruled 2026-09-10, "they have a
   Cancel"); Esc is *Cancel* where there is one, *Close* where the one action is *Close*, and
-  *Skip* (or *Skip all*) in the conflict and refused-name dialogs — never *Replace*; while a
-  dialog is up the page behind it is inert (`inert` on the shell), so no list shortcut fires. Only a dialog whose one action is *Close* —
-  the details modal, a *What happened* list, a toast's expansion — closes on the backdrop as
+  *Skip* in the extract's conflict question (its corner close too) and in the refused-name
+  question (every waiting name's *Skip* with its tick on), the compare list's *Cancel* skipping
+  them all — never *Replace* (§3); while a
+  dialog is up the page behind it is inert (`inert` on the shell), so no list shortcut fires. Only a dialog whose one act is *Close* —
+  the details modal, the results dialog (its *Copy details* beside *Close* taking nothing away),
+  a toast's expansion — closes on the backdrop as
   well. A popover (a menu) closes on any click outside, as menus do. The Archive page's dialogs
   that ask for a name or a path — *Rename…*, *Create folder…*, the extract dialog, a refused
   name's *Rename…* — are forms (ruled 2026-10-14; the Archives page's *New archive…* is not one
@@ -2209,10 +2523,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   No capitals and no tracking: an eyebrow or a step label is a caption as written, in
   sentence case. A link that runs in a sentence takes that sentence's type: in a caption line
   it is a caption, never a step larger than its own words. Every inset and gap is on a 4 px grid (4, 8, 12, 16, 20, 24): a card's inset
-  is 16 and a strip's (a bar, an op row, a toast) 12 — and 12 for the compact cards of a first
+  is 16 and a strip's (a bar, a toast) 12 — and 12 for the compact cards of a first
   way in, which must fit a dialog (ruled 2026-10-17); an icon stands 8 from its label, 12
   beside a 20 px icon; the layer's gutter is 24. The fixed heights stay as ruled — the 40 px
-  locked line, the 42 px op row, the 44/64 panel, the 36 px rows, the 62 px head. A fact is
+  locked line, the 34 px foot (the 42 px op row went with the operation strip, ruled
+  2026-10-18), the 44/64 panel, the 36 px rows, the 62 px head, and the foot's flyout rows of 40. A fact is
   drawn one way, a label · value list: the label a caption in the second ink, its column as
   wide as its longest label up to 120 px, the value in body beside it and left-aligned,
   wrapping onto as many lines as it needs (ruled 2026-10-17: it was one line that ellipsized,
@@ -2292,7 +2607,13 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   A button that grows to share a row centres its label, as a wide one does
   (*Continue*, *Unlock*, *Start again*). *Toasts* are for what the page cannot say in place — an error the
   action's own surface is gone for — never a confirmation of something the page already shows
-  (a saved setting is the bar leaving). Where they go, ruled 2026-09-07 for whatever toasts come
+  (a saved setting is the bar leaving). Since 2026-10-18, and until phase 4's InfoBars take
+  their place, they are narrowed to errors, to the moment a status warning arrives
+  (`vault.warning`), and to the few facts no surface holds — a copy made ("Details copied"), a
+  folder the page stood in that went, the `.efd` files a drop did not open, the keys a purge
+  dropped: how an operation ended is the foot's done line and never a toast (*The foot*; a
+  cancel's neutral "Stopped." toast, a reclaim's figure and another archive's summary were
+  toasts). Where they go, ruled 2026-09-07 for whatever toasts come
   next: at the top of the window, centred on the window — not on the content layer — dropping
   in a little as they fade (a few pixels down, never sliding in from the top edge) and leaving
   upward as they fade out; `Toasts` does this, 16 px from the top (ruled 2026-10-17, on the 4 px grid; it was 14), centred on the window's
@@ -2341,7 +2662,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   dialog whose foot holds no way out has a close button in its top-right corner instead, on
   the title's line at the body's 24 px inset: a 32 px subtle button with the × glyph, titled
   *Cancel (Esc)*, that does exactly what Esc does (ruled 2026-10-17). Only the close question
-  has one (§2.3), its foot being its two answers. Each page's head is one
+  has one (§2.3), its foot being its two answers — and, since 2026-10-18, the extract's
+  conflict question, which has no foot band at all, its answers being command rows in its body
+  and its close being *Skip* (§3). Each page's head is one
   height, the line of a 32 px button, whether or not it carries one, so the body never starts
   at a different place from one page to the next; the Archive page's heading button is exactly
   its title's line. A column of magnitudes — a size — is right-aligned, its header with it, so
@@ -2506,7 +2829,27 @@ not this platform's, a removable or network drive and every UNC path are left un
 are checked only for the one record the user acts on — `last_path` reaches the registry from
 *Import archives from a backup…* as easily as from *Locate…*, and opening `\\host\share` because a record says
 so is an outbound authentication to a host someone else named. Until a pass has run the column
-is blank, never "missing".
+is blank, never "missing". **`CheckFiles()` answers when its pass has ended** (ruled
+2026-10-18; it answered at once, with nothing but an error), with `CheckReport{Probed, Missing}`:
+`Probed` counts the records whose path the pass measured — a local fixed path that answered
+within its budget — and `Missing` those of them found absent; a path left unmeasured (UNC,
+removable or network, another platform's syntax, over its budget) is in neither figure. A call
+that lands while a pass runs for this vault joins it and answers its report; one that finds a
+pass still running for a vault since locked away waits that one out and starts a fresh pass. The
+probe rules above are unchanged, so the wait is bounded by the pass. *Find missing files* waits
+with the pending ring and *Checking…* (§6, *The foot*), a second press meanwhile ignored, and ends
+in the foot's done line: "Checked 3 archives · all files present" with the accent check, or
+"Checked 3 archives · 1 file missing" in neutral ink, with no action — the *Missing* chips in
+the list are the way on. The count is the archives checked, not the archives listed. A pass that
+checked none — every archive on a removable, network or UNC path, an empty vault, a pass behind
+a probe still held over its budget — establishes nothing, and ends in "No archive was checked" in
+neutral ink, with no check and no claim that files are present. **The
+*Missing* chip is a button** (ruled 2026-10-18, direction 7: the chip names the trouble and the
+button is its cure), drawn as the chip, that selects its row and runs *Locate…* for it; its
+title is the note's words and then "Locate… asks where it is now."; it is greyed by *Locate…*'s
+own rule — the vault locked, the record forgotten — with that reason as its title. It is outside
+the Tab order, the keyboard reaching *Locate…* through the pane's hyperlink button; once clicked
+it keeps its own Enter and Space (§6, *The lists' keys*).
 
 **Forget and delete.** *Forget archive…* (ruled 2026-10-17; it was *Forget key…*, the archive
 key being a technical word) drops the record softly. Its dialog follows the template of

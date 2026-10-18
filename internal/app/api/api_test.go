@@ -35,7 +35,7 @@ func TestBoundSurface(t *testing.T) {
 			"Status() app.VaultStatus",
 		},
 		"Archives": {
-			"CheckFiles() error",
+			"CheckFiles() (app.CheckReport, error)",
 			"Close(string) error",
 			"CloseAll() []string",
 			"Compact(string) (string, error)",

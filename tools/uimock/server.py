@@ -194,7 +194,69 @@ first Status once, so the boot shows its failure with Retry; Retry asks
 again and draws. Shell.OpenDataFolder - the failure's Open data folder -
 answers None and counts the asks in state["dataFolderOpened"]; POST
 /mock/state {"failNext": {"open_data_folder": "io"}} refuses the next one
-as a file manager that would not start."""
+as a file manager that would not start.
+
+Status's home and its ending (direction 4, phase 3). A Compact ends with
+its OpView.returned set to what it gave back - the staged archive's unused
+space, so Compact of Photos 2024 ends "Compacted Photos 2024: 2.9 GB given
+back" (3.1e9 bytes) and one with none ends with 0 - and the archive's
+storedSize and freeSpace follow. A reclaim's returned is as before.
+
+Archives.CheckFiles() - *Find missing files* - answers once its pass has
+ended with the core's CheckReport, {"probed": n, "missing": m}: the records
+not forgotten on a local fixed path (a drive letter here; the UNC and
+/Volumes paths are never probed) and those of them carrying the
+archive.file_missing note. The staged list answers {"probed": 3,
+"missing": 1} (Passport scans). It takes 0.8 s, so the busy state shows:
+
+    slower:        POST /mock/state {"checkSeconds": 3}
+    all present:   POST /mock/state {"archives": <the list with no "note">}
+    refused once:  POST /mock/state {"failNext": {"check_files": "io"}}
+    locked:        answers vault.needs_unlock
+
+Two operations at once, for the foot's flyout and its "+1": with the vault
+unlocked, POST /mock/preview {"name": "ops", "count": 2} starts an add of
+three files on Family videos - left draining, as a page left mid-add is -
+and a Compact of Photos 2024, each running 12 s ("seconds" moves it);
+"count": 3 adds a Verify of Tax returns, and "add", "compact", "verify"
+take other archive ids. The answer is the ops' ids. Any op's Cancel is
+archive.CancelOp as ever, and it ends the op with op.cancelled here
+whatever its kind (whether a row offers Cancel or "Runs to the end" is the
+page's); the same two by
+hand are Add files... on one archive's page, Back, then Compact... on
+another row of the Archives page.
+
+The foot's endings (direction 4, phase 3) - the done line - follow from
+these and three more knobs:
+
+    add with trouble:  POST /mock/state {"addFails": {"thumbs.db": "io"},
+                       "pickFiles": ["D:/Pictures/a.jpg", "D:/Pictures/b.jpg",
+                       "D:/Pictures/thumbs.db", "D:/Pictures/desktop.ini"]}, then Add
+                       files... - every add reports one FileOutcome per source, and a
+                       source whose leaf addFails names fails with that code
+    a stopped extract: the foot's Cancel during an extract; the op ends
+                       op.cancelled with the files written before it as
+                       "extracted" outcomes, as the core's does
+    the backup's path: POST /mock/state {"savePath": "E:/backup.eks"} - what
+                       every save dialog answers (Export backup..., New archive...)
+    a slow open:       POST /mock/state {"openSeconds": 3} - Archives.Open answers
+                       that late, for the pending ring on Open from the list
+    a long extract:    POST /mock/state {"extractSeconds": 200} - every Extract
+                       runs that long (4 s by default); an op of more than 12 s
+                       ticks twice a second, so the foot's "about 4 min left"
+                       shows once 3 s of it have passed
+    a backup saved:    the export's "done" scene sets backup.at to now (and
+                       missing and rekeyed to 0), as the core's export records
+                       it, so the Backups card follows
+    a picked folder:   POST /mock/state {"pickFolder": "D:/Pictures/2024"} - what
+                       every folder picker answers (Add folder..., Extract's Browse);
+                       a folder named like one already shown meets it as a merge in
+                       the add collisions (direction 7). null restores D:/Pictures
+
+Vault.Activity moves locksAt to now plus the idle minutes and emits the
+status while unlocked, as the core's grant does: the last minute's Stay
+unlocked is staged with {"vault": {"locksAt": <now + 45>}} and undone by
+any press the page reports, as in the app."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -392,7 +454,9 @@ state = {
 # takes "path" or "paths" from the same body. "unlock" is the third: the
 # tray's Unlock..., which the page answers with its lock scene (APP.md 2.4,
 # ruled 2026-10-17). "dialog" is the fourth: a ceremony inside a dialog,
-# played as events on an unlocked vault (DIALOG_SCENES, below). All are
+# played as events on an unlocked vault (DIALOG_SCENES, below). "ops" is
+# two operations at once on two archives, for the foot's flyout (two_ops,
+# direction 4). All are
 # queued like every other event and drained by GET /mock/events.
 PREVIEW_OPS = {
     "reclaim": lambda body: start_reclaim(),
@@ -401,6 +465,7 @@ PREVIEW_OPS = {
     "unlock": lambda body: tray_unlock(body),
     "dialog": lambda body: dialog_scene(body),
     "lock": lambda body: lock_scene(body),
+    "ops": lambda body: two_ops(body),
 }
 
 PREVIEWS = {
@@ -830,8 +895,8 @@ def op_view(op):
     return {k: v for k, v in op.items() if k != "cancelled"}
 
 
-def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase="", archive_id=None,
-             policy="", destination=""):
+def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", archive_id=None,
+             policy="", destination="", on_cancel=None):
     """An operation is a transaction (APP.md 2.3): it begins, ticks
     op.progress by *bytes* - Done against Total, both plaintext - and
     commits at its end. A Cancel aborts it and publishes nothing: the
@@ -840,7 +905,13 @@ def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase="", arch
     write - which is what the strip counts: "Adding 3 files", singular at
     one (APP.md 3, ruled 2026-09-09). An extract's OpView carries its
     Policy and Destination from its first event, so the conflict question
-    is the operation's own (APP.md 3, ruled 2026-09-10)."""
+    is the operation's own (APP.md 3, ruled 2026-09-10). on_cancel, given
+    the steps done and the steps in all, answers the FileOutcomes a cancel
+    reports - an extract's, which keeps the files it wrote (APP.md 2.3).
+    It ticks 24 times, or twice a second for a long one, so the foot's
+    rate (5 s of samples) can say "about N min left"."""
+    if steps is None:
+        steps = max(24, int(seconds * 2))
     state["nextOp"] = state.get("nextOp", 0) + 1
     op_id = "op%d" % state["nextOp"]
     aid = archive_id or state["stat"]["id"]
@@ -858,6 +929,8 @@ def start_op(kind, total, commit, seconds=4.0, steps=24, items=0, phase="", arch
             if op.get("cancelled"):
                 op["finished"] = True
                 op["error"] = "op.cancelled"
+                if on_cancel is not None:
+                    op["results"] = on_cancel(i - 1, steps)
                 emit("op.done", op_view(op))
                 finish_drain(aid)
                 return
@@ -1089,9 +1162,23 @@ def add_files(args):
     if not paths:
         return Err("params")
 
+    fails = dict(state.get("addFails") or {})
+
     def commit():
+        # One FileOutcome per source, as the core reports them (APP.md 3):
+        # a source whose leaf POST /mock/state {"addFails": {"thumbs.db":
+        # "io"}} names fails with that code and adds nothing.
+        out = []
         for p in paths:
-            add_one(parent, p, False)
+            name = [x for x in p.replace("\\", "/").split("/") if x][-1]
+            res = {"path": p, "name": name, "isDir": False, "outcome": "added", "size": ADDED_SIZE, "modifiedAt": NOW}
+            if name in fails:
+                res["outcome"], res["code"] = "failed", fails[name]
+                res["size"] = 0
+            else:
+                add_one(parent, p, False)
+            out.append(res)
+        return out
 
     return start_op("add", ADDED_SIZE * len(paths), commit, items=len(paths))
 
@@ -1261,7 +1348,16 @@ def extract(args):
             out.append(res)
         return out
 
-    return start_op("extract", total, commit, items=len(files), policy=policy, destination=dest)
+    def written(done_steps, steps):
+        """What a cancelled extract reports: the files it had written when
+        the cancel landed, as the core's extractItems answers them - it
+        checks between files and keeps what is on disk (APP.md 2.3)."""
+        n = len(files) * done_steps // steps
+        return [{"path": under(dest, out_path(r)), "name": path_of(r), "isDir": False, "outcome": "extracted",
+                 "id": r["id"], "size": r["size"], "modifiedAt": r["modifiedAt"]} for r in files[:n]]
+
+    return start_op("extract", total, commit, seconds=float(state.get("extractSeconds", 4.0)), items=len(files),
+                    policy=policy, destination=dest, on_cancel=written)
 
 
 # ---- the drag out of the window (APP.md 3, ruled 2026-09-10/11) --------
@@ -1494,7 +1590,10 @@ def open_archive(args):
     (APP.md 2.3, "What stays usable after a lock") - unless this page
     already has it, in which case the lock preserved it and Open answers
     Stat as before. A token is minted for the previews; any earlier one is
-    forgotten with the archive it belonged to."""
+    forgotten with the archive it belonged to. state["openSeconds"] holds
+    the answer back that long (default 0), so an open from the list can be
+    seen waiting - the pending ring in the row's status cell."""
+    time.sleep(float(state.get("openSeconds", 0)))
     a = archive(args[0]) if args else None
     if a is None:
         return Err("archive.not_found")
@@ -1736,16 +1835,130 @@ def record_op(kind, args, total, seconds=4.0, phase=""):
         if kind == "rotate":
             a["keyVersion"] += 1
         if kind == "compact":
+            # What a compaction gives back is the file's own shrinking - its
+            # size before less its size after, as the core's OpView.Returned
+            # says it (APP.md 2.3, direction 4): here the unused space the
+            # staged archive carries, the open one's from its status line,
+            # so Photos 2024 says "Compacted Photos 2024: 2.9 GB given
+            # back" and an archive with none says 0.
+            given = a.get("freeSpace", 0)
             if a["id"] == state["stat"]["id"]:
                 st = state["stat"]
+                given = st["freeSpace"]
                 st["size"] = max(0, st["size"] - st["freeSpace"])
                 st["freeSpace"] = 0
             a["freeSpace"] = 0
+            a["storedSize"] = max(0, a["storedSize"] - given)
+            # The commit runs on the operation's thread, once start_op has
+            # answered the id below.
+            state["ops"][op_id]["returned"] = given
         if kind == "verify":
             a["hashBehind"] = 0
         return None
 
-    return start_op(kind, total, commit, seconds=seconds, phase=phase, archive_id=a["id"])
+    op_id = start_op(kind, total, commit, seconds=seconds, phase=phase, archive_id=a["id"])
+    return op_id
+
+
+# The paths the core's presence pass probes (APP.md 13): a local fixed
+# volume only. The mock has no volume API, so a drive-letter path stands
+# for one; a UNC path and a /Volumes path (another platform's syntax) are
+# never probed.
+LOCAL_FIXED = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def check_files(args=None):
+    """Archives.CheckFiles() answers when its pass has ended, with what the
+    pass measured and what it found missing - {"probed", "missing"}, the
+    core's CheckReport - for *Find missing files*' line (APP.md 13,
+    direction 4). Measured is every record not forgotten whose path is a
+    local fixed one; missing is those of them carrying the
+    archive.file_missing note. On the staged list that is three probed -
+    Photos 2024, Tax returns (hidden, still checked), Passport scans - and
+    one missing; Family videos (/Volumes) and the forgotten laptop backup
+    (UNC) are counted in neither. The pass takes state["checkSeconds"]
+    (0.8 s unless staged) so the page's busy state can be seen; a locked
+    vault answers vault.needs_unlock, as the core's session gate does."""
+    if state["vault"]["state"] != "unlocked":
+        return Err("vault.needs_unlock")
+    time.sleep(float(state.get("checkSeconds", 0.8)))
+    probed = missing = 0
+    for a in state["archives"]:
+        if a.get("forgottenAt") or not LOCAL_FIXED.match(a.get("path") or ""):
+            continue
+        probed += 1
+        if a.get("note") == "archive.file_missing":
+            missing += 1
+    return {"probed": probed, "missing": missing}
+
+
+def two_ops(body):
+    """POST /mock/preview {"name": "ops", "count": 2} - two operations at
+    once on two archives, for the foot's ops flyout (direction 4): an add of
+    three files on Family videos and a Compact of Photos 2024, which ends
+    "Compacted Photos 2024: 2.9 GB given back". "count": 1 starts the add
+    alone; 3 adds a Verify of Tax returns. "seconds" (default 12) is how
+    long each runs, long enough to open the flyout and shoot it; "add",
+    "compact" and "verify" name other archives by id. They run on the
+    Archives page's terms - the archive opened for the operation and closed
+    after (APP.md 2.3) - so the vault must be unlocked: a locked one answers
+    {"error": "vault.needs_unlock"} and starts nothing. Answers the ids
+    started, in that order. The same two by hand, from the page: Add files
+    on one archive's page, then Compact another from the Archives page."""
+    if state["vault"]["state"] != "unlocked":
+        return {"error": "vault.needs_unlock"}
+    count = int(body.get("count", 2))
+    seconds = float(body.get("seconds", 12))
+    started = []
+    add_to = archive(body.get("add") or "b2" * 16)
+    if add_to is None:
+        return {"error": "archive.not_found"}
+    files = 3
+    mounted = state.get("mounted") == add_to["id"]
+    if not mounted:
+        # An add is the archive page's own operation, so on an archive whose
+        # page is not the one showing it is one the user began there and
+        # then left: the archive is DRAINING, open until the add ends
+        # (APP.md 2.3), and finish_drain closes it then.
+        add_to["open"] = True
+        add_to["draining"] = True
+        state["vault"]["openArchives"] = open_count()
+        emit("archives.changed", {"purged": []})
+        emit_status()
+
+    def added():
+        if mounted:
+            for n in ("IMG_2041.jpg", "IMG_2042.jpg", "IMG_2043.jpg"):
+                add_one(ROOT_ID, "D:/Pictures/" + n, False)
+        add_to["files"] = add_to.get("files", 0) + files
+        add_to["storedSize"] += ADDED_SIZE * files
+        add_to["lastWrittenAt"] = int(time.time())
+
+    started.append(start_op("add", ADDED_SIZE * files, added, seconds=seconds, items=files,
+                            archive_id=add_to["id"]))
+    for kind, default, total in (("compact", "a1" * 16, 8_000_000_000), ("verify", "c3" * 16, 4_000_000_000)):
+        if len(started) >= count:
+            break
+        out = record_op(kind, [body.get(kind) or default], total, seconds=seconds,
+                        phase="compacting" if kind == "compact" else "")
+        if isinstance(out, Err):
+            return {"error": out.code, "started": started}
+        started.append(out)
+    return started
+
+
+def activity(args=None):
+    """Vault.Activity: the session saw input, so the idle deadline moves to
+    now plus the idle minutes and the status is emitted once, as the core's
+    grant does (session.go Activity) - the foot's Stay unlocked and every
+    press the page reports. Nothing while the vault is not unlocked."""
+    v = state["vault"]
+    if v["state"] != "unlocked":
+        return None
+    idle = v.get("idleEffectiveMinutes") or 10
+    v["locksAt"] = int(time.time()) + idle * 60
+    emit_status()
+    return None
 
 
 def vault_status(args=None):
@@ -2210,6 +2423,11 @@ def dialog_scene(body):
     def run():
         for step, extra in steps:
             ev = dict({"method": method}, **extra)
+            if kind == "export" and step == "done":
+                # The core records the export's date as the ceremony ends
+                # (keys.go ExportBackup), and the backup then holds every
+                # key: BackupStatus says so from now on.
+                state["backup"] = dict(state.get("backup") or {}, at=int(time.time()), missing=0, rekeyed=0)
             emit_ceremony(kind, step, **ev)
             time.sleep(gap)
 
@@ -2347,7 +2565,7 @@ METHODS = {
     3940765069: vault_status,                                   # vault.Status
     3956196437: lambda a: [{"name": "Yubico YubiKey OTP+FIDO+CCID 0"}],
     1779776360: begin_unlock,                                   # BeginUnlock
-    3770426637: lambda a: None, 951839700: lock_vault, 4094929714: lambda a: None, 2320277474: lambda a: None,  # 951839700 vault.Lock
+    3770426637: lambda a: None, 951839700: lock_vault, 4094929714: lambda a: None, 2320277474: activity,  # 951839700 vault.Lock, 2320277474 vault.Activity
     2953146167: lambda a: None, 882388909: lambda a: None,
     4176692468: lambda a: listed(bool(a and a[0])),             # archives.List
     923201420: open_archive,                                    # archives.Open
@@ -2399,15 +2617,15 @@ METHODS = {
     2605071885: lambda a: forget(a, NOW),                       # archives.Forget
     2523843286: lambda a: forget(a, 0),                         # archives.Restore
     2185012391: lambda a: forget(a, NOW),                       # archives.Delete
-    118112595: lambda a: None,                                  # archives.CheckFiles
+    118112595: check_files,                                     # archives.CheckFiles (a CheckReport)
     1148297629: lambda a: None,                                 # vault.InspectRecords (a ceremony)
     2398325755: lambda a: {"records": state["incoming"], "tampered": state["incomingTampered"]},  # vault.IncomingRecords
     1344102321: lambda a: None,                                 # vault.MergeRecords
     3468826983: lambda a: None,                                 # vault.DiscardRecords
     18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: lambda a: None,  # ImportFile, FinishSetup, VerifyBackup
     2652127606: lambda a: state["settings"], 740356410: lambda a: state["settings"].update(a[0]) if a else None,
-    3606391931: lambda a: None, 3229291943: lambda a: ["D:/Pictures/a.jpg", "D:/Pictures/b.jpg"], 2529646972: lambda a: "D:/Pictures", 2079207478: lambda a: None,
-    842300112: lambda a: None, 1923582270: lambda a: "D:/new.efd", 3130426784: lambda a: None,
+    3606391931: lambda a: None, 3229291943: lambda a: state.get("pickFiles") or ["D:/Pictures/a.jpg", "D:/Pictures/b.jpg"], 2529646972: lambda a: state.get("pickFolder") or "D:/Pictures", 2079207478: lambda a: None,
+    842300112: lambda a: None, 1923582270: lambda a: state.get("savePath") or "D:/new.efd", 3130426784: lambda a: None,
     945813141: drag_out,                                        # shell.DragOut (APP.md 3)
     2169987085: close_decided,                                  # shell.CloseDecided (APP.md 2.4)
     1615108156: pending_open,                                   # shell.PendingOpen (APP.md 14)

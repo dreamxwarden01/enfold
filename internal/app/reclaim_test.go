@@ -433,6 +433,57 @@ func TestADeleteUnderTheFloorStartsNoReclaim(t *testing.T) {
 	}
 }
 
+// Compact, the whole-file rewrite the user asks for, says what it gave back
+// the way the reclaim does: the file's size before the run less its size
+// after, which the page's done line says — "Compacted Photos 2024: 2.9 GB
+// given back" (APP.md §2.3, direction 4). A megabyte's hole under a file is
+// not worth the core's own run under the standing rule, so it is still
+// there for the compaction to give back; a second compaction of the
+// compacted file reports the file's own shrinking again, which is next to
+// nothing and never below zero.
+func TestACompactionSaysWhatItGaveBack(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	h.rec.reset()
+	id, stay, _ := h.holed(t, "Compacted", 1<<20, 300<<10)
+	if h.reclaimRunning() {
+		t.Fatal("a reclaim started under the standing rule")
+	}
+	before := h.stat(t, id).Size
+	opID, e := h.c.Compact(id)
+	if e != nil {
+		t.Fatalf("compact: %v", e)
+	}
+	o := h.rec.waitOp(t, opID)
+	if o.Error != "" {
+		t.Fatalf("the compaction failed: %+v", o)
+	}
+	st := h.stat(t, id)
+	if o.Returned != before-st.Size || o.Returned < 1<<20-metadataSlack {
+		t.Errorf("the compaction reported %d bytes back; the file went %d → %d and the hole was a megabyte", o.Returned, before, st.Size)
+	}
+	h.extractsAll(t, id, stay)
+
+	before = st.Size
+	opID, e = h.c.Compact(id)
+	if e != nil {
+		t.Fatalf("the second compact: %v", e)
+	}
+	o = h.rec.waitOp(t, opID)
+	if o.Error != "" {
+		t.Fatalf("the second compaction failed: %+v", o)
+	}
+	after := h.stat(t, id).Size
+	switch {
+	case after >= before && o.Returned != 0:
+		t.Errorf("a compaction that left the file at %d from %d reported %d back", after, before, o.Returned)
+	case after < before && o.Returned != before-after:
+		t.Errorf("the second compaction reported %d bytes back; the file went %d → %d", o.Returned, before, after)
+	case o.Returned > metadataSlack:
+		t.Errorf("a compacted file gave %d bytes back when compacted again", o.Returned)
+	}
+}
+
 // The quarter: a run that would give back over the floor but under a quarter
 // of what it must move is refused, and it is the run that is weighed, not its
 // first commit. One hole under eight files of its own size: every commit

@@ -424,18 +424,36 @@ const presenceBudget = 2 * time.Second
 // test can hold a path unanswered past the budget.
 var probePath = func(p string) error { _, err := os.Stat(p); return err }
 
-// CheckFiles refreshes the presence of every record's last_path (APP.md §13).
-// It returns as soon as the pass has started: one path at a time with the
-// state mutex released, and archives.changed follows when anything changed.
-func (c *Core) CheckFiles() *Error {
-	c.mu.Lock()
-	_, e := c.sessionLocked()
-	c.mu.Unlock()
-	if e != nil {
-		return e
+// CheckFiles refreshes the presence of every record's last_path (APP.md §13)
+// and answers what the pass found once it has ended (CheckReport), so that
+// *Find missing files* can end with a line rather than in silence (direction
+// 4). The pass is the one the unlock starts: one path at a time with the
+// state mutex released, archives.changed following when anything changed.
+// A pass already running for this vault — the unlock's, or another call's —
+// is joined rather than doubled, since one pass at a time is what bounds the
+// probes it abandons; one still running for a vault since locked away is
+// waited out and a fresh one begun. The wait is the pass's own bounds and no
+// more: each path has its 2 s budget, and after a probe has gone over it the
+// rest of the pass measures nothing (probe), so the pass ends promptly.
+func (c *Core) CheckFiles() (CheckReport, *Error) {
+	for {
+		c.mu.Lock()
+		if _, e := c.sessionLocked(); e != nil {
+			c.mu.Unlock()
+			return CheckReport{}, e
+		}
+		run := c.presencePass
+		if run == nil {
+			run = c.presenceRowsLocked()
+			go c.runPresencePass(run)
+		}
+		mine := run.vaultID == c.vault.vaultID
+		c.mu.Unlock()
+		<-run.done
+		if mine {
+			return run.report, nil
+		}
 	}
-	c.startPresencePass()
-	return nil
 }
 
 // presenceRow is one record's path, taken under the state mutex.
@@ -444,35 +462,36 @@ type presenceRow struct {
 	path string
 }
 
-// startPresencePass claims the pass and runs it on its own goroutine. The
-// claim is made before this returns, so a caller — or a test — can see that
-// a pass is running.
-func (c *Core) startPresencePass() {
-	c.mu.Lock()
-	rows, vaultID, ok := c.presenceRowsLocked()
-	c.mu.Unlock()
-	if ok {
-		go c.runPresencePass(rows, vaultID)
-	}
+// presenceRun is one presence pass: what it measures, for which vault, and
+// what it found. report is written before done is closed and read only after
+// it, so the channel is the only synchronisation it needs.
+type presenceRun struct {
+	rows    []presenceRow
+	vaultID [16]byte
+	done    chan struct{}
+	report  CheckReport
 }
 
-// presenceRowsLocked claims the pass and lists what it will measure. Caller
-// holds the state mutex.
-func (c *Core) presenceRowsLocked() ([]presenceRow, [16]byte, bool) {
+// presenceRowsLocked claims the pass and lists what it will measure, or
+// answers nil when there is no session or a pass is already running. Caller
+// holds the state mutex; the caller runs the pass (runPresencePass), on its
+// own goroutine. The claim is made before this returns, so a caller — or a
+// test — can see that a pass is running.
+func (c *Core) presenceRowsLocked() *presenceRun {
 	sess, e := c.sessionLocked()
-	if e != nil || c.presencePass {
-		return nil, [16]byte{}, false
+	if e != nil || c.presencePass != nil {
+		return nil
 	}
-	var rows []presenceRow
+	run := &presenceRun{vaultID: c.vault.vaultID, done: make(chan struct{})}
 	for i := range sess.Registry().Archives {
 		a := &sess.Registry().Archives[i]
 		if a.LastPath == "" || a.Forgotten() {
 			continue
 		}
-		rows = append(rows, presenceRow{a.ArchiveID, a.LastPath})
+		run.rows = append(run.rows, presenceRow{a.ArchiveID, a.LastPath})
 	}
-	c.presencePass = true
-	return rows, c.vault.vaultID, true
+	c.presencePass = run
+	return run
 }
 
 // runPresencePass measures the records' paths one at a time with the state
@@ -484,14 +503,19 @@ func (c *Core) presenceRowsLocked() ([]presenceRow, [16]byte, bool) {
 // one pass runs at a time, and at most one probe is ever in flight: a path
 // that went over its budget stops the rest of the pass measuring anything
 // until it answers, which is what bounds the abandoned goroutines to one.
-func (c *Core) runPresencePass(rows []presenceRow, vaultID [16]byte) {
+// What the pass measured is counted as it goes (CheckReport): a path left
+// unmeasured, for whatever reason, is in neither figure.
+func (c *Core) runPresencePass(run *presenceRun) {
+	var report CheckReport
 	defer func() {
 		c.mu.Lock()
-		c.presencePass = false
+		run.report = report
+		c.presencePass = nil
 		c.mu.Unlock()
+		close(run.done)
 	}()
 	changed := false
-	for _, r := range rows {
+	for _, r := range run.rows {
 		if !c.localFixed(r.path) {
 			continue
 		}
@@ -499,8 +523,12 @@ func (c *Core) runPresencePass(rows []presenceRow, vaultID [16]byte) {
 		if !decided {
 			continue // over budget: left as it was, never "missing"
 		}
+		report.Probed++
+		if !present {
+			report.Missing++
+		}
 		c.mu.Lock()
-		if c.vault.vaultID == vaultID && c.vault.state != StateNone {
+		if c.vault.vaultID == run.vaultID && c.vault.state != StateNone {
 			if c.vault.presence == nil {
 				c.vault.presence, c.vault.presenceKnown = map[[16]byte]bool{}, map[[16]byte]bool{}
 			}

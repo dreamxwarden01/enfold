@@ -10,6 +10,9 @@
   // diffing, never stored.
   import { fade, fly, scale } from "svelte/transition";
   import { motion, enter, exit, FAST, LEAVE } from "../lib/motion";
+  import { pending } from "../lib/pending";
+  import PendingLabel from "./PendingLabel.svelte";
+  import { pendingCopy } from "../lib/strings";
 
   export interface PendingItem {
     key: string;
@@ -34,6 +37,8 @@
   let stripWidth = $state(0);
   let fit = $state(Infinity);
   let open = $state(false);
+  // The save has been waited on for 300 ms (lib/pending.ts).
+  let saveArmed = $state(false);
 
   $effect(() => {
     if (!strip) return;
@@ -110,7 +115,10 @@
         </span>
       </button>
       <button type="button" class="btn" disabled={busy} onclick={ondiscard}>Discard</button>
-      <button type="button" class="btn accent" disabled={busy || !!invalid} title={!busy && invalid ? invalid : undefined} onclick={onsave}>{busy ? "Saving…" : saveLabel}</button>
+      <!-- The wait is the one pending primitive (direction 4): the ring
+           and *Saving…* once it has taken 300 ms, so a quick save never
+           flashes either; the button is greyed from the press. -->
+      <button type="button" class="btn accent" disabled={busy || !!invalid} title={!busy && invalid ? invalid : undefined} onclick={onsave} use:pending={{ on: busy, armed: (b) => (saveArmed = b) }}><PendingLabel armed={saveArmed} rest={saveLabel} busy={pendingCopy.saving} /></button>
     </div>
   </div>
 {/if}

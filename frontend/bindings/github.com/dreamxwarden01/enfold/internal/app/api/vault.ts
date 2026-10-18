@@ -19,9 +19,10 @@ export function Activity(): $CancellablePromise<void> {
 }
 
 /**
- * BackupStatus is the Vault page's backup line (APP.md 13): the last
- * backup's time and, while unlocked and not Tampered, the archives and key
- * versions it lacks. Like LastExportAt it words and gates nothing.
+ * BackupStatus is the Vault page's backup line (APP.md §6, The backups
+ * card; §3): the last backup's time and, while unlocked and not Tampered,
+ * the archives it lacks and the archives it holds with an older key. Like
+ * LastExportAt it words and gates nothing.
  */
 export function BackupStatus(): $CancellablePromise<app$0.BackupStatus> {
     return $Call.ByID(2057616059);

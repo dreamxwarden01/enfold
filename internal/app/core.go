@@ -148,9 +148,10 @@ type Core struct {
 	// close open, since the keystore is concrete and has no seam of its own.
 	closeKS func(ks *keystore.Keystore)
 
-	// presencePass: a file-presence pass is running. One at a time, which
-	// is what bounds the probes it abandons (APP.md §13).
-	presencePass bool
+	// presencePass is the file-presence pass that is running, nil when none
+	// is. One at a time, which is what bounds the probes it abandons (APP.md
+	// §13); CheckFiles joins the one running rather than begin a second.
+	presencePass *presenceRun
 	// probeOut is the answer channel of a probe that went over its budget
 	// and is still inside its syscall. It cannot be cancelled, so it holds
 	// the one probe slot until it returns: no second probe is ever started

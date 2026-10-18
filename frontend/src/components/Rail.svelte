@@ -4,6 +4,7 @@
   import { fly } from "svelte/transition";
   import { motion, delay, enter, GAP, MOVE } from "../lib/motion";
   import { leavesHint } from "../lib/rail";
+  import { railMark } from "../lib/foot";
   import { settingsCopy, vaultCopy } from "../lib/strings";
 
   // The vault's page is *Vault* (ruled 2026-10-17; it was "Keystore",
@@ -22,6 +23,11 @@
   // Every item leaves an open archive (APP.md §2.3), the current Archives
   // one included, so each says so on hover until the rail shows the
   // archive as a place of its own (lib/rail.ts).
+  // Work in progress, seen from every page (direction 4): an accent dot on
+  // Archives while anything runs, a ring filled to the percentage while
+  // exactly one runs with a known total (lib/foot.ts railMark).
+  const mark = $derived(railMark(store.runningOps));
+
   const leaves = $derived(
     leavesHint({
       route: store.route,
@@ -37,6 +43,9 @@
   {#each items as it (it.route)}
     <button type="button" class="rail-item" aria-current={current(it.route) ? "page" : undefined} title={leaves} onclick={() => store.go(it.route)}>
       <svg class="i"><use href="#{it.icon}" /></svg>{it.label}
+      {#if it.route === "archives" && mark !== "none"}
+        <span class="rail-mark" class:ring={typeof mark === "object"} style:--pct={typeof mark === "object" ? mark.ring : null} aria-hidden="true"></span>
+      {/if}
     </button>
   {/each}
   <div class="rail-gap"></div>

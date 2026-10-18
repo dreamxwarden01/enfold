@@ -81,7 +81,7 @@ func TestCopyMismatchIsShown(t *testing.T) {
 	if list, _ := h.c.ListArchives(false); list[0].Note != "" {
 		t.Fatalf("an unmeasured record: %+v", list[0])
 	}
-	if e := h.c.CheckFiles(); e != nil {
+	if _, e := h.c.CheckFiles(); e != nil {
 		t.Fatal(e)
 	}
 	h.waitPresencePass()
@@ -91,7 +91,7 @@ func TestCopyMismatchIsShown(t *testing.T) {
 	if err := os.WriteFile(ap, older, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if e := h.c.CheckFiles(); e != nil {
+	if _, e := h.c.CheckFiles(); e != nil {
 		t.Fatal(e)
 	}
 	h.waitPresencePass()

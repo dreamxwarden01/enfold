@@ -7,7 +7,8 @@
 // listed with the code's own copy.
 import type { FileOutcome } from "./api";
 import { leaf, plural } from "./format";
-import { codeText } from "./strings";
+import { foreignPath } from "./paths";
+import { codeText, resultsCopy } from "./strings";
 
 export interface Tally {
   added: number;
@@ -49,24 +50,74 @@ export interface Trouble {
   isDir: boolean;
   outcome: string;
   text: string;
+  // path: the item's file on disk, for its Show in Explorer — an add's
+  // source; empty where there is no file to show (resultsPaths).
+  path: string;
 }
 
 // troubles are the items the summary's counts are not enough for: what
 // failed, with the code's copy, and what was skipped. A skipped directory
 // is one entry, for its top (APP.md §3).
-export function troubles(results: FileOutcome[] | null | undefined): Trouble[] {
+export function troubles(results: FileOutcome[] | null | undefined, kind = ""): Trouble[] {
   return (results ?? [])
     .filter((r) => r.outcome === "failed" || r.outcome === "skipped")
     .map((r) => ({
       name: r.name || leaf(r.path),
       isDir: r.isDir,
       outcome: r.outcome,
-      text: r.code
-        ? codeText(r.code)
-        : r.outcome === "skipped"
-          ? "Skipped: something of that name is already here."
-          : "It could not be done.",
+      text: r.code ? codeText(r.code) : r.outcome === "skipped" ? resultsCopy.skippedReason : resultsCopy.failedReason,
+      path: shownPath(kind, r),
     }));
+}
+
+// shownPath is the file a row's Show in Explorer opens (direction 4): an
+// add's or a replace's source, which is on disk whatever became of it,
+// and an extract's skipped file, which is the one already at the
+// destination. Never an archive path, never a destination that was not
+// written, and never a path this platform could not open (paths.ts).
+function shownPath(kind: string, r: FileOutcome): string {
+  const p = r.path ?? "";
+  if (!p || foreignPath(p)) return "";
+  if (kind === "add" || kind === "replace") return p;
+  if (kind === "extract" && r.outcome === "skipped") return p;
+  return "";
+}
+
+// The verb a title says an item was not given, by the operation's kind.
+const VERB: Record<string, string> = { add: "added", replace: "replaced", extract: "extracted" };
+
+// unitOf names what the rows are: files, folders, or items when both.
+function unitOf(rows: Trouble[]): string {
+  const dirs = rows.filter((t) => t.isDir).length;
+  if (dirs === 0) return "file";
+  return dirs === rows.length ? resultsCopy.folder : "item";
+}
+
+// resultsTitle is the results dialog's title: the outcome, counted —
+// "2 files were not added", "1 file was skipped", "2 files were not added
+// and 1 was skipped" (direction 4). Never "What happened".
+export function resultsTitle(kind: string, results: FileOutcome[] | null | undefined): string {
+  const rows = troubles(results, kind);
+  const failed = rows.filter((t) => t.outcome === "failed").length;
+  const skipped = rows.length - failed;
+  const unit = unitOf(rows);
+  const verb = VERB[kind] ?? "done";
+  if (failed > 0 && skipped > 0) return resultsCopy.notDoneAndSkipped(failed, unit, verb, skipped);
+  if (failed > 0) return resultsCopy.notDone(failed, unit, verb);
+  return resultsCopy.skipped(skipped, unit);
+}
+
+// rowName is a row's name as the dialog and its copy say it: a folder
+// says so.
+export function rowName(t: Trouble): string {
+  return t.isDir ? `${t.name} (${resultsCopy.folder})` : t.name;
+}
+
+// detailsText is what Copy details puts on the clipboard: the title, the
+// summary, and every row as the dialog shows it, one per line.
+export function detailsText(title: string, summary: string, rows: Trouble[]): string {
+  const head = summary ? [title, summary] : [title];
+  return [...head, "", ...rows.map((t) => `${rowName(t)}: ${t.text}`)].join("\n");
 }
 
 export function hasTrouble(results: FileOutcome[] | null | undefined): boolean {

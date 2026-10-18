@@ -109,7 +109,7 @@ function judge(f: Flight): Verdict {
   // do — the answer, if it is still to come, has no landing to meet.
   if (f.landed === "foreign") return { kind: "nothing" };
   if (!f.answer) return { kind: "wait" };
-  // The drag went out of the window: the strip follows the operation from
+  // The drag went out of the window: the foot follows the operation from
   // here, and no landing is coming.
   if (!f.answer.selfDrop) return { kind: "nothing" };
   if (f.landed === undefined) return { kind: "wait" };

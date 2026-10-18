@@ -4,6 +4,7 @@
   import { store } from "../lib/state.svelte";
   import { chipCopy, codeText, commandCopy, dialogCopy, sinceText, vaultCopy } from "../lib/strings";
   import { backupLine } from "../lib/backup";
+  import { backupLine as backupDone } from "../lib/foot";
   import { date, dateTime, leaf } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
@@ -98,9 +99,17 @@
     return (await Shell.SaveFile("Export a backup of the vault", `backup-${new Date().toISOString().slice(0, 10)}.eks`, "")) || "";
   }
 
+  // The file a plain export is writing, for its done line: said in the
+  // foot once its dialog is closed on "Backup saved", with the way to the
+  // file (direction 4). A backup taken before a re-key leaves none, since
+  // the re-key is the act that ends there.
+  let exportedTo = "";
+
   async function exportBackup() {
     const p = await pickBackup();
-    if (p) await exportTo(p);
+    if (!p) return;
+    exportedTo = p;
+    await exportTo(p);
   }
 
   // The export itself, apart from the file picked for it, so that Start
@@ -183,6 +192,9 @@
   // there is one; the review's finding 12, where Escape did nothing
   // mid-ceremony).
   function closeCeremony() {
+    const ended = store.ceremony;
+    if (exportedTo && ended?.kind === "export" && ended.step === CeremonyStep.StepDone) store.showDone(backupDone(exportedTo));
+    exportedTo = "";
     store.dismissCeremony();
     void store.refreshSlots();
     void store.refreshEntangled();

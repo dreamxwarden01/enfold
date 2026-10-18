@@ -329,7 +329,8 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeOpCancelled]: "Cancelled.",
   [Code.CodeOpCommitting]: "The operation is already being saved; it will finish.",
   [Code.CodeOpRunning]: "An operation is still writing the vault. Wait for it to finish.",
-  [Code.CodeTooSlow]: "This would not finish before the session locks. Extend the session first.",
+  // The cap cannot be extended (APP.md §2.2): the way out is a fresh session.
+  [Code.CodeTooSlow]: "This would not finish before the session ends. Lock and unlock to start a fresh session, then try again.",
   // A move commit of the reclaim the core runs after an edit failed: the
   // edit itself is saved, and the next qualifying commit takes the run up
   // again (APP.md §2.3). Never "the edit failed".
@@ -429,6 +430,11 @@ export const archivePageCopy = {
   closeNow: "Closes the archive now, even while something is playing.",
   deleteNeedsUnlock: "Unlock the vault first: the record is the vault's.",
   deleteTampered: "This vault file does not match itself, so changes to it are off.",
+  // A greyed command's title says why it is greyed (APP.md §6).
+  extractNothing: "This archive holds nothing yet",
+  renameNeedsOne: "Select one item to rename",
+  deleteNeedsSome: "Select what to delete",
+  extractNeedsSome: "Select what to extract",
 };
 
 // reclaimedText is what a finished *Reclaiming space* says: the bytes the
@@ -440,17 +446,18 @@ export function reclaimedText(returned: number): string {
   return `Reclaimed ${bytes(returned)}`;
 }
 
-// The drag out of the window on the operation strip (APP.md §3, ruled
-// 2026-09-11 after the first real drag): on the strip from the moment the
-// drag starts, so that a staging over in an instant is a change inside a
-// strip already on the screen and never a strip that flashes. The hover
+// The drag out of the window in the layer's foot (APP.md §3, ruled
+// 2026-09-11 after the first real drag; the foot since direction 4):
+// there from the moment the drag starts, so that a staging over in an
+// instant is a change inside a line already on the screen and never a
+// line that flashes. The hover
 // shows the label alone, *Dragging 2 items*, since nothing is chosen yet
 // (ruled 2026-10-14); from the drop on it is *Extracting 2 items*, and
 // the staging adds the bar, which moves by bytes and offers
-// *Cancel*; and when the bytes are written the bar simply stays full, with
-// no *Cancel* and no words of its own — from then on Explorer's own window
+// *Cancel*; and when the bytes are written the bar simply stays full, its
+// *Cancel* greyed and no words of its own — from then on Explorer's own window
 // is in front and the only control there is — until DoDragDrop returns and
-// the strip goes. A finished drag out that failed is named by the verb its
+// the foot moves on. A finished drag out that failed is named by the verb its
 // toast counts with (ops.ts opLabel).
 export const dragOutCopy = {
   dragging: "Dragging",
@@ -458,10 +465,10 @@ export const dragOutCopy = {
   name: "Dragging out",
 };
 
-// The operation strip's words for a running operation (ops.ts opLabel),
+// The foot's words for a running operation (ops.ts opLabel),
 // here so the glossary's walk sees them. A re-key is named by the verb
 // its button says, *Re-key archive…* (commandCopy.rekeyArchive): one act,
-// one name, on the strip and in its toast (ruled 2026-10-17). The bare
+// one name, in the foot and in its toast (ruled 2026-10-17). The bare
 // form stands when the archive's name is not known.
 export const opCopy = {
   rekeying: "Re-keying",
@@ -469,6 +476,99 @@ export const opCopy = {
   // *Refresh fingerprint* running: what it does, of which archive
   // (direction 9) — never "Verifying", which promised a check.
   refreshing: "Refreshing the fingerprint",
+};
+
+// ---- The foot as the status bar (direction 4, phase 3; APP.md §6) -------
+//
+// The layer's foot is where status lives: the running operation with its
+// line, its bytes and the time left; the done line once it ends; the
+// standing notices and the countdown on the right. Cancel and Stay
+// unlocked are commands, so they are buttons; Show in Explorer and
+// Details reveal something, so they are hyperlink buttons.
+export const footCopy = {
+  cancel: "Cancel",
+  cancelling: "Cancelling…",
+  // In the flyout, where a compaction's or a re-key's Cancel would stand:
+  // neither is the user's to stop halfway (APP.md §2.3).
+  runsToEnd: "Runs to the end",
+  // The button after the latest operation when more than one runs.
+  more: (n: number): string => `+${n}`,
+  moreLabel: (n: number): string => `${plural(n, "more operation")} running`,
+  flyoutLabel: "Running operations",
+  bytesOf: (done: string, total: string): string => `${done} of ${total}`,
+  minutesLeft: (m: number): string => `about ${m} min left`,
+  underAMinute: "less than a minute left",
+  details: "Details",
+  stayUnlocked: "Stay unlocked",
+  notices: (n: number): string => plural(n, "notice"),
+  noticesLabel: "Notices",
+};
+
+// The done line (direction 4): one sentence for how an operation ended,
+// said in the foot for 6 s on whichever page is up. Figures, the archive
+// named, no full stop at the end, as a status bar says it; a stop is the
+// user's own ending and says what is left, never "failed".
+function wereWritten(n: number): string {
+  return n === 1 ? "was" : "were";
+}
+export const doneCopy = {
+  extracted: (n: number, dest: string): string => `Extracted ${plural(n, "file")} to ${dest}`,
+  extractedOf: (n: number, of: number, dest: string): string => `Extracted ${n} of ${plural(of, "file")} to ${dest}`,
+  extractStopped: (n: number, of: number, dest: string): string => `Stopped. ${n} of ${plural(of, "file")} ${wereWritten(n)} written to ${dest}`,
+  extractStoppedNone: "Stopped. Nothing was written",
+  added: (n: number, archive: string): string => `Added ${plural(n, "file")}${archive ? ` to ${archive}` : ""}`,
+  addedOf: (n: number, of: number, archive: string): string => `Added ${n} of ${plural(of, "file")}${archive ? ` to ${archive}` : ""}`,
+  addedFolders: (n: number, archive: string): string => `Added ${plural(n, "folder")}${archive ? ` to ${archive}` : ""}`,
+  replaced: (n: number, archive: string): string => `Replaced ${plural(n, "file")}${archive ? ` in ${archive}` : ""}`,
+  replacedOf: (n: number, of: number, archive: string): string => `Replaced ${n} of ${plural(of, "file")}${archive ? ` in ${archive}` : ""}`,
+  compacted: (archive: string): string => `Compacted ${archive || "the archive"}`,
+  compactedBack: (archive: string, back: string): string => `Compacted ${archive || "the archive"}: ${back} given back`,
+  refreshed: (archive: string): string => `Fingerprint refreshed${archive ? ` for ${archive}` : ""}`,
+  rekeyed: (archive: string): string => `Re-keyed ${archive || "the archive"}`,
+  draggedOut: (n: number): string => `${plural(n, "item")} left Enfold as ordinary files`,
+  backupSaved: (path: string): string => `Backup saved to ${path}`,
+  checked: (probed: number, missing: number): string =>
+    `Checked ${plural(probed, "archive")} · ${missing > 0 ? `${plural(missing, "file")} missing` : "all files present"}`,
+  // A pass that measured no path (only local fixed drives are probed, APP.md
+  // §13) says so, and claims nothing about presence.
+  checkedNone: "No archive was checked",
+  // A stop the user chose, by kind: what did not happen, in neutral ink.
+  stoppedAdd: (archive: string): string => `Stopped. Nothing was added${archive ? ` to ${archive}` : ""}`,
+  stoppedReplace: (archive: string): string => `Stopped. Nothing was replaced${archive ? ` in ${archive}` : ""}`,
+  stoppedRefresh: (archive: string): string => `Stopped. The fingerprint${archive ? ` of ${archive}` : ""} was not refreshed`,
+  stoppedReclaim: (archive: string): string => `Stopped. Reclaiming space${archive ? ` in ${archive}` : ""} did not finish`,
+  stoppedOther: (archive: string): string => `Stopped. ${archive || "The archive"} is as it was`,
+};
+
+// One verb set for a wait the user started (direction 4, the pending
+// primitive), used only where the label gains something by it; elsewhere
+// the label stays and the ring alone says the wait.
+export const pendingCopy = {
+  opening: "Opening…",
+  deleting: "Deleting…",
+  merging: "Merging…",
+  saving: "Saving…",
+  checking: "Checking…",
+};
+
+// The results dialog (APP.md §3, FileOutcome; direction 4): its title is
+// the outcome, counted; each row the item's name, then the code's own
+// copy after a colon.
+function wasOrWere(n: number): string {
+  return n === 1 ? "was" : "were";
+}
+export const resultsCopy = {
+  notDone: (n: number, unit: string, verb: string): string => `${plural(n, unit)} ${wasOrWere(n)} not ${verb}`,
+  skipped: (n: number, unit: string): string => `${plural(n, unit)} ${wasOrWere(n)} skipped`,
+  notDoneAndSkipped: (n: number, unit: string, verb: string, skipped: number): string =>
+    `${plural(n, unit)} ${wasOrWere(n)} not ${verb} and ${skipped} ${wasOrWere(skipped)} skipped`,
+  folder: "folder",
+  skippedReason: "Something of that name is already here, so it was skipped.",
+  failedReason: "It could not be done.",
+  copyDetails: "Copy details",
+  copied: "Details copied",
+  copyFailed: "The details could not be copied.",
+  more: (n: number): string => `and ${n} more.`,
 };
 
 // ---- The extract dialog and what an `ask` comes back with (APP.md §3,
@@ -490,35 +590,129 @@ export const extractCopy = {
   // 2026-10-18): true of any destination, and a check of the drive's type
   // would miss a synced folder. A sentence, not a gate.
   ordinaryFiles: "The extracted copies are ordinary files, outside Enfold's protection.",
+  // One Extract… with a scope (direction 7): the title names the archive
+  // (ruled 2026-10-17), and the scope line asks what first — the
+  // selection, counted as the pane counts it (files and folders alike), or
+  // everything. With nothing selected the first radio is greyed and keeps
+  // its reason (archivePageCopy.extractNeedsSome).
+  title: (archive: string): string => `Extract from ${archive || "this archive"}`,
+  scopeLegend: "What to extract",
+  scopeSelection: (n: number): string => (n <= 0 ? "The selected items" : n === 1 ? "The selected item" : `The ${n} selected items`),
+  scopeAll: (archive: string): string => `Everything in ${archive || "this archive"}`,
 };
 
-// conflictTitle is the question asked first: one conflict names the file,
-// several count them.
-export function conflictTitle(n: number, name: string): string {
-  if (n === 1) return `The destination already has a file named ${name}`;
-  return `The destination has ${plural(n, "file")} with the same names`;
+// conflictTitle is the question asked first, in the shape of Explorer's
+// own "Replace or Skip Files" (direction 7): the title counts and names
+// the place — the extract's destination — and one conflict names the file.
+export function conflictTitle(n: number, name: string, place: string): string {
+  const where = place || "the destination";
+  if (n === 1) return `A file named ${name} is already in ${where}`;
+  return `${n} files with the same names are already in ${where}`;
 }
 
-// The rest of the question, one way for one conflict and another for
-// several: *Replace* / *Skip* / *Compare both files* against *Replace all*
-// / *Skip all* / *Let me decide for each file*.
+// The question's three command rows (CommandRows), each a strong line and
+// its consequence, of equal weight and none the accent: Replace, Skip and
+// the compare list. `others` is what the extract wrote besides the
+// conflicts, so the skip's consequence never speaks of a rest that is not
+// there.
 export const conflictCopy = {
-  oneBody: "It was left where it is. The copy in the archive can replace it, or both can be kept.",
-  andMore: (n: number): string => `and ${n} more.`,
-  compare: (n: number): string => (n === 1 ? "Compare both files" : "Let me decide for each file"),
-  skip: (n: number): string => (n === 1 ? "Skip" : "Skip all"),
-  replace: (n: number): string => (n === 1 ? "Replace" : "Replace all"),
+  replace: (n: number): string => (n === 1 ? "Replace the file in the destination" : "Replace the files in the destination"),
+  replaceSays: (n: number): string => (n === 1 ? "The file already there is overwritten." : `The ${n} files already there are overwritten.`),
+  skip: (n: number): string => (n === 1 ? "Skip this file" : "Skip these files"),
+  skipSays: (n: number, others: number): string => {
+    const stay = n === 1 ? "The file stays as it is in the destination" : `The ${n} files stay as they are in the destination`;
+    return others > 0 ? `${stay}; the rest were extracted.` : `${stay}.`;
+  },
+  decide: (n: number): string => (n === 1 ? "Compare both files" : "Let me decide for each file"),
+  decideSays: (n: number): string => (n === 1 ? "See their dates and sizes side by side." : "Compare the two copies side by side."),
 };
 
-// The compare list after Windows Explorer's: the two columns, the note
-// under the ticks, and its two buttons.
+// The add collisions (APP.md §3, CheckNames), in the conflict question's
+// shape (direction 7): the title counts what is already there by its kind
+// and names the folder, the names follow (the first 6 and a count), then
+// Replace · Keep both · Skip as command rows and Cancel in the band. A
+// collision carries the two kinds only, so no size or date is said.
+// A folder that meets a folder is not a clash: the add enters it and
+// merges the two whatever the policy, and the policy reaches only the
+// files inside (internal/app/ops.go planNodes). So the rows count and
+// speak of the clashes alone — files that meet files, and a file that
+// meets a folder — and a merge is said as one, with what the choice does
+// inside it (lib/conflicts.ts collisionPlan puts these together).
+export interface KindCount {
+  files: number;
+  folders: number;
+}
+
+function kindNoun(c: KindCount, n: number): string {
+  if (c.folders === 0) return n === 1 ? "file" : "files";
+  if (c.files === 0) return n === 1 ? "folder" : "folders";
+  return n === 1 ? "item" : "items";
+}
+
+export const collisionCopy = {
+  title: (c: KindCount, name: string, place: string): string => {
+    const n = c.files + c.folders;
+    const where = place || "this folder";
+    if (n === 1) return `A ${kindNoun(c, 1)} named ${name} is already in ${where}`;
+    return `${n} ${kindNoun(c, n)} with the same names are already in ${where}`;
+  },
+  // Each name's kind: what is here, what is being added when the two
+  // differ, and a merge when two folders meet.
+  kind: (isDir: boolean, existingIsDir: boolean): string => {
+    if (isDir === existingIsDir) return existingIsDir ? "Folder; the two are merged" : "File";
+    return existingIsDir ? "A folder here; a file is being added" : "A file here; a folder is being added";
+  },
+  andMore: (n: number): string => `and ${n} more`,
+  // What a merge does, said once under the names: alone, the choice is
+  // only for the files inside; beside clashes, it reaches inside too.
+  mergeNote: (merges: number, clashes: number): string => {
+    if (clashes === 0) {
+      return merges === 1
+        ? "The folder is merged with the one already here. The choice below is for any file inside it with the same name as one already there."
+        : `The ${merges} folders are merged with the ones already here. The choice below is for any file inside them with the same name as one already there.`;
+    }
+    return merges === 1
+      ? "The folder of the same name is merged with the one already here, and the choice below also applies to the files inside it."
+      : `The ${merges} folders of the same names are merged with the ones already here, and the choice below also applies to the files inside them.`;
+  },
+  replace: (c: KindCount, place: string): string => {
+    const n = c.files + c.folders;
+    const where = place || "this folder";
+    return n === 1 ? `Replace the ${kindNoun(c, 1)} in ${where}` : `Replace the ${n} ${kindNoun(c, n)} in ${where}`;
+  },
+  replaceSays: (n: number): string => (n === 1 ? "The copy already in the archive is overwritten." : "The copies already in the archive are overwritten."),
+  // Replace's reason when a file and a folder meet (APP.md §3): kinds that
+  // differ never replace one another, in either direction.
+  replaceOff: "A file and a folder never replace one another.",
+  keepBoth: "Keep both",
+  keepBothSays: (n: number): string => (n === 1 ? "The new one gets a number in its name." : "The new ones get a number in their names."),
+  skip: (c: KindCount): string => {
+    const n = c.files + c.folders;
+    return n === 1 ? `Skip this ${kindNoun(c, 1)}` : `Skip these ${kindNoun(c, n)}`;
+  },
+  skipSays: (c: KindCount, others: number): string => {
+    const n = c.files + c.folders;
+    const stay = n === 1 ? `The ${kindNoun(c, 1)} already here stays` : `The ${n} ${kindNoun(c, n)} already here stay`;
+    return others > 0 ? `${stay}; the rest are added.` : `${stay}; nothing is added.`;
+  },
+  // The rows when every name is a merge: the choice is for the files
+  // inside that meet files already there, which CheckNames cannot see.
+  replaceInside: "Replace files with the same names",
+  replaceInsideSays: "Those copies already in the archive are overwritten.",
+  keepBothInsideSays: "The new ones get a number in their names.",
+  skipInside: "Skip files with the same names",
+  skipInsideSays: "Those copies already in the archive stay; the other files are added.",
+};
+
+// The compare list after Windows Explorer's: the two columns, the rule
+// of the ticks said once over them, and its two buttons — *Continue*
+// reading what it will do (compareGoText).
 export const compareCopy = {
   title: "Which files do you want to keep?",
   fromArchive: "Files from the archive",
   inDestination: "Files already in the destination",
-  note: "A tick on both sides keeps both: the file from the archive comes out under a new name.",
+  keepBoth: "Tick both to keep both copies",
   cancel: "Cancel",
-  go: "Continue",
 };
 
 // skipSameText is the foot's tick, singular at one and empty at none —
@@ -527,16 +721,14 @@ export function skipSameText(n: number): string {
   return n === 0 ? "" : `Skip ${plural(n, "file")} with the same date and size`;
 }
 
-// compareCountText is the foot's count beside that tick: what *Continue*
-// will do, before it does it — "3 will be replaced · 2 skipped" (ruled
-// 2026-10-17). A part with nothing in it is left out, and keep both is
-// said the way the note under the ticks says it.
-export function compareCountText(c: { replace: number; both: number; skip: number }): string {
-  const parts: string[] = [];
-  if (c.replace > 0) parts.push(`${c.replace} will be replaced`);
-  if (c.both > 0) parts.push(`${c.both} kept under a new name`);
-  if (c.skip > 0) parts.push(`${c.skip} skipped`);
-  return parts.join(" · ");
+// compareGoText is *Continue* as it reads (direction 7): what it will do
+// with the ticks as they stand — "Extract 2, skip 1", "Extract 3", "Skip
+// 3". A copy kept beside the one there is extracted too, under a number.
+export function compareGoText(c: { replace: number; both: number; skip: number }): string {
+  const extract = c.replace + c.both;
+  if (extract === 0) return `Skip ${c.skip}`;
+  if (c.skip === 0) return `Extract ${extract}`;
+  return `Extract ${extract}, skip ${c.skip}`;
 }
 
 // retriesText is the count shown in the PIN's label row. The card is asked
@@ -752,6 +944,9 @@ export const archivesCopy = {
           ? `From ${plural(f.behind, "save")} ago`
           : "Matches the last save",
   technicalDetails: "Technical details…",
+  // The Missing chip is a button that runs Locate… for its row (direction
+  // 7): the chip names the trouble, the button is its cure.
+  missingChip: (why: string): string => `${why} ${commandCopy.locate} asks where it is now.`,
   // The locked banner (direction 9): the archives the lock left open, by
   // name from VaultStatus.opened, and that they still save.
   lockedBanner: (names: readonly string[]): string => lockedOpenText(names),
@@ -798,11 +993,38 @@ export const commandCopy = {
   createVault: "Create a vault…",
   rebuildVault: "Rebuild the vault…",
   reopen: "Reopen",
+  // One Extract… (direction 7): the toolbar's, the pane's and Ctrl+E's,
+  // whose dialog asks the scope. There is no *Extract all…*.
   extract: "Extract…",
-  extractAll: "Extract all…",
   goThere: "Go there",
   lockNow: "Lock now",
   unlock: "Unlock",
+  // The Archive page's own commands on its rows (APP.md §6).
+  rename: "Rename…",
+  delete: "Delete…",
+  createFolder: "Create folder…",
+};
+
+// keyHint is a command's title where a key runs it (direction 7; APP.md
+// §6): the label as the verb table has it, then the key — "Extract…
+// (Ctrl+E)". A greyed button keeps its reason as its title instead.
+export function keyHint(label: string, key: string): string {
+  return `${label} (${key})`;
+}
+
+// keyTitles: every command whose key exists, titled once here so the
+// glossary walk reads each title as the button shows it.
+export const keyTitles = {
+  extract: keyHint(commandCopy.extract, "Ctrl+E"),
+  delete: keyHint(commandCopy.delete, "Del"),
+  rename: keyHint(commandCopy.rename, "F2"),
+  createFolder: keyHint(commandCopy.createFolder, "Ctrl+Shift+N"),
+  newArchive: keyHint(commandCopy.newArchive, "Ctrl+N"),
+  openFile: keyHint(archivesCopy.openFile, "Ctrl+O"),
+  deleteArchive: keyHint(commandCopy.deleteArchive, "Del"),
+  technicalDetails: keyHint(archivesCopy.technicalDetails, "Alt+Enter"),
+  filter: keyHint(archivesCopy.filter, "Ctrl+F"),
+  lockNow: keyHint(commandCopy.lockNow, "Ctrl+L"),
 };
 
 // chipCopy is every chip's word, in sentence case (ruled 2026-10-17: they
@@ -811,6 +1033,11 @@ export const chipCopy = {
   locked: "Locked",
   open: "Open",
   compacting: "Compacting",
+  // A Refresh fingerprint or a re-key running on the row (direction 4): the
+  // core queues a second operation behind the handle rather than refusing
+  // it, so the chip says what runs and nothing is greyed for it.
+  refreshing: "Refreshing fingerprint",
+  rekeying: "Re-keying",
   missing: "Missing",
   hidden: "Hidden",
   forgotten: "Forgotten",
@@ -935,22 +1162,27 @@ export function typeLabel(name: string, isDir: boolean): string {
 
 // ---- A name the destination refuses (APP.md §3, ruled 2026-09-10) -----
 //
-// Asked per refused record: the final name refused on placement offers
-// *Shorten*, *Rename…* and *Skip*; a refused path — the temporary or a
-// folder, where no name helps — offers *Skip* and *Skip all like it*. Esc
-// is *Skip*. The count is where the record stands in the list of refused
-// ones, so a long list says how much is left.
+// Asked per refused record: the final name refused on placement shows the
+// name it would write and offers *Use this name*, *Rename…* and *Skip*,
+// with "Do the same for the other N" when more names of that kind wait
+// (direction 7); a refused path — the temporary or a folder, where no name
+// helps — offers *Skip* and *Skip all like it*. Esc is *Skip*. The count
+// is where the record stands in the list of refused ones, so a long list
+// says how much is left.
 export const refusedCopy = {
   nameTitle: "The destination cannot take a name this long",
   pathTitle: "The folder's path is too long for this destination",
-  nameBody: (name: string): string => `${name} was not written. A shorter name may fit: Shorten halves it, keeping the extension, or give it another name for this extract only. The archive keeps the name as it is.`,
+  notWritten: (name: string): string => `${name} was not written.`,
+  // The question, around the shorter name set strong: "Write it as …?"
+  writeAs: "Write it as",
+  howTitle: "How names are shortened",
+  how: "Use this name halves the name and keeps its extension; a name refused again is asked about again. Rename… writes it under a name you type, for this extract only. The archive keeps the name as it is.",
   pathBody: (name: string, isDir: boolean): string =>
     isDir
       ? `The folder ${name} and everything in it were not written: the destination cannot take a path this long, and no name would help. Extract it to a shorter path instead.`
       : `${name} was not written: the folder it goes in has a path the destination cannot take, and no name would help. Extract it to a shorter path instead.`,
   progress: (at: number, of: number): string => (of > 1 ? `${at} of ${of}` : ""),
-  shorten: "Shorten",
-  shortenTo: (to: string): string => `Shorten to ${to}`,
+  useName: "Use this name",
   nothingShorter: "The name is down to 1 character and cannot be shortened further.",
   rename: "Rename…",
   renameLabel: "Name for this extract",
@@ -958,6 +1190,9 @@ export const refusedCopy = {
   renameGo: "Extract as this",
   skip: "Skip",
   skipAllLike: "Skip all like it",
+  // Use this name or Skip, given to every refused name still waiting;
+  // Rename… is one record's alone.
+  sameForRest: (n: number): string => `Do the same for the other ${n}`,
 };
 
 // ---- The consequence dialogs (the dialog template above, ruled
@@ -974,9 +1209,9 @@ export const dialogCopy = {
   // The title of a dialog's corner close button, which does what Esc does
   // (APP.md §6, Controls; ruled 2026-10-17); its name is plain *Cancel*.
   cancelEsc: "Cancel (Esc)",
+  skipEsc: "Skip (Esc)",
   close: "Close",
   howThisWorks: "How this works",
-  working: "Working…",
   deleteArchive: {
     title: (name: string): string => `Delete ${name}?`,
     body: (path: string): string => `Deletes ${path} for good, after checking that the file really is this archive. Its key is kept for 30 days in case a copy of the file turns up.`,
@@ -1014,13 +1249,13 @@ export const dialogCopy = {
   forgotten: "The archive is forgotten",
   compact: {
     title: (name: string): string => `Compact ${name}?`,
-    body: "Rewrites the file to give back its unused space. The files inside do not change; a big archive takes a while.",
+    body: "Rewrites the file to give back its unused space; the files inside do not change, and a big archive takes a while. It runs to the end once started.",
     primary: "Compact archive",
   },
   // Registry first, then the file (FORMAT.md R33).
   rekeyArchive: {
     title: (name: string): string => `Re-key ${name}?`,
-    body: "From now on the archive opens with a new key. Its old keys stay in the vault, so copies of the file made before today still open.",
+    body: "From now on the archive opens with a new key; its old keys stay in the vault, so copies made before today still open. It runs to the end once started.",
     how: "The new key is added to the vault first, then the archive's file is changed to use it.",
     primary: "Re-key archive",
   },

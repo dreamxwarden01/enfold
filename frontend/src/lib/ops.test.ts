@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { cancellable, hasBar, opErrorLine, opLabel, opPhase, reclaimedLine, showsCancel, stripCount } from "./ops";
-import { dragOutCopy, reclaimedText } from "./strings";
+import { cancellable, hasBar, opErrorLine, opLabel, showsCancel, stripCount } from "./ops";
+import { dragOutCopy } from "./strings";
 
-// The operation strip (APP.md §2.3, §6). Since 2026-09-09 the strip says
+// The running operation in the foot (APP.md §2.3, §6). Since 2026-09-09 the foot says
 // what the operation is doing and to how many files — "Adding — adding"
 // said the same word twice.
 describe("the running operation's name", () => {
@@ -50,7 +50,7 @@ describe("the running operation's name", () => {
     expect(opLabel("something-new", 4)).toBe("something-new");
   });
 
-  // The strip shows every running operation, on the Archives page too,
+  // The foot shows every running operation, on the Archives page too,
   // where the verb alone does not say whose it is (ruled 2026-10-14).
   it("names the archive it is working on, when the name is known", () => {
     expect(opLabel("add", 3, "", "Photos 2024")).toBe("Adding 3 files to Photos 2024");
@@ -71,15 +71,15 @@ describe("the running operation's name", () => {
   });
 });
 
-// The drag out on the strip (APP.md §3, ruled 2026-09-11 after the first
-// real drag, whose staging was over before the strip appeared): on the
+// The drag out in the foot (APP.md §3, ruled 2026-09-11 after the first
+// real drag, whose staging was over before the foot appeared): on the
 // strip from the moment the drag starts. The hover (the label alone) says
 // *Dragging N items*, since nothing is chosen yet (ruled 2026-10-14); the
 // staging (the byte bar with *Cancel*) and the wait on Explorer (that same
 // bar, standing full, with nothing to cancel and no words of its own) say
 // *Extracting N items*. The operation ends when DoDragDrop returns, and
-// the strip goes with it.
-describe("the drag out on the strip", () => {
+// the foot goes with it.
+describe("the drag out in the foot", () => {
   it("counts what the gesture named, folders included, singular at one", () => {
     expect(opLabel("dragout", 2, "dragging")).toBe("Dragging 2 items");
     expect(opLabel("dragout", 2, "preparing")).toBe("Extracting 2 items");
@@ -96,7 +96,7 @@ describe("the drag out on the strip", () => {
   });
 
   it("counts the records the drag named, not the files beneath them", () => {
-    // A folder of forty files dragged out is one item on the strip, and
+    // A folder of forty files dragged out is one item in the foot, and
     // forty files under the bar (OpView.DragItems against OpView.Items).
     expect(stripCount({ kind: "dragout", items: 40, dragItems: 1 })).toBe(1);
     expect(stripCount({ kind: "extract", items: 40, dragItems: 1 })).toBe(40);
@@ -129,7 +129,7 @@ describe("the drag out on the strip", () => {
 
   it("keeps Cancel in its place while it stands full, greyed and unclickable", () => {
     // The button is drawn and cannot be pressed: one that vanished would
-    // reflow the strip at the very moment the user is watching the bar
+    // reflow the foot at the very moment the user is watching the bar
     // (APP.md §3, ruled 2026-09-11).
     expect(showsCancel("dragout", "awaiting")).toBe(true);
     expect(cancellable("dragout", "awaiting")).toBe(false);
@@ -151,51 +151,10 @@ describe("the drag out on the strip", () => {
     expect(opErrorLine("dragout", 1, "file.name_refused", "The destination cannot take a name this long.")).toBe("Dragging out 1 file: The destination cannot take a name this long.");
   });
 
-  it("never says its phase beside its name: the phase is not the user's word", () => {
-    expect(opPhase("dragging")).toBe("");
-    expect(opPhase("preparing")).toBe("");
-    expect(opPhase("awaiting")).toBe("");
-  });
-
   it("leaves every other kind's bar alone", () => {
     expect(hasBar("add", "")).toBe(true);
     expect(hasBar("extract", "extracting")).toBe(true);
     expect(cancellable("dragout")).toBe(false);
-  });
-});
-
-// No phase word beside the verb (APP.md §6): the phase is a second line
-// only where it says something the name does not.
-describe("the phase beside the name", () => {
-  it("drops a phase that only says the verb again", () => {
-    expect(opPhase("adding")).toBe("");
-    expect(opPhase("replacing")).toBe("");
-    expect(opPhase("extracting")).toBe("");
-    // A reclaim is made of copies, and a Compact of one; the name has
-    // already said what either is for.
-    expect(opPhase("compacting")).toBe("");
-    expect(opPhase("moving")).toBe("");
-    // The phase every operation carries before it has done anything: it
-    // says nothing about where the work has got to.
-    expect(opPhase("starting")).toBe("");
-  });
-
-  it("drops the phase an operation ends on, which no running strip shows", () => {
-    expect(opPhase("verified")).toBe("");
-    expect(opPhase("compacted")).toBe("");
-    expect(opPhase("rotated")).toBe("");
-  });
-
-  it("keeps a phase that says where the work has got to", () => {
-    expect(opPhase("hashing")).toBe("hashing");
-    expect(opPhase("registry")).toBe("registry");
-    expect(opPhase("archive")).toBe("archive");
-  });
-
-  it("says nothing when there is no phase yet", () => {
-    expect(opPhase("")).toBe("");
-    expect(opPhase(undefined)).toBe("");
-    expect(opPhase("   ")).toBe("");
   });
 });
 
@@ -209,33 +168,20 @@ describe("what Cancel is offered for", () => {
     expect(cancellable("reclaim")).toBe(true);
   });
 
-  it("is nothing else", () => {
-    for (const k of ["extract", "verify", "compact", "rotate", ""]) {
+  it("is a refresh of the fingerprint and an extract (direction 4): the core stops either between steps", () => {
+    expect(cancellable("verify")).toBe(true);
+    expect(cancellable("extract")).toBe(true);
+    expect(showsCancel("extract")).toBe(true);
+  });
+
+  it("is never a compaction or a re-key, which run to the end once started", () => {
+    for (const k of ["compact", "rotate", ""]) {
       expect(cancellable(k)).toBe(false);
+      expect(showsCancel(k)).toBe(false);
     }
   });
 });
 
-// When a finished reclaim says what came back (APP.md §2.3): the file's own
-// shrinking, said apart from what was moved. The words themselves are the
-// copy table's and are pinned there (strings.test.ts).
-describe("when a finished reclaim says what came back", () => {
-  it("says what the file system got back", () => {
-    const back = 1.2 * 1024 * 1024 * 1024;
-    expect(reclaimedLine({ kind: "reclaim", returned: back })).toBe(reclaimedText(back));
-  });
-
-  it("says nothing for a run that gave nothing back, or ended in a cancel or a failure", () => {
-    expect(reclaimedLine({ kind: "reclaim", returned: 0 })).toBe("");
-    expect(reclaimedLine({ kind: "reclaim" })).toBe("");
-    expect(reclaimedLine({ kind: "reclaim", error: "op.cancelled", returned: 4096 })).toBe("");
-  });
-
-  it("is nothing for any other kind", () => {
-    expect(reclaimedLine({ kind: "add", returned: 4096 })).toBe("");
-    expect(reclaimedLine({ kind: "compact", returned: 4096 })).toBe("");
-  });
-});
 
 // A finished operation's error names the operation first — except where the
 // copy already does, as the reclaim's "Saved. Reclaiming space did not
@@ -243,13 +189,6 @@ describe("when a finished reclaim says what came back", () => {
 describe("a finished operation's error line", () => {
   it("names the operation before the copy", () => {
     expect(opErrorLine("add", 3, "io", "A file could not be read or written.")).toBe("Adding 3 files: A file could not be read or written.");
-  });
-
-  it("says the user's own Cancel as a neutral stop, not a failure", () => {
-    // The toast it makes is an info toast (state.svelte.ts applyOp, ruled
-    // 2026-10-14); the line is the operation's name and "Stopped.".
-    expect(opErrorLine("reclaim", 0, "op.cancelled", "Cancelled.")).toBe("Reclaiming space: Stopped.");
-    expect(opErrorLine("add", 3, "op.cancelled", "Cancelled.")).toBe("Adding 3 files: Stopped.");
   });
 
   it("lets the reclaim's own outcome stand alone", () => {

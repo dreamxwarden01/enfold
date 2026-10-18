@@ -302,3 +302,135 @@ func TestExtractKeepBothExhaustionFails(t *testing.T) {
 		t.Fatalf("skip: %+v", r)
 	}
 }
+
+// A cancelled extract ends between two files (APP.md §2.3, direction 4): the
+// files written before the cancel are on the volume and in the operation's
+// outcomes, the operation's error is op.cancelled, and nothing after the
+// cancel is attempted. The page's done line counts those outcomes — "Stopped.
+// 2 of 3 files extracted" — so they must be the ones that are really there.
+func TestACancelledExtractKeepsTheOutcomesWrittenBeforeIt(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Stopped")
+	h.add(t, id, rootID, PolicySkip, h.src(t, "a.txt", "a"), h.src(t, "b.txt", "b"), h.src(t, "c.txt", "c"))
+	rows := rowsByName(h.page(t, id, rootID))
+	ids := []string{rows["a.txt"].ID, rows["b.txt"].ID, rows["c.txt"].ID}
+	dest := outDir(t)
+
+	placed := 0
+	h.c.extractFS = extractFS{place: func(tmp, path string, replace bool) error {
+		placed++
+		if placed == 2 {
+			// The cancel lands while the second file is being placed; the
+			// placement itself goes through, and the loop stops before the
+			// third file. The operation is found on the books rather than
+			// by the id the call returns, which this goroutine may not have
+			// seen yet.
+			if e := h.c.CancelOp(h.runningOp("extract")); e != nil {
+				t.Errorf("cancel: %v", e)
+			}
+		}
+		return extractFS{}.placeFile(tmp, path, replace)
+	}}
+	opID, e := h.c.Extract(id, ids, dest, ExtractSkip, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	o := h.rec.waitOp(t, opID)
+	if o.Error != CodeOpCancelled {
+		t.Fatalf("the cancelled extract: %+v", o)
+	}
+	if placed != 2 {
+		t.Fatalf("%d placements after a cancel during the second", placed)
+	}
+	if o.Items != 3 {
+		t.Errorf("the plan said %d files; it was 3", o.Items)
+	}
+	if len(o.Results) != 2 {
+		t.Fatalf("the cancelled extract reported %d outcomes, want the 2 written: %+v", len(o.Results), o.Results)
+	}
+	written := map[string]bool{}
+	for _, r := range o.Results {
+		if r.Outcome != "extracted" {
+			t.Errorf("%s: %+v", r.Name, r)
+		}
+		if _, err := os.Stat(r.Path); err != nil {
+			t.Errorf("%s is reported extracted and is not there: %v", r.Name, err)
+		}
+		written[filepath.Base(r.Path)] = true
+	}
+	for _, n := range []string{"a.txt", "b.txt", "c.txt"} {
+		if written[n] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dest, n)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was not reported and is on the volume: %v", n, err)
+		}
+	}
+	// The operation's view says the same once it is over.
+	if v, e := h.c.Op(opID); e != nil || v.Error != CodeOpCancelled || len(v.Results) != 2 {
+		t.Fatalf("the finished operation's view: %+v %v", v, e)
+	}
+}
+
+// A cancelled verify leaves the registry as it was: the hash it did not
+// finish is not recorded, and neither is the sequence or the size it would
+// have recorded with it (APP.md §2.3, direction 4). A verify run to its end
+// afterwards does move them, which is what makes the first assertion one.
+func TestACancelledVerifyLeavesTheRegistryUntouched(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	id := h.openArchive(t, "Checked")
+	h.add(t, id, rootID, PolicySkip, h.src(t, "a.bin", string(incompressible(t, 2<<20))))
+	rec := *h.record(id)
+	if rec.HashAtSeq == rec.LastSeq {
+		t.Fatalf("the layout does not test the verify: the hash is already current at %d", rec.HashAtSeq)
+	}
+
+	// The cancel lands as the hash begins: the verify's first event says
+	// it is hashing, and the hash checks the context before every MiB.
+	h.rec.onEvent(func(name string, p any) {
+		if v, ok := p.(OpView); ok && name == EventOpProgress && v.Kind == "verify" && v.Phase == "hashing" {
+			if e := h.c.CancelOp(v.ID); e != nil {
+				t.Errorf("cancel: %v", e)
+			}
+		}
+	})
+	opID, e := h.c.Verify(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	o := h.rec.waitOp(t, opID)
+	h.rec.onEvent(nil)
+	if o.Error != CodeOpCancelled {
+		t.Fatalf("the cancelled verify: %+v", o)
+	}
+	after := *h.record(id)
+	if after.LastCiphertextHash != rec.LastCiphertextHash || after.HashAtSeq != rec.HashAtSeq ||
+		after.LastSeq != rec.LastSeq || after.LastStoredSize != rec.LastStoredSize {
+		t.Fatalf("a cancelled verify wrote the registry: %+v → %+v", rec, after)
+	}
+
+	opID, e = h.c.Verify(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != "" {
+		t.Fatalf("the verify after: %+v", o)
+	}
+	if done := *h.record(id); done.HashAtSeq != done.LastSeq || done.HashAtSeq == rec.HashAtSeq {
+		t.Fatalf("a verify run to its end did not record the hash: %+v", done)
+	}
+}
+
+// runningOp is the id of the unfinished operation of that kind, or "".
+func (h *harness) runningOp(kind string) string {
+	h.c.mu.Lock()
+	defer h.c.mu.Unlock()
+	for _, o := range h.c.ops {
+		if o.kind == kind && !o.finished {
+			return o.id
+		}
+	}
+	return ""
+}

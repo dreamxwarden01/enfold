@@ -857,8 +857,8 @@ func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlock
 func (c *Core) settleAfterUnlockLocked() {
 	c.applyOwedLocked()
 	c.purgeForgottenLocked()
-	if rows, vaultID, ok := c.presenceRowsLocked(); ok {
-		go c.runPresencePass(rows, vaultID)
+	if run := c.presenceRowsLocked(); run != nil {
+		go c.runPresencePass(run)
 	}
 }
 

@@ -14,6 +14,7 @@ export type {
     ArchiveSummary,
     BackupStatus,
     CeremonyState,
+    CheckReport,
     ChildRef,
     Collision,
     Crumb,

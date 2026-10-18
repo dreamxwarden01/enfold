@@ -42,9 +42,9 @@ type op struct {
 	// files the extraction writes (OpView.DragItems, dragout.go). Zero for
 	// every other kind.
 	dragItems atomic.Int64
-	// returned is what a reclaim gave the file system back — the file's
-	// size before the run less its size after — set as the run ends and
-	// zero for every other kind (OpView.Returned).
+	// returned is what a reclaim or a compaction gave the file system back
+	// — the file's size before the run less its size after — set as the run
+	// ends and zero for every other kind (OpView.Returned).
 	returned atomic.Uint64
 	phase    atomic.Value // string
 	// dragResult is a drag out's end — self_drop | cancelled | refused |
@@ -1700,6 +1700,10 @@ func (c *Core) startCompaction(oa *openArchive) string {
 			return nil, coded(CodeArchiveNotOpen)
 		}
 		oa.state = "compacting"
+		// The file's size as the compaction finds it, against which what it
+		// gives back is measured (OpView.Returned): the snapshot every commit
+		// refreshes, the same figure the reclaim measures from.
+		before := oa.size
 		c.mu.Unlock()
 		o.progress(0, 1, "compacting")
 		// The compacted file continues the sequence (FORMAT.md R33, ruled
@@ -1722,6 +1726,15 @@ func (c *Core) startCompaction(oa *openArchive) string {
 			// The receipt is recorded (or owed) now, before the reopen: a
 			// reopen that fails must not lose it.
 			c.recordReceiptLocked(oa, archive.Receipt{Seq: seqAfter, Size: newSize, WrittenAt: c.now().Unix()}, &hash)
+			// What came back is the file's own shrinking, said as the page's
+			// done line says it — "Compacted Photos 2024: 2.9 GB given back"
+			// (APP.md §2.3, direction 4) — and set here, with the fresh file
+			// in place, rather than after the reopen: a reopen that fails
+			// does not undo it. A file that did not come out smaller gave
+			// nothing back, and says 0.
+			if newSize < before {
+				o.returned.Store(before - newSize)
+			}
 		}
 		c.mu.Unlock()
 		if err != nil {

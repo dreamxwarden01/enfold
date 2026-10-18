@@ -106,6 +106,19 @@ type BackupStatus struct {
 	Rekeyed  int   `json:"rekeyed"`
 }
 
+// CheckReport is what one presence pass found, which the Archives page's
+// *Find missing files* says as its line when the pass ends — "Checked 3
+// archives · all files present" (APP.md §13, direction 4). Probed is the
+// records whose path the pass measured: only a path on a local fixed volume
+// is ever probed, and one that went over its budget was not measured, so
+// neither counts. Missing is those of them found absent. A record the pass
+// left unmeasured is in neither figure, which is why the line counts
+// archives checked and not archives listed.
+type CheckReport struct {
+	Probed  int `json:"probed"`
+	Missing int `json:"missing"`
+}
+
 // CeremonyStep is where the unlock or enrollment ceremony is.
 type CeremonyStep string
 
@@ -463,11 +476,13 @@ type OpView struct {
 	// (APP.md §3).
 	Policy      string `json:"policy,omitempty"`
 	Destination string `json:"destination,omitempty"`
-	// Returned is what a reclaim gave the file system back once it ended:
-	// the file's size before the run less its size after, which is what the
-	// page says — "Reclaimed 1.2 GB" — and is never the bytes it moved
-	// (APP.md §2.3). Zero for every other kind, and for a run that ended
-	// before its first commit.
+	// Returned is what a reclaim or a compaction gave the file system back
+	// once it ended: the file's size before the run less its size after,
+	// which is what the page says — "Reclaimed 1.2 GB", "Compacted Photos
+	// 2024: 2.9 GB given back" — and is never the bytes it moved or wrote
+	// (APP.md §2.3, direction 4). Zero for every other kind, for a run that
+	// ended before its first commit, for a compaction that failed and for one
+	// whose file did not come out smaller.
 	Returned uint64 `json:"returned"`
 	// DragResult is how a drag out ended, on a finished dragout and nothing
 	// else (APP.md §3, dragout.go). The drop is synchronous — the data

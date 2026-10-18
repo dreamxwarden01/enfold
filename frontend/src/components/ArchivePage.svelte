@@ -3,19 +3,18 @@
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { Collision, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, codeText, vaultCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, listCopy, typeLabel } from "../lib/strings";
+  import { archivePageCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyTitles, listCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
   import { statusNote } from "../lib/status";
   import { newNameProblem } from "../lib/validate";
   import { renameSelection } from "../lib/paths";
-  import { ROOT_ID, canDrop, countPhrase, deleteBody, deleteCounts, deleteTitle } from "../lib/tree";
+  import { ROOT_ID, canDrop, deleteBody, deleteTitle } from "../lib/tree";
   import type { DropTarget, Kinded } from "../lib/tree";
   import { ownNames, pastThreshold } from "../lib/dragout";
   import type { DropAt, Flight, PendingMove } from "../lib/dragout";
-  import { summaryLine, tally, troubles } from "../lib/results";
-  import { destinationFor } from "../lib/extract";
-  import { allOf, conflictsOf, namesFor, planIsEmpty, reissuePlan } from "../lib/conflicts";
+  import type { ExtractScope } from "../lib/extract";
+  import { allOf, collisionPlan, conflictsOf, namesFor, planIsEmpty, reissuePlan, restExtracted, shownName } from "../lib/conflicts";
   import type { Decision } from "../lib/conflicts";
   import { SORT_KEYS, arrowOf, clickHeader as clickSortHeader } from "../lib/sort";
   import type { SortKey } from "../lib/sort";
@@ -23,15 +22,19 @@
   import { hasMore, nearEnd } from "../lib/paging";
   import { planIsEmpty as refusedPlanIsEmpty, refusedOf, refusedPlan } from "../lib/refused";
   import type { RefusedDecision } from "../lib/refused";
-  import { dialogIsUp } from "../lib/dialogs";
+  import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
+  import { pending } from "../lib/pending";
+  import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, pageRows, target, typeahead } from "../lib/listkeys";
+  import type { Intent } from "../lib/listkeys";
   import Dialog from "./Dialog.svelte";
+  import CommandRows from "./CommandRows.svelte";
+  import type { CommandRow } from "./CommandRows.svelte";
   import ConflictDialog from "./ConflictDialog.svelte";
   import DeleteArchiveDialog from "./DeleteArchiveDialog.svelte";
   import ExtractDialog from "./ExtractDialog.svelte";
   import RefusedDialog from "./RefusedDialog.svelte";
   import MenuButton from "./MenuButton.svelte";
   import type { MenuItem } from "./MenuButton.svelte";
-  import OpsBar from "./OpsBar.svelte";
   import TextField from "./TextField.svelte";
   import TamperedBar from "./TamperedBar.svelte";
 
@@ -106,7 +109,10 @@
   // The delete question: the ids it is about and their kinds, counted
   // from the whole selection (askDelete).
   let deleting = $state<{ ids: string[]; rows: Kinded[] } | null>(null);
-  let extracting = $state<{ ids: string[]; label: string; all: boolean } | null>(null);
+  // The extract dialog (direction 7): the selection as it stood when the
+  // dialog opened — its ids, and its count as the pane counts it — for the
+  // scope line to offer; *Everything* sends the root id instead.
+  let extracting = $state<{ ids: string[]; count: number } | null>(null);
   // The conflicts an extract with the `ask` policy came back with (APP.md
   // §3): the question is the store's, derived from the finished op itself
   // — its policy, its destination, its outcomes — so nothing here has to
@@ -118,12 +124,45 @@
   const question = $derived(store.conflictQuestion);
   const conflicts = $derived(question ? conflictsOf(question.results) : []);
   let comparing = $state(false);
+  // The question's three command rows (direction 7; Explorer's "Replace or
+  // Skip Files"), and what the extract wrote besides the conflicts, so
+  // Skip's consequence speaks of a rest only when there is one and all of
+  // it was extracted (lib/conflicts.ts restExtracted).
+  const extractedBeside = $derived(restExtracted(question?.results));
+  const conflictRows: CommandRow[] = $derived([
+    { label: conflictCopy.replace(conflicts.length), says: conflictCopy.replaceSays(conflicts.length), run: () => decide("replace") },
+    { label: conflictCopy.skip(conflicts.length), says: conflictCopy.skipSays(conflicts.length, extractedBeside), run: () => decide("skip") },
+    { label: conflictCopy.decide(conflicts.length), says: conflictCopy.decideSays(conflicts.length), run: () => (comparing = true) },
+  ]);
   // The names the destination refused (APP.md §3, ruled 2026-09-10): the
   // same shape, asked after the conflict question of the same op.
   const refused = $derived(store.refusedQuestion);
   const refusedRows = $derived(refused ? refusedOf(refused.results) : []);
-  let collisions = $state<{ at: string; plan: AddPlan; list: Collision[] } | null>(null);
-  const kindsDiffer = $derived((collisions?.list ?? []).some((c) => c.isDir !== c.existingIsDir));
+  // The add collisions (APP.md §3): `offered` is how many names the
+  // batch held, so Skip's consequence knows whether anything is added.
+  let collisions = $state<{ at: string; plan: AddPlan; list: Collision[]; offered: number } | null>(null);
+  // The folder the batch is going into, by name — the folder shown, or the
+  // folder row a drop landed on — and what the dialog says (lib/conflicts.ts
+  // collisionPlan): a folder meeting a folder is a merge, not a clash, so
+  // the rows speak of the clashes alone and a note says the merge.
+  const collisionPlace = $derived(collisions ? (collisions.at === dirId ? folderName : rows.find((r) => r.id === collisions?.at)?.name ?? folderName) : "");
+  const collisionSaid = $derived(collisions ? collisionPlan(collisions.list, collisions.offered, collisionPlace) : null);
+  const collisionRows: CommandRow[] = $derived.by(() => {
+    const c = collisions;
+    const p = collisionSaid;
+    if (!c || !p) return [];
+    return [
+      {
+        label: p.replace.label,
+        says: p.replace.says,
+        disabled: p.replace.off !== undefined,
+        reason: p.replace.off,
+        run: () => void addWith(c.at, c.plan, "replace"),
+      },
+      { label: p.keepBoth.label, says: p.keepBoth.says, run: () => void addWith(c.at, c.plan, "keep-both") },
+      { label: p.skip.label, says: p.skip.says, run: () => void addWith(c.at, c.plan, "skip") },
+    ];
+  });
   let dropping = $state(false);
 
   function fail(e: unknown) {
@@ -202,58 +241,178 @@
     else void store.selectFolder();
   }
 
-  // The keyboard path: Space selects, Enter selects and opens, the arrows
-  // move the focus between rows — `..` among them.
-  function keydown(e: KeyboardEvent, r: FileRow) {
-    switch (e.key) {
-      case " ":
-        e.preventDefault();
-        store.selectClick(r.id);
+  // ---- the keys (lib/listkeys.ts; direction 7, APP.md §6) --------------
+  // Every key of the list and of the page is taken here, in one handler,
+  // through the one keymap. Arrows move the selection, Explorer's way: the
+  // row arrived at becomes the one selected row and the anchor, the focus
+  // moves with it and the pane follows (reversing 2026-09-10's "Space
+  // selects, arrows move the focus"). The list's own keys are taken while
+  // the focus is in the list or on the page's body; the page's commands
+  // from anywhere on it but a text field. Nothing is taken while a dialog
+  // is up — the Dialog stops the key itself (lib/dialogs.ts), and the
+  // keymap says so too — nor from an open menu, whose keys are its own.
+  // The focus ring is :focus-visible's, so it is drawn once the keyboard
+  // is used and not for a click.
+  let listEl = $state<HTMLDivElement | undefined>();
+  // The type-ahead's buffer and when its last character came (700 ms).
+  let typed = "";
+  let typedAt = 0;
+
+  function onKey(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.isComposing) return;
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    if (t?.closest(`[role="menu"], [${POPOVER_ATTR}]`)) return;
+    const now = Date.now();
+    const i = intent(
+      { key: e.key, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey },
+      {
+        list: "files",
+        onUp: !!t?.closest("tr.up"),
+        inField: !!t && isTextEntry(t.tagName, t.getAttribute("type") ?? "", t.isContentEditable),
+        dialogUp: dialogIsUp(),
+        typing: typed !== "" && now - typedAt <= TYPEAHEAD_MS,
+        // A sort button, the tick-all box (and on the Archives page the
+        // empty vault's buttons) sit in the list's region but keep their
+        // own Enter and Space.
+        onControl: controlKeepsKeys(t),
+      },
+    );
+    // Ctrl+L is the foot's (LayerFoot): Lock now on every page.
+    if (i.kind === "none" || i.kind === "lock") return;
+    const inList = !t || t === document.body || !!listEl?.contains(t);
+    if (listScoped(i) && !inList) return;
+    // Every key the map names is spent here, F5's reload and Ctrl+E's
+    // browser search among them, whether or not there is anything to do.
+    e.preventDefault();
+    act(i, focusIndex(t), now);
+  }
+
+  // focusIndex: the row the keys start from — the focused row, `..` as -1
+  // — else, with the focus on the page's body, the anchor; else none.
+  function focusIndex(t: HTMLElement | null): number | null {
+    const tr = t && listEl?.contains(t) ? t.closest("tr") : null;
+    if (tr?.classList.contains("up")) return -1;
+    const id = tr?.getAttribute("data-id") ?? store.sel.anchor;
+    if (!id) return null;
+    const at = rows.findIndex((r) => r.id === id);
+    return at >= 0 ? at : null;
+  }
+
+  function act(i: Intent, from: number | null, now: number) {
+    const hasUp = !!parentId;
+    const atRow = from !== null && from >= 0 ? rows[from] : null;
+    switch (i.kind) {
+      case "move":
+      case "extend":
+      case "focusOnly":
+        land(target(from, i.by, rows.length, pageSize(), hasUp), i.kind);
         break;
-      case "Enter":
-        e.preventDefault();
+      case "select":
+        if (atRow) store.selectClick(atRow.id);
+        break;
+      case "toggle":
+        if (atRow) store.selectToggle(atRow.id);
+        break;
+      case "selectAll":
+        void store.selectFolder();
+        break;
+      case "clear":
+        store.clearSelection();
+        moveError = null;
+        break;
+      case "open": {
+        // Enter opens a folder. A file's Enter is the viewer's, which is
+        // phase 4's: until then it selects the row and does nothing more —
+        // never Extract, which is always a named command (ruled
+        // 2026-10-17).
+        const r = atRow ?? one;
+        if (!r) break;
         store.selectClick(r.id);
         open(r);
         break;
-      default:
-        arrows(e);
+      }
+      case "up":
+        if (parentId) nav(() => store.goUp());
+        break;
+      case "back":
+        // Back to the Archives list, leaving the archive as the rail does.
+        store.go("archives");
+        break;
+      case "extract":
+        extractCommand();
+        break;
+      case "delete":
+        if (selected.size > 0) void askDelete();
+        break;
+      case "rename":
+        if (one) askRename(one);
+        break;
+      case "newFolder":
+        askFolder();
+        break;
+      case "refresh":
+        void store.refreshArchive();
+        break;
+      case "typeahead": {
+        typed = typeahead(typed, i.char, now, typedAt);
+        typedAt = now;
+        const to = jump(rows.map((r) => r.name), typed, atRow ? from : null);
+        if (to >= 0) land(to, "move");
+        break;
+      }
     }
   }
 
-  // `..` takes focus like any row (APP.md §6): Enter or Space goes up.
-  function upKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      void store.goUp();
-    } else {
-      arrows(e);
-    }
+  // land: a step arrived at row `to` (-1 is `..`). A move selects that row
+  // alone and makes it the anchor; an extend ranges from the anchor to it
+  // (lib/selection.ts, Shift's own rule); a focus-only move selects
+  // nothing. `..` is never selected: a move onto it leaves nothing
+  // selected, since the selection would otherwise sit on a row the arrows
+  // have left.
+  function land(to: number | null, how: "move" | "extend" | "focusOnly") {
+    if (to === null) return;
+    const id = to >= 0 ? rows[to].id : null;
+    if (id !== null && how === "move") store.selectClick(id);
+    else if (id !== null && how === "extend") store.selectClick(id, { shift: true });
+    else if (id === null && how === "move") store.clearSelection();
+    moveError = null;
+    void tick().then(() => {
+      const el = id === null ? listEl?.querySelector<HTMLElement>("tr.up") : listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(id)}"]`);
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      reveal(el);
+    });
   }
 
-  function arrows(e: KeyboardEvent) {
-    const el = e.currentTarget as HTMLElement;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      (el.nextElementSibling as HTMLElement | null)?.focus();
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      (el.previousElementSibling as HTMLElement | null)?.focus();
-    }
+  // reveal brings a row into view clear of the sticky header row — the
+  // nearest way, so a row already in view does not move.
+  function reveal(el: HTMLElement) {
+    const box = listEl;
+    if (!box) return;
+    const head = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    const r = el.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    if (r.top < b.top + head) box.scrollTop -= b.top + head - r.top;
+    else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
   }
 
-  // Ctrl+A selects the whole folder but `..` (APP.md §6) when the focus is
-  // in the list or on the page's body: an input keeps its own select-all,
-  // and while a dialog is up the page behind it takes no shortcut — the
-  // Dialog stops the key itself (lib/dialogs.ts); the check here says so.
-  let listEl = $state<HTMLDivElement | undefined>();
-  function shortcut(e: KeyboardEvent) {
-    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || (e.key !== "a" && e.key !== "A")) return;
-    const t = e.target as HTMLElement | null;
-    if (!t || t.closest("input, textarea, select, [contenteditable]")) return;
-    if (t !== document.body && !listEl?.contains(t)) return;
-    if (dialogIsUp()) return;
-    e.preventDefault();
-    void store.selectFolder();
+  // PgUp and PgDn move by the rows that fit (lib/listkeys.ts pageRows).
+  function pageSize(): number {
+    const box = listEl;
+    if (!box) return 1;
+    return pageRows(box.clientHeight, box.querySelector("thead")?.getBoundingClientRect().height ?? 0, ROW_HEIGHT);
+  }
+
+  // One navigation at a time: a second double-click, or Enter pressed
+  // again, while a folder is still being entered is ignored rather than
+  // queued behind it (direction 7; the pending stage adds the ring).
+  let navigating = false;
+  function nav(go: () => Promise<void>) {
+    if (navigating) return;
+    navigating = true;
+    void go().finally(() => {
+      navigating = false;
+    });
   }
 
   // A header cell sorts by its column (lib/sort.ts); the selection is ids
@@ -285,7 +444,7 @@
   // clears the selection with it.
   function open(r: FileRow) {
     if (!r.isDir) return;
-    void store.enterDir(r.id, r.name);
+    nav(() => store.enterDir(r.id, r.name));
   }
 
   // A long folder pages in as the list scrolls (APP.md §3, lib/paging.ts):
@@ -307,14 +466,18 @@
     });
   });
 
-  // After going up, focus lands on the row of the folder just left (APP.md
-  // §6): the store names it once the listing lands.
+  // After going up, the row of the folder just left is selected and takes
+  // the focus (APP.md §6), as Explorer does — the focus and the selection
+  // stay together (direction 7). The store names it once the listing lands.
   $effect(() => {
     const want = store.focusAfter;
     if (!want || !rows.some((r) => r.id === want)) return;
     void tick().then(() => {
       const el = listEl?.querySelector<HTMLElement>(`tr[data-id="${want}"]`);
       if (el && store.focusAfter === want) {
+        // Only into an empty selection: in a long parent the row may land
+        // a page later, after the user has chosen something else.
+        if (store.sel.ids.size === 0) store.selectClick(want);
         el.focus();
         store.focusAfter = null;
       }
@@ -382,7 +545,7 @@
     try {
       const list = (await Archive.CheckNames(id, at, names)) ?? [];
       if (list.length > 0) {
-        collisions = { at, plan, list };
+        collisions = { at, plan, list, offered: names.length };
         return;
       }
       await addWith(at, plan, "skip");
@@ -418,7 +581,7 @@
   const addItems: MenuItem[] = $derived([
     { label: "Add files…", icon: "i-plus", run: () => void pickFiles() },
     { label: "Add folder…", icon: "i-folder-add", run: () => void pickFolder() },
-    { label: "Create folder…", icon: "i-folder", run: askFolder },
+    { label: commandCopy.createFolder, icon: "i-folder", run: askFolder },
   ]);
 
   // New archive… ends here, on the new archive's empty root with the Add
@@ -674,34 +837,30 @@
     }
   }
 
-  // Both ways in open the same dialog (APP.md §3): the destination lives
-  // in it, prefilled by the rule of §3 from the archive's own folder —
-  // *Extract all…* one level deeper, in a folder named after the archive —
-  // rather than in a native picker the page opens first. The destination is
-  // never kept from the last time (ruled 2026-09-10); the policy is, while
-  // Enfold runs (lib/extract.ts startingPolicy, ruled 2026-10-14).
-  function startExtract(ids: string[], label: string, all = false) {
-    if (ids.length === 0) return;
-    extracting = { ids, label, all };
+  // One Extract… (direction 7): the toolbar's, Ctrl+E's and the pane's
+  // open the same dialog, whose scope line asks what — the selection, or
+  // everything in the archive — opening on the selection when there is
+  // one. The destination lives in it, prefilled by the rule of §3 per
+  // scope, rather than in a native picker the page opens first; it is
+  // never kept from the last time (ruled 2026-09-10), and the policy is,
+  // while Enfold runs (lib/extract.ts startingPolicy, ruled 2026-10-14).
+  // An archive that holds nothing has nothing to extract, and the toolbar's
+  // button is greyed then.
+  function extractCommand() {
+    if (selected.size === 0 && (stat?.records ?? 0) === 0) return;
+    extracting = { ids: chosenIds, count: selected.size };
   }
 
-  // *Extract all…* is the archive's, not the selection's (APP.md §6): the
-  // root id alone means everything, so the page sends that one id and
-  // walks nothing.
-  function extractAll() {
-    // The title names the archive (APP.md §3, ruled 2026-10-17):
-    // "Extract everything in Photos 2024".
-    startExtract([ROOT_ID], archiveName ? `everything in ${archiveName}` : "everything in this archive", true);
-  }
-
-  async function doExtract(dir: string, policy: string) {
+  async function doExtract(scope: ExtractScope, dir: string, policy: string) {
     const x = extracting;
     extracting = null;
     if (!x) return;
+    // Everything is the root id alone (APP.md §3): the page walks nothing.
+    const ids = scope === "all" || x.ids.length === 0 ? [ROOT_ID] : x.ids;
     try {
       // An `ask` comes back with its question on the op itself (APP.md
       // §3): nothing is kept here against the op id.
-      await Archive.Extract(id, x.ids, dir, policy, null);
+      await Archive.Extract(id, ids, dir, policy, null);
     } catch (e) {
       fail(e);
     }
@@ -716,11 +875,11 @@
     store.noteExtractNames(opId, names);
   }
 
-  // The one-conflict and many-conflict answers (APP.md §3): *Replace* and
-  // *Replace all* re-issue for every record with `replace`, *Skip* and
-  // *Skip all* re-issue nothing, and *Compare* / *Let me decide* open the
-  // compare list. Closing either dialog answers nothing and the question
-  // is settled: the files in the way stay where they are.
+  // The question's answers (APP.md §3; the rows of direction 7): *Replace
+  // the files* re-issues for every record with `replace`, *Skip these
+  // files* re-issues nothing, and *Let me decide* opens the compare list.
+  // Closing either dialog answers nothing and the question is settled: the
+  // files in the way stay where they are.
   function decide(d: Decision) {
     void reissue(allOf(conflicts, d));
   }
@@ -779,7 +938,7 @@
   // readers or not, dropping every preview body in flight — where simply
   // leaving the page closes it only once nothing is reading it.
   // Refresh fingerprint from the copy_mismatch note: the Archives page's
-  // command, run on this archive; the operation strip shows it.
+  // command, run on this archive; the layer's foot shows it running.
   async function refreshFingerprint() {
     try {
       await Archives.Verify(id);
@@ -865,13 +1024,6 @@
     if (released) store.releasedForDelete = null;
   });
 
-  // What a batch reported when something was left out (lib/results.ts):
-  // the counts — folders created and entered beside the files added — and
-  // then the items themselves, each with its own code's copy.
-  const results = $derived(store.results);
-  const resultLine = $derived(summaryLine(tally(results?.results)));
-  const resultItems = $derived(troubles(results?.results));
-
   // The foot's note (LayerFoot, lib/status.ts): the archive's figures —
   // singular at one, and the free space when it is worth knowing. Nothing
   // counts down here: an open archive has no timeout of its own, locked
@@ -881,7 +1033,7 @@
   });
 </script>
 
-<svelte:window onkeydown={shortcut} ondrop={dropElsewhere} />
+<svelte:window onkeydown={onKey} ondrop={dropElsewhere} />
 
 <div class="layer-head">
   <button type="button" class="btn subtle back" onclick={() => { store.leaveArchive(); }}>Archives</button>
@@ -922,9 +1074,9 @@
          thing that can say whether the tree holds anything, since a
          folder occupies no data region and an archive of folders alone
          reports 0 files while holding real records (APP.md §3). -->
-    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} title={(stat?.records ?? 0) === 0 ? "This archive holds nothing yet" : undefined} onclick={extractAll}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extractAll}</button>
-    <button type="button" class="btn subtle" disabled={!one} title={one ? undefined : "Select one item to rename"} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>Rename…</button>
-    <button type="button" class="btn subtle danger" disabled={selected.size === 0} title={selected.size === 0 ? "Select what to delete" : undefined} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>Delete…</button>
+    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} title={(stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+    <button type="button" class="btn subtle" disabled={!one} title={one ? keyTitles.rename : archivePageCopy.renameNeedsOne} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>{commandCopy.rename}</button>
+    <button type="button" class="btn subtle danger" disabled={selected.size === 0} title={selected.size === 0 ? archivePageCopy.deleteNeedsSome : keyTitles.delete} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.delete}</button>
     <div class="grow"></div>
     <!-- Tampered disables it here as it does on the Archives page (APP.md
          §13, R25): the flow closes the archive before the write is even
@@ -962,10 +1114,6 @@
          registry write, greyed while Locked or Tampered as there. -->
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div>
   {/if}
-  <!-- The operation strip and nothing else: no pending bar, no Save, no
-       Discard, since every operation commits at its end (APP.md §2.3). -->
-  <OpsBar />
-
   <div class="file-split" class:dropping>
     <!-- A click on the list's blank area — under the last row, or in the
          container beside the table — clears the selection and the anchor
@@ -1005,7 +1153,7 @@
               <!-- `..` (APP.md §6): up one level, pinned at the top under
                    every sort, no checkbox, never selected; it takes
                    focus like any row, and a drop on it moves up. -->
-              <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
               <tr
                 class="up"
                 tabindex="0"
@@ -1013,8 +1161,7 @@
                 class:refused={refusedAt(upTarget.id, "up")}
                 aria-label={listCopy.upLabel}
                 onclick={(e) => { e.stopPropagation(); moveError = null; }}
-                ondblclick={() => void store.goUp()}
-                onkeydown={upKeydown}
+                ondblclick={() => nav(() => store.goUp())}
                 ondragover={(e) => over(e, upTarget, "up")}
                 ondragleave={() => leave(upTarget, "up")}
                 ondrop={(e) => dropOn(e, upTarget, "up")}
@@ -1030,7 +1177,7 @@
               </tr>
             {/if}
             {#each rows as r, i (r.id)}
-              <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
               <tr
                 data-id={r.id}
                 tabindex={selected.has(r.id) || (selected.size === 0 && i === 0 && !parentId) ? 0 : -1}
@@ -1040,7 +1187,6 @@
                 onpointerdown={(e) => pointerdown(e, r)}
                 onclick={(e) => click(e, r)}
                 ondblclick={() => open(r)}
-                onkeydown={(e) => keydown(e, r)}
                 ondragover={(e) => over(e, { id: r.id, isDir: r.isDir }, "row")}
                 ondragleave={() => leave({ id: r.id, isDir: r.isDir }, "row")}
                 ondrop={(e) => dropOn(e, { id: r.id, isDir: r.isDir }, "row")}
@@ -1091,9 +1237,10 @@
           <pre>{previewText.text}{previewText.truncated ? "\n…" : ""}</pre>
         {:else if previewLoading}
           <!-- Keyed on the row, so a move from one loading preview to the
-               next waits its own 300 ms again. -->
+               next waits its own 300 ms again. The ring is the one pending
+               rule (lib/pending.ts, app.css .pending). -->
           {#key one?.id}
-            <span class="wait" aria-hidden="true"></span>
+            <span class="wait" aria-hidden="true" use:pending={true}></span>
           {/key}
         {:else if one && one.isDir}
           <span class="none">Folder · {bytes(one.size)} inside</span>
@@ -1130,7 +1277,9 @@
         </div>
       {/if}
       <div class="preview-actions">
-        <button type="button" class="btn accent" disabled={selected.size === 0} title={selected.size === 0 ? "Select what to extract" : undefined} onclick={() => startExtract(chosenIds, countPhrase(deleteCounts(chosen)) || listCopy.selected(selected.size))}>{commandCopy.extract}</button>
+        <!-- The selection's shortcut to the one dialog (direction 7): it
+             opens on the selection, as the toolbar's does with one. -->
+        <button type="button" class="btn accent" disabled={selected.size === 0} title={selected.size === 0 ? archivePageCopy.extractNeedsSome : keyTitles.extract} onclick={extractCommand}>{commandCopy.extract}</button>
       </div>
     </aside>
   </div>
@@ -1151,7 +1300,7 @@
     <p class="t-quiet">Enter renames. A name already in {folderName} is refused here, not after.</p>
     {#snippet actions()}
       <button type="submit" class="btn accent">Rename</button>
-      <button type="button" class="btn" onclick={() => (renaming = null)}>Cancel</button>
+      <button type="button" class="btn" onclick={() => (renaming = null)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1169,7 +1318,7 @@
     <p>The folder is created now and stays, even while it is empty.</p>
     {#snippet actions()}
       <button type="submit" class="btn accent">Create folder</button>
-      <button type="button" class="btn" onclick={() => (creating = false)}>Cancel</button>
+      <button type="button" class="btn" onclick={() => (creating = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1182,7 +1331,7 @@
     <p>{deleteBody(deleting.rows)}</p>
     {#snippet actions()}
       <button type="button" class="btn danger-fill" onclick={doDelete}>Delete</button>
-      <button type="button" class="btn" onclick={() => (deleting = null)}>Cancel</button>
+      <button type="button" class="btn" onclick={() => (deleting = null)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1203,36 +1352,26 @@
 
 {#if extracting}
   <ExtractDialog
-    label={extracting.label}
-    initial={destinationFor(store.currentPath, stat?.name ?? "", extracting.all)}
-    onextract={(dir, policy) => void doExtract(dir, policy)}
+    archiveName={archiveName || (stat?.name ?? "")}
+    archivePath={store.currentPath}
+    selectedCount={extracting.count}
+    onextract={(scope, dir, policy) => void doExtract(scope, dir, policy)}
     oncancel={() => (extracting = null)}
   />
 {/if}
 
-<!-- What an `ask` came back with (APP.md §3): one conflict names the file,
-     several count them, and *Compare* / *Let me decide* open the compare
-     list. Skipping re-issues nothing. The words are the strings table's
-     (§7). -->
+<!-- What an `ask` came back with (APP.md §3), in the shape of Explorer's
+     own "Replace or Skip Files" (direction 7): the title counts and names
+     the destination — one conflict names the file — and three command
+     rows of equal weight say what each answer does. Skipping re-issues
+     nothing. The words are the strings table's (§7). -->
 {#if question && conflicts.length > 0 && !comparing}
-  <!-- Esc is Skip, or Skip all — never Replace — and the backdrop is
-       nothing: the dialog has a choice (APP.md §6, "Dialogs stay put").
-       No button wears the accent, so the one that looks like the default
-       is never the mass overwrite (ruled 2026-10-14). -->
-  <Dialog title={conflictTitle(conflicts.length, conflicts[0].name)} onclose={() => decide("skip")}>
-    {#if conflicts.length === 1}
-      <p>{conflictCopy.oneBody}</p>
-    {:else}
-      <ul class="plain">
-        {#each conflicts.slice(0, 6) as c (c.path)}<li>{c.path}</li>{/each}
-        {#if conflicts.length > 6}<li>{conflictCopy.andMore(conflicts.length - 6)}</li>{/if}
-      </ul>
-    {/if}
-    {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (comparing = true)}>{conflictCopy.compare(conflicts.length)}</button>
-      <button type="button" class="btn" onclick={() => decide("skip")}>{conflictCopy.skip(conflicts.length)}</button>
-      <button type="button" class="btn" onclick={() => decide("replace")}>{conflictCopy.replace(conflicts.length)}</button>
-    {/snippet}
+  <!-- Esc and the corner close are Skip — never Replace — and the
+       backdrop is nothing: the dialog has a choice (APP.md §6, "Dialogs
+       stay put"). No row wears the accent, so the one that looks like the
+       default is never the mass overwrite (ruled 2026-10-14). -->
+  <Dialog title={conflictTitle(conflicts.length, conflicts[0].name, question.destination ?? "")} onclose={() => decide("skip")} closeButton closeTitle={dialogCopy.skipEsc}>
+    <CommandRows rows={conflictRows} />
   </Dialog>
 {/if}
 
@@ -1255,44 +1394,32 @@
   {/key}
 {/if}
 
-<!-- The collision dialog says the kind on both sides — "Photos is a file
-     here" — and greys *Replace* whenever the two differ: kinds that differ
-     never replace one another, in either direction (APP.md §3). Every
-     button is a standard one: the accent never sits on Replace (ruled
-     2026-10-14). -->
-{#if collisions}
-  <Dialog title="Some names already exist" onclose={() => (collisions = null)}>
-    <ul class="plain">
+<!-- The add collisions (APP.md §3) in the conflict question's shape
+     (direction 7): the title counts what is already there by its kind and
+     names the folder, the names follow with each one's kind — both kinds
+     when they differ — and then Replace · Keep both · Skip as command rows,
+     Cancel in the band. Replace is greyed with its reason whenever a file
+     and a folder meet: kinds that differ never replace one another, in
+     either direction. A folder meeting a folder is said as a merge, and a
+     note under the names says what the choice does inside it. No row
+     wears the accent (ruled 2026-10-14). A collision carries the two kinds
+     only, so no size or date is said. -->
+{#if collisions && collisionSaid}
+  <Dialog title={collisionSaid.title} onclose={() => (collisions = null)}>
+    <ul class="collide">
       {#each collisions.list.slice(0, 6) as c (c.name)}
-        <li>{c.name} is {c.existingIsDir ? "a folder" : "a file"} here{c.isDir === c.existingIsDir ? "" : c.isDir ? ", and a folder is being added" : ", and a file is being added"}.</li>
+        <li>
+          <svg class="i i-14" aria-hidden="true"><use href="#{fileIcon(c.name, c.existingIsDir)}" /></svg>
+          <span class="nm">{shownName(c.name)}</span>
+          <span class="kd" class:clash={c.isDir !== c.existingIsDir}>{collisionCopy.kind(c.isDir, c.existingIsDir)}</span>
+        </li>
       {/each}
-      {#if collisions.list.length > 6}<li>and {collisions.list.length - 6} more.</li>{/if}
+      {#if collisions.list.length > 6}<li class="more">{collisionCopy.andMore(collisions.list.length - 6)}</li>{/if}
     </ul>
-    {#if kindsDiffer}<p class="dim">A file and a folder never replace one another, so <b>Replace</b> is off: skip those, or keep both.</p>{/if}
+    {#if collisionSaid.note}<p class="merge">{collisionSaid.note}</p>{/if}
+    <CommandRows rows={collisionRows} />
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => collisions && void addWith(collisions.at, collisions.plan, "skip")}>Skip those</button>
-      <button type="button" class="btn" onclick={() => collisions && void addWith(collisions.at, collisions.plan, "keep-both")}>Keep both</button>
-      <button type="button" class="btn" disabled={kindsDiffer} title={kindsDiffer ? "A file and a folder never replace one another" : undefined} onclick={() => collisions && void addWith(collisions.at, collisions.plan, "replace")}>Replace</button>
-      <button type="button" class="btn" onclick={() => (collisions = null)}>Cancel</button>
-    {/snippet}
-  </Dialog>
-{/if}
-
-<!-- What a batch left out: the counts first — folders created and entered
-     beside the files added — then each item with its own code's copy
-     (APP.md §3, FileOutcome). It waits behind the questions of the same
-     op — the conflicts, the refused names — which are answered first. -->
-{#if results && !question && !refused}
-  <Dialog title="What happened" onclose={() => (store.results = null)} dismissable>
-    <p>{resultLine}</p>
-    <ul class="plain">
-      {#each resultItems.slice(0, 12) as t, i (i)}
-        <li><b>{t.name}</b>{t.isDir ? " (folder)" : ""} — {t.text}</li>
-      {/each}
-      {#if resultItems.length > 12}<li>and {resultItems.length - 12} more.</li>{/if}
-    </ul>
-    {#snippet actions()}
-      <button type="button" class="btn accent" onclick={() => (store.results = null)}>Close</button>
+      <button type="button" class="btn" onclick={() => (collisions = null)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -1313,21 +1440,19 @@
     overflow-y: auto;
   }
 
-  /* The preview's wait (APP.md §6, ruled 2026-10-14): a 14 px ring, 2 px,
-     the accent, one turn a second — shown only after 300 ms, so a quick
-     preview never flashes it. Under reduced motion it stands still. */
-  .wait {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 2px solid var(--accent-line);
-    border-top-color: var(--accent);
-    opacity: 0;
-    animation: wait-show 0s linear 300ms forwards, wait-turn 1s linear infinite;
-  }
-  @keyframes wait-show { to { opacity: 1; } }
-  @keyframes wait-turn { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) {
-    .wait { animation: wait-show 0s linear 300ms forwards; }
-  }
+  /* The preview's wait (APP.md §6, ruled 2026-10-14): the pending ring
+     (app.css .pending), which the action shows after 300 ms. */
+  .wait { display: inline-flex; }
+
+  /* The add collisions' names (direction 7): the kind's icon, the name,
+     and its kind in caption at the right — the clash in the attention
+     ink, since that is what greys Replace. One line each, 4 apart. */
+  .collide { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
+  .collide li { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+  .collide .i { color: var(--ink-3); }
+  .collide .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .collide .kd { flex: none; font: var(--t-cap); color: var(--ink-2); }
+  .collide .kd.clash { color: var(--attention); }
+  .collide .more { color: var(--ink-2); }
+  .merge { margin: 0; font: var(--t-cap); color: var(--ink-2); }
 </style>

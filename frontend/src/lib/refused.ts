@@ -88,13 +88,15 @@ export function shorten(name: string): string | null {
   return reserved(half) ? shorten(out) : out;
 }
 
-// What the dialog decided for one refused record: *Shorten*, *Rename…* to
+// What the dialog decided for one refused record: *Use this name* — the
+// shorter name shown, which is shorten's (kind "shorten") — *Rename…* to
 // a name typed, or *Skip*.
 export type RefusedDecision = { kind: "shorten" } | { kind: "rename"; to: string } | { kind: "skip" };
 
 // The re-issue *Shorten* and *Rename…* send: the ids chosen and the name
 // each is written under in that extract only. A row skipped, a row that
-// came without an id, or a *Shorten* with nothing left to shorten is in
+// came without an id, or a *Use this name* with nothing left to shorten
+// (given to it by "Do the same for the other N") is in
 // neither. The core answers params for a name that breaks R20, so a typed
 // name is judged by the dialog before it gets here.
 export interface RefusedPlan {
@@ -135,4 +137,26 @@ export function skipAllLike(rows: RefusedRow[], decisions: Record<string, Refuse
 // a decision, or -1 when every row has one and the re-issue can go.
 export function nextUndecided(rows: RefusedRow[], decisions: Record<string, RefusedDecision>): number {
   return rows.findIndex((r) => !(r.id in decisions));
+}
+
+// restLike is the N of "Do the same for the other N" (direction 7): the
+// rows of the same kind as the one asked about that still wait for an
+// answer. Zero hides the tick.
+export function restLike(rows: RefusedRow[], decisions: Record<string, RefusedDecision>, at: RefusedRow): number {
+  return rows.filter((r) => r.id !== at.id && r.kind === at.kind && !(r.id in decisions)).length;
+}
+
+// applyToRest is the answer given with that tick on: the row asked about
+// takes it, and so does every row of the same kind still waiting — the
+// rows already answered keep their answers. *Use this name* given to the
+// rest writes each under its own shorter name, and one with nothing left
+// to shorten is skipped by the plan. *Rename…* is never given to others:
+// a typed name is one record's.
+export function applyToRest(rows: RefusedRow[], decisions: Record<string, RefusedDecision>, at: RefusedRow, d: RefusedDecision): Record<string, RefusedDecision> {
+  const out: Record<string, RefusedDecision> = { ...decisions, [at.id]: d };
+  if (d.kind === "rename") return out;
+  for (const r of rows) {
+    if (r.kind === at.kind && !(r.id in out)) out[r.id] = d;
+  }
+  return out;
 }

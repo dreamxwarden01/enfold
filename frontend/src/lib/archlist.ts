@@ -62,6 +62,15 @@ export function compacting(a: RowFacts, ops: readonly OpFacts[]): boolean {
   return a.state === "compacting" || ops.some((o) => !o.finished && o.kind === "compact" && o.archiveId === a.id);
 }
 
+// runningKind: the operation running on this row that the core queues
+// behind the handle rather than refusing — a Refresh fingerprint (verify)
+// or a re-key (rotate) — so the row can say so with a chip while nothing
+// is greyed for it; "" when neither runs. A compaction is compacting's.
+export function runningKind(a: RowFacts, ops: readonly OpFacts[]): "" | "verify" | "rotate" {
+  const o = ops.find((o) => !o.finished && o.archiveId === a.id && (o.kind === "verify" || o.kind === "rotate"));
+  return o ? (o.kind as "verify" | "rotate") : "";
+}
+
 // rowRefusal: the code that stops Open, Compact, Re-key archive and Refresh
 // fingerprint on this row, or "" when nothing does. Forgotten comes
 // first: Restore is the way back, whatever else is going on.

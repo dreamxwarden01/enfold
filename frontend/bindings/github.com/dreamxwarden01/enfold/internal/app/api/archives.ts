@@ -16,10 +16,12 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as app$0 from "../models.js";
 
 /**
- * CheckFiles refreshes the presence of every record's last_path; the list's
- * Status column follows on archives.changed.
+ * CheckFiles refreshes the presence of every record's last_path and answers
+ * when the pass has ended, with what it measured and what it found missing,
+ * for *Find missing files*' line (APP.md §13); the list's Status column
+ * follows on archives.changed.
  */
-export function CheckFiles(): $CancellablePromise<void> {
+export function CheckFiles(): $CancellablePromise<app$0.CheckReport> {
     return $Call.ByID(118112595);
 }
 

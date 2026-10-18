@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_POLICY, POLICIES, appendArchiveFolder, archiveFolderName, destinationEmpty,
-  destinationFor, parentFolder, rememberPolicy, startingPolicy,
+  destinationFor, destinationForScope, followScope, parentFolder, rememberPolicy, startingPolicy, startingScope,
 } from "./extract";
 
 // The extract dialog's destination field (APP.md §3, ruled 2026-09-10):
@@ -138,5 +138,38 @@ describe("the destination itself", () => {
     expect(destinationEmpty("")).toBe(true);
     expect(destinationEmpty("   ")).toBe(true);
     expect(destinationEmpty("D:\\Somewhere that is not there yet")).toBe(false);
+  });
+});
+
+// One Extract… with a scope (direction 7): the dialog asks what first —
+// the selection or everything in the archive — and the 2026-09-10 rule
+// is applied per scope.
+describe("the scope line", () => {
+  const path = "D:\\Archives\\Photos 2024.efd";
+
+  it("opens on the selection when there is one, and on everything when there is none", () => {
+    expect(startingScope(4)).toBe("selection");
+    expect(startingScope(1)).toBe("selection");
+    expect(startingScope(0)).toBe("all");
+  });
+
+  it("prefills each scope by the 2026-09-10 rule", () => {
+    expect(destinationForScope(path, "Photos 2024", "selection")).toBe("D:\\Archives");
+    expect(destinationForScope(path, "Photos 2024", "all")).toBe("D:\\Archives\\Photos 2024");
+  });
+
+  it("follows the scope while the field holds the old scope's prefill", () => {
+    expect(followScope("D:\\Archives", "selection", "all", path, "Photos 2024")).toBe("D:\\Archives\\Photos 2024");
+    expect(followScope("D:\\Archives\\Photos 2024", "all", "selection", path, "Photos 2024")).toBe("D:\\Archives");
+  });
+
+  it("leaves a field the user has edited as it is", () => {
+    expect(followScope("E:\\Out", "selection", "all", path, "Photos 2024")).toBe("E:\\Out");
+    expect(followScope("D:\\Archives\\", "selection", "all", path, "Photos 2024")).toBe("D:\\Archives\\");
+    expect(followScope("", "all", "selection", path, "Photos 2024")).toBe("");
+  });
+
+  it("stays empty for an archive whose folder is not known", () => {
+    expect(followScope("", "selection", "all", "", "Photos 2024")).toBe("");
   });
 });

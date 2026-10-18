@@ -17,7 +17,9 @@
   import { CeremonyStep, Vault, errorOf } from "../lib/api";
   import type { FileInfo, IncomingRecord } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { chipCopy, codeText, dialogCopy, importCopy, lockCopy, vaultCopy } from "../lib/strings";
+  import { chipCopy, codeText, dialogCopy, importCopy, lockCopy, pendingCopy, vaultCopy } from "../lib/strings";
+  import { pending } from "../lib/pending";
+  import PendingLabel from "./PendingLabel.svelte";
   import { date, dateTime, keyId, leaf, plural } from "../lib/format";
   import { actionOf, defaultTicks, differLine, incomingOf, summarise, tickable, tickedIds } from "../lib/merge";
   import Dialog from "./Dialog.svelte";
@@ -33,6 +35,8 @@
   let looked = $state(false);
   let ticks = $state<Record<string, boolean>>({});
   let merging = $state(false);
+  // The merge has been waited on for 300 ms (lib/pending.ts).
+  let mergeArmed = $state(false);
   let fetched = $state("");
   // reading: the ceremony was asked for and its first event has not
   // landed yet, so the proof screen does not flash back.
@@ -247,7 +251,7 @@
       <!-- [Import 2 archives] [Cancel] (the verb table, ruled 2026-10-17):
            the count is the ticks', and with none ticked the verb stands
            alone, greyed. Cancel discards what was read. -->
-      <button type="button" class="btn accent" disabled={merging || sum.total === 0} onclick={merge}>{merging ? dialogCopy.working : importCopy.archivesPrimary(sum.total)}</button>
+      <button type="button" class="btn accent" disabled={merging || sum.total === 0} onclick={merge} use:pending={{ on: merging, armed: (b) => (mergeArmed = b) }}><PendingLabel armed={mergeArmed} rest={importCopy.archivesPrimary(sum.total)} busy={pendingCopy.merging} /></button>
       <button type="button" class="btn" disabled={merging} onclick={close}>{dialogCopy.cancel}</button>
     {:else if !cer && !reading}
       <!-- What happens next is the unlock that opens the file. -->

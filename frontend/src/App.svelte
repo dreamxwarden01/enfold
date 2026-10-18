@@ -14,6 +14,7 @@
   import CloseDialog from "./components/CloseDialog.svelte";
   import OpenKeyDialog from "./components/OpenKeyDialog.svelte";
   import LayerFoot from "./components/LayerFoot.svelte";
+  import ResultsDialog from "./components/ResultsDialog.svelte";
   import { fade, fly } from "svelte/transition";
   import { motion, delay, enter, GAP, OUT, MOVE } from "./lib/motion";
 
@@ -164,6 +165,14 @@
      here. -->
 {#if store.keyNotInVault}
   <OpenKeyDialog path={store.keyNotInVault} onclose={() => (store.keyNotInVault = null)} onimport={() => store.askImportRecords()} />
+{/if}
+
+<!-- What a batch left out (APP.md §3; direction 4): above every route,
+     since the done line's Details opens it from any page. It waits behind
+     the questions of the same op — the conflicts, the refused names — which
+     the archive's page asks first. -->
+{#if store.results && !store.conflictQuestion && !store.refusedQuestion}
+  <ResultsDialog op={store.results} onclose={() => (store.results = null)} />
 {/if}
 
 <Toasts />

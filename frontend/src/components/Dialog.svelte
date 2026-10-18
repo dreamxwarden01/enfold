@@ -53,6 +53,9 @@
     // the close question has one, since its foot holds its two answers and
     // no Cancel.
     closeButton?: boolean;
+    // closeTitle: what the corner button says it does when it is not Cancel
+    // (the extract's conflict question: Skip).
+    closeTitle?: string;
     // anchored: the box stands at a fixed distance from the top of the
     // window instead of at its middle (APP.md §6, Dialogs stay put; ruled
     // 2026-10-17). Opt-in, for a dialog whose height changes with a
@@ -61,7 +64,7 @@
     // downward; every other dialog is centred.
     anchored?: boolean;
   }
-  let { title, onclose, dismissable = false, children, actions, wide = false, medium = false, heading, covered = false, onsubmit, select, closeButton = false, anchored = false }: Props = $props();
+  let { title, onclose, dismissable = false, children, actions, wide = false, medium = false, heading, covered = false, onsubmit, select, closeButton = false, closeTitle, anchored = false }: Props = $props();
 
   // What the body lends a ceremony panel (lib/dialogs DialogHost): the
   // foot band while it is mounted, and the touch's green over the box
@@ -207,7 +210,7 @@
     {#if closeButton}
       <div class="dialog-head">
         <h2>{title}{@render heading?.()}</h2>
-        <button type="button" class="btn subtle dialog-close" title={onclose ? dialogCopy.cancelEsc : undefined} aria-label={dialogCopy.cancel} disabled={!onclose} onclick={cancel}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button>
+        <button type="button" class="btn subtle dialog-close" title={onclose ? (closeTitle ?? dialogCopy.cancelEsc) : undefined} aria-label={closeTitle ?? dialogCopy.cancel} disabled={!onclose} onclick={cancel}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button>
       </div>
     {:else}
       <h2>{title}{@render heading?.()}</h2>

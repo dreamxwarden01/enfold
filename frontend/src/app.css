@@ -95,6 +95,8 @@
   --dur-pop: 240ms;
   --loop-listen: 1.6s;
   --loop-pulse: 2.4s;
+  --loop-ring: 1s;   /* the pending ring's turn */
+  --loop-run: 1.4s;  /* the indeterminate progress line's run */
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI Semibold", "Segoe UI", system-ui, sans-serif;
   --font-text: "Segoe UI Variable Text", "Segoe UI Variable Small", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
@@ -643,6 +645,23 @@ progress:indeterminate { background: var(--accent-line); }
 .rail-item[aria-current="page"]::before { transform: scaleY(1); }
 .rail-item[aria-current="page"] .i { color: var(--accent-ink); }
 .rail-gap { flex: 1; }
+/* The rail's mark while anything runs (direction 4): an 8 px accent dot at
+   the item's right edge, inside its 36 px row and centred on it; while
+   exactly one operation runs with a known total, a 14 px ring, 2 px
+   thick, filled from the top to its percentage — a conic gradient from
+   the accent to the stroke on --pct — the quiet fill vanished on the
+   current item's own fill, so a quarter ring read as a spinner — cut to a
+   ring by a mask (the
+   mask's colour is its opacity, not a colour on screen). */
+@property --pct { syntax: "<number>"; inherits: false; initial-value: 0; }
+.rail-mark { position: absolute; right: var(--s3); top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
+.rail-mark.ring {
+  width: 14px; height: 14px; margin-top: -7px;
+  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--stroke) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  transition: --pct var(--dur-fast) var(--ease-enter);
+}
 .rail-foot { padding: var(--s2) 0 0; border-top: 1px solid var(--stroke); margin-top: var(--s2); }
 .layer {
   background: var(--layer); border-top: 1px solid var(--stroke); border-left: 1px solid var(--stroke);
@@ -659,13 +678,67 @@ progress:indeterminate { background: var(--accent-line); }
    ruled with the height, not a step of the grid. */
 .layer-head { display: flex; align-items: center; gap: var(--s3); padding: 18px var(--s6) var(--s3); min-height: 62px; flex: none; }
 .layer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 var(--s6); gap: var(--s3); overflow: auto; }
+/* The foot is the status bar (direction 4, phase 3): 34 px whatever it
+   says, so nothing above it ever moves; its popovers stand on it. */
 .layer-foot {
+  position: relative;
   display: flex; align-items: center; justify-content: space-between; gap: var(--s3); height: 34px; flex: none; padding: 0 var(--s6);
   border-top: 1px solid var(--stroke); background: var(--ground); color: var(--ink-2); font: var(--t-cap);
 }
 .cmdbar { display: flex; align-items: center; gap: var(--s1); flex: none; flex-wrap: wrap; }
 .lockchip { display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); font-variant-numeric: tabular-nums; }
 .lockchip .i { color: var(--accent-ink); }
+/* The foot's progress line (direction 4): 160 px and 3 px high, the
+   accent filling the quiet track by bytes. Before the total is known a
+   40 px segment travels along it; under reduced motion the whole line
+   stands in the accent's pale stroke instead, still. */
+.fprog { position: relative; flex: none; width: 160px; height: 3px; border-radius: 1.5px; background: var(--fill-2); overflow: hidden; }
+.fprog.wide { width: 100%; }
+.fprog > i { display: block; height: 100%; border-radius: 1.5px; background: var(--accent); transition: width var(--dur-fast) var(--ease-enter); }
+.fprog.indet > i { width: 40px; animation: fprog-run var(--loop-run) var(--ease-enter) infinite; }
+@keyframes fprog-run { from { margin-left: -40px; } to { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+  .fprog.indet > i { width: 100%; margin-left: 0; animation: none; background: var(--accent-line); }
+}
+/* A popover over the foot (direction 4): the running operations' flyout
+   at the left, the standing notices at the right. The menu's surface,
+   its stroke and its shadow, 360 px wide, 4 px above the foot's edge. */
+.foot-pop {
+  position: absolute; bottom: calc(100% + var(--s1)); z-index: 6; width: 360px; max-width: calc(100% - 2 * var(--s6));
+  display: flex; flex-direction: column; padding: var(--s1);
+  background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card); box-shadow: var(--shadow-pop);
+  font: var(--t-cap); color: var(--ink-2);
+}
+.foot-pop.ops-pop { left: var(--s6); }
+.foot-pop.notice-pop { right: var(--s6); }
+/* The pending ring (direction 4, phase 3; lib/pending.ts): one rule for
+   every wait the user started — the preview pane's, a row's open, a
+   dialog's primary. 14 px, 2 px of the accent turning once a second on
+   its pale stroke, drawn before the control's label once the wait has
+   passed 300 ms (the action adds .pending then). Over a filled button it
+   turns in that button's own ink. Under reduced motion it stands still. */
+.pending::before, .swap > .busy::before {
+  content: ""; flex: none; display: inline-block; box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--accent-line); border-top-color: var(--accent); animation: ring-turn var(--loop-ring) linear infinite;
+}
+.btn.accent.pending::before, .btn.accent .swap > .busy::before { border-color: color-mix(in srgb, var(--accent-on) 40%, transparent); border-top-color: var(--accent-on); }
+.btn.danger-fill.pending::before, .btn.danger-fill .swap > .busy::before { border-color: color-mix(in srgb, var(--danger-on) 40%, transparent); border-top-color: var(--danger-on); }
+.btn.pending:disabled::before, .btn:disabled .swap > .busy::before { border-color: var(--stroke); border-top-color: var(--ink-dis); }
+/* On a button the ring stands where its icon was, so the label keeps its place
+   beside one mark, not two. */
+.btn.pending > .i { display: none; }
+/* A label that changes while its button waits (PendingLabel.svelte): both
+   labels share one cell, the one not shown hidden, so the button is as wide
+   as the wider from the start and nothing beside it moves (direction 4); the
+   ring is the waiting label's, not the button's, so it adds no width. */
+.swap { display: inline-grid; justify-items: center; }
+.swap > * { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: var(--s2); }
+.swap > .off { visibility: hidden; }
+.btn.pending:has(> .swap)::before { content: none; }
+@keyframes ring-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .pending::before, .swap > .busy::before { animation: none; }
+}
 
 /* ---------- tables ---------------------------------------- */
 .tablewrap { background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); overflow: auto; min-height: 0; }
@@ -1329,26 +1402,7 @@ tbody tr.up .fname { color: var(--ink-2); }
   .sb-note { flex-basis: 100%; padding-right: 0; }
 }
 
-/* ---------- ops, dialogs, toasts ---------------------------------------- */
-.ops { display: flex; flex-direction: column; gap: var(--s2); flex: none; }
-/* The row is as tall as a row with a button in it, always: a drag out's
-   hover carries no bar and no *Cancel*, and the strip must not grow under
-   the user when the staging begins (APP.md §3, ruled 2026-09-11 — a strip
-   that reflows while it is being watched). 28px of .btn.sm, 6 px either
-   side and the border — the height holds it, so the padding is a strip's
-   inset that the 42 px centres in. */
-.op { display: flex; align-items: center; gap: var(--s3); min-height: 42px; padding: var(--s1) var(--s3); border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); font: var(--t-cap); }
-.op progress { flex: 1; }
-/* The name keeps its room and the byte readout does not shuffle the bar as
-   the figures grow (APP.md §6: progress is by bytes). */
-.op .opname { flex: none; }
-/* The phase, where it says something the name does not (lib/ops.ts): a
-   second, quieter line's worth of words beside the first. */
-.op .opphase { flex: none; color: var(--ink-2); }
-.op .opbytes { flex: none; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-/* A drag out's hover has no bar (APP.md §3): the label stands alone at the
-   strip's left, the room the bar would take left empty. */
-.op .grow { flex: 1; }
+/* ---------- dialogs, toasts ---------------------------------------- */
 .backdrop { position: fixed; inset: 0; background: var(--smoke); display: flex; align-items: center; justify-content: center; z-index: 20; }
 /* The dialog is WinUI's ContentDialog (APP.md §6, Controls; ruled
    2026-10-17), in two parts: the body — the title (sub, 20/28), the prose

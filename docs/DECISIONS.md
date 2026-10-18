@@ -4903,3 +4903,78 @@ archive, and its Lock does not clear Tampered as the core's does; the strip's se
 shows the core's "hashing"; the replace ask survives a damaged or absent lock card until the
 route leaves the lock screen; `--stage-w` and `--stage-top` moved to `:root` so the boot panel
 and the lock panel cannot drift. Nothing of direction 9 has been seen in a real window.
+
+## 2026-10-18 — Phase 3: status gets a home and an ending; Explorer's habits
+
+**Phase 3, built** (2026-10-18). The user asked for the third phase after direction 9: direction
+4's foot as the status bar, done line, ops flyout, rail dot, cancellable work, pending ring and
+standing notices, and direction 7's keys, one *Extract…*, and the conflict and refused-name
+dialogs — the research's own cut, with InfoBars, list motion, row menus, *Move to…* and the
+viewer left to phase 4 and named as not to be half-built. Built in four parts and a spec pass,
+each reviewed, the whole shot against the mock and read: **the foot is the status bar** — 34 px,
+always there, so the list never moves (its top measured the same before, during and after an
+operation, with two running and the flyout open); the left slot cycles the page's note, the
+running operation and the done line, cross-fading; the running line names the operation and its
+archive, a 160 px line 3 px high by bytes (a moving segment while the total is unknown), the
+bytes and a time left from the last 5 s of samples, and a subtle *Cancel* that reads
+*Cancelling…* greyed until the end; two or more running show the latest with *+N*, which opens a
+flyout of 40 px rows with each one's *Cancel* or *Runs to the end*; the 42 px strip above the
+list is retired with its rules restated for the foot. **The done line**, 6 s or until the next
+press in the page's body, queued up to three: *Extracted 15 files to …* with *Show in Explorer*,
+*Stopped. 6 of 15 files were written to …* in neutral ink for a cancel (the neutral toast of
+phase 0 retired), *Added 2 of 4 files to …* with *Details*, *Compacted Photos 2024: 2.9 GB given
+back* (the core's Compact fills Returned now), *Fingerprint refreshed for …*, *Re-keyed …*,
+*Backup saved to …* with *Show in Explorer* (its toast retired), *Checked 3 archives · all files
+present* (CheckFiles returns a report, {probed, missing}, after joining or starting the pass) or
+*No archive was checked* when nothing was probed; a failed operation keeps its error toast.
+**The results dialog** is titled by its outcome (*2 files were not added*), each row the name
+and the code's copy with *Show in Explorer* for a source on disk, *Copy details* and *Close*
+equal. **The rail**: an 8 px accent dot on Archives while anything runs, a 14 px ring at the
+percentage when one runs with a known total. **Refresh fingerprint and Extract are cancellable**
+(the core already checked its context; a cancelled extract keeps what it wrote and the line says
+how many), and the compact and re-key dialogs say *It runs to the end once started.* **The
+pending ring**: one primitive, 300 ms, aria-busy, the 14 px ring the preview pane already drew,
+on Open from the list (and the row's status cell), Find missing files, Delete, Merge, Save and
+Create, with one verb set (*Opening…*, *Deleting…*, *Merging…*, *Saving…*, *Checking…*). **Stay
+unlocked** in the idle deadline's last minute; the too-slow refusal says to lock and unlock.
+**Standing notices** gather behind *N notices* on the foot's lock chip, a popover with each line
+and its tier's icon (direction 9's deferral closed), the arrival toast kept and its kind now
+following the tier. **The keys**: one pure keymap (`lib/listkeys.ts`) for both lists — arrows
+move the selection and the pane follows (reversing 2026-09-10's *Space selects, arrows move
+focus*: that suited a checkbox list, not Explorer), Shift and Ctrl with the arrows,
+Home/End/PgUp/PgDn, Space and Ctrl+Space, Ctrl+A, Esc, Enter on a folder, Backspace and Alt+Up,
+Alt+Left back to the list, Ctrl+E/Del/F2/Ctrl+Shift+N/F5, Ctrl+N/Ctrl+O/Ctrl+F/Alt+Enter on the
+Archives list, a 700 ms type-ahead, Ctrl+L *Lock now* on every page from the foot; the titles
+say the key; the *Missing* chip is a button that runs *Locate…*. **One *Extract…*** on the
+toolbar with a scope line — the selected items or everything — the destination following the
+2026-09-10 rule per scope until the field is edited, Ctrl+E, the pane's *Extract…* as the
+selection's shortcut; *Extract all…* retired. **The conflict question** in Explorer's shape: a
+title that counts and names the place, three command rows of equal weight with their
+consequences, no accent, Esc and the corner close are *Skip*; **the add collisions** the same,
+with *Keep both*, a folder meeting a folder said as a merge of what is inside; **the compare
+list's** button says what it does (*Extract 2, skip 1*), replacing the 2026-10-17 count line,
+with the ticks' rule as one caption; **the refused name** shows the name it would write with
+*Use this name* (*Shorten* retired), *Rename…* and *Skip*, all standard, a *Do the same for the
+other N* tick for the rest, and how names are shortened behind a disclosure.
+
+**Chosen along the way, and left** (2026-10-18). Ruled at the end: the page's command keys (Del,
+F2, Backspace, Esc, F5, Ctrl+E) act from anywhere in the window but a text field, the rail and
+the foot included, since the handler is the window's and Explorer's own keys behave so; Ctrl+O
+works inside the Filter as the named exception to a field keeping its keys (ruled 2026-10-14,
+kept); the done line holds its 6 s even while another operation runs, the slot's *Cancel*
+waiting behind it and the flyout keeping it when open; *Opening…* and *Checking…* stay as
+labels, the button reserving its wider width at rest so nothing beside it moves; the rail ring's
+track is the stroke, not the quiet fill, which vanished on the current item's own fill; the
+notices' dot wears the highest tier gathered; *Do the same for the other N* starts unticked,
+Explorer's way, and a path refusal's *Skip* is standard like the rest; the conflict question has
+no band and no *Cancel* (the corner close is *Skip (Esc)*); when every collision is a folder
+meeting a folder the question is still asked, since CheckNames sees the top level only and any
+silent policy could overwrite or skip unasked; the two new loops have their tokens. Left: the
+core queues a second operation on an archive behind its handle rather than refusing it, so a
+running refresh or re-key is said by a chip (*Refreshing fingerprint*, *Re-keying*) and greys
+nothing; CheckFiles waits for its whole pass, bounded per path at 2 s but not in total; a dated
+fingerprint and the add collisions' sizes and dates still need core fields; the compaction test
+fails about 2 in 100 runs on the antivirus's temp-dir race; the mock's paths mix separators; the
+foot's fit was measured at 1024 px while the window's minimum is 880; a status re-read that
+re-learns a running operation would clear a standing done line. Nothing of phase 3 has been seen
+in a real window.

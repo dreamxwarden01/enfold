@@ -88,7 +88,10 @@
     { key: "saved", label: technicalCopy.lastSaved, value: dateTime(d.lastWrittenAt), num: true },
     { key: "rev", label: technicalCopy.revision, value: String(d.revision), num: true },
     { key: "writer", label: technicalCopy.lastWriter, value: d.lastWriter || "—", mono: true, long: true },
-    { key: "seq", label: technicalCopy.seq, value: `${d.lastSeq} / ${d.hashAtSeq}`, num: true, long: true },
+    { key: "seq", label: technicalCopy.seq, value: String(d.lastSeq), num: true },
+    // 0 is no fingerprint taken yet (lib/archlist.ts fingerprintOf), said
+    // as the fingerprint row says it (format.ts hashText), not as a seq.
+    { key: "hashseq", label: technicalCopy.fingerprintSeq, value: d.hashAtSeq ? String(d.hashAtSeq) : "N/A", num: true },
     // The compression the archive was created with, by its word: every
     // writer of this archive follows it (FORMAT.md §7.1 bits 2-5).
     { key: "method", label: archivesCopy.facts.compression, value: methodWord(d.method) },
@@ -97,7 +100,7 @@
   ]);
   const stacked = $derived<Row[]>([
     { key: "path", label: technicalCopy.lastPath, value: d.lastPath || "—" },
-    { key: "hash", label: technicalCopy.ciphertextHash, value: hashText(d.lastCiphertextHash), mono: true },
+    { key: "hash", label: technicalCopy.fingerprint, value: hashText(d.lastCiphertextHash), mono: true },
   ]);
 </script>
 
@@ -129,6 +132,9 @@
       </div>
     {/each}
   </dl>
+  <!-- What the fingerprint is for, and what it is not (direction 9): it
+       tells this file from another copy, and checks nothing inside it. -->
+  <p class="t-quiet">{technicalCopy.fingerprintNote}</p>
 
   <h3 class="t-section vh">{technicalCopy.keyVersions}</h3>
   <div class="tablewrap vers">

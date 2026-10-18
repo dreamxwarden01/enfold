@@ -2,15 +2,18 @@
   import { CeremonyStep, Keys, Shell, Vault, errorOf } from "../lib/api";
   import type { FileInfo, SlotView } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { chipCopy, codeText, commandCopy, dialogCopy, sinceText, vaultCopy, warningCopy } from "../lib/strings";
+  import { chipCopy, codeText, commandCopy, dialogCopy, sinceText, vaultCopy } from "../lib/strings";
+  import { backupLine } from "../lib/backup";
   import { date, dateTime, leaf } from "../lib/format";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
   import EntangledDialog from "./EntangledDialog.svelte";
+  import TamperedBar from "./TamperedBar.svelte";
 
   const st = $derived(store.status);
   const unlocked = $derived(store.unlocked);
-  const tampered = $derived(st?.tampered ?? false);
+  // The banner's one predicate (store.tampered; APP.md §6).
+  const tampered = $derived(store.tampered);
   // This page's own ceremonies: the unlock methods, the backups and the
   // vault's password. A `records` ceremony belongs to the Archives page, which
   // renders its own panel — the incoming file's recovery prompt has
@@ -37,8 +40,9 @@
   const entangleBlocked = $derived(!!ent && !ent.on && !ent.canEnable && unlocked);
   // Why a change is greyed, as its title: a disabled button still takes
   // the pointer so that this can be read (APP.md §6, Controls). The
-  // tampered one is the banner's own words.
-  const greyed = $derived(!unlocked ? codeText("vault.needs_unlock") : tampered ? "Changes are off until you replace this vault with a copy from the lock screen." : undefined);
+  // tampered one points at the banner, whose button is the remedy
+  // (direction 9).
+  const greyed = $derived(!unlocked ? codeText("vault.needs_unlock") : tampered ? vaultCopy.changesOff : undefined);
 
   function fail(e: unknown) {
     store.toast(codeText(errorOf(e).code), "error");
@@ -120,6 +124,15 @@
   const WEEK = 604800;
   const backupAge = $derived(store.lastExportAt ? Math.floor(store.now / 1000) - store.lastExportAt : -1);
   const backupWanted = $derived(backupAge < 0 || backupAge > WEEK);
+
+  // The backups card's status (direction 9, ruled 2026-10-18): the last
+  // backup against what it lacks, by lib/backup.ts. The counts are read
+  // only from an unlocked registry that is not Tampered (the core answers
+  // them 0 otherwise), so while Locked or Tampered the line says the date
+  // alone — or that no backup is recorded — and claims nothing about what
+  // a backup holds. The date is relative: recency is the point.
+  const backupAt = $derived(store.backup?.at ?? store.lastExportAt);
+  const bline = $derived(backupLine(store.backup ?? (backupAt ? { at: backupAt, archives: 0, missing: 0, rekeyed: 0 } : null), unlocked && !tampered && !!store.backup, backupAt ? sinceText(backupAt, store.now) : ""));
   let rotateBackup = $state(false);
 
   function openRotate() {
@@ -181,11 +194,13 @@
   }
 </script>
 
-<div class="layer-head"><h1 class="t-title">{vaultCopy.title}</h1>{#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}</div>
+<div class="layer-head"><h1 class="t-title">{vaultCopy.title}</h1>{#if !unlocked}<span class="chip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}</div>
 
 <div class="layer-body">
   {#if tampered}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy("vault.tampered", st?.tamperedReason)}</span></div>
+    <!-- First on the page (direction 9; APP.md §6, The Tampered banner): the danger tier, with
+         the fix every greyed change here points at. -->
+    <TamperedBar reason={st?.tamperedReason} />
   {/if}
   {#if !unlocked}
     <div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button></div>
@@ -222,14 +237,29 @@
 
       <div class="ks-head top"><h2 class="t-section">{vaultCopy.backups}</h2></div>
       <div class="card backup">
+        <!-- The status first (direction 9): attention while a backup is
+             owed, a plain line with the accent's check while one holds
+             every archive key, nothing with nothing to back up; then,
+             under a date, the caveat, since the stamp is this PC's record
+             and not a look at the file (lib/backup.ts). -->
+        {#if bline.tone}
+          <div class="status">
+            {#if bline.tone === "attention"}
+              <div class="bar attention"><svg class="i i-14"><use href="#i-backup" /></svg><span><strong>{bline.head}</strong>{bline.rest ? ` ${bline.rest}` : ""}</span></div>
+            {:else}
+              <p class="current"><svg class="i i-14" class:quiet={!bline.checked}><use href={bline.checked ? "#i-check" : "#i-backup"} /></svg><span>{bline.head}{bline.rest ? ` ${bline.rest}` : ""}</span></p>
+            {/if}
+            {#if bline.caveat}<p class="t-quiet">{bline.caveat}</p>{/if}
+          </div>
+        {/if}
+        <!-- The consequence, in plain words: what a backup is for. -->
         <p class="t-sub">{vaultCopy.backupsLine}</p>
         <div class="ks-actions">
-          <button type="button" class="btn" disabled={!unlocked || tampered} title={greyed} onclick={() => void exportBackup()}><svg class="i i-14"><use href="#i-backup" /></svg>{commandCopy.exportBackup}</button>
+          <!-- The accent while a backup is owed; it suggests and never
+               gates (lastExportAt is local and unauthenticated). -->
+          <button type="button" class="btn" class:accent={bline.suggestExport} disabled={!unlocked || tampered} title={greyed} onclick={() => void exportBackup()}><svg class="i i-14"><use href="#i-backup" /></svg>{commandCopy.exportBackup}</button>
           <button type="button" class="btn" onclick={inspectBackup}>{commandCopy.inspectBackup}</button>
         </div>
-        <!-- The last backup is one of the two places a relative date is
-             said, since recency is the point (strings.ts sinceText). -->
-        <dl class="kv"><dt>{vaultCopy.lastBackup}</dt><dd>{store.lastExportAt ? vaultCopy.lastBackupValue(sinceText(store.lastExportAt, store.now)) : vaultCopy.noBackup}</dd></dl>
         <!-- Import archives from a backup… lives in the Archives page's command bar; this
              is the pointer to it (APP.md §13), and it hands the ask over
              the way the key dialog does — the page opens its picker on
@@ -387,6 +417,15 @@
   .slots { display: flex; flex-direction: column; gap: var(--s1); }
   .backup { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s3); }
   .backup p { margin: 0; }
+  /* The status and its caveat read as one: 4 apart, the card's 12 after. */
+  .status { display: flex; flex-direction: column; gap: var(--s1); }
+  /* A current backup is a fact, not a notice: no box, the check in the
+     accent's ink before the sentence. */
+  .current { display: flex; align-items: flex-start; gap: var(--s2); color: var(--ink); }
+  .current .i { flex: none; margin-top: 3px; color: var(--accent-ink); }
+  /* The date alone, with nothing counted (Locked, Tampered): no receipt,
+     so the quiet backup icon instead of the check. */
+  .current .i.quiet { color: var(--ink-3); }
   /* The invariant's reason and its cure, stacked: this card is the narrow
      column, where a bar's inline action would be a word per line. */
   .why { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s1); min-width: 0; }

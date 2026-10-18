@@ -34,6 +34,16 @@ export interface ArchiveDetails {
 }
 
 /**
+ * ArchiveRef is an open archive as the lock screen and the banners name
+ * it: its id and the registry's trusted name (FORMAT.md 7.4) the archive
+ * was opened under, renames included.
+ */
+export interface ArchiveRef {
+    "id": string;
+    "name": string;
+}
+
+/**
  * ArchiveStat is the open archive's status strip. There is no Dirty, no
  * CapAt and no SessionAlive since 2026-09-09 — every operation is its own
  * transaction, so the archive is clean between them — and no ExpiresAt since
@@ -111,6 +121,27 @@ export interface ArchiveSummary {
      * open | compacting | needs_reopen
      */
     "state"?: string;
+}
+
+/**
+ * BackupStatus is the Vault page's backup line (APP.md 13, direction 9):
+ * how the vault kept here stands against its last backup. At is
+ * LastExportAt's answer — 0 for never — and like it is local and
+ * unauthenticated, so it words the line and gates nothing. The counts are
+ * read from an unlocked registry alone and are 0 while Locked, Tampered
+ * or with no vault: Archives is the records not forgotten (hidden ones
+ * included, since a backup holds their keys too); Missing is those created
+ * after At, every one when At is 0; Rekeyed is, over the records the
+ * backup does hold, those with a key version created after At — an
+ * archive whose current key the backup lacks, counted once however many
+ * times it was re-keyed since. modified_at is never the measure: every save
+ * moves it, and a line keyed to it would never be current.
+ */
+export interface BackupStatus {
+    "at": number;
+    "archives": number;
+    "missing": number;
+    "rekeyed": number;
 }
 
 /**
@@ -1144,6 +1175,15 @@ export interface VaultStatus {
     "ceremony"?: CeremonyState | null;
     "ops": OpView[] | null;
     "openArchives": number;
+
+    /**
+     * Opened names the archives this process holds open, sorted by name
+     * (APP.md 2.3): after a lock each is still decrypted and its page
+     * still saves, so the lock screen and the banners name them rather
+     * than count them (direction 9, 2026-10-18). Never null. OpenArchives
+     * stays, the count the foot and the tray already read.
+     */
+    "opened": ArchiveRef[] | null;
     "hasPasswordSlot": boolean;
     "hasHardwareSlot": boolean;
 

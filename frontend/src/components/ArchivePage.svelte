@@ -3,7 +3,7 @@
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { Collision, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, codeText, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, listCopy, typeLabel } from "../lib/strings";
+  import { archivePageCopy, codeText, vaultCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, listCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
   import { statusNote } from "../lib/status";
@@ -33,6 +33,7 @@
   import type { MenuItem } from "./MenuButton.svelte";
   import OpsBar from "./OpsBar.svelte";
   import TextField from "./TextField.svelte";
+  import TamperedBar from "./TamperedBar.svelte";
 
   const id = $derived(store.current ?? "");
   const stat = $derived(store.stat);
@@ -57,7 +58,13 @@
   // a lock (APP.md §2.3): Page, Stat, the previews, Extract and every
   // operation - each committing the archive and owing its receipt until
   // the vault comes back. Only the registry write needs the session.
-  const tampered = $derived(store.status?.tampered ?? false);
+  // The banner's one predicate (store.tampered; APP.md §6).
+  const tampered = $derived(store.tampered);
+  // The locked banner names this archive as the status names it
+  // (VaultStatus.opened), the page's own name until the status has it.
+  const lockedName = $derived(store.status?.opened?.find((a) => a.id === id)?.name || archiveName);
+  // The locked banner's sentence, its first strong (direction 9's mock).
+  const lockedLead = $derived(archivePageCopy.lockedBannerLead(lockedName));
 
   // The selection is the store's (lib/selection.ts): ticks are the
   // selection and the selection is the ticks.
@@ -771,6 +778,16 @@
   // *Close archive* is the kill switch (APP.md §2.3): it closes now,
   // readers or not, dropping every preview body in flight — where simply
   // leaving the page closes it only once nothing is reading it.
+  // Refresh fingerprint from the copy_mismatch note: the Archives page's
+  // command, run on this archive; the operation strip shows it.
+  async function refreshFingerprint() {
+    try {
+      await Archives.Verify(id);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function close() {
     try {
       await Archives.Close(id);
@@ -886,10 +903,16 @@
   <div class="grow"></div>
   <!-- The kill switch (APP.md §2.3): leaving the page closes the archive
        on its own, and this closes it even while something is playing. -->
-  <button type="button" class="btn sm" title={archivePageCopy.closeNow} onclick={close}>Close archive</button>
+  <button type="button" class="btn sm" title={archivePageCopy.closeNow} onclick={close}>{commandCopy.closeArchive}</button>
 </div>
 
 <div class="layer-body">
+  {#if tampered}
+    <!-- First on every page (direction 9; APP.md §13): the archive keeps
+         saving, but the vault file it reports to may have been changed
+         outside Enfold, and this page said nothing of it. -->
+    <TamperedBar reason={store.status?.tamperedReason} />
+  {/if}
   {#if moveError && refusedAt(ROOT_ID, "head")}
     <div class="move-note">Not moved: {moveError.text}</div>
   {/if}
@@ -913,12 +936,14 @@
   {#if !store.unlocked}
     <!-- One line of 40 px, everything on it centred (APP.md §7, ruled
          2026-09-11): .bar.line. -->
-    <div class="bar line">
+    <div class="bar line attention">
       <svg class="i i-14"><use href="#i-lock" /></svg>
-      <!-- One plain line (APP.md §2.3, §6, ruled 2026-09-10): the archive
-           has no timeout of its own, and what it owes the vault is
-           already said by the status strip. -->
-      <span class="grow">{archivePageCopy.lockedBanner}</span>
+      <!-- What the lock left (direction 9, ruled 2026-10-18): this archive
+           is still decrypted and still saves (APP.md §2.3), so the banner
+           is attention and carries the kill switch — the head's own
+           *Close archive*, the same act — beside the unlock. -->
+      <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
+      <button type="button" class="btn sm" title={archivePageCopy.closeNow} onclick={close}>{commandCopy.closeArchive}</button>
       <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
     </div>
   {/if}
@@ -928,10 +953,14 @@
          from the list. "Close and reopen" promised a reopen it does not do
          (one word per thing, consequences first: APP.md §7, ruled
          2026-10-17). -->
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span><button type="button" class="btn sm" onclick={close}>Close archive</button></div>
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span><button type="button" class="btn sm" onclick={close}>{commandCopy.closeArchive}</button></div>
   {/if}
   {#if stat?.copyMismatch}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("archive.copy_mismatch")}</span></div>
+    <!-- The note names *Refresh fingerprint*, so the command stands in the
+         note: the Archives page's command bar, where it otherwise lives,
+         is not on this page (direction 9; APP.md §2.3 Verify). It is a
+         registry write, greyed while Locked or Tampered as there. -->
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div>
   {/if}
   <!-- The operation strip and nothing else: no pending bar, no Save, no
        Discard, since every operation commits at its end (APP.md §2.3). -->

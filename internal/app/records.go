@@ -55,10 +55,16 @@ func (c *Core) RenameArchive(id, name string) *Error {
 		return e
 	}
 	c.mu.Lock()
-	if oa := c.archives[aid]; oa != nil {
+	oa := c.archives[aid]
+	if oa != nil {
 		oa.name = name
 	}
 	c.mu.Unlock()
+	if oa != nil {
+		// VaultStatus.Opened carries the open archive's name (APP.md 2.3):
+		// the lock screen and the banners name it as it is now.
+		c.emitState()
+	}
 	c.emitArchivesChanged()
 	return nil
 }

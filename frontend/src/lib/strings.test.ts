@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CeremonyStep, Code } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
 import * as strings from "./strings";
 import * as validate from "./validate";
-import { ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, commandCopy, compressedText, dialogCopy, extensionNames, lockCopy, purgedText, reclaimedText, retriesText, sinceText, stepCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
+import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, commandCopy, compressedText, lockedOpenText, dialogCopy, extensionNames, extractCopy, lockCopy, purgedText, reclaimedText, retriesText, revealCopy, sinceText, stepCopy, tamperedCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
 
 // ---- One word per thing (APP.md §7, ruled 2026-10-17) -------------------
 //
@@ -31,6 +31,8 @@ const banned: [RegExp, string][] = [
   [/\bForget key\b/i, "Forget archive…"],
   [/\bCheck files\b/i, "Find missing files"],
   [/\bCheck (a|that a) backup\b/i, "Inspect a backup… / Test that a backup opens…"],
+  // The archive's hash checks nothing inside the file (direction 9).
+  [/\b(Verify|Verifying|Last verified)\b/, "Refresh fingerprint / Fingerprint"],
 ];
 
 // A word that must stay where it is, with the line it stays in and why.
@@ -130,7 +132,7 @@ describe("one word per thing", () => {
 // The verb table and the dialog template (strings.ts head).
 describe("the verb table", () => {
   it("ends a command with an ellipsis exactly when a dialog or a picker follows", () => {
-    const opensNothing = ["open", "close", "hide", "unhide", "restore", "verify", "showInExplorer", "findMissing", "reopen", "goThere", "lockNow", "unlock"];
+    const opensNothing = ["open", "close", "closeArchive", "closeAll", "hide", "unhide", "restore", "refreshFingerprint", "showInExplorer", "findMissing", "reopen", "goThere", "lockNow", "unlock"];
     for (const [k, v] of Object.entries(commandCopy)) {
       expect(v.endsWith("…"), k).toBe(!opensNothing.includes(k));
     }
@@ -248,6 +250,93 @@ describe("the lock screen's and the dialogs' words", () => {
     expect(ceremonyCopy.swapLead("Desk")).toBe("Remove Desk");
     expect(ceremonyCopy.swapLine).toBe("Then insert the new YubiKey. Enfold carries on by itself.");
     expect(stepCopy[CeremonyStep.StepBlocked].title).toBe("The PIN is blocked. Use your recovery key.");
+  });
+});
+
+// Direction 9 (ruled 2026-10-18): safety's receipts, said as what they are.
+describe("the receipts' words", () => {
+  const house = /n't|'re|'ll|'ve|it's/i;
+  it("says the fingerprint is which copy, never a check", () => {
+    expect(archivesCopy.fingerprint({ kind: "current", behind: 0 })).toBe("Matches the last save");
+    expect(archivesCopy.fingerprint({ kind: "behind", behind: 1 })).toBe("From 1 save ago");
+    expect(archivesCopy.fingerprint({ kind: "behind", behind: 2 })).toBe("From 2 saves ago");
+    // never taken: said, not counted from seq 0; owed: no number claimed
+    expect(archivesCopy.fingerprint({ kind: "none", behind: 0 })).toBe("Not taken yet");
+    expect(archivesCopy.fingerprint({ kind: "owed", behind: 3 })).toBe("From before the last save");
+    expect(archivesCopy.facts.fingerprint).toBe("Fingerprint");
+    expect(commandCopy.refreshFingerprint).toBe("Refresh fingerprint");
+    expect(technicalCopy.fingerprint).toBe("Fingerprint (SHA-256 of the file)");
+    expect(technicalCopy.fingerprintNote).toMatch(/It is not a check of the file's contents\.$/);
+    // one word for the thing in that dialog: never a bare "hash" beside it
+    expect([technicalCopy.seq, technicalCopy.fingerprintSeq]).toEqual(["Last seq", "Fingerprint at seq"]);
+    expect(codeText(Code.CodeArchiveCopyMismatch)).toContain("Your next save, or Refresh fingerprint, makes it the current one.");
+    expect(technicalCopy.envelopeStaleWhy).not.toMatch(/\bVerify\b/);
+  });
+  it("says turning the password off in two sentences, on a standard button", () => {
+    expect(dialogCopy.passwordOff.body).toBe("After this, a YubiKey opens the vault with its PIN and touch alone. One of the vault's unlock methods is asked for first.");
+    expect(dialogCopy.passwordOff.primary).toBe("Turn off the password");
+  });
+  it("says what an extract makes, every time", () => {
+    expect(extractCopy.ordinaryFiles).toBe("The extracted copies are ordinary files, outside Enfold's protection.");
+  });
+  it("gives the recovery key both risks, one paragraph each", () => {
+    expect(revealCopy.leadOpens).toBe("With this key, the vault file or a backup opens without your YubiKey. Keep it from others.");
+    expect(revealCopy.leadNothing).toBe("Without the vault file or a backup, this key opens nothing. Keep those too.");
+    expect(revealCopy.digitsLine(48)).toMatch(/^48 digits\. /);
+    expect(revealCopy.digitsLine(48)).not.toMatch(/ID/);
+    expect(revealCopy.group(3)).toBe("Group 3");
+  });
+  it("names the boot failure and copies its details in one line", () => {
+    expect(bootCopy.title).toBe("Enfold could not start");
+    expect(bootCopy.details("internal", "2026-10-18T09:12:00.000Z")).toBe("Enfold could not start · internal · 2026-10-18T09:12:00.000Z");
+  });
+  it("says the Tampered banner's three sentences, the archive files last", () => {
+    expect(tamperedCopy()).toBe("This vault file does not match itself, so it may have been changed outside Enfold. Changes to the vault are off until you replace it with a copy you trust. Your archive files are not affected.");
+    // the same words whatever the reason; the cause is the Why?'s
+    expect(tamperedCopy(Code.CodeTamperedGeneration)).toBe(tamperedCopy());
+    expect(warningCopy(Code.CodeVaultTampered, Code.CodeTamperedHash)).toBe(tamperedCopy());
+    expect(vaultCopy.changesOff).toBe("Changes are off until this vault is replaced with a copy you trust; the banner above has the button.");
+  });
+  it("splits each banner where its strong first sentence ends", () => {
+    expect(tamperedLead()).toEqual({ head: "This vault file does not match itself, so it may have been changed outside Enfold.", rest: "Changes to the vault are off until you replace it with a copy you trust. Your archive files are not affected." });
+    expect(leadText(tamperedLead(Code.CodeTamperedHash))).toBe(tamperedCopy());
+    expect(archivesCopy.lockedBannerLead(["Photos 2024"]).head).toBe("The vault is locked.");
+    expect(archivePageCopy.lockedBannerLead("Photos 2024").head).toBe("The vault is locked.");
+    expect(lockCopy.openWhileLockedLead(["Photos 2024"])).toEqual({ head: "Photos 2024 is still open in Enfold, decrypted.", rest: "Changes to it are still saved." });
+    // a name holding ". " is never split inside
+    expect(lockCopy.openWhileLockedLead(["Vol. 2"]).head).toBe("Vol. 2 is still open in Enfold, decrypted.");
+    for (const names of [["Photos 2024"], ["A", "B"], []]) {
+      expect(leadText(archivesCopy.lockedBannerLead(names))).toBe(archivesCopy.lockedBanner(names));
+    }
+    expect(leadText(lockCopy.openWhileLockedLead(["A", "B"]))).toBe(lockCopy.openWhileLocked(["A", "B"]));
+    expect(leadText(archivePageCopy.lockedBannerLead("Photos 2024"))).toBe(archivePageCopy.lockedBanner("Photos 2024"));
+  });
+  it("says what a lock left open is: decrypted, and still saving", () => {
+    expect(lockCopy.openWhileLocked(["Photos 2024"])).toBe("Photos 2024 is still open in Enfold, decrypted. Changes to it are still saved.");
+    expect(lockCopy.openWhileLocked(["Photos 2024", "Family videos"])).toBe("2 archives are still open in Enfold, decrypted. Changes to them are still saved.");
+    expect(archivesCopy.lockedBanner(["Photos 2024"])).toBe("The vault is locked. Photos 2024 is still open: decrypted, and changes to it are still saved.");
+    expect(archivesCopy.lockedBanner(["Photos 2024", "Family videos"])).toBe("The vault is locked. 2 archives are still open: decrypted, and changes to them are still saved.");
+    expect(archivesCopy.lockedBanner([])).toBe("The vault is locked.");
+    expect(archivePageCopy.lockedBanner("Photos 2024")).toBe(lockedOpenText(["Photos 2024"]));
+    expect([lockCopy.closeIt, lockCopy.closeThem, commandCopy.closeArchive, commandCopy.closeAll]).toEqual(["Close it", "Close them", "Close archive", "Close all"]);
+    // the old reassurance, gone everywhere
+    for (const s of [lockCopy.openWhileLocked(["A"]), lockCopy.openWhileLocked(["A", "B"]), lockedOpenText(["A"]), lockedOpenText(["A", "B"])]) {
+      expect(s).not.toMatch(/brows|stays open while|needs the vault/i);
+    }
+  });
+  it("says the backups card's consequence and caveat", () => {
+    expect(vaultCopy.backupsLine).toBe("Your archives open only with this vault file or a backup of it. The recovery key opens either one; it cannot replace them.");
+    expect(vaultCopy.backupCaveat).toBe("Recorded here, not proof the file is still there.");
+  });
+  it("keeps the house voice in every new line", () => {
+    const said = [
+      tamperedCopy(), vaultCopy.changesOff, vaultCopy.backupsLine, vaultCopy.backupCaveat, vaultCopy.backupNeverHead, vaultCopy.backupNever(3), vaultCopy.backupLacks(2, 1),
+      lockCopy.openWhileLocked(["Photos 2024"]), lockCopy.openWhileLocked(["A", "B"]), lockedOpenText(["Photos 2024"]), lockedOpenText(["A", "B"]),
+      ...Object.values(revealCopy).filter((v): v is string => typeof v === "string"), revealCopy.digitsLine(48), revealCopy.savedTo("E:\\key.txt"),
+      bootCopy.title, bootCopy.openFolder, bootCopy.copied, extractCopy.ordinaryFiles, dialogCopy.passwordOff.body, archivesCopy.fingerprint({ kind: "behind", behind: 2 }), archivesCopy.fingerprint({ kind: "none", behind: 0 }), archivesCopy.fingerprint({ kind: "owed", behind: 0 }),
+      technicalCopy.fingerprintNote, lockCopy.tamperedWhyTitle,
+    ];
+    for (const s of said) expect(s, s).not.toMatch(house);
   });
 });
 

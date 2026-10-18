@@ -6,6 +6,7 @@
   import { minutesLabel } from "../lib/format";
   import { closeActionLabel, closeChoices } from "../lib/closing";
   import SaveBar from "./SaveBar.svelte";
+  import TamperedBar from "./TamperedBar.svelte";
   import type { PendingItem } from "./SaveBar.svelte";
 
   const s = $derived(store.settings);
@@ -135,6 +136,13 @@
 <div class="layer-head"><h1 class="t-title">{settingsCopy.title}</h1></div>
 
 <div class="layer-body">
+  {#if store.tampered}
+    <!-- First on every page (direction 9; APP.md §13), Settings opened
+         from the lock screen's gear included: these settings are this
+         PC's, but the vault beside them may have been changed outside
+         Enfold, and the fix is one press away. -->
+    <TamperedBar reason={store.status?.tamperedReason} />
+  {/if}
   {#if s}
     <div class="ks-cols">
       <div class="ks-col">

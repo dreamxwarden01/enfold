@@ -83,6 +83,11 @@
     {/each}
   </fieldset>
 
+  <!-- What an extract makes, said every time (direction 9, ruled
+       2026-10-18): an info line in the second ink, no box — a sentence,
+       not a gate. -->
+  <p class="infoline"><svg class="i i-14" aria-hidden="true"><use href="#i-info" /></svg><span>{extractCopy.ordinaryFiles}</span></p>
+
   {#snippet actions()}
     <button type="submit" class="btn accent">Extract</button>
     <button type="button" class="btn" onclick={oncancel}>Cancel</button>
@@ -95,4 +100,8 @@
      is a field label, strong, 8 above the first of them. */
   .policies { border: 0; margin: 0; padding: 0; }
   .policies .lbl { font: var(--t-strong); color: var(--ink); padding: 0 0 var(--s2); }
+  /* The icon 8 from its words, centred on the first 20 px line as a
+     bar's is (app.css .bar .i.i-14). */
+  .infoline { display: flex; align-items: flex-start; gap: var(--s2); color: var(--ink-2); }
+  .infoline .i { margin-top: 3px; }
 </style>

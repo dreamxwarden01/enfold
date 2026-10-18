@@ -16,11 +16,11 @@
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, listCopy, warningCopy } from "../lib/strings";
+  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, listCopy, vaultCopy } from "../lib/strings";
   import { bytes, count, date, dateTime, plural } from "../lib/format";
   import { clickRow, emptySelection, selectAll, survive, toggleRow } from "../lib/selection";
   import type { Selection } from "../lib/selection";
-  import { clickShownHeader, compacting, paneRow, rowRefusal, shownTicked } from "../lib/archlist";
+  import { clickShownHeader, compacting, fingerprintOf, paneRow, rowRefusal, shownTicked } from "../lib/archlist";
   import { CLOSED, canExpand, collapse, edgeY, escape, inContact, naturalEnd, openHeight, overScroll, picked, pushScroll, reveals, rideReachesHome, rideScroll, springScroll, toggle } from "../lib/archbar";
   import type { BarState, ListMetrics } from "../lib/archbar";
   import { MOVE, enter, motion } from "../lib/motion";
@@ -39,6 +39,7 @@
   import ArchiveDetailsDialog from "./ArchiveDetailsDialog.svelte";
   import DeleteArchiveDialog from "./DeleteArchiveDialog.svelte";
   import MergeDialog from "./MergeDialog.svelte";
+  import TamperedBar from "./TamperedBar.svelte";
 
   // The selection (APP.md §6, ruled 2026-09-10): the ticks, under the file
   // list's rules (lib/selection.ts) over the rows the filter shows, and
@@ -55,10 +56,17 @@
   const one = $derived(sel.ids.size === 1 ? pane : null);
   const st = $derived(store.status);
   const unlocked = $derived(store.unlocked);
-  const tampered = $derived(st?.tampered ?? false);
+  // The banner's one predicate (store.tampered; APP.md §6).
+  const tampered = $derived(store.tampered);
+  // The archives a lock left open, by name (direction 9; APP.md §2.3).
+  const opened = $derived(st?.opened ?? []);
+  const openedNames = $derived(opened.map((a) => a.name));
   // The record read whole, and only when it is the pane's: a reply for a
   // record the user has left is not this pane's (APP.md §13).
   const det = $derived(store.details && pane && store.details.archiveId === pane.id ? store.details : null);
+  // The pane's Fingerprint fact (direction 9): null — no row — until the
+  // record is read, and so always while Locked (lib/archlist.ts).
+  const fp = $derived(pane ? fingerprintOf(pane, det) : null);
 
   // pick is what a create or a delete begun elsewhere does: that one row
   // ticked, clicked, and so in the pane.
@@ -780,9 +788,16 @@
   // opens and not on every advancing status (APP.md §13): loadDetails
   // reads store.unlocked before its first await, so an unguarded call
   // would make every vault.state event re-issue Archives.Details.
+  // The record is read again when the row's hashBehind moves — a save, a
+  // Refresh fingerprint, a Compact — so the Fingerprint fact and Technical
+  // details never stand on a record older than the summary for longer
+  // than one Details call, and again on an unlock, which brings the
+  // record back after a lock dropped it. A primitive key, so a list refresh that leaves
+  // the row as it was reads nothing.
+  const detailsKey = $derived(paneId ? `${paneId}:${pane?.hashBehind ?? 0}:${pane?.receiptOwed ?? false}:${store.unlocked}` : "");
   $effect(() => {
-    const id = paneId;
-    untrack(() => void store.loadDetails(id));
+    void detailsKey;
+    untrack(() => void store.loadDetails(paneId));
   });
 
   async function saveRecord() {
@@ -952,23 +967,26 @@
   }
 
   // What stops a record-level operation, said on the button itself. The
-  // archive being open is never one of them since 2026-09-10: *Verify*,
-  // *Compact…* and *Re-key archive…* unwrap the key with the session's KWK, open
+  // archive being open is never one of them since 2026-09-10: *Refresh
+  // fingerprint*, *Compact…* and *Re-key archive…* unwrap the key with the session's KWK, open
   // the file for the operation and close it again, so the page never asks
   // for the archive to be opened first (APP.md §2.3). Only the vault does:
   // while it is locked they are disabled with its own reason.
+  // The locked banner's sentence, its first strong (direction 9's mock).
+  const lockedLead = $derived(archivesCopy.lockedBannerLead(openedNames));
+
   const opReason = $derived(
     !unlocked
       ? codeText(Code.CodeVaultLocked)
       : tampered
-        ? warningCopy(Code.CodeVaultTampered, st?.tamperedReason)
+        ? vaultCopy.changesOff // the banner says why; the title says only that changes are off
         : undefined,
   );
 
   // What the row itself stops (lib/archlist.ts): a forgotten record, or a
   // compaction under way. Hide, Locate and the name and description are
   // registry writes and are stopped by the first alone; Open, Compact,
-  // Re-key archive and Verify by either. Close, Forget archive and Delete archive
+  // Re-key archive and Refresh fingerprint by either. Close, Forget archive and Delete archive
   // by the second alone: the close the last two need is refused while a
   // compaction holds the handle, and asking for the name first would only
   // end in that refusal (APP.md §2.3, §13).
@@ -999,7 +1017,7 @@
        all: Svelte trims the white space at a block's edges, which made
        "stored· vault file". -->
   <span class="t-quiet num meta">{plural(rows.length, "archive")} shown · {bytes(shownSize)} stored{#if st}{` · vault file ${bytes(st.vaultFileSize)} · changed ${dateTime(st.modifiedAt)}`}{/if}</span>
-  {#if !unlocked}<span class="chip warn"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}
+  {#if !unlocked}<span class="chip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}
 </div>
 
 <!-- The page is a drop target with no data-archive-id: Wails emits a drop
@@ -1008,6 +1026,11 @@
      §14; ruled 2026-10-14). The file list's own target, on the Archive
      page, carries the ids. -->
 <div class="layer-body" bind:this={bodyEl} data-file-drop-target="true">
+  {#if tampered}
+    <!-- First on the page, above the commands it greys (direction 9;
+         APP.md §13): the danger tier, with its fix. -->
+    <TamperedBar reason={st?.tamperedReason} />
+  {/if}
   <div class="cmdbar">
     <!-- Every action that takes one archive works on the pane's row and is
          greyed unless exactly one is ticked (APP.md §6, ruled 2026-09-10). -->
@@ -1023,7 +1046,7 @@
          again, so there is no "open the archive first". -->
     <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: dialogCopy.compact.title(one.name), body: dialogCopy.compact.body, button: dialogCopy.compact.primary, run: () => Archives.Compact(one.id) })}>{commandCopy.compact}</button>
     <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && (confirm = { title: dialogCopy.rekeyArchive.title(one.name), body: dialogCopy.rekeyArchive.body, how: dialogCopy.rekeyArchive.how, button: dialogCopy.rekeyArchive.primary, run: () => Archives.RotateKey(one.id) })}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</button>
-    <button type="button" class="btn subtle" disabled={!one || !unlocked || !!rowStop} title={!unlocked ? codeText(Code.CodeVaultLocked) : rowWhy} onclick={() => one && run(Archives.Verify(one.id))}><svg class="i i-14"><use href="#i-check" /></svg>{commandCopy.verify}</button>
+    <button type="button" class="btn subtle" disabled={!one || !unlocked || tampered || !!rowStop} title={opReason ?? rowWhy} onclick={() => one && run(Archives.Verify(one.id))}>{commandCopy.refreshFingerprint}</button>
     <button type="button" class="btn subtle" disabled={!one || !unlocked || hideStop} title={forgotWhy} onclick={() => one && run(one.hidden ? Archives.Unhide(one.id) : Archives.Hide(one.id))}><svg class="i i-14"><use href="#i-eye" /></svg>{one?.hidden ? commandCopy.unhide : commandCopy.hide}</button>
     <div class="sep"></div>
     <button type="button" class="btn subtle" disabled={!unlocked} onclick={() => run(Archives.CheckFiles())}>{commandCopy.findMissing}</button>
@@ -1038,15 +1061,18 @@
 
   {#if !unlocked}
     <!-- The locked banner: one line of 40 px, everything on it centred
-         (APP.md §7, ruled 2026-09-11). -->
-    <div class="bar line">
+         (APP.md §7, ruled 2026-09-11). Attention since direction 9 (ruled
+         2026-10-18): what the lock left open is still decrypted and still
+         saves (APP.md §2.3), so it names them (VaultStatus.opened) and
+         offers their close beside the unlock. -->
+    <div class="bar line attention">
       <svg class="i i-14"><use href="#i-lock" /></svg>
-      <span class="grow">The vault is locked. Open archives can still be browsed; everything else needs the vault.</span>
+      <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
+      {#if openedNames.length > 0}
+        <button type="button" class="btn sm" onclick={() => void store.closeOpened(opened.length === 1 ? opened[0].id : undefined)}>{opened.length === 1 ? commandCopy.closeArchive : commandCopy.closeAll}</button>
+      {/if}
       <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
     </div>
-  {/if}
-  {#if tampered}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy("vault.tampered", st?.tamperedReason)}</span></div>
   {/if}
   <OpsBar />
 
@@ -1234,8 +1260,14 @@
                    same floor decides whether it is worth saying (lib/status.ts).
                    *Unused*, not *free*, which reads as the disk's. -->
               {#if pane.open && freeWorthShowing(pane.freeSpace)}<div><dt>{archivesCopy.facts.unused}</dt><dd class="num">{bytes(pane.freeSpace)}</dd></div>{/if}
+              <!-- Which copy of the file the registry names (direction 9, ruled
+                   2026-10-18): the hash Refresh fingerprint records, against
+                   the saves since — never "verified", since it checks
+                   nothing inside the file (APP.md §2.3). Drawn only from the
+                   record read whole: "Not taken yet" in the third ink when
+                   no hash was ever taken, no tick unless it matches. -->
+              {#if fp}<div><dt>{archivesCopy.facts.fingerprint}</dt><dd class="num">{#if fp.kind === "current"}<span class="fp"><svg class="i i-14" aria-hidden="true"><use href="#i-check" /></svg>{archivesCopy.fingerprint(fp)}</span>{:else}<span class:none={fp.kind === "none"}>{archivesCopy.fingerprint(fp)}</span>{/if}</dd></div>{/if}
             </dl>
-            {#if pane.hashBehind > 0}<p class="pad t-quiet verified">{archivesCopy.verifiedAgo(pane.hashBehind)}</p>{/if}
             <!-- *Technical details…* reveals more of these facts, so it is a
                  hyperlink button under them, as *Show in Explorer* and
                  *Locate…* are under the path (APP.md §6, Controls; ruled
@@ -1379,7 +1411,11 @@
      2026-10-17); a longer description scrolls inside its two lines. */
   .area { height: auto; padding: var(--s2) var(--s3); resize: none; }
   .pathblock { display: flex; flex-direction: column; gap: var(--s1); }
-  .verified { margin: 0; }
+  /* The fingerprint's check: the i-check in the accent's ink, before
+     the words, only while the fingerprint matches the last save. */
+  .fp { display: inline-flex; align-items: center; gap: var(--s2); }
+  .fp .i { color: var(--accent-ink); }
+  .none { color: var(--ink-3); }
   .why { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); min-width: 0; }
   tbody tr.forgotten .two-line b { color: var(--ink-2); }
   .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

@@ -11,6 +11,8 @@
     <symbol id="i-check" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.2"/><path d="m6.8 10.2 2.2 2.2 4.3-4.6"/></symbol>
     <symbol id="i-info" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.2"/><path d="M10 9v4.4"/><path d="M10 6.6h.01"/></symbol>
     <symbol id="i-warn" viewBox="0 0 20 20"><path d="M10 3.4 17.6 16.4H2.4L10 3.4Z"/><path d="M10 8.2v3.6"/><path d="M10 14h.01"/></symbol>
+    <!-- The danger tier (lib/notices.ts): the circle of i-info with the exclamation of i-warn, in the same strokes. -->
+    <symbol id="i-error" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.2"/><path d="M10 6.6v4.4"/><path d="M10 13.4h.01"/></symbol>
     <symbol id="i-yubi" viewBox="0 0 20 20"><rect x="2.6" y="6" width="14.8" height="8" rx="2.4"/><circle cx="13.4" cy="10" r="2"/><path d="M5.4 8.6v2.8"/></symbol>
     <symbol id="i-touchdot" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2.6v1.8"/><path d="M10 15.6v1.8"/><path d="M2.6 10h1.8"/><path d="M15.6 10h1.8"/></symbol>
     <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4.5v11"/><path d="M4.5 10h11"/></symbol>

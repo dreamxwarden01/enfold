@@ -22,6 +22,10 @@ const m = vi.hoisted(() => ({
   CloseDecided: vi.fn(),
   PendingOpen: vi.fn(),
   invoke: vi.fn(),
+  Lock: vi.fn(),
+  Close: vi.fn(),
+  CloseAll: vi.fn(),
+  BackupStatus: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -42,9 +46,9 @@ vi.mock("./api", async () => {
   return {
     ...actual,
     Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children },
-    Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath },
+    Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath, Close: m.Close, CloseAll: m.CloseAll },
     Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided, PendingOpen: m.PendingOpen },
-    Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: never },
+    Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: never, Lock: m.Lock, BackupStatus: m.BackupStatus },
     Keys: { Slots: never, EntangledState: never },
     Settings: { Get: never },
   };
@@ -101,6 +105,10 @@ beforeEach(async () => {
   m.CloseDecided.mockReset().mockResolvedValue(undefined);
   m.PendingOpen.mockReset().mockResolvedValue({ seq: 0, path: "", rest: null });
   m.invoke.mockReset();
+  m.Lock.mockReset().mockResolvedValue(undefined);
+  m.Close.mockReset().mockResolvedValue(undefined);
+  m.CloseAll.mockReset().mockResolvedValue([]);
+  m.BackupStatus.mockReset().mockResolvedValue({ at: 0, archives: 0, missing: 0, rekeyed: 0 });
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -1092,6 +1100,115 @@ describe("a created archive opened with the Add menu asked for (openNew)", () =>
     expect(store.takeAddAsked("b")).toBe(false);
     expect(store.takeAddAsked("a")).toBe(false);
     expect(store.takeAddAsked("")).toBe(false);
+  });
+});
+
+// The Tampered banner's *Replace with a copy…* on a page (direction 9,
+// ruled 2026-10-18): the vault is locked first, the route is the lock
+// screen, and the lock screen takes the ask once.
+describe("replacing a tampered vault from a page (askReplaceVault)", () => {
+  const refusal = (code: string) => Object.assign(new Error(code), { cause: { code } });
+
+  it("locks an unlocked vault, goes to the lock screen, and is taken once", async () => {
+    store.status = status(1, "unlocked");
+    store.go("keys");
+    await store.askReplaceVault();
+    expect(m.Lock).toHaveBeenCalledTimes(1);
+    expect(store.route).toBe("lock");
+    expect(store.takeReplaceAsked()).toBe(true);
+    expect(store.takeReplaceAsked()).toBe(false);
+  });
+
+  // A lock of a Locked vault still runs its every-state half in the core
+  // (lockLocked: the token.reset_failed notice, a pending touch, a merge's
+  // records), so Settings opened from the lock screen's gear asks for no
+  // second lock: the route alone ends the visit.
+  it("asks a Locked vault for no lock: it ends the gear's Settings visit and goes to the lock screen", async () => {
+    store.status = status(1, "locked");
+    store.openSettingsLocked();
+    await store.askReplaceVault();
+    expect(m.Lock).not.toHaveBeenCalled();
+    expect(store.route).toBe("lock");
+    expect(store.settingsLocked).toBe(false);
+    expect(store.takeReplaceAsked()).toBe(true);
+  });
+
+  it("is withdrawn when the route leaves the lock screen before it is taken", async () => {
+    store.status = status(1, "locked");
+    await store.askReplaceVault();
+    store.go("archives");
+    expect(store.replaceAsked).toBe(false);
+    expect(store.takeReplaceAsked()).toBe(false);
+  });
+
+  it("asks for nothing and stays where it was when the lock is refused", async () => {
+    store.status = status(1, "unlocked");
+    store.go("settings");
+    m.Lock.mockRejectedValueOnce(refusal("internal"));
+    await store.askReplaceVault();
+    expect(store.route).toBe("settings");
+    expect(store.replaceAsked).toBe(false);
+    expect(store.toasts.length).toBe(1);
+  });
+});
+
+// The locked banners' and the lock screen's close (direction 9): one
+// archive by its id, or every open one; the page that showed a closed
+// archive is dropped as closed, so nothing is left to Leave.
+describe("closing what a lock left open (closeOpened)", () => {
+  it("closes the one archive and drops its page when it is the one shown", async () => {
+    await open(["x"]);
+    store.go("lock");
+    await store.closeOpened("a");
+    expect(m.Close).toHaveBeenCalledWith("a");
+    expect(m.Leave).not.toHaveBeenCalled();
+    expect(store.current).toBeNull();
+    expect(m.List).toHaveBeenCalled();
+  });
+
+  it("keeps the page of another archive", async () => {
+    await open(["x"]);
+    await store.closeOpened("b");
+    expect(store.current).toBe("a");
+  });
+
+  it("closes them all, and says so when one could not be closed", async () => {
+    await open(["x"]);
+    m.CloseAll.mockResolvedValueOnce(["a"]);
+    await store.closeOpened();
+    expect(m.CloseAll).toHaveBeenCalledTimes(1);
+    // the archive still open keeps its page
+    expect(store.current).toBe("a");
+    expect(store.toasts.at(-1)?.kind).toBe("error");
+    await store.closeOpened();
+    expect(store.current).toBeNull();
+  });
+});
+
+// The backups card's status is read again when the archives change: a
+// create, a re-key or a forget moves its counts (direction 9).
+describe("the backup status", () => {
+  it("is read again on archives.changed", async () => {
+    store.boot();
+    m.BackupStatus.mockResolvedValueOnce({ at: 5, archives: 2, missing: 1, rekeyed: 0 });
+    m.handlers["archives.changed"]({ data: { purged: [] } });
+    await vi.waitFor(() => expect(store.backup).toEqual({ at: 5, archives: 2, missing: 1, rekeyed: 0 }));
+  });
+
+  it("is dropped when the state changes, so no count of nothing reads as current", async () => {
+    store.boot();
+    m.handlers["vault.state"]({ data: status(1, "unlocked") });
+    store.backup = { at: 5, archives: 2, missing: 0, rekeyed: 0 };
+    // The lock's read is held back: until it lands the card says the date alone.
+    m.BackupStatus.mockReturnValue(new Promise(() => {}));
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    expect(store.backup).toBeNull();
+  });
+
+  it("is no status when the call is refused", async () => {
+    m.BackupStatus.mockRejectedValueOnce(new Error("internal"));
+    await store.refreshBackup();
+    expect(store.backup).toBeNull();
   });
 });
 

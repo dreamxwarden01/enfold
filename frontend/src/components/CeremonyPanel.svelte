@@ -350,14 +350,14 @@
             <div class="lead"><h3 class="t-section">{lockCopy.stoppedWaiting}</h3><div class="cap">{lockCopy.stoppedLine}</div></div>
           {:else}
             <div class="lead"><h3 class="t-section">{stepText(c.step).title}</h3></div>
-            <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error ?? "")}</span></div>
+            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error ?? "")}</span></div>
           {/if}
         {:else if shown === "blocked"}
           <!-- On the PIN's step, where it arises: whose PIN, then what it
                means on a danger bar (APP.md §6, ruled 2026-10-17). -->
           {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           <div class="lead"><h3 class="t-section">{ceremonyCopy.blockedLead}</h3></div>
-          <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{ceremonyCopy.blockedMeans}</span></div>
+          <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{ceremonyCopy.blockedMeans}</span></div>
         {:else if c.step !== CeremonyStep.StepWaitingForKey}
           <!-- A step that asks nothing here (the records found, a recovery
                key being shown). The opening wait of a typed proof draws

@@ -19,6 +19,15 @@ export function Activity(): $CancellablePromise<void> {
 }
 
 /**
+ * BackupStatus is the Vault page's backup line (APP.md 13): the last
+ * backup's time and, while unlocked and not Tampered, the archives and key
+ * versions it lacks. Like LastExportAt it words and gates nothing.
+ */
+export function BackupStatus(): $CancellablePromise<app$0.BackupStatus> {
+    return $Call.ByID(2057616059);
+}
+
+/**
  * BeginUnlock starts a ceremony: "token", "password" or "recovery". The
  * secrets themselves arrive on the raw message channel, never here.
  */

@@ -3,7 +3,7 @@
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
 import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code, submitSecret } from "./api";
-import type { ArchiveDetails, ArchiveStat, ArchiveSummary, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, SettingsView, SlotView, VaultStatus } from "./api";
+import type { ArchiveDetails, ArchiveStat, ArchiveSummary, BackupStatus, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, moreNotOpened, openElsewhereText, purgedText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
@@ -26,6 +26,7 @@ import { answer as answerDrag, baseName, beginFlight, land, ownDrop } from "./dr
 import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
 import type { Decision } from "./closing";
 import { droppedArchives } from "./archlist";
+import { tamperedShown } from "./notices";
 import { dialogIsUp } from "./dialogs";
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
@@ -180,6 +181,16 @@ class Store {
   // applied the four checks (APP.md §13). It chooses wording and
   // pre-selects the rotate dialog's tick; it gates nothing.
   lastExportAt = $state(0);
+  // What the last backup lacks (Vault.BackupStatus; direction 9): read
+  // wherever lastExportAt is, and again when the archives change — a
+  // create, a re-key or a forget moves its counts. The Vault page's
+  // status line is lib/backup.ts's; like lastExportAt it gates nothing.
+  backup = $state<BackupStatus | null>(null);
+  // The Tampered banner's *Replace with a copy…* on a page (direction 9):
+  // the import runs from the lock screen, so the page locks and goes
+  // there, and the lock screen at rest takes this once and opens its
+  // import dialog (takeReplaceAsked), as the Archive page takes addAsked.
+  replaceAsked = $state(false);
   // A merge handle, the records it read and whether that file fails its
   // own slot-region hash, until MergeRecords consumes it, the dialog
   // discards it, or a lock trigger drops it.
@@ -256,8 +267,12 @@ class Store {
   // said Unlocked).
   booted = $state(false);
   // bootFailed: the first Status() failed with nothing accepted meanwhile —
-  // what it said, shown as one plain line with Retry.
+  // what it said, the sentence of the boot failure's panel (APP.md §2.4;
+  // direction 9). bootCode and bootFailedAt are the code it failed with
+  // and when (Unix ms), which *Copy details* copies.
   bootFailed = $state("");
+  bootCode = $state("");
+  bootFailedAt = $state(0);
 
   private seq = 0;
   private ceremonySeq = 0;
@@ -277,6 +292,15 @@ class Store {
 
   get unlocked(): boolean {
     return this.status?.state === VaultState.StateUnlocked;
+  }
+
+  // tampered is whether the Tampered banner is drawn, the one fact the
+  // lock screen, Archives, an archive's page, Vault and Settings share
+  // (APP.md §6, The Tampered banner; lib/notices.ts): a lock clears
+  // VaultStatus.tampered but keeps the vault.tampered warning, and the
+  // banner stays until the vault is replaced or unlocks clean.
+  get tampered(): boolean {
+    return tamperedShown(this.status);
   }
 
   get runningOps(): OpView[] {
@@ -379,6 +403,7 @@ class Store {
         this.toast(purgedText(purged));
       }
       void this.refreshArchives();
+      void this.refreshBackup();
     });
     Events.On("archive.changed", (e) => {
       const d = e.data as { id: string; seq: number };
@@ -472,7 +497,10 @@ class Store {
       // evidence; with a status accepted from an event meanwhile there is
       // a scene to draw, and the failure is then a toast like any other.
       if (!this.status) {
-        this.bootFailed = codeText(errorOf(e).code);
+        const code = errorOf(e).code;
+        this.bootFailed = codeText(code);
+        this.bootCode = code;
+        this.bootFailedAt = Date.now();
         return;
       }
       this.toast(codeText(errorOf(e).code), "error");
@@ -681,6 +709,10 @@ class Store {
     const before = this.status?.state;
     this.seq = s.seq;
     this.status = s;
+    // A status accepted after the first call failed is the evidence the
+    // gate waited for, so it opens on it (APP.md §2.4, ruled 2026-10-18; it
+    // cleared the failure and left the gate shut: a bare splash, no Retry).
+    if (this.bootFailed) this.booted = true;
     this.bootFailed = "";
     if (s.ops) {
       for (const o of s.ops) {
@@ -710,6 +742,14 @@ class Store {
       // lock, an unlock or a ceremony begun elsewhere ends the visit, so
       // the scene the new state names is drawn.
       this.settingsLocked = false;
+      // The backup counts were read in the state just left: a read made
+      // while Locked holds 0s, and one made while Unlocked is not the
+      // registry's after a lock. Dropped here, the card says the date
+      // alone until the new state's read lands, and never claims "It
+      // holds every archive key." from a count of nothing (APP.md §6, The
+      // backups card).
+      this.backup = null;
+      this.backupRead++; // and a read still in flight is not believed
       // The unlock's full stop (APP.md §6, Motion): the lock screen keeps
       // showing the ceremony's last frame for the settle after the state
       // says Unlocked — the Done event lands a few milliseconds after the
@@ -896,6 +936,74 @@ class Store {
     } catch {
       this.lastExportAt = 0; // never recorded here
     }
+    await this.refreshBackup();
+  }
+
+  // refreshBackup reads what the last backup lacks (APP.md §6, The backups
+  // card). A refusal is no status: the card then draws from lastExportAt
+  // alone, as while Locked (lib/backup.ts). A read is believed only if no
+  // lock or unlock has passed since it was asked: one asked while Locked
+  // (counts of 0) could otherwise land after the unlock's reset and read as
+  // "every archive key is held".
+  private backupRead = 0;
+  async refreshBackup(): Promise<void> {
+    const read = ++this.backupRead;
+    try {
+      const b = (await Vault.BackupStatus()) ?? null;
+      if (read === this.backupRead) this.backup = b;
+    } catch {
+      if (read === this.backupRead) this.backup = null;
+    }
+  }
+
+  // askReplaceVault is the Tampered banner's *Replace with a copy…* on a
+  // page (direction 9, ruled 2026-10-18): the import replaces the vault
+  // file, which only the lock screen does, so the vault is locked first if
+  // it is unlocked, and the lock screen, at rest, opens its import dialog.
+  // A vault already Locked is not locked again: a lock in that state still
+  // runs its every-state half (internal/app/session.go lockLocked), which
+  // drops the token.reset_failed notice, a pending touch and a merge's
+  // records. The route alone ends a visit to Settings from the gear.
+  async askReplaceVault(): Promise<void> {
+    this.replaceAsked = true;
+    if (this.unlocked) {
+      try {
+        await Vault.Lock();
+      } catch (e) {
+        this.replaceAsked = false;
+        this.toast(codeText(errorOf(e).code), "error");
+        return;
+      }
+    }
+    this.go("lock");
+  }
+
+  // takeReplaceAsked is the lock screen's one read of replaceAsked: asked
+  // or not, the ask is spent, so the dialog opens once.
+  takeReplaceAsked(): boolean {
+    const asked = this.replaceAsked;
+    if (asked) this.replaceAsked = false;
+    return asked;
+  }
+
+  // closeOpened is the locked banners' and the lock screen's close
+  // (direction 9): one archive by its id — the kill switch, Archives.Close
+  // — or every open one (Archives.CloseAll). The archive page that showed
+  // one closed here has nothing left to show, so it is dropped as closed;
+  // an archive CloseAll could not close (one being compacted holds its
+  // handle) is said.
+  async closeOpened(id?: string): Promise<void> {
+    let kept: string[] = [];
+    try {
+      if (id) await Archives.Close(id);
+      else kept = (await Archives.CloseAll()) ?? [];
+    } catch (e) {
+      this.toast(codeText(errorOf(e).code), "error");
+      return;
+    }
+    if (kept.length) this.toast(codeText(Code.CodeArchiveCompacting), "error");
+    if (this.current && (id ? id === this.current : !kept.includes(this.current))) this.leaveArchive(true);
+    await this.refreshArchives();
   }
 
   private detailsToken = 0;
@@ -1451,6 +1559,10 @@ class Store {
     const from = this.route;
     if (from === "archive" && route !== "archive" && route !== "lock" && this.current) void this.dropArchive(false);
     if (route !== "settings") this.settingsLocked = false;
+    // The Tampered banner's ask is the lock screen's to take; a route
+    // that leaves it (an unlock, the rail) withdraws it, so the import
+    // never opens later unasked.
+    if (route !== "lock") this.replaceAsked = false;
     this.nav = from === "archives" && route === "archive" ? 1 : from === "archive" && route === "archives" ? -1 : 0;
     this.route = route;
   }

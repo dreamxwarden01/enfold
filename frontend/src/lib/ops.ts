@@ -15,12 +15,12 @@ import { dragOutCopy, opCopy, reclaimedText } from "./strings";
 // operations any more.
 //
 // With the archive's name given, the label says which archive as well —
-// *Adding 3 files to Photos 2024*, *Verifying Photos 2024* — since the
-// strip shows every running operation, on the Archives page and on
-// another archive's page too, where the verb alone does not say whose it
-// is (ruled 2026-10-14). The name is the registry row's (OpView carries
-// only the id); without one the label is the verb and its count, as the
-// finished operation's toast still says it.
+// *Adding 3 files to Photos 2024*, *Refreshing the fingerprint of Photos
+// 2024* — since the strip shows every running operation, on the Archives
+// page and on another archive's page too, where the verb alone does not
+// say whose it is (ruled 2026-10-14). The name is the registry row's
+// (OpView carries only the id); without one the label is the verb and its
+// count, as the finished operation's toast still says it.
 //
 // A drag out is named by what it carries (APP.md §3, ruled 2026-09-11
 // after the first real drag, whose staging was over before the strip
@@ -46,8 +46,9 @@ export function opLabel(kind: string, items = 0, phase = "", archive = ""): stri
       return named(counted("Replacing", items), "in", archive);
     case "extract":
       return named(counted("Extracting", items), "from", archive);
+    // *Refresh fingerprint* (direction 9): the kind keeps the core's name.
     case "verify":
-      return named("Verifying", "", archive);
+      return named(opCopy.refreshing, "of", archive);
     case "compact":
       return named("Compacting", "", archive);
     // The in-place compaction the core runs itself after a commit, or after

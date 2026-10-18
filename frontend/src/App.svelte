@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { CeremonyStep, VaultState } from "./lib/api";
+  import { CeremonyStep, Code, Shell, VaultState, errorOf } from "./lib/api";
   import { store } from "./lib/state.svelte";
-  import { bootCopy } from "./lib/strings";
+  import { bootCopy, codeText } from "./lib/strings";
   import Icons from "./components/Icons.svelte";
   import Toasts from "./components/Toasts.svelte";
   import Rail from "./components/Rail.svelte";
@@ -63,6 +63,31 @@
   // session alive and asks nothing about the archive (APP.md §2.3,
   // DESIGN.md §10, ruled 2026-09-10).
   const activity = () => store.activity();
+
+  // The boot failure's ways on (APP.md §2.4; direction 9, ruled
+  // 2026-10-18). Retry has the focus, without a ring until the keyboard
+  // is used, as the lock screen's first button has.
+  function focusFirst(node: HTMLElement) {
+    node.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
+  }
+  // The data folder holds the log the sentence points at; the shell opens
+  // its own folder, so the page names no path of the machine's.
+  async function openDataFolder() {
+    try {
+      await Shell.OpenDataFolder();
+    } catch (e) {
+      store.toast(codeText(errorOf(e).code), "error");
+    }
+  }
+  // What a report needs: the heading, the code and when it failed.
+  async function copyDetails() {
+    try {
+      await navigator.clipboard.writeText(bootCopy.details(store.bootCode, new Date(store.bootFailedAt || Date.now()).toISOString()));
+      store.toast(bootCopy.copied);
+    } catch {
+      store.toast(bootCopy.copyFailed, "error");
+    }
+  }
 </script>
 
 <svelte:window onpointerdown={activity} onkeydown={activity} onwheel={activity} />
@@ -70,12 +95,22 @@
 <Icons />
 <!-- Nothing is drawn until the first status is accepted (APP.md §2.4):
      the splash, then the scene that status names — never the lock scene
-     on no evidence. A first status that failed is one plain line and
-     Retry. -->
+     on no evidence. A first status that failed is a panel where the lock
+     screen's stands (direction 9): the brand, the heading, the code's
+     sentence and three ways on — and nothing of the vault. -->
 {#if !store.booted}
   <div class="splash">
     {#if store.bootFailed}
-      <div class="boot-failed" role="alert"><p>{store.bootFailed}</p><button type="button" class="btn" onclick={() => void store.refreshAll()}>{bootCopy.retry}</button></div>
+      <div class="boot-failed" role="alert">
+        <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
+        <h1 class="t-title">{bootCopy.title}</h1>
+        <p>{store.bootFailed}</p>
+        <div class="row">
+          <button type="button" class="btn accent" onclick={() => void store.refreshAll()} use:focusFirst>{bootCopy.retry}</button>
+          <button type="button" class="btn" onclick={() => void openDataFolder()}>{bootCopy.openFolder}</button>
+          <button type="button" class="btn" onclick={() => void copyDetails()}>{bootCopy.copyDetails}</button>
+        </div>
+      </div>
     {:else}
       <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
     {/if}
@@ -135,6 +170,18 @@
 
 <style>
   .splash { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ink-2); }
-  .boot-failed { display: flex; flex-direction: column; align-items: center; gap: var(--s3); }
-  .boot-failed p { margin: 0; }
+  /* The boot failure's panel stands where the lock screen's does: 440 px,
+     its top at 14vh, 28 px in, a flat 1 px stroke (app.css .unlock .panel;
+     APP.md §6). The splash's centring gives way to it. */
+  .splash:has(.boot-failed) { align-items: flex-start; padding: 0 var(--s6); }
+  .boot-failed {
+    width: min(var(--stage-w), 100%); box-sizing: border-box; margin-top: var(--stage-top); padding: calc(var(--s6) + var(--s1));
+    display: flex; flex-direction: column; gap: var(--s3); color: var(--ink);
+    background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card);
+  }
+  /* The brand as the lock scene's header draws it, without the rail's
+     inset: it heads the panel. */
+  .boot-failed .brand { padding: 0 0 var(--s1); }
+  .boot-failed p { margin: 0; color: var(--ink-2); }
+  .boot-failed .row { flex-wrap: wrap; margin-top: var(--s1); }
 </style>

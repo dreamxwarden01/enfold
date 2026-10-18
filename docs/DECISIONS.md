@@ -4836,3 +4836,70 @@ its way out reads *Cancel* where *Close* may be truer; the setup-needed panel st
 the deadline note keeps the string §2.2 quotes. Nothing of direction 1 has been seen in a real
 window: the user's eye is the next gate, and the YubiKey's real timing (the LED, the touch's
 blink) is what the mock cannot show.
+
+## 2026-10-18 — Direction 9: rank the warnings; give safety its receipts
+
+**Rank the warnings; give safety its receipts, built** (2026-10-18). The user asked for
+direction 9 after direction 1, skipping the close question, which was ruled and built on
+2026-10-17. Three facts were checked before anything was designed, and they decide the words:
+Verify hashes the file's raw bytes (SHA-256) and authenticates nothing — it repairs a stale
+envelope, records the hash with the seq and size and clears the open archive's copy-mismatch,
+and the hash is shown in Technical details and read nowhere else; the Tampered state freezes the
+vault file at the keystore (every registry write refused, every mutation ceremony refused, the
+reveal admitted) while an archive's own saves still commit and owe their receipts; and an
+archive left open after a lock is decrypted and still saves (§2.3's "what stays usable after a
+lock"). Built, in three parts and a spec pass: the tiers, fixed by code in `lib/notices.ts` —
+danger for the three tampered codes, info for the stale copy and the clamped timeouts, attention
+for the rest and for any code no one has classified — the tier setting the colour and the icon
+(a new error circle for danger) and nothing else, the Locked chip with no tier; the Tampered
+banner as one component on five surfaces (the lock screen's notices, first; the Archives page,
+an archive's page, the Vault page and Settings, first in the body), its three sentences,
+*Replace with a copy…* that locks first from a page and asks the lock screen once, and *Why?*
+opening the two-cause sentence; the locked copy made true in its three places — "Photos 2024 is
+still open in Enfold, decrypted. Changes to it are still saved." with *Show* and *Close it* on
+the lock screen, "The vault is locked. Photos 2024 is still open: decrypted, and changes to it
+are still saved." with *Close archive* and *Unlock* on the pages — from `VaultStatus.Opened`,
+which follows renames; the backups card opening with its receipt from `Vault.BackupStatus` (the
+last backup's time, the archives, the archives created since, the archives re-keyed since —
+never `modified_at`, which every save moves): never, behind and current, *Export backup…* in the
+accent while a backup is owed, the consequence sentence, the old caveat only under a date; the
+recovery key's dialog at 520 px with the ID once as the heading's label, the two risks in two
+sentences, *Print…* the suggested action, *Save as a text file…* straight to the native dialog
+with its caution inline, an optional readback of two random groups that ticks and never gates,
+and *Done* after any way out; *Verify* renamed *Refresh fingerprint* with a *Fingerprint* fact
+row in four states (none, owed, current with the check, behind by N saves), Technical details'
+rows renamed and explained, the copy-mismatch note naming the command, the command greyed while
+Tampered since it writes the registry; the password-off dialog on a standard button with "After
+this, a YubiKey opens the vault with its PIN and touch alone. One of the vault's unlock methods
+is asked for first."; one info line on every extract, "The extracted copies are ordinary files,
+outside Enfold's protection."; and the boot failure as a panel — the brand, "Enfold could not
+start", the code's sentence, *Retry*, *Open the data folder* (`Shell.OpenDataFolder`) and *Copy
+details* — with a gap that predates it closed: a status accepted after the first call failed now
+opens the gate instead of clearing the failure and leaving a bare splash. The spec was written
+in one pass after the code and reviewed against it; `IncomingFile.Tampered`'s line in the import
+dialog and every failure bar wear the danger wash and the error circle with the banner.
+
+**Chosen along the way, and left** (2026-10-18). Ruled at the end, against the briefs where they
+differed: "again" appears only on a way actually taken (after a print the band is *Done*, *Print
+again…*, *Save as a text file…*), since *Save again…* would claim a save that never happened;
+the boot page's button is *Open the data folder*, the name the ruled sentence of 2026-10-14 and
+Settings already use, not *Open Enfold's folder*; the re-key count is archives re-keyed, each
+once, which the banners agent changed in the core against its brief and rightly, since a version
+count would say two for one archive re-keyed twice; the caveat "Recorded here, not proof the
+file is still there." stands only under a date, never under "No backup is recorded here"; *Show*
+before *Close it*; failure bars (a refused unlock, a blocked PIN, a dialog's failure) sit
+outside the tier table but take the error circle, the merge dialog's line over a file that fails
+its own hash is danger, and the reveal's used-link state is info; two accent buttons on the
+Vault page while a backup is owed are accepted, each card keeping its own primary; the extract
+line is said always, because it is true of every destination and a drive-type oracle would miss
+synced folders. Left: the lock screen's archives-open notice is reached only through Unlock,
+since a lock with archives open shows the page — intended; the copy-mismatch note names *Refresh
+fingerprint*, which lives on the Archives page's bar and not on the archive's page; a dated
+fingerprint fact ("Taken 2026-10-11") needs a time in the record the format does not keep; a
+real authenticated check of an archive's contents stays the honest next step for the command;
+the attention and info warnings that arrive while unlocked are still the toast until direction
+4's foot popover; the mock cannot stage a never-taken fingerprint or an owed receipt per
+archive, and its Lock does not clear Tampered as the core's does; the strip's second line still
+shows the core's "hashing"; the replace ask survives a damaged or absent lock card until the
+route leaves the lock screen; `--stage-w` and `--stage-top` moved to `:root` so the boot panel
+and the lock panel cannot drift. Nothing of direction 9 has been seen in a real window.

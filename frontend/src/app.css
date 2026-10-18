@@ -4,6 +4,9 @@
 
 :root {
   color-scheme: light;
+  /* The stage: the lock screen's panel width and top, which the boot
+     failure's panel shares (APP.md §6, §2.4). */
+  --stage-w: 440px; --stage-top: 14vh;
   --ground: #f1f1f4;
   --layer: #fbfbfd;
   --ink: #191a1d;
@@ -585,7 +588,9 @@ progress:indeterminate { background: var(--accent-line); }
   background: var(--surface-alt); border: 1px solid var(--stroke); font: var(--t-cap); color: var(--ink-2);
 }
 .chip.key { font-variant-numeric: tabular-nums; padding: 0 var(--s2); border-radius: var(--r-sm); height: 20px; }
-.chip.warn { background: var(--attention-wash); border-color: var(--attention-line); color: var(--attention); }
+/* No tier on the Locked chip (direction 9, ruled 2026-10-18): locked is the
+   safe state, so it is the plain chip in the second ink with the closed
+   padlock, never amber. */
 /* The ramp as classes (APP.md §6, Type and spacing): a page's or a
    dialog's title, a section's heading, a field label's weight, a caption.
    `.t-sub` the class is older than `--t-sub` the token and is not it: it
@@ -725,11 +730,12 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
    own stacking context, so the touch's wash sits under everything in it
    without a z-index on each child. The stage scrolls inside it
    (.u-scroll), so the wash, pinned to the section, covers the window
-   however far a short one scrolls. Its sizes are named here: the panel's
-   width, its top, what stands above it, the rings (the step disc is the
-   line's own, below). */
+   however far a short one scrolls. Its sizes are named here: what stands
+   above the panel and the rings (the step disc is the line's own, below);
+   the panel's width and top are :root's, shared with the boot failure's
+   panel. */
 .unlock {
-  --stage-w: 440px; --stage-top: 14vh; --stage-above: 92px; --rings-big: 160px;
+  --stage-above: 92px; --rings-big: 160px;
   position: relative; isolation: isolate; height: 100%; overflow: hidden;
 }
 .u-scroll { display: flex; flex-direction: column; padding: var(--s5) var(--s6) var(--s6); height: 100%; overflow: auto; }
@@ -893,11 +899,6 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 /* The recovery digits are read off a screen onto paper and back: the sub
    size, in mono at its regular weight, spaced. */
 .digits span { font: var(--t-sub); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; padding: var(--s2) 0; background: var(--surface-alt); border: 1px solid var(--stroke); border-radius: var(--r-ctl); user-select: text; }
-/* The recovery key's ID (FORMAT.md §18.4): the checksum catches a mistyped
-   group, the ID catches the wrong sheet. */
-.key-id { display: flex; align-items: baseline; gap: var(--s2); margin-top: var(--s3); }
-.key-id .kid-label { font: var(--t-cap); color: var(--ink-2); }
-.key-id .kid { font: var(--t-body); font-family: var(--font-mono); letter-spacing: 0.08em; color: var(--ink); user-select: text; }
 
 /* ---------- archives / archive / keys ---------------------------------------- */
 .arch-split { display: grid; grid-template-columns: 1fr 300px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); }

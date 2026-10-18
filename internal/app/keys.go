@@ -944,6 +944,11 @@ func (c *Core) recordExport() {
 func (c *Core) LastExportAt() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.lastExportAtLocked()
+}
+
+// lastExportAtLocked is LastExportAt under the state mutex.
+func (c *Core) lastExportAtLocked() int64 {
 	le := c.settings.LastExport
 	switch {
 	case le == nil || le.At <= 0:
@@ -954,6 +959,49 @@ func (c *Core) LastExportAt() int64 {
 		return 0
 	}
 	return le.At
+}
+
+// BackupStatus is how the vault kept here stands against its last backup
+// (APP.md 13, direction 9): At is LastExportAt's answer, and the counts are
+// the archives the last backup lacks and those it holds with an older key
+// — each record's created_at and each version's against At, never
+// modified_at, which every save moves. Only an unlocked registry is read, as for the effective
+// timeouts, so Locked, no vault and Tampered answer the counts as 0: a
+// Tampered registry may not be the vault's own, and the page's danger
+// banner, not a backup count, is what it owes the user then. One known
+// gap: a record or a version merged in from another file keeps the
+// created_at it was made with (merge.go), so one made before At and merged
+// after it reads as in the backup when it is not. The line words and gates
+// nothing (lastExportAt is unauthenticated), so the gap is a wording one.
+func (c *Core) BackupStatus() BackupStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	bs := BackupStatus{At: c.lastExportAtLocked()}
+	sess, e := c.sessionLocked()
+	if e != nil || c.vault.tampered != nil {
+		return bs
+	}
+	g := sess.Registry()
+	for i := range g.Archives {
+		a := &g.Archives[i]
+		if a.Forgotten() {
+			continue
+		}
+		bs.Archives++
+		if bs.At == 0 || a.CreatedAt > bs.At {
+			bs.Missing++
+			continue
+		}
+		// One count per archive, however many re-keys it had since: the
+		// card says "<n> archives re-keyed since", a count of archives.
+		for _, v := range a.Versions {
+			if v.CreatedAt > bs.At {
+				bs.Rekeyed++
+				break
+			}
+		}
+	}
+	return bs
 }
 
 // CreateVault makes a new keystore with a recovery slot and a first slot

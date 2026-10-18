@@ -41,7 +41,10 @@
     <details class="how"><summary>{dialogCopy.howThisWorks}</summary><p>{mode === "on" ? `${dialogCopy.passwordOn.next} ${how}` : how}</p></details>
   {/if}
   {#snippet actions()}
-    <button type="button" class="btn accent" onclick={go}>{copy.primary}</button>
+    <!-- Turning the password off weakens the vault, so nothing suggests
+         it: a standard button beside Cancel (direction 9, ruled
+         2026-10-18). Turning it on and changing it keep the accent. -->
+    <button type="button" class="btn" class:accent={mode !== "off"} onclick={go}>{copy.primary}</button>
     <button type="button" class="btn" onclick={onclose}>{dialogCopy.cancel}</button>
   {/snippet}
 </Dialog>

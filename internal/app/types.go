@@ -48,13 +48,19 @@ type VaultStatus struct {
 	// slot region does not match the registry, R25) or
 	// vault.tampered_generation (the slot region and the superblock do not
 	// belong together, FORMAT.md §6.2).
-	TamperedReason  Code           `json:"tamperedReason,omitempty"`
-	Warnings        []Code         `json:"warnings"`
-	Ceremony        *CeremonyState `json:"ceremony,omitempty"`
-	Ops             []OpView       `json:"ops"`
-	OpenArchives    int            `json:"openArchives"`
-	HasPasswordSlot bool           `json:"hasPasswordSlot"`
-	HasHardwareSlot bool           `json:"hasHardwareSlot"`
+	TamperedReason Code           `json:"tamperedReason,omitempty"`
+	Warnings       []Code         `json:"warnings"`
+	Ceremony       *CeremonyState `json:"ceremony,omitempty"`
+	Ops            []OpView       `json:"ops"`
+	OpenArchives   int            `json:"openArchives"`
+	// Opened names the archives this process holds open, sorted by name
+	// (APP.md 2.3): after a lock each is still decrypted and its page
+	// still saves, so the lock screen and the banners name them rather
+	// than count them (direction 9, 2026-10-18). Never null. OpenArchives
+	// stays, the count the foot and the tray already read.
+	Opened          []ArchiveRef `json:"opened"`
+	HasPasswordSlot bool         `json:"hasPasswordSlot"`
+	HasHardwareSlot bool         `json:"hasHardwareSlot"`
 	// PendingTouch: a cancelled ceremony's key call is still answering —
 	// the key waits for a touch — and an unlock can pick it up (§2.2).
 	PendingTouch bool `json:"pendingTouch"`
@@ -71,6 +77,33 @@ type VaultStatus struct {
 	RetiredPath     string `json:"retiredPath"`     // the newest of them
 	Damaged         bool   `json:"damaged"`         // MissingPath is there and not a keystore: the rebuild of APP.md §2.1 applies
 	DamagedCopyPath string `json:"damagedCopyPath"` // the newest vault-damaged-*.eks kept for salvage
+}
+
+// ArchiveRef is an open archive as the lock screen and the banners name
+// it: its id and the registry's trusted name (FORMAT.md 7.4) the archive
+// was opened under, renames included.
+type ArchiveRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// BackupStatus is the Vault page's backup line (APP.md 13, direction 9):
+// how the vault kept here stands against its last backup. At is
+// LastExportAt's answer — 0 for never — and like it is local and
+// unauthenticated, so it words the line and gates nothing. The counts are
+// read from an unlocked registry alone and are 0 while Locked, Tampered
+// or with no vault: Archives is the records not forgotten (hidden ones
+// included, since a backup holds their keys too); Missing is those created
+// after At, every one when At is 0; Rekeyed is, over the records the
+// backup does hold, those with a key version created after At — an
+// archive whose current key the backup lacks, counted once however many
+// times it was re-keyed since. modified_at is never the measure: every save
+// moves it, and a line keyed to it would never be current.
+type BackupStatus struct {
+	At       int64 `json:"at"`
+	Archives int   `json:"archives"`
+	Missing  int   `json:"missing"`
+	Rekeyed  int   `json:"rekeyed"`
 }
 
 // CeremonyStep is where the unlock or enrollment ceremony is.

@@ -51,6 +51,18 @@ export function DragOut(archiveID: string, recordIDs: string[] | null): $Cancell
 }
 
 /**
+ * OpenDataFolder opens Enfold's data folder in the file manager, so that
+ * the log in it is a click away from the boot failure (APP.md 2.4,
+ * direction 9). It takes no path: the page names no folder of the
+ * machine's, and the one it opens is the shell's own. io when the file
+ * manager cannot be started, as Reveal answers; internal when the shell
+ * lent no folder.
+ */
+export function OpenDataFolder(): $CancellablePromise<void> {
+    return $Call.ByID(664142233);
+}
+
+/**
  * PendingOpen is the page asking, at boot, whether this launch was asked
  * to open a file (APP.md §14). A launch argument cannot be delivered as an
  * event — there is no page to hear it until the window has drawn one — so

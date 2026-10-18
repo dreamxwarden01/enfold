@@ -16,6 +16,7 @@ func TestBoundSurface(t *testing.T) {
 	want := map[string][]string{
 		"Vault": {
 			"Activity()",
+			"BackupStatus() app.BackupStatus",
 			"BeginUnlock(string) error",
 			"CancelUnlock() error",
 			"CreateVault(string, string, string, string, bool, bool) error",
@@ -95,6 +96,7 @@ func TestBoundSurface(t *testing.T) {
 			"CloseDecided(string, bool) error",
 			"CloseWindow()",
 			"DragOut(string, []string) (app.DragOutResult, error)",
+			"OpenDataFolder() error",
 			"PendingOpen() app.OpenRequest",
 			"PickFiles(string, bool) ([]string, error)",
 			"PickFolder(string) (string, error)",
@@ -168,3 +170,23 @@ func TestMarshalError(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// TestOpenDataFolder: the shell's own data folder is opened, never a path
+// the page names; a file manager that fails answers io, as Reveal does,
+// and a shell that lent no folder answers internal (APP.md 2.4).
+func TestOpenDataFolder(t *testing.T) {
+	var got string
+	s := NewShell(Hooks{DataDir: `C:\Users\me\AppData\Local\Enfold`, OpenFolder: func(p string) error { got = p; return nil }})
+	if err := s.OpenDataFolder(); err != nil || got != `C:\Users\me\AppData\Local\Enfold` {
+		t.Fatalf("opened %q: %v", got, err)
+	}
+	s = NewShell(Hooks{DataDir: `C:\x`, OpenFolder: func(string) error { return errString("explorer") }})
+	if string(MarshalError(s.OpenDataFolder())) != `{"code":"io"}` {
+		t.Fatalf("a failed open: %s", MarshalError(s.OpenDataFolder()))
+	}
+	for _, h := range []Hooks{{}, {DataDir: `C:\x`}, {OpenFolder: func(string) error { return nil }}} {
+		if string(MarshalError(NewShell(h).OpenDataFolder())) != `{"code":"internal"}` {
+			t.Fatalf("no folder lent: %+v", h)
+		}
+	}
+}

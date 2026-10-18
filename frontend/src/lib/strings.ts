@@ -21,6 +21,10 @@
 //   surface (the two registers).
 // - The vault's password with every YubiKey is *Password with every
 //   YubiKey*, never "entangled".
+// - *fingerprint* is the archive file's SHA-256 the registry keeps (APP.md
+//   §2.3, Verify): it tells this file from another copy of it, and checks
+//   nothing inside it, so it is never "verified". The command that takes
+//   it again is *Refresh fingerprint* (direction 9, ruled 2026-10-18).
 //
 // The verb table (commandCopy). A command names what happens and ends
 // with "…" when a dialog or a picker follows; the dialog's primary
@@ -48,6 +52,7 @@
 import { CeremonyStep, Code } from "./api";
 import type { CeremonyState, CodeKey, StepKey } from "./api";
 import { bytes, clockTime, dateTime, ext, plural } from "./format";
+import type { FingerprintKind } from "./archlist";
 
 export interface StepCopy {
   title: string;
@@ -290,7 +295,9 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeArchiveMissing]: "The archive file is not where the vault last saw it.",
   // The copy-mismatch banner (ruled 2026-10-17): what it is likely to be,
   // then what the next save does.
-  [Code.CodeArchiveCopyMismatch]: "This is not the copy the vault saved last; maybe an older backup. Your next save makes it the current one.",
+  // The command that also makes it the current one is named, since the
+  // fingerprint is what tells the copies apart (direction 9).
+  [Code.CodeArchiveCopyMismatch]: "This is not the copy the vault saved last; maybe an older backup. Your next save, or Refresh fingerprint, makes it the current one.",
   [Code.CodeArchiveForgotten]: "This archive is forgotten. Restore it to use it again; 30 days after it was forgotten it can no longer be opened.",
   [Code.CodeArchiveNotThisOne]: "The file there is not this archive: another archive, or a copy someone made. Nothing was deleted.",
   [Code.CodeArchiveUnreachable]: "The folder that file is in could not be reached. Nothing was deleted and nothing was forgotten.",
@@ -377,14 +384,48 @@ export function unknownCodeParts(text: string): [string, string, string] | null 
   return [text.slice(0, at), m[1], text.slice(at + m[1].length)];
 }
 
+// lockedOpenText is the locked banner's sentence on the Archives page and
+// the Archive page (direction 9, ruled 2026-10-18): what an archive left
+// open after a lock still is — decrypted, and still saving, since every
+// operation commits to the archive file and owes the vault its receipt
+// (APP.md §2.3, "What stays usable after a lock"). One archive is named;
+// several are counted. With none open the page is not shown (App.svelte
+// showLock), so the bare first sentence is only ever a moment's.
+export function lockedOpenText(names: readonly string[]): string {
+  return leadText(lockedOpenLead(names));
+}
+
+// A banner's sentence split where it is drawn: `head`, the first sentence,
+// set strong, then `rest` (direction 9's mock, ruled 2026-10-18: a bar
+// opens with what happened, in the strong weight, as the backups card's
+// status does). The split is the copy's own, never a search for ". ",
+// since an archive's name may hold one.
+export interface Lead {
+  head: string;
+  rest: string;
+}
+
+export function leadText(l: Lead): string {
+  return l.rest ? `${l.head} ${l.rest}` : l.head;
+}
+
+export function lockedOpenLead(names: readonly string[]): Lead {
+  const head = "The vault is locked.";
+  if (names.length === 0) return { head, rest: "" };
+  if (names.length === 1) return { head, rest: `${names[0]} is still open: decrypted, and changes to it are still saved.` };
+  return { head, rest: `${plural(names.length, "archive")} are still open: decrypted, and changes to them are still saved.` };
+}
+
 // ---- The archive page's own lines (APP.md §2.3, §6, ruled 2026-09-10) --
 //
-// The locked banner is one plain line: the archive has no timeout of its
-// own, and what it owes the vault is already said by the status strip. The
-// two titles are what stops *Delete archive…*, said on the button itself,
-// and the third is what the kill switch does that leaving the page does not.
+// The locked banner names what the lock left open (direction 9): the
+// archive is still decrypted and still saves, which "stays open while you
+// are here" did not say. The two titles are what stops *Delete archive…*,
+// said on the button itself, and the third is what the kill switch does
+// that leaving the page does not.
 export const archivePageCopy = {
-  lockedBanner: "The vault is locked. This archive stays open while you are here.",
+  lockedBanner: (name: string): string => lockedOpenText([name]),
+  lockedBannerLead: (name: string): Lead => lockedOpenLead([name]),
   closeNow: "Closes the archive now, even while something is playing.",
   deleteNeedsUnlock: "Unlock the vault first: the record is the vault's.",
   deleteTampered: "This vault file does not match itself, so changes to it are off.",
@@ -425,6 +466,9 @@ export const dragOutCopy = {
 export const opCopy = {
   rekeying: "Re-keying",
   rekeyingArchive: "Re-keying archive",
+  // *Refresh fingerprint* running: what it does, of which archive
+  // (direction 9) — never "Verifying", which promised a check.
+  refreshing: "Refreshing the fingerprint",
 };
 
 // ---- The extract dialog and what an `ask` comes back with (APP.md §3,
@@ -442,6 +486,10 @@ export const policyLabels: Record<string, string> = {
 
 export const extractCopy = {
   policyLegend: "If a file is already there",
+  // One info line above the band, on every extract (direction 9, ruled
+  // 2026-10-18): true of any destination, and a check of the drive's type
+  // would miss a synced folder. A sentence, not a gate.
+  ordinaryFiles: "The extracted copies are ordinary files, outside Enfold's protection.",
 };
 
 // conflictTitle is the question asked first: one conflict names the file,
@@ -509,8 +557,20 @@ export function retriesText(s: Pick<CeremonyState, "retries" | "retriesKnown" | 
 // failed — and the rule that, with no reason to hand, both causes are
 // named, because guessing one would be a claim — moved to
 // technicalCopy.tamperedWhy, the banner's "Why?" (ruled 2026-10-17).
-export function tamperedCopy(_reason?: string): string {
-  return "This vault file does not match itself, so it may have been changed outside Enfold. Changes to the vault are off until you replace it with a copy you trust.";
+// The last sentence answers the fear the first one raises (direction 9,
+// ruled 2026-10-18): the freeze is the vault file's, and the archive
+// files keep saving (APP.md §2.3).
+export function tamperedCopy(reason?: string): string {
+  return leadText(tamperedLead(reason));
+}
+
+// The same words split for the banner: what happened, strong, then the
+// freeze and its limit.
+export function tamperedLead(_reason?: string): Lead {
+  return {
+    head: "This vault file does not match itself, so it may have been changed outside Enfold.",
+    rest: "Changes to the vault are off until you replace it with a copy you trust. Your archive files are not affected.",
+  };
 }
 
 // warningCopy is what a status warning says in the banner.
@@ -557,11 +617,21 @@ export const listCopy = {
   selectOne: "Select a file",
 };
 
-// The boot (APP.md §2.4): a first Status() that failed is one plain line —
-// the code's own words — and this button; the lock scene is never drawn
-// on no evidence.
+// The boot (APP.md §2.4): a first Status() that failed is a panel of its
+// own (direction 9, ruled 2026-10-18) — the brand, this heading, the
+// code's own words, and three ways on: Retry, the data folder that holds
+// the log, and the details copied for a report. The lock scene is never
+// drawn on no evidence, and nothing of the vault is.
 export const bootCopy = {
+  title: "Enfold could not start",
   retry: "Retry",
+  openFolder: "Open the data folder",
+  copyDetails: "Copy details",
+  copied: "Details copied",
+  copyFailed: "The details could not be copied.",
+  // What *Copy details* copies: the heading, the code, and when, in ISO
+  // form so a report reads the same wherever it is pasted.
+  details: (code: string, iso: string): string => `Enfold could not start · ${code} · ${iso}`,
 };
 
 // The close question (APP.md §2.3, ruled 2026-09-13): the close button
@@ -664,10 +734,28 @@ export const archivesCopy = {
     unused: "Unused space",
     file: "File",
     foreign: "Last seen on another system at",
+    fingerprint: "Fingerprint",
   },
-  // A Verify behind the last saves, said as what it is.
-  verifiedAgo: (saves: number): string => `Last verified ${plural(saves, "save")} ago`,
+  // The fingerprint's fact (direction 9, ruled 2026-10-18): how far the
+  // hash the registry keeps is behind the archive's saves, said as what
+  // it is — which copy of the file, not a check of what is in it. Most
+  // records never had one taken (only Refresh fingerprint and Compact
+  // take one), and that is said rather than counted from seq 0; while a
+  // receipt is owed the file has saves the registry has not counted, so
+  // no number is claimed (lib/archlist.ts fingerprintOf).
+  fingerprint: (f: { kind: FingerprintKind; behind: number }): string =>
+    f.kind === "none"
+      ? "Not taken yet"
+      : f.kind === "owed"
+        ? "From before the last save"
+        : f.kind === "behind" && f.behind > 0
+          ? `From ${plural(f.behind, "save")} ago`
+          : "Matches the last save",
   technicalDetails: "Technical details…",
+  // The locked banner (direction 9): the archives the lock left open, by
+  // name from VaultStatus.opened, and that they still save.
+  lockedBanner: (names: readonly string[]): string => lockedOpenText(names),
+  lockedBannerLead: (names: readonly string[]): Lead => lockedOpenLead(names),
 };
 
 // commandCopy is the verb table (the glossary above): a command's label
@@ -677,6 +765,10 @@ export const archivesCopy = {
 export const commandCopy = {
   open: "Open",
   close: "Close",
+  // The kill switch (APP.md §2.3): the Archive page's head and the locked
+  // banners; *Close all* is the Archives page's for several left open.
+  closeArchive: "Close archive",
+  closeAll: "Close all",
   newArchive: "New archive…",
   hide: "Hide",
   unhide: "Unhide",
@@ -686,7 +778,9 @@ export const commandCopy = {
   compact: "Compact…",
   rekeyArchive: "Re-key archive…",
   rekeyVault: "Re-key vault…",
-  verify: "Verify",
+  // Named for what it does (direction 9): it hashes the file's raw bytes
+  // and records the hash; it authenticates nothing, so it is not "Verify".
+  refreshFingerprint: "Refresh fingerprint",
   locate: "Locate…",
   showInExplorer: "Show in Explorer",
   findMissing: "Find missing files",
@@ -981,10 +1075,13 @@ export const dialogCopy = {
     how: "The old password is not asked for: whoever reaches this page has already opened the vault, and could add an unlock method of their own.",
     primary: "Change password",
   },
+  // Turning it off weakens the vault, so its primary is a standard button,
+  // not the accent (direction 9, ruled 2026-10-18), and the body says the
+  // ceremony that follows will ask for an unlock method first.
   passwordOff: {
     title: "Stop requiring a password with every YubiKey?",
-    body: "Each YubiKey opens the vault with its PIN and touch alone; none needs to be present. Nothing else about the vault changes.",
-    primary: "Turn off password",
+    body: "After this, a YubiKey opens the vault with its PIN and touch alone. One of the vault's unlock methods is asked for first.",
+    primary: "Turn off the password",
   },
   // No placeholder in the name field: an invented name read as a default
   // already filled in (ruled 2026-10-14 for the key's name).
@@ -1009,11 +1106,34 @@ export const vaultCopy = {
   lockedLine: "Unlock the vault to change its unlock methods.",
   setupLine: "This vault has only its recovery key. Add a YubiKey or a password to finish setting it up; the recovery key is asked for first.",
   foot: (name: string): string => name,
+  // A change's greyed title while Tampered (APP.md §13): the remedy is the
+  // banner's button, on this page too (direction 9).
+  changesOff: "Changes are off until this vault is replaced with a copy you trust; the banner above has the button.",
   backups: "Backups",
-  backupsLine: "A backup is a copy of this vault that opens with its recovery key. Keep one somewhere other than this PC.",
-  lastBackup: "Last backup",
-  lastBackupValue: (when: string): string => `${when}; recorded here, not proof the file is still there`,
-  noBackup: "None recorded here",
+  // The backups card (direction 9, ruled 2026-10-18): the status, then
+  // the consequence, then the buttons. The status compares the last
+  // backup with what the vault holds — archives created and archives
+  // re-keyed since (Vault.BackupStatus), never the last change, which
+  // every save moves. Which line is drawn is lib/backup.ts's; the date
+  // is relative, since recency is the point (sinceText).
+  backupNever: (archives: number): string =>
+    archives === 1 ? "Your 1 archive is only in this vault file." : `All ${plural(archives, "archive")} are only in this vault file.`,
+  backupNeverHead: "No backup is recorded here.",
+  backedUp: (when: string): string => `Backed up ${when}.`,
+  // What the last backup lacks: the archives created since and those
+  // re-keyed since, each counted, one sentence for both.
+  backupLacks: (created: number, rekeyed: number): string => {
+    const verb = created + rekeyed === 1 ? "is" : "are";
+    if (created > 0 && rekeyed > 0) return `${plural(created, "archive")} created since and ${rekeyed} re-keyed since are not in it.`;
+    if (created > 0) return `${plural(created, "archive")} created since ${verb} not in it.`;
+    return `${plural(rekeyed, "archive")} re-keyed since ${verb} not in it.`;
+  },
+  backupHoldsAll: "It holds every archive key.",
+  // The old caveat, under the status: the stamp is this PC's record of an
+  // export, not a look at the file (lastExportAt gates nothing).
+  backupCaveat: "Recorded here, not proof the file is still there.",
+  // The consequence, the card's sentence.
+  backupsLine: "Your archives open only with this vault file or a backup of it. The recovery key opens either one; it cannot replace them.",
   importPointer: "To take archives out of a backup without replacing this vault, use Import archives from a backup… on the Archives page.",
   // What *Inspect a backup…* reads off the file's label.
   inspected: {
@@ -1225,12 +1345,24 @@ export const lockCopy = {
     n === 1
       ? "1 archive is still open. Close it first: its saves would land in the wrong vault."
       : `${plural(n, "archive")} are still open. Close them first: their saves would land in the wrong vault.`,
-  // Archives left open when the vault locked: they browse, they do not save.
-  openWhileLocked: (n: number): string => `${plural(n, "archive")} still open — browsing works, saving needs the vault.`,
+  // Archives left open when the vault locked (direction 9, ruled
+  // 2026-10-18): still decrypted, and every change to them still saves
+  // (APP.md §2.3, "What stays usable after a lock"). One is named, several
+  // are counted; the names are VaultStatus.opened's.
+  openWhileLocked: (names: readonly string[]): string => leadText(lockCopy.openWhileLockedLead(names)),
+  openWhileLockedLead: (names: readonly string[]): Lead =>
+    names.length === 1
+      ? { head: `${names[0]} is still open in Enfold, decrypted.`, rest: "Changes to it are still saved." }
+      : { head: `${plural(names.length, "archive")} are still open in Enfold, decrypted.`, rest: "Changes to them are still saved." },
+  closeIt: "Close it",
+  closeThem: "Close them",
   // The rebuild's bar, around the damaged file's path.
   rebuildFileAt: "The file at",
   rebuildKept: "is not a readable vault. It is kept as a dated copy in Enfold's folder, never deleted: archives that only it holds can be opened only with it, if it can ever be repaired.",
   replaceKept: "A file already at the chosen place is kept as a dated copy in Enfold's folder.",
+  // The tampered bar's Why? dialog (direction 9): its title says what the
+  // bar says is off; the body is technicalCopy.tamperedWhy.
+  tamperedWhyTitle: "Why changes are off",
 };
 
 // ---- The first unlock method's cards (APP.md §6, ruled 2026-10-17) -----
@@ -1371,11 +1503,18 @@ export const technicalCopy = {
   lastSaved: "Last saved",
   revision: "Revision",
   lastWriter: "Last writer",
-  seq: "Last seq / hash at seq",
+  // Two rows, each its own number: one combined label wrapped in the
+  // dialog's label column, and the glossary keeps "fingerprint" for the
+  // hash (direction 9).
+  seq: "Last seq",
+  fingerprintSeq: "Fingerprint at seq",
   storedAs: "Stored as",
   policy: "Policy",
   lastPath: "Last path",
-  ciphertextHash: "Ciphertext hash",
+  fingerprint: "Fingerprint (SHA-256 of the file)",
+  // One caption under the dialog's rows (direction 9): what the
+  // fingerprint is good for, and what it is not.
+  fingerprintNote: "A fingerprint tells this file from another copy of it, such as a restored backup. It is not a check of the file's contents.",
   receipt: "Receipt",
   receiptPending: "Pending",
   keyVersions: "Key versions",
@@ -1398,5 +1537,42 @@ export const technicalCopy = {
   },
   staleWhy: "One of the vault file's two superblock copies is damaged. Enfold opened the good one; the next write repairs the other.",
   notThisVaultWhy: "No VMK this vault keeps, current or retired, opens that file's registry: it is another vault's, or a backup from a generation this vault no longer keeps, as when this vault was rolled back to an older copy.",
-  envelopeStaleWhy: "The archive's envelope still names a retired key version; a Verify or a second re-key rewrites it.",
+  envelopeStaleWhy: "The archive's envelope still names a retired key version; Refresh fingerprint or a second re-key rewrites it.",
+};
+
+// ---- The recovery key's dialog (APP.md §6; direction 9, ruled 2026-10-18)
+//
+// The key ID once, as the heading's label; both risks in two sentences —
+// the key opens the vault without a YubiKey, and opens nothing without
+// the vault file or a backup; Print… suggested; the text file's caution
+// in the body, since its own dialog went; and the optional readback.
+export const revealCopy = {
+  title: "Recovery key",
+  // A create's or an added key's first showing.
+  titleNew: "Your recovery key",
+  idLabel: "Recovery key ID",
+  leadOpens: "With this key, the vault file or a backup opens without your YubiKey. Keep it from others.",
+  leadNothing: "Without the vault file or a backup, this key opens nothing. Keep those too.",
+  loading: "Loading…",
+  digitsLine: (n: number): string => `${n} digits. They can be shown again from the Vault page: unlock, then prove a YubiKey or a password once more.`,
+  // The core still refuses Enfold's own folder and the vault's
+  // (vault.recovery_place); the rest is the user's to choose.
+  textFile: "A text file is plain text. Keep it off this PC and out of any folder that syncs.",
+  check: "Check what I wrote",
+  group: (n: number): string => `Group ${n}`,
+  compare: "Compare it with what you wrote.",
+  onlyACheck: "Only a check: nothing here is required.",
+  print: "Print…",
+  printAgain: "Print again…",
+  save: "Save as a text file…",
+  saveAgain: "Save again…",
+  wroteDown: "I have written it down",
+  done: "Done",
+  saveTitle: "Save the recovery key",
+  savedTo: (path: string): string => `Saved to ${path}.`,
+  sentToPrint: (title: string): string => `Sent to print as “${title}”.`,
+  writtenDown: "Written down.",
+  gone: "The recovery key could not be shown here: its one-time link was already used.",
+  goneHow: "Show it again from the Vault page: unlock, then prove a YubiKey or a password once more.",
+  notHeld: "The recovery key is no longer held. Show it again from the Vault page.",
 };

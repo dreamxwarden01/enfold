@@ -156,7 +156,7 @@
   {#if inspecting}
     <p>Reading the file…</p>
   {:else if problem}
-    <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{problem}</span></div>
+    <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{problem}</span></div>
   {:else if info}
     <dl class="kv">
       <dt>{vaultCopy.inspected.kind}</dt><dd>{isBackup ? vaultCopy.inspected.backup : vaultCopy.inspected.vault}</dd>

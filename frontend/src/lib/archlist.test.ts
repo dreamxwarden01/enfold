@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clickShownHeader, compacting, droppedArchives, paneRow, rowRefusal, shownTicked } from "./archlist";
+import { clickShownHeader, compacting, droppedArchives, fingerprintOf, paneRow, rowRefusal, shownTicked } from "./archlist";
 import { clickRow, emptySelection, toggleRow } from "./selection";
 
 // The Archives list's ticks (APP.md §6, ruled 2026-09-10): the header
@@ -102,5 +102,50 @@ describe("an .efd dropped on the Archives page", () => {
   it("never takes a folder named like an archive, and nothing else at all", () => {
     expect(droppedArchives(["C:\\a\\odd.efd"], [true])).toEqual([]);
     expect(droppedArchives(["C:\\a\\photo.jpg", "C:\\a\\efd"])).toEqual([]);
+  });
+});
+
+// The pane's Fingerprint fact (direction 9): a hash only Refresh
+// fingerprint and Compact take, so a record never refreshed has none,
+// and the summary's hashBehind alone cannot say so.
+describe("the fingerprint fact", () => {
+  const zeros = "0".repeat(64);
+  const hash = "ab".repeat(32);
+  const row = (hashBehind: number, receiptOwed = false) => ({ hashBehind, receiptOwed });
+
+  it("is not drawn without the record, as while Locked", () => {
+    expect(fingerprintOf(row(0), null)).toBeNull();
+  });
+
+  it("says none for a record never refreshed, however many saves it has", () => {
+    // Create: LastSeq 1, HashAtSeq 0, so hashBehind 1 — not "1 save ago".
+    expect(fingerprintOf(row(1), { lastSeq: 1, hashAtSeq: 0, lastCiphertextHash: zeros })).toEqual({ kind: "none", behind: 0 });
+    expect(fingerprintOf(row(7), { lastSeq: 7, hashAtSeq: 0, lastCiphertextHash: zeros })).toEqual({ kind: "none", behind: 0 });
+    // a record written before the archive ever was: nothing at all
+    expect(fingerprintOf(row(0), { lastSeq: 0, hashAtSeq: 0, lastCiphertextHash: "" })).toEqual({ kind: "none", behind: 0 });
+  });
+
+  it("matches only when a hash was taken at the last save", () => {
+    expect(fingerprintOf(row(0), { lastSeq: 9, hashAtSeq: 9, lastCiphertextHash: hash })).toEqual({ kind: "current", behind: 0 });
+  });
+
+  it("counts the saves since a hash was taken", () => {
+    expect(fingerprintOf(row(2), { lastSeq: 9, hashAtSeq: 7, lastCiphertextHash: hash })).toEqual({ kind: "behind", behind: 2 });
+    expect(fingerprintOf(row(1), { lastSeq: 9, hashAtSeq: 8, lastCiphertextHash: hash })).toEqual({ kind: "behind", behind: 1 });
+  });
+
+  it("claims no number while a receipt is owed", () => {
+    expect(fingerprintOf(row(0, true), { lastSeq: 9, hashAtSeq: 9, lastCiphertextHash: hash })).toEqual({ kind: "owed", behind: 0 });
+    expect(fingerprintOf(row(3, true), { lastSeq: 9, hashAtSeq: 6, lastCiphertextHash: hash })).toEqual({ kind: "owed", behind: 3 });
+    // and an owed receipt is still no hash when none was taken
+    expect(fingerprintOf(row(4, true), { lastSeq: 4, hashAtSeq: 0, lastCiphertextHash: zeros })).toEqual({ kind: "none", behind: 0 });
+  });
+
+  it("believes a summary that proves a hash taken since a stale record was read", () => {
+    // record read at seq 5 with no hash; a Refresh fingerprint since
+    // leaves hashBehind 0, below that record's LastSeq
+    expect(fingerprintOf(row(0), { lastSeq: 5, hashAtSeq: 0, lastCiphertextHash: zeros })).toEqual({ kind: "current", behind: 0 });
+    // a save since that refresh: still a taken hash
+    expect(fingerprintOf(row(1), { lastSeq: 5, hashAtSeq: 0, lastCiphertextHash: zeros })).toEqual({ kind: "behind", behind: 1 });
   });
 });

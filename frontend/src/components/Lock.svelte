@@ -9,6 +9,7 @@
   import { CeremonyStep, Keys, Shell, Vault, VaultState, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { ceremonyCopy, codeText, commandCopy, dialogCopy, firstMethodCopy, lockCopy, retriesText, sinceText, stepText, vaultCopy, warningCopy } from "../lib/strings";
+  import { OPENED, lockNotices, tier, tierIcon } from "../lib/notices";
   import { date, leaf } from "../lib/format";
   import { fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
@@ -30,6 +31,7 @@
   import TextField from "./TextField.svelte";
   import MenuButton from "./MenuButton.svelte";
   import KeyArt from "./KeyArt.svelte";
+  import TamperedBar from "./TamperedBar.svelte";
 
   const st = $derived(store.status);
   const c = $derived(store.ceremony);
@@ -115,6 +117,10 @@
   // 54. The full path is the line's title.
   const destShown = $derived(middlePath(dest, rebuild ? 54 : 34));
   const openArchives = $derived(st?.openArchives ?? 0);
+  // The archives the lock left open, by name (VaultStatus.opened): the
+  // notice above the panel names one and counts several (direction 9).
+  const openedNames = $derived((st?.opened ?? []).map((a) => a.name));
+  const openedLead = $derived(lockCopy.openWhileLockedLead(openedNames));
 
   let importing = $state(false);
   let importPrefill = $state("");
@@ -462,6 +468,26 @@
   }
 
   const warnings = $derived(st?.warnings ?? []);
+  // The notices in tier order (lib/notices.ts): the open-archives notice is
+  // not a core warning but ranks as one, attention, so it stands under the
+  // tampered banner and above an info line (direction 9).
+  // The Tampered banner is drawn from the pages' one predicate
+  // (store.tampered), once, whichever fact raised it (lib/notices.ts).
+  const noticeList = $derived(lockNotices(warnings, store.tampered, openedNames.length > 0));
+
+  // The Tampered banner's *Replace with a copy…* pressed on a page locked
+  // the vault and came here (store.askReplaceVault): at rest, the import
+  // dialog opens, once, preferring a copy (direction 9).
+  $effect(() => {
+    if (shown === "rest" && store.replaceAsked && store.takeReplaceAsked()) openImport("", "copy");
+  });
+
+  // The lock screen's close for what the lock left open: the one archive
+  // by its id, or all of them (direction 9).
+  function closeOpened() {
+    const opened = st?.opened ?? [];
+    void store.closeOpened(opened.length === 1 ? opened[0].id : undefined);
+  }
 
   // The header's padlock closes over the first moment the lock screen
   // shows (APP.md §6, Motion): open on arrival, shut after the settle.
@@ -504,22 +530,39 @@
   </div>
 
   <div class="u-stage">
-    {#if !firstRun && (warnings.length > 0 || openArchives > 0)}
+    {#if !firstRun && noticeList.length > 0}
       <!-- Notices stand above the panel, its width, so nothing warns from
            below the buttons (APP.md §6, ruled 2026-10-17). -->
       <div class="notices">
-        {#each warnings as w (w)}
-          <!-- The reason names which cause the status carries; every
-               other code ignores it (APP.md §13, VaultStatus.TamperedReason). -->
-          <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{warningCopy(w, st?.tamperedReason)}</span></div>
+        <!-- Ranked by tier, danger first, each in its tier's colour and
+             icon (lib/notices.ts; direction 9, ruled 2026-10-18). -->
+        {#each noticeList as n (n)}
+          {@const t = n === OPENED ? "attention" : tier(n)}
+          {#if t === "danger"}
+            <!-- The Tampered banner, first (TamperedBar): here its fix
+                 opens the import dialog this screen runs. -->
+            <TamperedBar reason={st?.tamperedReason} onreplace={() => openImport()} />
+          {:else if n === OPENED}
+            <!-- The archives the lock left open (direction 9, ruled
+                 2026-10-18): attention, since they are still decrypted
+                 and still save (APP.md §2.3), with the closed padlock;
+                 ranked with the other attention notices, above the info
+                 ones. Show goes there, then the close, as the mock draws
+                 them; the sentence over the row, as in the tampered bar. -->
+            <div class="bar attention">
+              <svg class="i i-14"><use href="#i-lock" /></svg>
+              <div class="grow notice-body">
+                <span class="num"><strong>{openedLead.head}</strong> {openedLead.rest}</span>
+                <div class="row">
+                  <button type="button" class="btn link" onclick={() => store.go(store.current ? "archive" : "archives")}>{vaultCopy.show}</button>
+                  <button type="button" class="btn sm" onclick={closeOpened}>{openedNames.length === 1 ? lockCopy.closeIt : lockCopy.closeThem}</button>
+                </div>
+              </div>
+            </div>
+          {:else}
+            <div class="bar {t}"><svg class="i i-14"><use href="#{tierIcon(t)}" /></svg><span>{warningCopy(n, st?.tamperedReason)}</span></div>
+          {/if}
         {/each}
-        {#if openArchives > 0}
-          <div class="bar">
-            <svg class="i i-14"><use href="#i-info" /></svg>
-            <span class="grow num">{lockCopy.openWhileLocked(openArchives)}</span>
-            <button type="button" class="btn link" onclick={() => store.go(store.current ? "archive" : "archives")}>{vaultCopy.show}</button>
-          </div>
-        {/if}
       </div>
     {/if}
 
@@ -584,7 +627,7 @@
             <button type="button" class="btn subtle sm start" onclick={testBackup}>{commandCopy.testBackup}</button>
           {/if}
           {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
-            <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
+            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
           {:else if outcome?.kind === "verify"}
             <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{ceremonyCopy.verified(outcome.archives)}</span></div>
           {:else if outcome?.kind === "import"}
@@ -626,7 +669,7 @@
                ceremony clears it, so it needs no dismissal. -->
           {#if st?.note}<div class="infoline"><svg class="i i-14"><use href="#i-info" /></svg><span>{codeText(st.note)}</span></div>{/if}
           {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
-            <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
+            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
           {:else if outcome?.kind === "import"}
             <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{restoring ? lockCopy.restored : lockCopy.replaced}</span></div>
           {:else if outcome?.kind === "verify"}
@@ -837,7 +880,7 @@
             <div class="lead"><h2 class="t-title">{lockCopy.stoppedWaiting}</h2><div class="cap">{lockCopy.stoppedLine}</div></div>
           {:else}
             <div class="lead"><h2 class="t-title">{stepText(c.step).title}</h2></div>
-            <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
+            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
           {/if}
           <div class="row">
             {#if restartable && againWay}
@@ -855,7 +898,7 @@
                §6, ruled 2026-10-17). -->
           {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           <div class="lead"><h2 class="t-title">{ceremonyCopy.blockedLead}</h2></div>
-          <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{offersRecovery ? ceremonyCopy.blockedMeansWayOut : ceremonyCopy.blockedMeans}</span></div>
+          <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{offersRecovery ? ceremonyCopy.blockedMeansWayOut : ceremonyCopy.blockedMeans}</span></div>
           <div class="row">
             {#if offersRecovery}
               <button type="button" class="btn accent grow" onclick={() => begin("recovery")} use:takeFocus>{lockCopy.useRecoveryKey}</button>
@@ -937,6 +980,7 @@
 {/if}
 
 
+
 <style>
   .named { display: flex; flex-direction: column; gap: var(--s1); }
   /* The "Kept in" line (APP.md §6, ruled 2026-10-17): one caption row
@@ -956,4 +1000,7 @@
   .gear { margin: -2px 0 -2px var(--s1); padding: 0 var(--s1); color: inherit; }
   .lockbox { position: relative; width: 14px; height: 14px; display: inline-block; }
   .lockbox .padlock { position: absolute; inset: 0; }
+  /* The open-archives notice: the sentence, then its close and its Show
+     on a row under it, 8 apart, as the tampered bar's (TamperedBar). */
+  .notice-body { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); min-width: 0; }
 </style>

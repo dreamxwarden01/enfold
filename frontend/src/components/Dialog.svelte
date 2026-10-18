@@ -26,6 +26,13 @@
     // equal widths that wrap to rows of their own rather than spill.
     actions?: Snippet;
     wide?: boolean;
+    // medium: 520 px, between the default 460 and wide's 640 — the
+    // recovery key's dialog, whose eight groups of digits at the sub size
+    // and two readback fields want the room (direction 9, ruled 2026-10-18).
+    medium?: boolean;
+    // heading: what stands beside the title, inside its heading — the
+    // recovery key's ID, said once as the heading's label (direction 9).
+    heading?: Snippet;
     // covered: another dialog stands over this one — it answers no key or
     // click and leaves the tab order until that one closes.
     covered?: boolean;
@@ -54,7 +61,7 @@
     // downward; every other dialog is centred.
     anchored?: boolean;
   }
-  let { title, onclose, dismissable = false, children, actions, wide = false, covered = false, onsubmit, select, closeButton = false, anchored = false }: Props = $props();
+  let { title, onclose, dismissable = false, children, actions, wide = false, medium = false, heading, covered = false, onsubmit, select, closeButton = false, anchored = false }: Props = $props();
 
   // What the body lends a ceremony panel (lib/dialogs DialogHost): the
   // foot band while it is mounted, and the touch's green over the box
@@ -181,7 +188,7 @@
 <svelte:window onkeydowncapture={trap} onkeydown={key} onfocusin={refocus} />
 
 <div class="backdrop" class:anchored role="presentation" bind:this={backdrop} in:fade|global={motion()} out:fade|global={motion(LEAVE)} onmousedown={backdropDown} onclick={backdropClick}>
-  <div class="dialog" class:wide class:ceremony={host.ceremony} class:green={host.green} role="dialog" aria-modal={covered ? undefined : true} aria-label={title} tabindex="-1" bind:this={box} inert={covered || undefined} in:scale|global={motion(FAST, { start: 0.97 })} out:fade|global={motion(LEAVE)}>
+  <div class="dialog" class:wide class:medium class:ceremony={host.ceremony} class:green={host.green} role="dialog" aria-modal={covered ? undefined : true} aria-label={title} tabindex="-1" bind:this={box} inert={covered || undefined} in:scale|global={motion(FAST, { start: 0.97 })} out:fade|global={motion(LEAVE)}>
     {#if onsubmit}
       <!-- display: contents makes the body and the foot the box's own
            flex children, as if the form were not there. -->
@@ -199,11 +206,11 @@
   <div class="dialog-body">
     {#if closeButton}
       <div class="dialog-head">
-        <h2>{title}</h2>
+        <h2>{title}{@render heading?.()}</h2>
         <button type="button" class="btn subtle dialog-close" title={onclose ? dialogCopy.cancelEsc : undefined} aria-label={dialogCopy.cancel} disabled={!onclose} onclick={cancel}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button>
       </div>
     {:else}
-      <h2>{title}</h2>
+      <h2>{title}{@render heading?.()}</h2>
     {/if}
     {@render children()}
   </div>
@@ -226,6 +233,7 @@
      640 it fits whole, and at the 880 px minimum window 640 still stands
      clear of the edges. */
   .dialog.wide { width: 640px; }
+  .dialog.medium { width: 520px; }
   .dialog-form { display: contents; }
   /* The top anchor (APP.md §6, Dialogs stay put; ruled 2026-10-17): the
      box's top at a tenth of the window, as WinUI's tall dialogs sit high,

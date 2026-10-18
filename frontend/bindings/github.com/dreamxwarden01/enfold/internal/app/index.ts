@@ -9,8 +9,10 @@ export {
 
 export type {
     ArchiveDetails,
+    ArchiveRef,
     ArchiveStat,
     ArchiveSummary,
+    BackupStatus,
     CeremonyState,
     ChildRef,
     Collision,

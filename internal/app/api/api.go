@@ -125,6 +125,12 @@ func (v *Vault) DiscardRecords(handle string) error {
 // nothing (APP.md §13).
 func (v *Vault) LastExportAt() int64 { return v.c.LastExportAt() }
 
+// BackupStatus is the Vault page's backup line (APP.md §6, The backups
+// card; §3): the last backup's time and, while unlocked and not Tampered,
+// the archives it lacks and the archives it holds with an older key. Like
+// LastExportAt it words and gates nothing.
+func (v *Vault) BackupStatus() app.BackupStatus { return v.c.BackupStatus() }
+
 // Archives is the registry's list and the per-archive operations that do
 // not need it open.
 type Archives struct {

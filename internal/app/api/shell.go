@@ -22,6 +22,12 @@ type Hooks struct {
 	SaveFile func(title, filename, dir string) (string, error)
 	// Reveal shows a path in the file manager.
 	Reveal func(path string) error
+	// OpenFolder opens a folder itself in the file manager, rather than
+	// showing it selected in its parent as Reveal does a file.
+	OpenFolder func(path string) error
+	// DataDir is the core's data folder (Deps.DataDir): the settings, the
+	// WebView profile and the log the boot failure points to (APP.md 2.4).
+	DataDir string
 	// Quit runs the shell's quit flow: name any running operations, resolve,
 	// then end the process.
 	Quit func()
@@ -110,6 +116,22 @@ func (s *Shell) SaveFile(title, filename, dir string) (string, error) {
 // pressing Print… counts as done (APP.md §6).
 func (s *Shell) Reveal(path string) error {
 	if err := s.h.Reveal(path); err != nil {
+		return &app.Error{Code: app.CodeIO}
+	}
+	return nil
+}
+
+// OpenDataFolder opens Enfold's data folder in the file manager, so that
+// the log in it is a click away from the boot failure (APP.md 2.4,
+// direction 9). It takes no path: the page names no folder of the
+// machine's, and the one it opens is the shell's own. io when the file
+// manager cannot be started, as Reveal answers; internal when the shell
+// lent no folder.
+func (s *Shell) OpenDataFolder() error {
+	if s.h.OpenFolder == nil || s.h.DataDir == "" {
+		return &app.Error{Code: app.CodeInternal}
+	}
+	if err := s.h.OpenFolder(s.h.DataDir); err != nil {
 		return &app.Error{Code: app.CodeIO}
 	}
 	return nil

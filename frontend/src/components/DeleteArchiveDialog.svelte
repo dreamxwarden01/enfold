@@ -242,7 +242,7 @@
   {:else if phase === "failed"}
     <p>{dialogCopy.deleteFailed}</p>
   {:else}
-    <div class="bar danger"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(problem)}</span></div>
+    <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(problem)}</span></div>
   {/if}
 
   {#snippet actions()}

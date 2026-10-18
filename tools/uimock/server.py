@@ -126,7 +126,75 @@ began, which parks again at the opening wait (begin_act): it is offered
 only for an act the page itself began, so stage it by opening the act
 from the page's own button first (Add an unlock method... then Add), then
 the "timeout" or "failed" scene, then press Start again. A scene played
-with no act begun shows Close alone, as an act the page cannot repeat."""
+with no act begun shows Close alone, as an act the page cannot repeat.
+
+The backup line (APP.md 13, direction 9) is Vault.BackupStatus, answered
+from state["backup"] as the core answers it: "at" is the last backup's
+Unix seconds (0 for never) and Vault.LastExportAt answers the same "at", so
+one knob words the Vault page's line and the delete dialog's sentence
+alike; "archives", "missing" and "rekeyed" are the counts ("rekeyed" is
+archives the backup holds with an older key, each counted once), and
+they read 0 while the vault is not unlocked or is tampered, as the core's
+do (only an unlocked registry is read). The staged default is behind - a
+backup 22 days old that lacks 2 of 4 archives (the list's records not
+forgotten). The poster computes "at"
+from its own clock (the mock's NOW is its start, close enough):
+
+    never:   POST /mock/state {"backup": {"at": 0, "archives": 4, "missing": 4, "rekeyed": 0}}
+    behind:  POST /mock/state {"backup": {"at": <now - 1900000>, "archives": 4, "missing": 2, "rekeyed": 0}}
+    re-key:  POST /mock/state {"backup": {"at": <now - 1900000>, "archives": 4, "missing": 0, "rekeyed": 1}}
+    current: POST /mock/state {"backup": {"at": <now - 432000>, "archives": 4, "missing": 0, "rekeyed": 0}}
+
+The Archive page's copy_mismatch note (the fingerprint names this copy):
+POST /mock/state {"stat": {"copyMismatch": true}} before the archive is
+opened.
+
+Each is a merge into the dict, so a line may name only what it moves. The
+page reads the line when it draws the Vault page: stage, then reload or
+navigate there.
+
+The archives open in this process are named on the status (VaultStatus
+"opened", APP.md 2.3): [{id, name}] by name, derived here from the
+archives marked open - the mounted one and any still draining - so the
+lock screen's and the banners' "Photos 2024 is still open" follow
+Archives.Open, Leave and Close. Stage one open while locked by opening it
+from the page and then {"vault": {"state": "locked"}} (an archive opened
+stays open after a lock), or with {"archives": ...} carrying "open": true.
+POST /mock/state {"openNames": ["Photos 2024", "Family videos"]} makes
+exactly the archives named open (the page's mounted one stays mounted only
+if named) and announces it, so two left open is one line:
+
+    one, lock screen / Archives page:  {"vault": {"state": "locked"}, "openNames": ["Photos 2024"]}
+    two:                               {"vault": {"state": "locked"}, "openNames": ["Photos 2024", "Family videos"]}
+    the Archive page, locked:          open Photos 2024 from the page, then {"vault": {"state": "locked"}}
+                                       (add "openNames": [..., "Family videos"] for a second beside it)
+
+Archives.Close and Archives.CloseAll (the banners' *Close archive* / *Close
+all*, the lock screen's *Close it* / *Close them*) close as the core does and
+announce archives.changed and the status. Vault.Lock locks an unlocked vault
+and announces it - the foot's *Lock now*, and the Tampered banner's *Replace
+with a copy...* on a page, which locks and lets the lock screen open its
+import dialog.
+
+The Tampered state (APP.md 13, direction 9): the banner stands above the
+lock screen's panel and first on every page while VaultStatus.tampered or the
+vault.tampered warning (the page's one predicate, store.tampered):
+
+    locked:    {"vault": {"state": "locked", "tampered": true, "tamperedReason": "vault.tampered_hash", "warnings": ["vault.tampered"]}}
+    unlocked:  {"vault": {"state": "unlocked", "tampered": true, "tamperedReason": "vault.tampered_hash", "warnings": ["vault.tampered"]}}
+    cleared:   {"vault": {"tampered": false, "tamperedReason": "", "warnings": []}}
+    after a lock (the core's lock clears the fact, keeps the warning):
+               {"vault": {"state": "locked", "tampered": false, "tamperedReason": "", "warnings": ["vault.tampered"]}}
+
+then a reload; its Why? opens the "Why changes are off" dialog.
+
+The boot failure (APP.md 2.4, direction 9): POST /mock/state
+{"failNext": {"vault_status": "internal"}} and a reload refuse the page's
+first Status once, so the boot shows its failure with Retry; Retry asks
+again and draws. Shell.OpenDataFolder - the failure's Open data folder -
+answers None and counts the asks in state["dataFolderOpened"]; POST
+/mock/state {"failNext": {"open_data_folder": "io"}} refuses the next one
+as a file manager that would not start."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -247,7 +315,14 @@ state = {
         {"recipientId": "04" * 16, "type": "recovery", "label": "Recovery key — the first one", "createdAt": NOW - 900000, "recoveryId": "0404-0404", "removable": True},
     ],
     "entangled": {"on": True, "canEnable": True},
-    "lastExportAt": NOW - 1_900_000,
+    # The last backup and what it lacks (Vault.BackupStatus, APP.md 13):
+    # "at" is also Vault.LastExportAt's answer. Staged behind - 22 days
+    # old, 2 of 5 archives created since - so the Vault page's line has
+    # its attention form to draw (see the module docstring for the rest).
+    "backup": {"at": NOW - 1_900_000, "archives": 4, "missing": 2, "rekeyed": 0},
+    # How many times Shell.OpenDataFolder was asked (the boot failure's
+    # Open data folder): there is no Explorer here to open.
+    "dataFolderOpened": 0,
     "settings": {"vaultPath": "D:/Vaults/personal.eks", "displayName": "Personal vault", "closeAction": "ask", "theme": "system",
                  "look": "native", "recoveryRecordPct": 3, "dictionaryBelow": 262144, "idleMinutes": 0, "absoluteMinutes": 0,
                  "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives"},
@@ -1585,7 +1660,64 @@ def close_archive(args):
     a["draining"] = False
     a["open"] = False
     state["vault"]["openArchives"] = open_count()
+    # The core's close announces the list and the status (archives.go):
+    # the lock screen's and the banners' names follow it (direction 9).
+    emit("archives.changed", {"purged": []})
+    emit_status()
     return None
+
+
+def close_all(args=None):
+    """Archives.CloseAll(): every open archive closed as Close closes one;
+    the answer is the ids that stayed open - none here, since the mock
+    holds no handle a compaction would keep (archives.go CloseAllArchives).
+    The locked banners' *Close all* and the lock screen's *Close them*."""
+    for a in state["archives"]:
+        if a.get("open"):
+            for o in running_ops(a["id"]):
+                o["cancelled"] = True
+            a["open"] = False
+            a["draining"] = False
+    state["mounted"] = None
+    state["token"] = ""
+    state["vault"]["openArchives"] = open_count()
+    emit("archives.changed", {"purged": []})
+    emit_status()
+    return []
+
+
+def lock_vault(args=None):
+    """Vault.Lock(): the lock trigger, accepted in every state (session.go
+    LockNow). An unlocked vault turns Locked and says so; the archives the
+    page holds stay open, as the core's do (APP.md 2.3). The Tampered
+    banner's *Replace with a copy...* on a page locks first this way, and
+    so does the foot's *Lock now*. As the core's lockLocked does, the lock
+    of an unlocked vault clears "tampered" and its reason and keeps the
+    vault.tampered warning, so "locked after a Tampered unlock" stages
+    itself; a vault already Locked is left as it is (the page asks such a
+    vault for no lock)."""
+    v = state["vault"]
+    if v.get("state") == "unlocked":
+        v.update({"state": "locked", "locksAt": 0, "absoluteAt": 0, "idleEffectiveMinutes": 0, "absoluteEffectiveMinutes": 0,
+                  "tampered": False, "tamperedReason": ""})
+        emit_status()
+    return None
+
+
+def mark_open(names):
+    """POST /mock/state {"openNames": [...]}: exactly the archives named are
+    open in this process - a knob for "opened" while Locked, which the page
+    cannot reach by itself past the first (Archives.Open needs the session).
+    The archive the page has mounted stays mounted only if it is named."""
+    for a in state["archives"]:
+        a["open"] = a["name"] in names
+        a["draining"] = False
+    if state.get("mounted") and not (archive(state["mounted"]) or {}).get("open"):
+        state["mounted"] = None
+        state["token"] = ""
+    state["vault"]["openArchives"] = open_count()
+    emit("archives.changed", {"purged": []})
+    emit_status()
 
 
 def record_op(kind, args, total, seconds=4.0, phase=""):
@@ -1620,11 +1752,48 @@ def vault_status(args=None):
     """Status carries Ops so a window recreated mid-operation recovers the
     progress it was showing (APP.md 2.4). Named, not a lambda, so that
     POST /mock/state {"failNext": {"vault_status": "internal"}} can refuse
-    the first Status once - the boot's one plain line with Retry (2.4)."""
+    the first Status once - the boot failure with Retry (2.4). "opened"
+    names the open archives by name, as the core's VaultStatus.Opened
+    does (APP.md 2.3)."""
     v = dict(state["vault"])
     v["ops"] = [op_view(o) for o in state["ops"].values() if not o["finished"]]
     v["openArchives"] = state["vault"]["openArchives"]
+    v["opened"] = opened()
     return v
+
+
+def opened():
+    """VaultStatus.opened: [{id, name}] of the archives open here, sorted
+    by name with case aside and then by id, as the core sorts them."""
+    refs = [{"id": a["id"], "name": a["name"]} for a in state["archives"] if a.get("open")]
+    return sorted(refs, key=lambda r: (r["name"].lower(), r["id"]))
+
+
+def backup_status(args=None):
+    """Vault.BackupStatus(): the last backup's time and what it lacks
+    (APP.md 13). The counts are 0 unless the vault is unlocked and not
+    tampered - only an unlocked registry is read, as in the core - and
+    "at" stands either way. Named, so failNext can refuse it."""
+    b = state.get("backup") or {}
+    v = state["vault"]
+    out = {"at": int(b.get("at", 0)), "archives": 0, "missing": 0, "rekeyed": 0}
+    if v.get("state") == "unlocked" and not v.get("tampered"):
+        for k in ("archives", "missing", "rekeyed"):
+            out[k] = int(b.get(k, 0))
+    return out
+
+
+def last_export_at(args=None):
+    """Vault.LastExportAt(): the same "at" BackupStatus answers, so one
+    knob words both (APP.md 13)."""
+    return int((state.get("backup") or {}).get("at", 0))
+
+
+def open_data_folder(args=None):
+    """Shell.OpenDataFolder(): the boot failure's Open data folder (APP.md
+    2.4). No Explorer here: the ask is counted and answered None."""
+    state["dataFolderOpened"] = state.get("dataFolderOpened", 0) + 1
+    return None
 
 
 def create_archive(args):
@@ -2178,14 +2347,14 @@ METHODS = {
     3940765069: vault_status,                                   # vault.Status
     3956196437: lambda a: [{"name": "Yubico YubiKey OTP+FIDO+CCID 0"}],
     1779776360: begin_unlock,                                   # BeginUnlock
-    3770426637: lambda a: None, 951839700: lambda a: None, 4094929714: lambda a: None, 2320277474: lambda a: None,
+    3770426637: lambda a: None, 951839700: lock_vault, 4094929714: lambda a: None, 2320277474: lambda a: None,  # 951839700 vault.Lock
     2953146167: lambda a: None, 882388909: lambda a: None,
     4176692468: lambda a: listed(bool(a and a[0])),             # archives.List
     923201420: open_archive,                                    # archives.Open
     2811090123: open_path,                                      # archives.OpenPath (APP.md 14)
     660127987: leave_archive,                                   # archives.Leave (the page left)
     1388822288: close_archive,                                  # archives.Close (the kill switch)
-    2300343171: lambda a: [], 2169725132: lambda a: None, 474530495: lambda a: None,
+    2300343171: close_all, 2169725132: lambda a: None, 474530495: lambda a: None,     # archives.CloseAll
     422512670: lambda a: None, 1162996984: create_archive,
     # Verify, Compact and Rotate key run on a closed archive: the core
     # opens it for the operation and closes it again (APP.md 2.3).
@@ -2219,7 +2388,8 @@ METHODS = {
     898464716: lambda a: state["entangled"],                    # keys.EntangledState
     2247223905: lambda a: state["entangled"].update({"on": bool(a[0])}) if a else None,  # keys.SetEntangled
     3747209322: lambda a: None,                                 # keys.ChangeEntangledPassword
-    3774546620: lambda a: state["lastExportAt"],                # vault.LastExportAt
+    3774546620: last_export_at,                                 # vault.LastExportAt (backup.at)
+    2057616059: backup_status,                                  # vault.BackupStatus (APP.md 13)
     3319062579: lambda a: {"path": a[0], "kind": "backup", "modifiedAt": NOW - 90000, "vaultMatches": True, "slotCount": 1, "hardware": 0, "password": 0, "recovery": 1, "newer": False,
                            "recoverySlots": [{"recipientId": "03" * 16, "label": "Recovery key - printed, in the safe", "createdAt": NOW - 600000}], "generation": 4},  # vault.InspectFile
     # The Archives page as the inspector, and the merge (APP.md 13).
@@ -2241,6 +2411,7 @@ METHODS = {
     945813141: drag_out,                                        # shell.DragOut (APP.md 3)
     2169987085: close_decided,                                  # shell.CloseDecided (APP.md 2.4)
     1615108156: pending_open,                                   # shell.PendingOpen (APP.md 14)
+    664142233: open_data_folder,                                # shell.OpenDataFolder (APP.md 2.4)
 }
 # The Vault page's acts and the import's proof open their panel (begin_act,
 # above): they answered None and drew nothing before.
@@ -2340,11 +2511,16 @@ class H(SimpleHTTPRequestHandler):
                 state["vault"]["idleEffectiveMinutes"], state["vault"]["absoluteEffectiveMinutes"] = 10, 60
             return self.reply({"ok": True})
         if self.path.startswith("/mock/state"):
+            names = body.pop("openNames", None)
             for k, v in body.items():
                 if isinstance(state.get(k), dict) and isinstance(v, dict):
                     state[k].update(v)
                 else:
                     state[k] = v
+            # After the merge, so the count it sets is not undone by a
+            # "vault" posted beside it.
+            if names is not None:
+                mark_open(names)
             # A request staged from outside raises the high-water mark at
             # once, so a preview fired after it is newer than it whether
             # or not the page has come for it yet (APP.md 14).

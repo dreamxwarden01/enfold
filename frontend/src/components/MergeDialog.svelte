@@ -184,7 +184,9 @@
          any row, so it stands above the list and the ticks still work
          (APP.md §13). -->
     {#if tamperedBar}
-      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{tamperedBar}</span></div>
+      <!-- Danger, as the Tampered banner is: the file may have been changed
+           outside Enfold (APP.md §6, Notices and their tiers; ruled 2026-10-18). -->
+      <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{tamperedBar}</span></div>
     {/if}
     <div class="merge-list" role="group" aria-label="Archives in that file">
       {#each rows as r (r.archiveId)}

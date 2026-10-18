@@ -29,7 +29,7 @@ describe("the running operation's name", () => {
   });
 
   it("names the kinds that count nothing", () => {
-    expect(opLabel("verify", 0)).toBe("Verifying");
+    expect(opLabel("verify", 0)).toBe("Refreshing the fingerprint");
     expect(opLabel("compact", 0)).toBe("Compacting");
     expect(opLabel("rotate", 0)).toBe("Re-keying archive");
   });
@@ -57,7 +57,7 @@ describe("the running operation's name", () => {
     expect(opLabel("add", 0, "", "Photos 2024")).toBe("Adding to Photos 2024");
     expect(opLabel("replace", 1, "", "Photos 2024")).toBe("Replacing 1 file in Photos 2024");
     expect(opLabel("extract", 12, "extracting", "Photos 2024")).toBe("Extracting 12 files from Photos 2024");
-    expect(opLabel("verify", 0, "hashing", "Photos 2024")).toBe("Verifying Photos 2024");
+    expect(opLabel("verify", 0, "hashing", "Photos 2024")).toBe("Refreshing the fingerprint of Photos 2024");
     expect(opLabel("compact", 0, "", "Photos 2024")).toBe("Compacting Photos 2024");
     expect(opLabel("reclaim", 0, "moving", "Photos 2024")).toBe("Reclaiming space in Photos 2024");
     expect(opLabel("rotate", 0, "", "Photos 2024")).toBe("Re-keying Photos 2024");
@@ -66,7 +66,7 @@ describe("the running operation's name", () => {
   });
 
   it("is the verb alone when the archive's name is not known", () => {
-    expect(opLabel("verify", 0, "", "")).toBe("Verifying");
+    expect(opLabel("verify", 0, "", "")).toBe("Refreshing the fingerprint");
     expect(opLabel("rotate", 0, "")).toBe("Re-keying archive");
   });
 });

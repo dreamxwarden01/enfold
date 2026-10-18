@@ -128,6 +128,8 @@ func main() {
 		PickFolder:   s.pickFolder,
 		SaveFile:     s.saveFile,
 		Reveal:       s.reveal,
+		OpenFolder:   s.openFolder,
+		DataDir:      dataDir,
 		Quit:         s.quit,
 		DragOut:      s.dragOut,
 		PendingOpen:  s.open.take,
@@ -578,6 +580,15 @@ func (s *shell) saveFile(title, filename, dir string) (string, error) {
 
 func (s *shell) reveal(path string) error {
 	return s.app.Env.OpenFileManager(path, true)
+}
+
+// openFolder is Shell.OpenDataFolder's half (APP.md 2.4): the folder
+// opened itself — explorer.exe "<path>" — not shown selected in its
+// parent. Wails' OpenFileManager already drops the select for a directory
+// (fileexplorer.go: selectFile && !IsDir), so Reveal would open it too;
+// asking for no select says what is meant rather than leaning on that.
+func (s *shell) openFolder(path string) error {
+	return s.app.Env.OpenFileManager(path, false)
 }
 
 // beginDrag is the core's Deps.Drag: the native drag of internal/dragout,

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
@@ -267,7 +269,7 @@ func (c *Core) statusLocked() VaultStatus {
 		Seq: c.seq, State: v.state, Path: v.path, DisplayName: v.displayName,
 		ModifiedAt: v.modifiedAt, Entangled: v.entangled, VaultFileSize: v.vaultFileSize,
 		Tampered: v.tampered != nil, TamperedReason: v.tamperedReason,
-		Warnings: []Code{}, Ops: []OpView{},
+		Warnings: []Code{}, Ops: []OpView{}, Opened: []ArchiveRef{},
 	}
 	if !v.lastUnlockedAt.IsZero() {
 		st.LastUnlockedAt = v.lastUnlockedAt.Unix()
@@ -309,9 +311,19 @@ func (c *Core) statusLocked() VaultStatus {
 	for _, o := range c.ops {
 		st.Ops = append(st.Ops, o.view())
 	}
-	for range c.archives {
+	for id, oa := range c.archives {
 		st.OpenArchives++
+		st.Opened = append(st.Opened, ArchiveRef{ID: hexID(id), Name: oa.name})
 	}
+	// By name as the Archives list sorts, then by id so that two archives
+	// of one name keep their order from one status to the next.
+	sort.Slice(st.Opened, func(i, j int) bool {
+		a, b := strings.ToLower(st.Opened[i].Name), strings.ToLower(st.Opened[j].Name)
+		if a != b {
+			return a < b
+		}
+		return st.Opened[i].ID < st.Opened[j].ID
+	})
 	return st
 }
 

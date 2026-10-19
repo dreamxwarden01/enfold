@@ -1,32 +1,107 @@
-// The Archives list's ticks (APP.md §6, ruled 2026-09-10): the same rules
-// as the file list's (lib/selection.ts) over the rows the filter shows,
-// and the one rule of its own — which row the details pane shows. The
-// list is whole and filtered on the page, so "every row" is the shown
-// order and nothing is asked of the core.
-import type { Selection } from "./selection";
-import { emptySelection, selectAll } from "./selection";
+// The Archives list (APP.md §6, §13; direction 6, phase 4a): one archive
+// selected at a time, no ticks — every action on this list takes one
+// archive, so a checkbox selected for nothing (reopening 2026-09-10's
+// "checkboxes on both lists" for this list alone; the file list keeps
+// them). The selection is the page's one id, the details pane follows it,
+// and the rules below are the list's shape: which records a view shows,
+// what a row's second line says, which chips follow its name.
 
-// shownTicked: the header's checkbox is ticked exactly when every row the
-// filter shows is, never a third state, and never for an empty list. A
-// tick on a row the filter hides stays a tick and does not count.
-export function shownTicked(s: Selection, shown: readonly string[]): boolean {
-  return shown.length > 0 && shown.every((id) => s.ids.has(id));
+// ---- the views (View ▾; APP.md §13) -------------------------------------
+// The list proper hides hidden and forgotten records; Show hidden lists
+// the hidden ones beside the rest and never a forgotten one, which shows
+// only in the Forgotten view — the Recycle Bin's logic: a deleted file is
+// in the Bin, not among the hidden ones (ruled 2026-10-19). The Forgotten
+// view lists the forgotten records alone, each with the date its key
+// goes. Both read the whole
+// registry (Archives.List(true)) and filter here, so a count the page
+// gives — Forgotten (2) — is right whichever view is up.
+export interface ViewRow {
+  readonly hidden: boolean;
+  readonly forgottenAt: number;
 }
 
-// clickShownHeader: ticked, it clears; otherwise it ticks the rows the
-// filter shows — those and no other, so the ticks are what is on screen.
-export function clickShownHeader(s: Selection, shown: readonly string[]): Selection {
-  return shownTicked(s, shown) ? emptySelection() : selectAll(s, shown);
+export type ListView = "list" | "forgotten";
+
+export function viewRows<T extends ViewRow>(all: readonly T[], view: ListView, showHidden: boolean): T[] {
+  if (view === "forgotten") return all.filter((a) => a.forgottenAt > 0);
+  return all.filter((a) => !(a.forgottenAt > 0) && (showHidden || !a.hidden));
 }
 
-// paneRow is the archive the details pane shows: the row last clicked
-// while it is ticked, else the sole ticked row, else none — the pane and
-// the ticks then never name different archives, and with several ticked
-// and the last click gone the pane shows a count instead.
-export function paneRow(s: Selection, lastClicked: string | null): string | null {
-  if (lastClicked !== null && s.ids.has(lastClicked)) return lastClicked;
-  if (s.ids.size === 1) return s.ids.values().next().value ?? null;
-  return null;
+// ---- a row's second line -------------------------------------------------
+// folderOf: the folder an archive's file is in — the path's parent, in the
+// path's own separators — which is the row's second line when it has no
+// description (the page cuts it from the left, so the end of the path,
+// the folder's own name, is what stays). A drive's root keeps its
+// separator ("D:\"), as Explorer writes it; a bare name has no folder.
+export function folderOf(path: string): string {
+  const p = (path ?? "").trim();
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  if (i < 0) return "";
+  const head = p.slice(0, i);
+  if (head === "" || /^[A-Za-z]:$/.test(head)) return head + p[i];
+  // A UNC share's own root ("\\nas\x.efd" is "\\nas") reads as the
+  // server, which is where the file is.
+  return head;
+}
+
+// ---- the chips after a row's name ----------------------------------------
+// What the row is, in the chips' words (chipCopy), on the name's own line,
+// in this order: Missing — a button, Locate… for its row (direction 7) —
+// Hidden, Forgotten, then what is happening to it: Open, or an operation
+// on it. *Missing* is only ever the core's note, never a guess about a
+// path nobody measured (APP.md §13). The Forgotten view says Forgotten of
+// every row by being that view, so its rows do not.
+export type ChipKind = "missing" | "hidden" | "forgotten" | "open" | "compacting" | "refreshing" | "rekeying";
+
+export interface ChipRow extends RowFacts {
+  readonly hidden: boolean;
+  readonly open: boolean;
+  readonly note?: string;
+}
+
+export function chipKinds(a: ChipRow, ops: readonly OpFacts[], view: ListView = "list"): ChipKind[] {
+  const out: ChipKind[] = [];
+  if (a.note === "archive.file_missing") out.push("missing");
+  if (a.hidden) out.push("hidden");
+  if (a.forgottenAt > 0 && view !== "forgotten") out.push("forgotten");
+  // A compaction refuses the open and every operation until it ends, so
+  // it says so first; a refresh or a re-key is queued behind the handle,
+  // never refused, so the row says what runs and nothing is greyed for it.
+  if (compacting(a, ops)) out.push("compacting");
+  else {
+    const k = runningKind(a, ops);
+    if (k === "verify") out.push("refreshing");
+    else if (k === "rotate") out.push("rekeying");
+    else if (a.open) out.push("open");
+  }
+  return out;
+}
+
+// ---- the pane with nothing selected (direction 6) ------------------------
+// The vault's summary: how many archives it holds and what they take,
+// over every record but the forgotten ones (a forgotten record's file is
+// on its way out of the vault), hidden ones included — the vault holds
+// them all the same.
+export interface FigureRow {
+  readonly storedSize: number;
+  readonly forgottenAt: number;
+  readonly hidden?: boolean;
+}
+
+// hidden is how many of the counted are hidden: the summary names them
+// apart while the list leaves them out, so its count squares with the
+// title's "N archives shown".
+export function vaultFigures(all: readonly FigureRow[]): { count: number; size: number; hidden: number } {
+  let count = 0;
+  let size = 0;
+  let hidden = 0;
+  for (const a of all) {
+    if (a.forgottenAt > 0) continue;
+    count++;
+    if (a.hidden) hidden++;
+    size += Number.isFinite(a.storedSize) && a.storedSize > 0 ? a.storedSize : 0;
+  }
+  return { count, size, hidden };
 }
 
 // ---- what stops an action on a row (APP.md §13, §2.3) --------------------

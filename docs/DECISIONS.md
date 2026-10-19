@@ -4991,3 +4991,89 @@ until any way is taken, and *Done* takes the accent then — one accent at a tim
 first showing is the same dialog (App.svelte mounts one component for every kind, *Your recovery
 key* titled), so both have it. The "again" rule stands: a way is worded again only once it was
 actually taken.
+
+## 2026-10-19 — Phase 4a: one rail, the archive as a place, vault things in one place, the Archives page at its real size
+
+**Phase 4a, built** (2026-10-19). The user asked for the fourth phase after phase 3; it was
+split in two, and this is the first half — directions 3, 10 and 6 together, since they share the
+rail — with direction 7's row menus, *Move to…* and the viewer and direction 4's InfoBars and
+list motion left to 4b. Built in five parts (the core and the rail in parallel, then the Archive
+page, the Vault page and Settings, the Archives page), each reviewed, the whole shot against the
+mock at four window widths, a spec pass reviewed against the code, an integration review, and a
+fix pass on what the reviews left open. **Leaving is explicit** (reversing 2026-09-10's "leaving
+the page closes it", whose aim — no timer cuts work off — is kept): an archive closes only by
+the rail child's ×, the head's *Close*, opening another archive, *Delete archive…* or the window
+closing; a route change keeps it open and mounted and the page comes back to the same folder,
+sort and selection; *Close* is the graceful leave everywhere — the head, the rail, the locked
+lines of the Archive and Archives pages, the lock screen's notice, the needs-reopen bar — and
+*Force close*, the kill switch, is offered only for an archive still held after a leave. **The
+rail** is one spec: the brand row (until direction 5's caption), the vault head (the name over
+its state word, a quiet button to the Vault page), *Archives* with an indented child row per
+open archive (the name, the app's tooltip, a 20 px ×), *Vault*, the gap, *Settings*; below 1008
+px it is 48 px of icons with a hamburger flyout carrying the labels, the head a 32 px padlock
+that is *Lock now* or *Unlock*, the op dot or ring on the icon's corner, the child a 20 px
+glyph; the app's own tooltip (`lib/tip.ts`: 300 ms, on focus at once, one at a time) stands
+beside a rail item, since under it it covered the next one. **The Archive page**: the head is
+the path as crumbs with the user's rulings of 2026-10-14 and the fold rule now closed — a
+per-crumb cap of 240 px (the root 320) with an end ellipsis and the tooltip, and a fit-to-width
+fold that keeps the root and the current folder and adds parents from the current one outward
+while they fit, the folded ones in an ellipsis menu in path order, capped at about eight rows
+with a scrollbar; an ancestor's crumb is a *Move* drop target; the toolbar *Add ▾* (*Add files…
+· Add a folder… · ─ · Create folder… Ctrl+Shift+N*), *Extract…*, *Rename…*, *Delete…*, More
+(with *Delete archive…* in danger ink until 4b's row menu) and *View ▾ › Preview pane Alt+P*
+kept in settings.json (`PreviewPane`, this PC's); the pane at rest names the folder, counts it
+and lists the archive's facts with *Extract…*; with several selected it counts them and offers
+the accent *Extract N items…*; a file with no preview shows its type at 48 px, "No preview for
+PDF documents", the facts and a standard *Extract…* — never offered as the cure; the empty
+folder offers *Add files…* and *Add a folder…* and "or drop files here"; the last opened archive
+is remembered in memory only and offered after the unlock with the foot's "Enter opens Photos
+2024"; a file opened from Explorer while locked is named on the stage's rest and unlock views
+("Unlock to open photos-2024.efd", with a ×) and opened again after an import's merge. **The
+Vault page** in three sections: *Unlock methods* with the header's *Add an unlock method…* and
+*Re-key vault…* and each card's own *Show recovery key…* and *Remove…*; *This vault* with
+*Rename…* (a one-field dialog, the only place the name is edited; the core's SetSettings moves
+the status's name so the tray follows) and the two lock times as selects applying the moment
+they are chosen with the pending ring and a refusal line, reading "Unlock to see" while locked;
+*Backups and copies* with every maintenance action — *Export backup…*, *Inspect a backup…*,
+*Test that a backup opens…* (the file picked first, then the lock, then the lock screen takes
+the one-shot ask), *Import archives from a backup…* (the merge dialog mounted above every
+route), *Replace this vault with a copy…*, and "Archive files: 1 missing" with *Find missing
+files*. **Settings is this PC only**: one column, *When the window closes* as three radios,
+*Theme*, *Compression*, *About*, every choice applying at once, no save bar — the bar's one job
+is the staged edit it was designed for, the archive's name and description. **The tray** names
+the running operation and its percentage under its header (the shell routes the operation events
+to it). **The Archives page**: titled *Archives*; a 40 px bar that never wraps, folding its
+verbs into More from the right with the destructive ones last in danger ink and a greyed item's
+reason as a second line; *View ▾* with *Show hidden* and *Forgotten (N)*; rows of 52 px in two
+lines (the name with its chips, then the description or the file's folder); single select
+without checkboxes (reopening 2026-09-10's one list idiom for this list only, since every action
+here is one archive); the side pane from 1133 px of window with the facts first, the file, the
+edit behind a pencil with the save bar, *Technical details…* and *More ▾*, and the vault's
+summary when nothing is selected; the bottom panel below that; the Forgotten view with *Restore*
+and *Delete archive…* per row and a chip into it; *Show hidden* lists hidden records only. The
+core applies the lock times only from a read taken unlocked, which closes a race the old draft
+path had too.
+
+**Chosen along the way, and left** (2026-10-19). Ruled against the briefs or the reviews: the
+app's tooltip stands beside a rail item, not under it; the Vault page keeps two accents while a
+backup is owed (each section's own primary), and its *Rename…* stays live while locked, since
+the name is this PC's; at 1008 versus 1007 px the file list folds *Modified* with the expanded
+rail and shows it with the compact one — each width shows what fits its own list; "(Compact to
+reclaim)" stands on its own caption line in the 264 px pane; the bottom panel's collapsed line
+carries the vault summary's head and backup row when nothing is selected, since the panel's
+motion is built around a row; the summary's *Export backup…* starts the export on arrival; the
+Settings section holding the close action is *Window*; the Forgotten chip stays while its view
+is up, as the way out; the *Do the same* ellipsis menu's slack is up to ten rows whole, else
+eight and a half with a scrollbar; the needs-reopen bar hides its button while draining, the
+head's *Force close* being the one way; the tray says "Dragging out from" where the foot says
+"Extracting N items from" after a drop; the shell's event routing to the tray (main_windows.go)
+was outside the brief and is kept, since the core emits no status while an operation runs. Left:
+"Drop now…" for a forgotten record and a slot's rename need core calls that do not exist;
+"Archive files: not checked yet" stands after an unlock although the core's own pass ran, since
+nothing exposes its report; a one-field `SetPreviewPane` would spare a whole-struct write;
+CheckFiles waits for its whole pass with no total cap; the tray's tooltip can pass Windows' 127
+units with a long name; the merge list does not pin the file the user opened; the ellipsis
+menu's 240 px cut is a literal, since the menu is portalled out of the head's custom properties;
+the locked Vault page shows the timeouts' default for a frame right after an unlock; the add
+collisions still lack sizes and dates. Nothing of phase 4a has been seen in a real window; the
+rail's two forms and the crumbs' fold are what the user's eye should judge first.

@@ -10,6 +10,7 @@
   import { store } from "../lib/state.svelte";
   import { ceremonyCopy, codeText, commandCopy, dialogCopy, firstMethodCopy, lockCopy, retriesText, sinceText, stepText, vaultCopy, warningCopy } from "../lib/strings";
   import { OPENED, lockNotices, tier, tierIcon } from "../lib/notices";
+  import { closeButton } from "../lib/leave";
   import { date, leaf } from "../lib/format";
   import { fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
@@ -138,8 +139,9 @@
   }
 
   // The vault's name, as the panel says it — at first run, the one that
-  // is gone or damaged, by its name or its file's.
-  const vaultName = $derived(st?.displayName || leaf(st?.path ?? ""));
+  // is gone or damaged, by its name or its file's. The name is the one
+  // Rename… gave last (store.vaultName), as the rail's head says it.
+  const vaultName = $derived(store.vaultName || leaf(st?.path ?? ""));
   const missingName = $derived(vaultName || leaf(st?.missingPath ?? "") || lockCopy.defaultName);
   // The damaged vault's best remedy: the vault a replacement kept, dated
   // by its file's name (APP.md §6, ruled 2026-10-17).
@@ -163,9 +165,14 @@
   // An import at first run restores, elsewhere it replaces: the header,
   // the panel's lead and the outcome say which (the verb table).
   const importHeader = $derived(restoring ? lockCopy.header.restoring : lockCopy.header.replacing);
+  // The file a test of a backup checks, by its name (verifyBackup): the
+  // panel's lead names it, since the file was picked a step earlier — on
+  // the Vault page, before the lock — and nothing else on the stage says
+  // which one is being opened (the final shoot of phase 4a).
+  let testing = $state("");
   // The lead of a ceremony that is not an unlock: the header's word for
-  // the act, since no vault is being opened.
-  const actLead = $derived(c?.kind === "verify" ? lockCopy.header.testing : c?.kind === "import" ? importHeader : c?.kind === "create" ? lockCopy.header.creating : c?.kind === "setup" ? lockCopy.header.settingUp : vaultName);
+  // the act, since no vault is being opened; a test names its file.
+  const actLead = $derived(c?.kind === "verify" ? (testing ? lockCopy.testingFile(testing) : lockCopy.header.testing) : c?.kind === "import" ? importHeader : c?.kind === "create" ? lockCopy.header.creating : c?.kind === "setup" ? lockCopy.header.settingUp : vaultName);
 
   // ---- The stage (APP.md §6, ruled 2026-10-17) ---------------------------
   // The view the facts ask for, and the one on the panel: the panel holds
@@ -377,10 +384,17 @@
   // the one screen a ceremony runs on while the vault is locked.
   async function testBackup() {
     const p = (await Shell.PickFiles(lockCopy.testPicker, false)) ?? [];
-    if (!p.length) return;
+    if (p.length) await verifyBackup(p[0]);
+  }
+
+  // The check itself, on a file already picked: here, or on the Vault
+  // page, whose *Test that a backup opens…* locks and hands the path over
+  // (store.askTestBackup, direction 10).
+  async function verifyBackup(path: string) {
     store.dismissCeremony();
+    testing = path.split(/[\\/]/).pop() ?? "";
     try {
-      await Keys.VerifyBackup(p[0]);
+      await Keys.VerifyBackup(path);
     } catch (e) {
       store.toast(codeText(errorOf(e).code), "error");
     }
@@ -482,11 +496,24 @@
     if (shown === "rest" && store.replaceAsked && store.takeReplaceAsked()) openImport("", "copy");
   });
 
-  // The lock screen's close for what the lock left open: the one archive
-  // by its id, or all of them (direction 9).
+  // The Vault page's *Test that a backup opens…* locked the vault and came
+  // here with the file it picked (store.askTestBackup, direction 10): at
+  // rest, the check starts at once, once, and its ceremony is the stage's.
+  $effect(() => {
+    if (shown !== "rest" || !store.testAsked) return;
+    const path = store.takeTestAsked();
+    if (path) void verifyBackup(path);
+  });
+
+  // The lock screen's close for what the lock left open (direction 9): the
+  // graceful leave of the one archive or of all of them, then *Force close*
+  // / *Force close them* once what it names still stands after the leave
+  // (APP.md §2.3, ruled 2026-10-19: one meaning for Close; lib/leave.ts).
+  const openedIds = $derived((st?.opened ?? []).map((a) => a.id));
+  const noticeClose = $derived(closeButton("notice", openedIds, (x) => store.leftHeld(x)));
   function closeOpened() {
-    const opened = st?.opened ?? [];
-    void store.closeOpened(opened.length === 1 ? opened[0].id : undefined);
+    if (noticeClose.force) void store.closeOpened(openedIds.length === 1 ? openedIds[0] : undefined);
+    else void store.leaveOpened(openedIds);
   }
 
   // The header's padlock closes over the first moment the lock screen
@@ -504,6 +531,20 @@
   const padlockOpen = $derived(padlockOpenOf(closed, running, c));
   const unlockedNow = $derived(running && c?.kind === "unlock" && c?.step === CeremonyStep.StepDone);
 </script>
+
+<!-- A file opened from Explorer waits for this unlock (direction 3, phase
+     4a; store.openWhenUnlocked): one info line above the panel's buttons,
+     and a 20 px × that forgets the request and nothing more. One line for
+     the rest panel and every view of the unlock — the YubiKey's, the
+     PIN's or password's, the recovery key's (ruled 2026-10-19): an
+     Explorer open while locked begins the unlock at once, so on the rest
+     panel alone it was seen only after a cancel. -->
+{#snippet pendingOpen()}
+  {#if store.openWhenUnlocked}
+    {@const pendingFile = leaf(store.openWhenUnlocked)}
+    <div class="infoline pending-open"><svg class="i i-14"><use href="#i-file" /></svg><span class="grow">{lockCopy.unlockToOpen} <strong>{pendingFile}</strong></span><button type="button" class="x20" title={lockCopy.forgetOpen(pendingFile)} aria-label={lockCopy.forgetOpen(pendingFile)} onclick={() => store.forgetOpenWhenUnlocked()}><svg class="i i-14"><use href="#i-x" /></svg></button></div>
+  {/if}
+{/snippet}
 
 <section class="unlock" class:green={isGreen} aria-label={lockCopy.regionLabel}>
   <!-- The touch's green: an overlay over the whole stage whose opacity
@@ -555,7 +596,7 @@
                 <span class="num"><strong>{openedLead.head}</strong> {openedLead.rest}</span>
                 <div class="row">
                   <button type="button" class="btn link" onclick={() => store.go(store.current ? "archive" : "archives")}>{vaultCopy.show}</button>
-                  <button type="button" class="btn sm" onclick={closeOpened}>{openedNames.length === 1 ? lockCopy.closeIt : lockCopy.closeThem}</button>
+                  <button type="button" class="btn sm" onclick={closeOpened}>{noticeClose.label}</button>
                 </div>
               </div>
             </div>
@@ -677,6 +718,7 @@
           {:else if outcome?.kind === "create"}
             <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{lockCopy.created}</span></div>
           {/if}
+          {@render pendingOpen()}
           {#if busy}
             <button type="button" class="btn accent wide" onclick={() => void Vault.Reopen()} use:takeFocus>{lockCopy.tryAgain}</button>
           {:else if broken}
@@ -734,6 +776,7 @@
             <!-- An attention line under the lead, as the broken vault's. -->
             <div class="infoline att"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
           {/if}
+          {#if c.kind === "unlock"}{@render pendingOpen()}{/if}
           <div class="row">
             <!-- The view that replaced the focused button takes the focus,
                  so the keyboard keeps its place (APP.md §6); here Cancel is
@@ -749,6 +792,7 @@
             <h2 class="t-title">{c.step === CeremonyStep.StepNoMatch && c.kind === "unlock" && vaultName ? lockCopy.noMatch(vaultName) : stepText(c.step).title}</h2>
             <div class="cap">{c.step === CeremonyStep.StepNoMatch && !offersRecovery ? ceremonyCopy.noMatchWithoutRecovery : stepText(c.step).body}</div>
           </div>
+          {#if c.kind === "unlock"}{@render pendingOpen()}{/if}
           <div class="row">
             <!-- No match offers what its line names, for an unlock alone.
                  Every two-button row of the panel is the accent, grown,
@@ -778,6 +822,7 @@
             <div class="lead"><h2 class="t-title">{pinLeads(c.kind, form.shows) ? lockCopy.pinLead : actLead}</h2></div>
           {/if}
           {#if c.slotLabel && c.step !== CeremonyStep.StepManagementKey}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
+          {#if c.kind === "unlock"}{@render pendingOpen()}{/if}
           {#if store.chosenSent && store.chosenSent === c.promptId}
             <!-- The Choose prompt the dialog's password answered (APP.md
                  §6, ruled 2026-10-17): no field to fill. Refused all the
@@ -827,6 +872,7 @@
           <!-- A setup's recovery key is this vault's too, so the panel names
                the vault; the header already says *Setting up*. -->
           <div class="lead"><h2 class="t-title">{c.kind === "unlock" || c.kind === "setup" ? vaultName : actLead}</h2><div class="cap">{lockCopy.recoveryLine}</div></div>
+          {#if c.kind === "unlock"}{@render pendingOpen()}{/if}
           <RecoveryInput
             promptId={c.promptId ?? ""}
             slots={recoverySlots}

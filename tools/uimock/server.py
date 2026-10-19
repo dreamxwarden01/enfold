@@ -253,6 +253,36 @@ these and three more knobs:
                        a folder named like one already shown meets it as a merge in
                        the add collisions (direction 7). null restores D:/Pictures
 
+The Archive page's View > Preview pane (Settings.previewPane, direction 3,
+phase 4a) is a setting like the theme: true by default, and Settings.Set
+- the page's own choice - writes it into the settings Settings.Get reads
+back. Stage it off with POST /mock/state {"settings": {"previewPane": false}}
+(a merge, so the other settings stay) and a reload; {"previewPane": true}
+puts it back. The tray's running line (direction 10) is the shell's and has
+no stand-in here. A Settings.Set that gives the vault a new displayName
+(the Vault page's Rename...) moves the status's name too and emits
+vault.state, as the core's SetSettings does (APP.md 3, Settings).
+
+The lock times are the vault's, as in the core (APP.md 3, Settings; ruled
+2026-10-19): Settings.Get answers idleMinutes and absoluteMinutes 0 and
+timeoutsFromVault false while the vault is not unlocked - the Vault page's
+selects then read "Unlock to see" - and Settings.Set writes them only from
+a struct carrying timeoutsFromVault true while unlocked. The values stand
+in state["settings"]; stage them with {"settings": {"idleMinutes": 15}}.
+Three knobs for the choices that apply at once (direction 10):
+
+    a slow write:      POST /mock/state {"settingsSeconds": 3} - every
+                       Settings.Set answers that late, for the pending ring
+                       on the select or the toggle that made it
+    refused once:      POST /mock/state {"failNext": {"settings_set": "io"}} -
+                       the next Settings.Set is refused with that code, the
+                       code's line under the control and the old value back
+    a test parked:     Keys.VerifyBackup - the Vault page's *Test that a backup
+                       opens...* with the vault locked, or the lock screen's -
+                       parks a "verify" ceremony at its recovery-key prompt on
+                       the stage, the vault Unlocking while it runs; the
+                       stage's Cancel ends it (Vault.CancelUnlock)
+
 Vault.Activity moves locksAt to now plus the idle minutes and emits the
 status while unlocked, as the core's grant does: the last minute's Stay
 unlocked is staged with {"vault": {"locksAt": <now + 45>}} and undone by
@@ -387,7 +417,10 @@ state = {
     "dataFolderOpened": 0,
     "settings": {"vaultPath": "D:/Vaults/personal.eks", "displayName": "Personal vault", "closeAction": "ask", "theme": "system",
                  "look": "native", "recoveryRecordPct": 3, "dictionaryBelow": 262144, "idleMinutes": 0, "absoluteMinutes": 0,
-                 "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives"},
+                 "timeoutsFromVault": True, "timeoutsAdjustable": True, "lastArchiveFolder": "D:/Archives",
+                 # The Archive page's View > Preview pane (direction 3): on by
+                 # default, moved by Settings.Set like the theme.
+                 "previewPane": True},
     "text": {"text": "# Iceland, July 2024\n\nDay 1: Reykjavik...\n", "truncated": False},
     # What the destination already holds, keyed by the record's path inside
     # the archive: the mock's stand-in for the exclusive create the core
@@ -1867,6 +1900,46 @@ def record_op(kind, args, total, seconds=4.0, phase=""):
 LOCAL_FIXED = re.compile(r"^[A-Za-z]:[\\/]")
 
 
+TIMEOUT_KEYS = ("idleMinutes", "absoluteMinutes", "timeoutsFromVault", "timeoutsAdjustable")
+
+
+def settings_get(args=None):
+    """Settings.Get: the settings, with the lock times the core reads from
+    the vault's registry only while Unlocked - 0, 0 and timeoutsFromVault
+    false otherwise, as GetSettings answers (APP.md 3, Settings). The mock
+    keeps the registry's values in state["settings"] all the same."""
+    s = dict(state["settings"])
+    if state["vault"].get("state") != "unlocked":
+        s.update({"idleMinutes": 0, "absoluteMinutes": 0, "timeoutsFromVault": False, "timeoutsAdjustable": False})
+    return s
+
+
+def settings_set(args):
+    """Settings.Set: the page's whole struct, merged. A new displayName moves
+    the status's name with it and emits vault.state, as the core does. The
+    lock times are taken only from a struct that carries timeoutsFromVault
+    true - a read made while Unlocked - and only while Unlocked, as the
+    core's SetSettings takes them (ruled 2026-10-19); otherwise the
+    registry's stand. Named, so failNext {"settings_set": code} refuses the
+    next write once; state["settingsSeconds"] holds every write that long
+    first, for the pending ring on a choice (APP.md 6, direction 10)."""
+    time.sleep(float(state.get("settingsSeconds") or 0))
+    if not args:
+        return None
+    s = dict(args[0] or {})
+    timed = bool(s.get("timeoutsFromVault")) and state["vault"].get("state") == "unlocked"
+    for k in TIMEOUT_KEYS:
+        if k in ("timeoutsFromVault", "timeoutsAdjustable") or not timed:
+            s.pop(k, None)
+    state["settings"].update(s)
+    v = state["vault"]
+    name = s.get("displayName") or ""
+    if name and v.get("path") and v.get("displayName") != name:
+        v["displayName"] = name
+        emit_status()
+    return None
+
+
 def check_files(args=None):
     """Archives.CheckFiles() answers when its pass has ended, with what the
     pass measured and what it found missing - {"probed", "missing"}, the
@@ -2096,6 +2169,29 @@ def emit_ceremony(kind, step, **extra):
     c = ceremony_event(kind, step, **extra)
     state["vault"]["ceremony"] = c
     emit("vault.ceremony", c)
+
+
+def verify_backup(args):
+    """Keys.VerifyBackup(path) - *Test that a backup opens...* - parks a
+    "verify" ceremony at its recovery-key prompt on a Locked vault, as the
+    core's check asks for the backup's recovery key: the vault reads
+    Unlocking while it runs (vaultfile.go), so the lock screen's stage
+    shows the test begun, "Testing <file>" in its lead. Its Cancel is
+    Vault.CancelUnlock, as for any ceremony on the stage. Refused as the
+    core's import gate refuses it: vault.unlocked while unlocked,
+    ceremony.in_progress while one runs, vault.busy otherwise."""
+    v = state["vault"]
+    st = v.get("state")
+    if st == "unlocked":
+        return Err("vault.unlocked")
+    if st == "unlocking" or CEREMONY["kind"]:
+        return Err("ceremony.in_progress")
+    if st not in ("locked", "none"):
+        return Err("vault.busy")
+    v["state"] = "unlocking"
+    emit_status()
+    emit_ceremony("verify", "recovery", method="recovery", promptId="vrk-1")
+    return None
 
 
 class Cancelled(Exception):
@@ -2622,8 +2718,8 @@ METHODS = {
     2398325755: lambda a: {"records": state["incoming"], "tampered": state["incomingTampered"]},  # vault.IncomingRecords
     1344102321: lambda a: None,                                 # vault.MergeRecords
     3468826983: lambda a: None,                                 # vault.DiscardRecords
-    18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: lambda a: None,  # ImportFile, FinishSetup, VerifyBackup
-    2652127606: lambda a: state["settings"], 740356410: lambda a: state["settings"].update(a[0]) if a else None,
+    18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: verify_backup,  # ImportFile, FinishSetup, VerifyBackup
+    2652127606: settings_get, 740356410: settings_set,
     3606391931: lambda a: None, 3229291943: lambda a: state.get("pickFiles") or ["D:/Pictures/a.jpg", "D:/Pictures/b.jpg"], 2529646972: lambda a: state.get("pickFolder") or "D:/Pictures", 2079207478: lambda a: None,
     842300112: lambda a: None, 1923582270: lambda a: state.get("savePath") or "D:/new.efd", 3130426784: lambda a: None,
     945813141: drag_out,                                        # shell.DragOut (APP.md 3)

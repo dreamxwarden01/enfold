@@ -60,6 +60,69 @@ export function menuKey(key: string, active: number, count: number): MenuAction 
   return NONE;
 }
 
+// ---- what a menu holds (APP.md §6, Menus; direction 6) -----------------
+//
+// A menu is groups of items, a separator between one group and the next:
+// the Archives bar's More is the verbs the bar had no room for, then
+// Hide, then the two that destroy. A group can be empty — no verb folded,
+// no Close for an archive that is not open — and an empty group leaves no
+// separator behind, so a menu never starts with one, never ends with one
+// and never draws two in a row.
+export interface Groupable {
+  sep?: boolean;
+}
+
+export function groups<T extends Groupable>(...gs: readonly (readonly T[])[]): T[] {
+  const out: T[] = [];
+  for (const g of gs) {
+    if (g.length === 0) continue;
+    g.forEach((item, i) => out.push({ ...item, sep: i === 0 && out.length > 0 }));
+  }
+  return out;
+}
+
+// secondLine: what a menu item says under its label. A command that
+// cannot run now keeps its reason there, in the caption (direction 6),
+// where the keyboard and the eye both read it without a hover; an item
+// that can run says nothing more, its title staying the native tooltip.
+export interface Explained {
+  disabled?: boolean;
+  title?: string;
+}
+
+export function secondLine(item: Explained): string {
+  return item.disabled ? (item.title ?? "").trim() : "";
+}
+
+// ---- a menu that floats free of its box (direction 6) -------------------
+//
+// A menu inside a box that clips — the Archives pane, which scrolls, and
+// the bottom panel, whose card clips its own height as it moves — is drawn
+// over the window instead, placed against its button: under it, its left
+// edge on the button's (its right edge, for a button at the right of its
+// row), and above the button when the window has no room for it below — a
+// panel at the window's foot opens its menus upwards. Pulled inside the
+// window's margin either way.
+export interface Anchor {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+export function dropPlacement(anchor: Anchor, box: Size, view: Size, end = false, gap = 4, margin = 6): Point & { up: boolean } {
+  const want = end ? anchor.right - box.width : anchor.left;
+  const x = Math.max(margin, Math.min(want, view.width - box.width - margin));
+  const below = anchor.bottom + gap;
+  if (below + box.height <= view.height - margin) return { x, y: below, up: false };
+  const above = anchor.top - gap - box.height;
+  if (above >= margin) return { x, y: above, up: true };
+  // Room on neither side: the side with more of it, clamped to the margin.
+  const roomBelow = view.height - anchor.bottom;
+  if (roomBelow >= anchor.top) return { x, y: Math.max(margin, view.height - box.height - margin), up: false };
+  return { x, y: margin, up: true };
+}
+
 // ---- the context menu (APP.md §13) ------------------------------------
 //
 // A value in the details modal is selectable and a right-click on it opens

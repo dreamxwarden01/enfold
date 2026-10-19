@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ArchiveStat, DragOutResult, FileRow, OpView, Page, VaultStatus } from "./api";
+import type { ArchiveStat, ArchiveSummary, DragOutResult, FileRow, OpView, Page, VaultStatus } from "./api";
+import { railChildren } from "./rail";
 
 // The store's ordering rules (APP.md §2.4, §6, ruled 2026-09-10): which
 // reply is applied and which is dropped, what a navigation clears, and
@@ -26,6 +27,9 @@ const m = vi.hoisted(() => ({
   Close: vi.fn(),
   CloseAll: vi.fn(),
   BackupStatus: vi.fn(),
+  SettingsGet: vi.fn(),
+  SettingsSet: vi.fn(),
+  CheckFiles: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -46,11 +50,11 @@ vi.mock("./api", async () => {
   return {
     ...actual,
     Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children },
-    Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath, Close: m.Close, CloseAll: m.CloseAll },
+    Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath, Close: m.Close, CloseAll: m.CloseAll, CheckFiles: m.CheckFiles },
     Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided, PendingOpen: m.PendingOpen },
     Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: never, Lock: m.Lock, BackupStatus: m.BackupStatus },
     Keys: { Slots: never, EntangledState: never },
-    Settings: { Get: never },
+    Settings: { Get: m.SettingsGet, Set: m.SettingsSet },
   };
 });
 
@@ -109,6 +113,8 @@ beforeEach(async () => {
   m.Close.mockReset().mockResolvedValue(undefined);
   m.CloseAll.mockReset().mockResolvedValue([]);
   m.BackupStatus.mockReset().mockResolvedValue({ at: 0, archives: 0, missing: 0, rekeyed: 0 });
+  m.SettingsGet.mockReset().mockImplementation(() => new Promise(() => {}));
+  m.SettingsSet.mockReset().mockResolvedValue(undefined);
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -1330,12 +1336,12 @@ describe("an archive let go of for Delete archive… (releasedForDelete)", () =>
     expect(store.route).toBe("archive");
   });
 
-  it("is over when the page is left: the rail's leave, a fresh list, and the archive read again on its next visit", async () => {
+  it("is over when the page is left: the dialog's leave, a fresh list, and the archive read again on its next visit", async () => {
     await open(["x"]);
     store.route = "archive";
     store.releasedForDelete = "a";
     m.List.mockClear();
-    store.go("archives"); // the dialog's close
+    store.leaveArchive(); // the dialog's close (a route change leaves nothing)
     expect(store.current).toBeNull();
     expect(store.releasedForDelete).toBeNull();
     expect(m.Leave).toHaveBeenCalledWith("a");
@@ -1378,5 +1384,596 @@ describe("the ceremony's opening step, passed (ceremonyPassed)", () => {
     expect(store.ceremonyPassed.passed).toBe(true);
     store.dismissCeremony();
     expect(store.ceremonyPassed.passed).toBe(false);
+  });
+});
+
+// Leaving is explicit (APP.md §2.3, ruled 2026-10-18): a route change keeps
+// the archive open and mounted, and coming back shows the same folder,
+// sort and selection, read again from the core. It is left by its rail
+// row's ×, the head's Close, opening another, Delete archive… and the
+// window closing.
+describe("an archive kept open across pages (explicit leave)", () => {
+  const D = "d".repeat(32);
+  const sorted = { key: "size", desc: true, nameDesc: false } as const;
+
+  // In folder D of archive "a", sorted by size, "x" selected, on its page.
+  async function inFolder() {
+    store.current = "a";
+    store.route = "archive";
+    store.dirId = D;
+    m.Page.mockResolvedValueOnce(reply(1, ["x", "y"], 2, [{ id: ROOT, name: "A" }, { id: D, name: "Trips" }]));
+    await store.loadPage();
+    store.sort = { ...sorted };
+    store.selectClick("x");
+  }
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  };
+
+  it("keeps the archive, its folder, sort and selection through Vault and Settings", async () => {
+    await inFolder();
+    store.go("settings");
+    store.go("keys");
+    store.go("archives");
+    await settle();
+    expect(m.Leave).not.toHaveBeenCalled();
+    expect(store.current).toBe("a");
+    expect(store.dirId).toBe(D);
+    expect(store.sort).toEqual(sorted);
+    expect([...store.sel.ids]).toEqual(["x"]);
+  });
+
+  it("asks the core for the same folder under the same sort when the page comes back", async () => {
+    await inFolder();
+    store.go("settings");
+    m.Stat.mockResolvedValueOnce(stat(2));
+    m.Page.mockResolvedValueOnce(reply(2, ["x", "y", "z"], 3, [{ id: ROOT, name: "A" }, { id: D, name: "Trips" }]));
+    store.go("archive");
+    await settle();
+    expect(store.route).toBe("archive");
+    expect(m.Stat).toHaveBeenCalledWith("a");
+    expect(m.Page).toHaveBeenLastCalledWith("a", D, store.sortBy, 0, expect.any(Number));
+    expect(store.page?.rows.map((r) => r.id)).toEqual(["x", "y", "z"]);
+    expect([...store.sel.ids]).toEqual(["x"]);
+  });
+
+  it("shows the archive already open on its row's Open, without opening it again or starting at the root", async () => {
+    await inFolder();
+    store.go("archives");
+    m.Stat.mockResolvedValueOnce(stat(1));
+    m.Page.mockResolvedValueOnce(reply(1, ["x", "y"], 2, [{ id: ROOT, name: "A" }, { id: D, name: "Trips" }]));
+    expect(await store.openArchive("a")).toBe(true);
+    expect(m.Open).not.toHaveBeenCalled();
+    expect(store.route).toBe("archive");
+    expect(store.dirId).toBe(D);
+    expect(store.sort).toEqual(sorted);
+  });
+
+  it("leaves the archive open when another is opened over it — once the new one is mounted", async () => {
+    await inFolder();
+    store.go("archives");
+    const order: string[] = [];
+    m.Open.mockImplementationOnce(async (id: string) => {
+      order.push(`open:${id}`);
+      return stat(1);
+    });
+    m.Leave.mockImplementationOnce(async (id: string) => {
+      order.push(`leave:${id}`);
+    });
+    m.Page.mockResolvedValueOnce(reply(1, [], 0));
+    expect(await store.openArchive("b")).toBe(true);
+    expect(order).toEqual(["open:b", "leave:a"]);
+    expect(store.current).toBe("b");
+    expect(store.dirId).toBe(ROOT);
+    expect(store.route).toBe("archive");
+  });
+
+  it("closes by its Close: left, and back to the list when the core holds it no more", async () => {
+    await inFolder();
+    m.Status.mockResolvedValueOnce({ ...status(5, "unlocked"), opened: [] });
+    await store.closeArchive("a");
+    expect(m.Leave).toHaveBeenCalledWith("a");
+    expect(store.current).toBeNull();
+    expect(store.draining).toBeNull();
+    expect(store.route).toBe("archives");
+  });
+
+  it("closes a second open archive by its rail row without touching the page's", async () => {
+    await inFolder();
+    m.Status.mockResolvedValueOnce({ ...status(5, "unlocked"), opened: [{ id: "a", name: "A" }] });
+    await store.closeArchive("b");
+    expect(m.Leave).toHaveBeenCalledWith("b");
+    expect(store.current).toBe("a");
+    expect(store.draining).toBeNull();
+    expect(store.route).toBe("archive");
+  });
+
+  it("stands draining while the core still names it, reads nothing meanwhile, and goes when the status lets it go", async () => {
+    await inFolder();
+    m.Status.mockResolvedValueOnce({ ...status(5, "unlocked"), opened: [{ id: "a", name: "A" }] });
+    await store.closeArchive("a");
+    expect(store.draining).toBe("a");
+    expect(store.current).toBe("a");
+    expect(store.route).toBe("archive");
+    m.Stat.mockClear();
+    await store.refreshArchive();
+    expect(m.Stat).not.toHaveBeenCalled();
+    // The core's next status, as the vault.state event carries it.
+    (store as unknown as { applyStatus(s: VaultStatus): void }).applyStatus({ ...status(6, "unlocked"), opened: [] } as unknown as VaultStatus);
+    expect(store.draining).toBeNull();
+    expect(store.current).toBeNull();
+    expect(store.route).toBe("archives");
+  });
+
+  it("goes as soon as the list says the core closed it, before a status does", async () => {
+    await inFolder();
+    m.Status.mockResolvedValueOnce({ ...status(5, "unlocked"), opened: [{ id: "a", name: "A" }] });
+    await store.closeArchive("a");
+    expect(store.draining).toBe("a");
+    m.List.mockResolvedValueOnce([{ id: "a", name: "A", path: "D:/a.efd", open: false }]);
+    await store.refreshArchives();
+    expect(store.draining).toBeNull();
+    expect(store.current).toBeNull();
+  });
+
+  it("mounts a draining archive again on Open, where it stood", async () => {
+    await inFolder();
+    m.Status.mockResolvedValueOnce({ ...status(5, "unlocked"), opened: [{ id: "a", name: "A" }] });
+    await store.closeArchive("a");
+    store.go("archives");
+    m.Stat.mockResolvedValueOnce(stat(2));
+    m.Page.mockResolvedValueOnce(reply(2, ["x", "y"], 2, [{ id: ROOT, name: "A" }, { id: D, name: "Trips" }]));
+    expect(await store.openArchive("a")).toBe(true);
+    await settle();
+    expect(m.Open).toHaveBeenCalledWith("a");
+    expect(store.draining).toBeNull();
+    expect(store.dirId).toBe(D);
+    expect([...store.sel.ids]).toEqual(["x"]);
+  });
+
+  // The review of 2026-10-18: a kill switch that did not go through the
+  // store (the inspector's, as it was) left store.current naming a closed
+  // handle — a rail row for it, and an Open that showed a page bouncing
+  // back to the list.
+  it("lets the page's archive go once the list says the core closed it outside the store", async () => {
+    await inFolder();
+    store.go("archives");
+    m.List.mockResolvedValueOnce([{ id: "a", name: "A", path: "D:/a.efd", open: false }]);
+    await store.refreshArchives(); // archives.changed after Archives.Close
+    expect(store.current).toBeNull();
+    expect(railChildren(store.current, "A", [])).toEqual([]);
+    m.Page.mockResolvedValueOnce(reply(1, [], 0));
+    expect(await store.openArchive("a")).toBe(true);
+    expect(m.Open).toHaveBeenCalledWith("a");
+    expect(store.current).toBe("a");
+    expect(store.dirId).toBe(ROOT);
+  });
+
+  it("lets it go once a status that named it stops naming it", async () => {
+    await inFolder();
+    store.go("archives");
+    const apply = (s: unknown) => (store as unknown as { applyStatus(s: VaultStatus): void }).applyStatus(s as VaultStatus);
+    apply({ ...status(5, "unlocked"), opened: [{ id: "a", name: "A" }] });
+    expect(store.current).toBe("a");
+    apply({ ...status(6, "unlocked"), opened: [] });
+    expect(store.current).toBeNull();
+  });
+
+  it("does not take a status that never named it, or a list read before an open landed, as a close", async () => {
+    await inFolder();
+    const apply = (s: unknown) => (store as unknown as { applyStatus(s: VaultStatus): void }).applyStatus(s as VaultStatus);
+    apply({ ...status(5, "unlocked"), opened: [] });
+    expect(store.current).toBe("a");
+    // A list asked for while an Open of "a" travels, answered after it.
+    let answer: (v: unknown) => void = () => {};
+    m.List.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const listed = store.refreshArchives();
+    m.Stat.mockResolvedValueOnce(stat(1));
+    m.Page.mockResolvedValueOnce(reply(1, ["x", "y"], 2, [{ id: ROOT, name: "A" }, { id: D, name: "Trips" }]));
+    store.archives = [{ id: "a", name: "A", path: "D:/a.efd", open: false } as ArchiveSummary];
+    const opened = store.openArchive("a");
+    answer([{ id: "a", name: "A", path: "D:/a.efd", open: false }]);
+    await listed;
+    await opened;
+    expect(store.current).toBe("a");
+  });
+
+  it("keeps an archive let go of for Delete archive… under its dialog", async () => {
+    await inFolder();
+    store.releasedForDelete = "a";
+    m.List.mockResolvedValueOnce([{ id: "a", name: "A", path: "D:/a.efd", open: false }]);
+    await store.refreshArchives();
+    expect(store.current).toBe("a");
+    expect(store.route).toBe("archive");
+  });
+
+  it("holds another archive a Close left still held as lingering, until the status lets it go", async () => {
+    await inFolder();
+    m.Status.mockResolvedValueOnce({ ...status(5, "unlocked"), opened: [{ id: "a", name: "A" }, { id: "b", name: "B" }] });
+    await store.closeArchive("b");
+    expect(store.leftHeld("b")).toBe(true);
+    expect(store.current).toBe("a");
+    (store as unknown as { applyStatus(s: VaultStatus): void }).applyStatus({ ...status(6, "unlocked"), opened: [{ id: "a", name: "A" }] } as unknown as VaultStatus);
+    expect(store.leftHeld("b")).toBe(false);
+    expect(store.current).toBe("a");
+  });
+
+  it("forgets the lingering mark when the kill switch closes it", async () => {
+    await inFolder();
+    m.Status.mockResolvedValueOnce({ ...status(5, "unlocked"), opened: [{ id: "a", name: "A" }, { id: "b", name: "B" }] });
+    await store.closeArchive("b");
+    await store.closeOpened("b");
+    expect(m.Close).toHaveBeenCalledWith("b");
+    expect(store.leftHeld("b")).toBe(false);
+    expect(store.current).toBe("a");
+  });
+});
+
+// Phase 4a (direction 3): getting back to where you were. The archive
+// opened last is remembered per vault in memory only, the list focuses
+// its row after an unlock, a file opened from Explorer while locked can be
+// forgotten from the lock screen, an Import-archives merge reached from
+// such a file opens it once it succeeds, and View › Preview pane writes
+// Settings.previewPane through the whole-struct Set.
+describe("getting back to the archive (direction 3, phase 4a)", () => {
+  const VAULT = "D:/Vaults/personal.eks";
+  const FILE = "D:\Archives\holiday.efd";
+  const at = (seq: number, state: string, path = VAULT) => ({ ...status(seq, state), path }) as unknown as VaultStatus;
+  const refusal = (code: string) => Object.assign(new Error(code), { cause: { code } });
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+
+  async function bootAt(state: string) {
+    m.Status.mockResolvedValueOnce(at(1, state));
+    m.Page.mockResolvedValue(reply(1, [], 0));
+    store.boot();
+    await settle();
+  }
+
+  async function openThenClose() {
+    await store.openArchive("a");
+    m.Status.mockResolvedValueOnce(at(2, "unlocked"));
+    await store.closeArchive("a");
+    expect(store.current).toBeNull();
+  }
+
+  it("remembers the archive opened last and asks the list to focus it after an unlock", async () => {
+    await bootAt("unlocked");
+    await openThenClose();
+    expect(store.remembered).toBe("a");
+    m.handlers["vault.state"]({ data: at(3, "locked") });
+    expect(store.focusArchiveAsked).toBeNull();
+    m.handlers["vault.state"]({ data: at(4, "unlocked") });
+    expect(store.route).toBe("archives");
+    expect(store.focusArchiveAsked).toBe("a");
+    // Taken once.
+    expect(store.takeFocusAsked()).toBe("a");
+    expect(store.takeFocusAsked()).toBeNull();
+  });
+
+  it("asks nothing when the archive is still open: the unlock goes back to its page", async () => {
+    await bootAt("unlocked");
+    await store.openArchive("a");
+    m.handlers["vault.state"]({ data: at(3, "locked") });
+    m.handlers["vault.state"]({ data: at(4, "unlocked") });
+    expect(store.current).toBe("a");
+    expect(store.focusArchiveAsked).toBeNull();
+  });
+
+  it("asks nothing before anything was opened in this process", async () => {
+    await bootAt("unlocked");
+    m.handlers["vault.state"]({ data: at(3, "locked") });
+    m.handlers["vault.state"]({ data: at(4, "unlocked") });
+    expect(store.remembered).toBe("");
+    expect(store.focusArchiveAsked).toBeNull();
+  });
+
+  it("drops what it remembered when the vault is another one", async () => {
+    await bootAt("unlocked");
+    await openThenClose();
+    m.handlers["vault.state"]({ data: at(3, "locked", "E:/Other/vault.eks") });
+    m.handlers["vault.state"]({ data: at(4, "unlocked", "E:/Other/vault.eks") });
+    expect(store.remembered).toBe("");
+    expect(store.focusArchiveAsked).toBeNull();
+    // Back on the first vault, nothing comes back: it was forgotten.
+    m.handlers["vault.state"]({ data: at(5, "unlocked") });
+    expect(store.remembered).toBe("");
+  });
+
+  it("forgets a file opened from Explorer while locked, so the unlock opens nothing", async () => {
+    await bootAt("locked");
+    m.OpenPath.mockRejectedValueOnce(refusal("vault.needs_unlock"));
+    await store.openFiles([FILE]);
+    await settle();
+    expect(store.openWhenUnlocked).toBe(FILE);
+    store.forgetOpenWhenUnlocked();
+    expect(store.openWhenUnlocked).toBe("");
+    m.handlers["vault.state"]({ data: at(2, "unlocked") });
+    await settle();
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the file that led to an Import-archives merge once the merge succeeds", async () => {
+    await bootAt("unlocked");
+    m.OpenPath.mockRejectedValueOnce(refusal("archive.key_not_in_vault"));
+    await store.openFiles([FILE]);
+    await settle();
+    expect(store.keyNotInVault).toBe(FILE);
+    store.askImportRecords();
+    m.OpenPath.mockResolvedValueOnce({ archiveId: "a", relocated: false });
+    store.mergeDone();
+    await settle();
+    expect(m.OpenPath).toHaveBeenCalledTimes(2);
+    expect(m.OpenPath).toHaveBeenLastCalledWith(FILE);
+    expect(store.current).toBe("a");
+    // Once: a later merge by hand opens nothing.
+    store.mergeDone();
+    await settle();
+    expect(m.OpenPath).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens nothing after a merge when the import was abandoned first", async () => {
+    await bootAt("unlocked");
+    m.OpenPath.mockRejectedValueOnce(refusal("archive.key_not_in_vault"));
+    await store.openFiles([FILE]);
+    await settle();
+    store.askImportRecords();
+    store.forgetImport(); // the picker closed with nothing, or the merge dialog did
+    store.mergeDone();
+    await settle();
+    expect(m.OpenPath).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes the preview pane through the whole settings, changing nothing else", async () => {
+    const saved = { vaultPath: VAULT, displayName: "Personal vault", closeAction: "ask", theme: "dark", previewPane: true, idleMinutes: 5 };
+    m.SettingsGet.mockReset().mockResolvedValueOnce(saved).mockResolvedValueOnce({ ...saved, previewPane: false });
+    store.settings = { ...saved } as never;
+    expect(store.previewPane).toBe(true);
+    const p = store.setPreviewPane(false);
+    expect(store.previewPane).toBe(false); // shown at once
+    await p;
+    expect(m.SettingsSet).toHaveBeenCalledWith({ ...saved, previewPane: false });
+    expect(store.previewPane).toBe(false);
+  });
+
+  it("shows the pane until the settings say otherwise", () => {
+    store.settings = null;
+    expect(store.previewPane).toBe(true);
+  });
+});
+
+// Vault things in one place (direction 10, phase 4a): a choice applies the
+// moment it is made, through one chain of whole-struct writes; the Vault
+// page's test of a backup locks and hands the lock screen its ask; the
+// merge dialog stands above every route and goes with a lock.
+describe("choices that apply at once (applySettings, choose)", () => {
+  const saved = { vaultPath: "D:/v.eks", displayName: "Personal vault", closeAction: "ask", theme: "system", previewPane: true, idleMinutes: 0, absoluteMinutes: 0, dictionaryBelow: 262144 };
+  const refusal = (code: string) => Object.assign(new Error(code), { cause: { code } });
+  const settle = async () => {
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  };
+
+  it("shows the choice at once and writes the whole settings with only that field changed", async () => {
+    m.SettingsGet.mockReset().mockResolvedValueOnce(saved).mockResolvedValueOnce({ ...saved, idleMinutes: 5 });
+    store.settings = { ...saved } as typeof store.settings;
+    const p = store.choose("idleMinutes", 5);
+    expect(store.settings?.idleMinutes).toBe(5);
+    expect(store.choosing.idleMinutes).toBeDefined();
+    await p;
+    expect(m.SettingsSet).toHaveBeenCalledWith({ ...saved, idleMinutes: 5 });
+    expect(store.choosing.idleMinutes).toBeUndefined();
+    expect(store.choiceRefused.idleMinutes).toBeUndefined();
+    expect(store.toasts.length).toBe(0); // a choice that applied is its own confirmation
+  });
+
+  it("puts the old value back and says the refusal under the control, with no toast", async () => {
+    m.SettingsGet.mockReset().mockResolvedValue(saved);
+    m.SettingsSet.mockRejectedValueOnce(refusal("params"));
+    store.settings = { ...saved } as typeof store.settings;
+    await store.choose("absoluteMinutes", 480);
+    expect(store.settings?.absoluteMinutes).toBe(0);
+    expect(store.choiceRefused.absoluteMinutes).toBeTruthy();
+    expect(store.choosing.absoluteMinutes).toBeUndefined();
+    expect(store.toasts.length).toBe(0);
+  });
+
+  it("lands two quick choices in order, neither putting the other's field back", async () => {
+    let core = { ...saved };
+    m.SettingsGet.mockReset().mockImplementation(async () => ({ ...core }));
+    m.SettingsSet.mockReset().mockImplementation(async (v: typeof saved) => {
+      core = { ...v };
+    });
+    store.settings = { ...saved } as typeof store.settings;
+    const a = store.choose("theme", "dark");
+    const b = store.setPreviewPane(false);
+    expect(store.settings?.theme).toBe("dark");
+    expect(store.settings?.previewPane).toBe(false);
+    await Promise.all([a, b]);
+    expect(core.theme).toBe("dark");
+    expect(core.previewPane).toBe(false);
+    expect(store.settings?.theme).toBe("dark");
+    expect(store.settings?.previewPane).toBe(false);
+  });
+
+  it("keeps a later choice shown while an earlier one is refused", async () => {
+    let core = { ...saved };
+    m.SettingsGet.mockReset().mockImplementation(async () => ({ ...core }));
+    m.SettingsSet.mockReset()
+      .mockImplementationOnce(async () => {
+        throw refusal("io");
+      })
+      .mockImplementation(async (v: typeof saved) => {
+        core = { ...v };
+      });
+    store.settings = { ...saved } as typeof store.settings;
+    const a = store.choose("closeAction", "quit");
+    const b = store.choose("theme", "light");
+    await a;
+    // The first is back to what the core holds; the second still shows.
+    expect(store.settings?.closeAction).toBe("ask");
+    expect(store.settings?.theme).toBe("light");
+    expect(store.choiceRefused.closeAction).toBeTruthy();
+    await b;
+    expect(core.theme).toBe("light");
+    expect(store.choiceRefused.theme).toBeUndefined();
+  });
+
+  it("says a refusal only for the latest choice of a control", async () => {
+    let core = { ...saved };
+    m.SettingsGet.mockReset().mockImplementation(async () => ({ ...core }));
+    m.SettingsSet.mockReset()
+      .mockImplementationOnce(async () => {
+        throw refusal("io");
+      })
+      .mockImplementation(async (v: typeof saved) => {
+        core = { ...v };
+      });
+    store.settings = { ...saved } as typeof store.settings;
+    const a = store.choose("idleMinutes", 2);
+    const b = store.choose("idleMinutes", 15);
+    await Promise.all([a, b]);
+    await settle();
+    expect(store.choiceRefused.idleMinutes).toBeUndefined();
+    expect(core.idleMinutes).toBe(15);
+    expect(store.settings?.idleMinutes).toBe(15);
+  });
+
+  it("drops a refusal's line when the page changes", async () => {
+    m.SettingsGet.mockReset().mockResolvedValue(saved);
+    m.SettingsSet.mockRejectedValueOnce(refusal("params"));
+    store.settings = { ...saved } as typeof store.settings;
+    store.go("settings");
+    await store.choose("theme", "dark");
+    expect(store.choiceRefused.theme).toBeTruthy();
+    store.go("keys");
+    expect(store.choiceRefused.theme).toBeUndefined();
+  });
+});
+
+describe("testing that a backup opens, from the Vault page (askTestBackup)", () => {
+  const refusal = (code: string) => Object.assign(new Error(code), { cause: { code } });
+
+  it("locks an unlocked vault, goes to the lock screen, and hands the path over once", async () => {
+    store.status = status(1, "unlocked");
+    store.go("keys");
+    await store.askTestBackup("E:/backup.eks");
+    expect(m.Lock).toHaveBeenCalledTimes(1);
+    expect(store.route).toBe("lock");
+    expect(store.takeTestAsked()).toBe("E:/backup.eks");
+    expect(store.takeTestAsked()).toBe("");
+  });
+
+  it("asks a Locked vault for no lock", async () => {
+    store.status = status(1, "locked");
+    store.go("keys");
+    await store.askTestBackup("E:/backup.eks");
+    expect(m.Lock).not.toHaveBeenCalled();
+    expect(store.route).toBe("lock");
+    expect(store.testAsked).toBe("E:/backup.eks");
+  });
+
+  it("asks for nothing without a file", async () => {
+    store.status = status(1, "unlocked");
+    store.go("keys");
+    await store.askTestBackup("");
+    expect(m.Lock).not.toHaveBeenCalled();
+    expect(store.route).toBe("keys");
+  });
+
+  it("is withdrawn when the route leaves the lock screen before it is taken", async () => {
+    store.status = status(1, "locked");
+    await store.askTestBackup("E:/backup.eks");
+    store.go("keys");
+    expect(store.takeTestAsked()).toBe("");
+  });
+
+  it("asks for nothing and stays where it was when the lock is refused", async () => {
+    store.status = status(1, "unlocked");
+    store.go("keys");
+    m.Lock.mockRejectedValueOnce(refusal("internal"));
+    await store.askTestBackup("E:/backup.eks");
+    expect(store.route).toBe("keys");
+    expect(store.testAsked).toBe("");
+    expect(store.toasts.length).toBe(1);
+  });
+});
+
+describe("the summary's export, taken by the Vault page (askExport)", () => {
+  it("goes to the Vault page and is taken once", () => {
+    store.status = status(1, "unlocked");
+    store.go("archives");
+    store.askExport();
+    expect(store.route).toBe("keys");
+    expect(store.takeExportAsked()).toBe(true);
+    expect(store.takeExportAsked()).toBe(false);
+  });
+
+  it("is withdrawn when the route leaves the Vault page before it is taken", () => {
+    store.status = status(1, "unlocked");
+    store.askExport();
+    store.go("archives");
+    expect(store.takeExportAsked()).toBe(false);
+  });
+});
+
+describe("the merge dialog over every route, and the list's notes", () => {
+  it("closes the merge dialog when the vault locks", async () => {
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    store.merging = "E:/backup.eks";
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    expect(store.merging).toBe("");
+  });
+
+  // The Vault page's "Archive files:" line claims presence only on the
+  // word of a pass of this unlock (lib/vaultfiles.ts): the answer is kept
+  // while Unlocked and dropped when the vault leaves Unlocked, since the
+  // presence it measured was the session's.
+  it("keeps Find missing files' answer for this unlock only", async () => {
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(store.filesCheck).toBe(null);
+    m.CheckFiles.mockResolvedValueOnce({ probed: 3, missing: 1 });
+    expect(await store.checkFiles()).toEqual({ probed: 3, missing: 1 });
+    expect(store.filesCheck).toEqual({ probed: 3, missing: 1 });
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    expect(store.filesCheck).toBe(null);
+    // An answer that lands after a lock is not kept.
+    m.CheckFiles.mockResolvedValueOnce({ probed: 3, missing: 0 });
+    await store.checkFiles();
+    expect(store.filesCheck).toBe(null);
+  });
+
+  // The name Rename… gave is the one shown (store.vaultName), even in the
+  // moment before the core's status follows it.
+  it("names the vault by its setting first, then its status", async () => {
+    m.Status.mockResolvedValueOnce({ ...status(1, "unlocked"), displayName: "Personal vault", path: "C:/v.eks" });
+    m.SettingsGet.mockResolvedValue({ displayName: "Personal vault" });
+    store.boot();
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(store.vaultName).toBe("Personal vault");
+    m.SettingsGet.mockResolvedValue({ displayName: "Home vault" });
+    m.SettingsSet.mockResolvedValueOnce(undefined);
+    await store.applySettings({ displayName: "Home vault" });
+    expect(store.status?.displayName).toBe("Personal vault");
+    expect(store.vaultName).toBe("Home vault");
+  });
+
+  // Another vault file opened (a switch, an import) carries the name the
+  // core wrote into the settings: they are read again, so the old
+  // vault's name is not shown over the new one.
+  it("reads the settings again when the vault file changes", async () => {
+    m.Status.mockResolvedValueOnce({ ...status(1, "locked"), displayName: "Personal vault", path: "C:/v.eks" });
+    m.SettingsGet.mockResolvedValue({ displayName: "Personal vault" });
+    store.boot();
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(store.vaultName).toBe("Personal vault");
+    m.SettingsGet.mockResolvedValue({ displayName: "Travel vault" });
+    m.handlers["vault.state"]({ data: { ...status(2, "locked"), displayName: "Travel vault", path: "E:/t.eks" } });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(store.vaultName).toBe("Travel vault");
   });
 });

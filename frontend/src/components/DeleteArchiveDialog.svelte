@@ -223,11 +223,13 @@
     </div>
   {:else if phase === "done"}
     <!-- What happened, then the undo and its date. A Delete that ended in
-         Forget archive only… left the file alone, and says so. -->
+         Forget archive only… left the file alone, and says so. The undo is
+         in View › Forgotten, where forgotten records alone show (APP.md
+         §13, ruled 2026-10-19). -->
     {#if did === "forget"}
-      <p>The file stays where it is. You can restore {name} from Show hidden until {date(forgottenAt + RETENTION_SECONDS)}; after that its key is gone.</p>
+      <p>{dialogCopy.deleteArchive.forgotDone(name, date(forgottenAt + RETENTION_SECONDS))}</p>
     {:else}
-      <p>The file is gone. Its key is kept until {date(forgottenAt + RETENTION_SECONDS)}, so you can restore the archive from Show hidden if a copy of the file turns up.</p>
+      <p>{dialogCopy.deleteArchive.deletedDone(date(forgottenAt + RETENTION_SECONDS))}</p>
     {/if}
   {:else if phase === "mismatch"}
     <p>{dialogCopy.notThisArchive.body}</p>

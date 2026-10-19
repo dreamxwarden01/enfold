@@ -132,7 +132,7 @@ describe("one word per thing", () => {
 // The verb table and the dialog template (strings.ts head).
 describe("the verb table", () => {
   it("ends a command with an ellipsis exactly when a dialog or a picker follows", () => {
-    const opensNothing = ["open", "close", "closeArchive", "closeAll", "hide", "unhide", "restore", "refreshFingerprint", "showInExplorer", "findMissing", "reopen", "goThere", "lockNow", "unlock"];
+    const opensNothing = ["open", "close", "closeArchive", "closeAll", "hide", "unhide", "restore", "refreshFingerprint", "showInExplorer", "findMissing", "reopen", "lockNow", "unlock", "forceClose", "forceCloseAll"];
     for (const [k, v] of Object.entries(commandCopy)) {
       expect(v.endsWith("…"), k).toBe(!opensNothing.includes(k));
     }

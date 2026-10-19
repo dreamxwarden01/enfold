@@ -122,6 +122,9 @@
       await Vault.MergeRecords(handle, tickedIds(rows, ticks));
       store.merge = null;
       await store.refreshArchives();
+      // The file opened from Explorer whose key this import brought in is
+      // opened now (direction 3, phase 4a), as the dialog closes.
+      store.mergeDone();
       onclose();
     } catch (e) {
       fail(e);

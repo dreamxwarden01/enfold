@@ -37,12 +37,18 @@ type settingsFile struct {
 	// any more — an extract's destination is the page's own rule (§3, ruled
 	// 2026-09-10).
 	LastArchiveFolder string `json:"lastArchiveFolder,omitempty"`
+	// PreviewPane is the Archive page's View ▾ › Preview pane choice (APP.md
+	// §6, direction 3 of the polish review): whether the pane beside the
+	// file list is shown. A layout choice of this machine's, like Theme, and
+	// true unless the user has turned it off — a file written before the
+	// choice existed has no key and reads true (loadSettings).
+	PreviewPane bool `json:"previewPane"`
 
 	LastExport *lastExport `json:"lastExportAt,omitempty"`
 }
 
 func defaultSettings() settingsFile {
-	return settingsFile{CloseAction: CloseAsk, Theme: "system", Look: "native", RecoveryRecordPct: 3, DictionaryBelow: 256 << 10}
+	return settingsFile{CloseAction: CloseAsk, Theme: "system", Look: "native", RecoveryRecordPct: 3, DictionaryBelow: 256 << 10, PreviewPane: true}
 }
 
 // loadSettings reads the file; anything missing or unreadable is the
@@ -53,7 +59,9 @@ func loadSettings(dir string) settingsFile {
 	if err != nil {
 		return s
 	}
-	var f settingsFile
+	// Seeded where a missing key must not read as the zero value: the
+	// preview pane is on unless the file says it is off.
+	f := settingsFile{PreviewPane: true}
 	if json.Unmarshal(b, &f) != nil {
 		return s
 	}
@@ -67,6 +75,7 @@ func loadSettings(dir string) settingsFile {
 	if f.Theme == "light" || f.Theme == "dark" {
 		s.Theme = f.Theme
 	}
+	s.PreviewPane = f.PreviewPane
 	if f.RecoveryRecordPct >= 0 && f.RecoveryRecordPct <= 20 {
 		s.RecoveryRecordPct = f.RecoveryRecordPct // 0: no recovery record (SCOPE.md: optional, 3% by default)
 	}
@@ -152,6 +161,7 @@ func (c *Core) GetSettings() Settings {
 		VaultPath: c.settings.VaultPath, DisplayName: c.settings.DisplayName, CloseAction: c.settings.CloseAction,
 		Theme: c.settings.Theme, Look: c.settings.Look, RecoveryRecordPct: c.settings.RecoveryRecordPct,
 		DictionaryBelow: c.settings.DictionaryBelow, LastArchiveFolder: c.settings.LastArchiveFolder,
+		PreviewPane: c.settings.PreviewPane,
 	}
 	if c.vault.state == StateUnlocked && c.vault.sess != nil {
 		g := c.vault.sess.Registry()
@@ -197,6 +207,13 @@ func (c *Core) SetCloseAction(action string) *Error {
 // SetSettings stores the machine-local part and, while unlocked, the
 // timeouts into the registry. Out-of-range timeouts are refused.
 //
+// The timeouts are applied only from a struct that carries them from an
+// unlocked read — TimeoutsFromVault true (APP.md §3, Settings; ruled
+// 2026-10-19). The page echoes the struct it read, and a read taken while
+// Locked carries false and zeros: a theme or a name saved from it after an
+// unlock would otherwise put the defaults over the vault's own lock times.
+// Without the flag the registry's values stand and nothing is written to it.
+//
 // The write commits before anything is applied: the new values are built
 // on a copy, the file is written, and only a written file moves the
 // settings in memory. A settings file that cannot be written is refused
@@ -220,6 +237,7 @@ func (c *Core) SetSettings(s Settings) *Error {
 	c.mu.Lock()
 	file := c.settings // a copy: nothing in memory moves until the file is written
 	file.CloseAction, file.Theme, file.RecoveryRecordPct = s.CloseAction, s.Theme, s.RecoveryRecordPct
+	file.PreviewPane = s.PreviewPane
 	if s.DictionaryBelow >= 0 && s.DictionaryBelow <= 64<<20 {
 		file.DictionaryBelow = s.DictionaryBelow
 	}
@@ -239,9 +257,20 @@ func (c *Core) SetSettings(s Settings) *Error {
 	c.mu.Lock()
 	c.settings.CloseAction, c.settings.Theme, c.settings.RecoveryRecordPct = file.CloseAction, file.Theme, file.RecoveryRecordPct
 	c.settings.DictionaryBelow, c.settings.DisplayName = file.DictionaryBelow, file.DisplayName
+	c.settings.PreviewPane = file.PreviewPane
+	// The vault's name is Rename… on the Vault page (APP.md §3, Settings;
+	// §6, the Vault page): the status takes it at once, so the tray's
+	// header and tooltip (§2.4), which read only VaultStatus, never name
+	// the vault otherwise than the window does. Only a name this call
+	// gives, and only while a vault file is open — the settings' name is
+	// that file's.
+	renamed := s.DisplayName != "" && c.vault.path != "" && c.vault.displayName != file.DisplayName
+	if renamed {
+		c.vault.displayName = file.DisplayName
+	}
 	c.mu.Unlock()
 	changed := false
-	if unlocked && sess != nil {
+	if s.TimeoutsFromVault && unlocked && sess != nil {
 		if g := sess.Registry(); g != nil {
 			changed = int(g.IdleMinutes) != s.IdleMinutes || int(g.AbsoluteMinutes) != s.AbsoluteMinutes
 		}
@@ -252,11 +281,17 @@ func (c *Core) SetSettings(s Settings) *Error {
 			return nil
 		})
 		if err != nil {
+			if renamed {
+				c.emitState() // the name moved even though the timeouts did not
+			}
 			return err
 		}
 		c.mu.Lock()
 		c.armTimersLocked()
 		c.mu.Unlock()
+	}
+	// One status for both: a new name, new lock times, or the two together.
+	if renamed || changed {
 		c.emitState()
 	}
 	return nil

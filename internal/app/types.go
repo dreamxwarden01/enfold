@@ -570,6 +570,11 @@ const (
 )
 
 // Settings is the machine-local settings file plus the registry's timeouts.
+// The timeouts travel with TimeoutsFromVault: GetSettings sets it, with the
+// registry's values, only while Unlocked, and SetSettings writes the
+// timeouts back only from a struct that carries it true, so a struct read
+// while Locked — false, zeros — never puts the defaults over the vault's
+// own lock times (APP.md §3, Settings; ruled 2026-10-19).
 type Settings struct {
 	VaultPath         string `json:"vaultPath"`
 	DisplayName       string `json:"displayName"`
@@ -582,11 +587,15 @@ type Settings struct {
 	// archive dialog (APP.md §6): read-only, since only a create writes it.
 	// An extract's destination is not remembered — the page prefills it from
 	// the archive's own folder (§3, ruled 2026-09-10).
-	LastArchiveFolder  string `json:"lastArchiveFolder"`
-	IdleMinutes        int    `json:"idleMinutes"`     // from the registry; 0 = default
-	AbsoluteMinutes    int    `json:"absoluteMinutes"` // from the registry; 0 = default
-	TimeoutsFromVault  bool   `json:"timeoutsFromVault"`
-	TimeoutsAdjustable bool   `json:"timeoutsAdjustable"` // only while unlocked
+	LastArchiveFolder string `json:"lastArchiveFolder"`
+	// PreviewPane is the Archive page's View ▾ › Preview pane choice (APP.md
+	// §6, direction 3): machine-local, applied the moment it is made and
+	// written through Set like Theme; true by default.
+	PreviewPane        bool `json:"previewPane"`
+	IdleMinutes        int  `json:"idleMinutes"`     // from the registry; 0 = default
+	AbsoluteMinutes    int  `json:"absoluteMinutes"` // from the registry; 0 = default
+	TimeoutsFromVault  bool `json:"timeoutsFromVault"`
+	TimeoutsAdjustable bool `json:"timeoutsAdjustable"` // only while unlocked
 }
 
 // What Settings.CloseAction may be (APP.md §2.4, ruled 2026-09-13): the

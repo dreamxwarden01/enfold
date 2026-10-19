@@ -289,14 +289,23 @@ func sweepProfile(dir string) {
 }
 
 // Emit is the core's Emitter: every event goes to the page and, for the
-// vault state, to the tray.
+// vault state and an operation's progress and end, to the tray.
 func (s *shell) Emit(name string, payload any) {
 	if s.app != nil {
 		s.app.Event.Emit(name, payload)
 	}
-	if name == app.EventVaultState && s.tray != nil {
+	if s.tray == nil {
+		return
+	}
+	switch name {
+	case app.EventVaultState:
 		if st, ok := payload.(app.VaultStatus); ok {
 			s.tray.update(st)
+		}
+	case app.EventOpProgress, app.EventOpDone:
+		// The tray's running line moves with the operation (direction 10).
+		if v, ok := payload.(app.OpView); ok {
+			s.tray.opEvent(v)
 		}
 	}
 }

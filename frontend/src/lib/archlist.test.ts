@@ -1,70 +1,120 @@
 import { describe, expect, it } from "vitest";
-import { clickShownHeader, compacting, droppedArchives, fingerprintOf, paneRow, rowRefusal, runningKind, shownTicked } from "./archlist";
-import { clickRow, emptySelection, toggleRow } from "./selection";
+import { chipKinds, compacting, droppedArchives, fingerprintOf, folderOf, rowRefusal, runningKind, vaultFigures, viewRows } from "./archlist";
 
-// The Archives list's ticks (APP.md §6, ruled 2026-09-10): the header
-// ticks the rows the filter shows and is ticked exactly when all of them
-// are; the details pane shows the row last clicked while it is ticked,
-// else the sole ticked row, else nothing.
+// The Archives list (direction 6, phase 4a): one archive selected at a
+// time, no ticks; the views over the whole registry, a row's second line,
+// the chips after its name, and the vault's figures when nothing is
+// selected.
 
-const shown = ["a", "b", "c"];
-const ids = (s: { ids: ReadonlySet<string> }) => [...s.ids].sort();
+describe("which records a view shows", () => {
+  const plain = { id: "a", hidden: false, forgottenAt: 0 };
+  const hidden = { id: "b", hidden: true, forgottenAt: 0 };
+  const gone = { id: "c", hidden: false, forgottenAt: 1_760_000_000 };
+  const both = { id: "d", hidden: true, forgottenAt: 1_760_000_000 };
+  const all = [plain, hidden, gone, both];
+  const ids = (rows: { id: string }[]) => rows.map((r) => r.id);
 
-describe("a toggle that empties the ticks", () => {
-  it("drops the anchor here too, so a Shift+click after it takes the clicked row alone", () => {
-    let s = toggleRow(emptySelection(), "b");
-    s = clickRow(s, shown, "b", { ctrl: true });
-    expect(s.anchor).toBeNull();
-    expect(ids(clickRow(s, shown, "c", { shift: true }))).toEqual(["c"]);
+  it("lists neither hidden nor forgotten records until Show hidden", () => {
+    expect(ids(viewRows(all, "list", false))).toEqual(["a"]);
+  });
+
+  it("lists the hidden records under Show hidden and never a forgotten one, hidden or not", () => {
+    expect(ids(viewRows(all, "list", true))).toEqual(["a", "b"]);
+  });
+
+  it("lists the forgotten records alone in the Forgotten view, hidden or not", () => {
+    expect(ids(viewRows(all, "forgotten", false))).toEqual(["c", "d"]);
+    expect(ids(viewRows(all, "forgotten", true))).toEqual(["c", "d"]);
+  });
+
+  it("hands back a list of its own, never the caller's", () => {
+    const out = viewRows(all, "list", true);
+    expect(out).not.toBe(all);
   });
 });
 
-describe("the header's tick", () => {
-  it("is ticked exactly when every shown row is", () => {
-    let s = clickRow(emptySelection(), shown, "a");
-    expect(shownTicked(s, shown)).toBe(false);
-    s = clickRow(s, shown, "c", { shift: true });
-    expect(shownTicked(s, shown)).toBe(true);
+describe("a row's folder, its second line without a description", () => {
+  it("is the path's parent, in the path's own separators", () => {
+    expect(folderOf("D:\\Archives\\photos-2024.efd")).toBe("D:\\Archives");
+    expect(folderOf("D:/Archives/photos-2024.efd")).toBe("D:/Archives");
+    expect(folderOf("/Volumes/Media/family-videos.efd")).toBe("/Volumes/Media");
   });
-  it("is never ticked over an empty list", () => {
-    expect(shownTicked(clickRow(emptySelection(), shown, "a"), [])).toBe(false);
+
+  it("keeps a drive's root and the file system's root whole", () => {
+    expect(folderOf("D:\\photos.efd")).toBe("D:\\");
+    expect(folderOf("E:/photos.efd")).toBe("E:/");
+    expect(folderOf("/photos.efd")).toBe("/");
   });
-  it("counts the rows the filter shows, not the ticks it hides", () => {
-    const s = clickRow(clickRow(emptySelection(), shown, "a"), shown, "c", { shift: true });
-    expect(shownTicked(s, ["a", "b"])).toBe(true);
-    expect(shownTicked(s, ["a", "d"])).toBe(false);
+
+  it("names a share's server and folder", () => {
+    expect(folderOf("\\\\nas\\backups\\laptop.efd")).toBe("\\\\nas\\backups");
   });
-  it("ticks the shown rows, and clears when they are all ticked", () => {
-    let s = clickShownHeader(emptySelection(), shown);
-    expect(ids(s)).toEqual(["a", "b", "c"]);
-    s = clickShownHeader(s, shown);
-    expect(ids(s)).toEqual([]);
-  });
-  it("ticks the shown rows alone when the filter narrowed the list", () => {
-    const s = clickShownHeader(clickRow(emptySelection(), shown, "c"), ["a", "b"]);
-    expect(ids(s)).toEqual(["a", "b"]);
+
+  it("is nothing for a bare name or no path", () => {
+    expect(folderOf("photos.efd")).toBe("");
+    expect(folderOf("")).toBe("");
   });
 });
 
-describe("the details pane's row", () => {
-  it("is the row last clicked while it is ticked", () => {
-    const s = clickRow(clickRow(emptySelection(), shown, "a"), shown, "c", { shift: true });
-    expect(paneRow(s, "c")).toBe("c");
+describe("the chips after a row's name", () => {
+  const row = { id: "a", forgottenAt: 0, hidden: false, open: false };
+  const op = (kind: string) => ({ kind, archiveId: "a", finished: false });
+
+  it("says nothing of a plain closed record", () => {
+    expect(chipKinds(row, [])).toEqual([]);
   });
-  it("is the sole ticked row when the last click is no longer ticked", () => {
-    let s = clickRow(emptySelection(), shown, "a");
-    s = toggleRow(s, "b");
-    s = toggleRow(s, "b"); // b was clicked last, and is unticked again
-    expect(paneRow(s, "b")).toBe("a");
+
+  it("puts Missing first, then Hidden, Forgotten and what is happening", () => {
+    const r = { ...row, note: "archive.file_missing", hidden: true, forgottenAt: 1, open: true };
+    expect(chipKinds(r, [])).toEqual(["missing", "hidden", "forgotten", "open"]);
   });
-  it("is nothing with several ticked and the last click among none of them", () => {
-    let s = clickRow(clickRow(emptySelection(), shown, "a"), shown, "c", { shift: true });
-    s = toggleRow(s, "b");
-    expect(paneRow(s, "b")).toBe(null);
+
+  it("says Missing only from the core's note", () => {
+    expect(chipKinds({ ...row, note: "archive.something_else" }, [])).toEqual([]);
   });
-  it("is nothing with nothing ticked", () => {
-    expect(paneRow(emptySelection(), "a")).toBe(null);
-    expect(paneRow(emptySelection(), null)).toBe(null);
+
+  it("leaves Forgotten to the Forgotten view itself", () => {
+    expect(chipKinds({ ...row, forgottenAt: 1 }, [], "forgotten")).toEqual([]);
+  });
+
+  it("says what runs on the row in place of Open", () => {
+    expect(chipKinds({ ...row, open: true }, [op("compact")])).toEqual(["compacting"]);
+    expect(chipKinds({ ...row, open: true }, [op("verify")])).toEqual(["refreshing"]);
+    expect(chipKinds({ ...row, open: true }, [op("rotate")])).toEqual(["rekeying"]);
+    expect(chipKinds({ ...row, state: "compacting" }, [])).toEqual(["compacting"]);
+  });
+
+  it("ignores an operation that ended, or one on another archive", () => {
+    expect(chipKinds({ ...row, open: true }, [{ kind: "verify", archiveId: "a", finished: true }])).toEqual(["open"]);
+    expect(chipKinds(row, [{ kind: "compact", archiveId: "b", finished: false }])).toEqual([]);
+  });
+});
+
+describe("the vault's figures with nothing selected", () => {
+  it("counts every record but the forgotten ones, hidden ones included", () => {
+    const all = [
+      { storedSize: 100, forgottenAt: 0 },
+      { storedSize: 50, forgottenAt: 0 },
+      { storedSize: 7, forgottenAt: 1_760_000_000 },
+    ];
+    expect(vaultFigures(all)).toEqual({ count: 2, size: 150, hidden: 0 });
+  });
+
+  it("takes a size it was not told as nothing", () => {
+    expect(vaultFigures([{ storedSize: Number.NaN, forgottenAt: 0 }, { storedSize: -1, forgottenAt: 0 }])).toEqual({ count: 2, size: 0, hidden: 0 });
+  });
+
+  it("is nothing for an empty vault", () => {
+    expect(vaultFigures([])).toEqual({ count: 0, size: 0, hidden: 0 });
+  });
+
+  it("counts the hidden ones it counted, apart", () => {
+    const all = [
+      { storedSize: 10, forgottenAt: 0, hidden: true },
+      { storedSize: 20, forgottenAt: 0, hidden: false },
+      { storedSize: 30, forgottenAt: 1_760_000_000, hidden: true },
+    ];
+    expect(vaultFigures(all)).toEqual({ count: 2, size: 30, hidden: 1 });
   });
 });
 

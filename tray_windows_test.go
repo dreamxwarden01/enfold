@@ -47,11 +47,115 @@ func TestTheTrayLineNamesTheVaultAndItsState(t *testing.T) {
 	if got, want := vaultLine(app.VaultStatus{State: app.StateLocked}), "Enfold — Locked"; got != want {
 		t.Errorf("no name: %q, want %q", got, want)
 	}
+	// The tooltip ends in the running line's words (direction 10).
 	busy := unlocked
 	busy.OpenArchives = 1
-	busy.Ops = []app.OpView{{Kind: "add"}, {Kind: "verify", Finished: true}}
-	if got, want := tooltip(busy), "Personal vault — Unlocked · locks after 10 min idle · 1 archive open · 1 operation running"; got != want {
+	busy.Opened = []app.ArchiveRef{{ID: "a1", Name: "Photos 2024"}}
+	busy.Ops = []app.OpView{{ID: "o1", Kind: "extract", ArchiveID: "a1", Done: 58, Total: 100}, {ID: "o0", Kind: "verify", Finished: true}}
+	if got, want := tooltip(busy), "Personal vault — Unlocked · locks after 10 min idle · 1 archive open · Extracting from Photos 2024 · 58%"; got != want {
 		t.Errorf("tooltip: %q, want %q", got, want)
+	}
+	idle := busy
+	idle.Ops = []app.OpView{{ID: "o0", Kind: "verify", Finished: true}}
+	if got, want := tooltip(idle), "Personal vault — Unlocked · locks after 10 min idle · 1 archive open"; got != want {
+		t.Errorf("tooltip with nothing running: %q, want %q", got, want)
+	}
+}
+
+// The tray's running line (direction 10): the latest operation started, its
+// verb, its archive's name when the status has it open, and how far when
+// the total is known; "+N more" beside others; nothing at all while nothing
+// runs, which is what hides the menu item.
+func TestTheTrayRunningLine(t *testing.T) {
+	opened := []app.ArchiveRef{{ID: "a1", Name: "Photos 2024"}, {ID: "a2", Name: "Taxes"}}
+	for _, c := range []struct {
+		name string
+		ops  []app.OpView
+		want string
+	}{
+		{"nothing", nil, ""},
+		{"only finished", []app.OpView{{ID: "x", Kind: "add", ArchiveID: "a1", Finished: true}}, ""},
+		{"add", []app.OpView{{ID: "x", Kind: "add", ArchiveID: "a1", Done: 58, Total: 100}}, "Adding to Photos 2024 · 58%"},
+		{"replace", []app.OpView{{ID: "x", Kind: "replace", ArchiveID: "a1", Done: 1, Total: 4}}, "Replacing in Photos 2024 · 25%"},
+		{"extract", []app.OpView{{ID: "x", Kind: "extract", ArchiveID: "a1", Done: 2, Total: 3}}, "Extracting from Photos 2024 · 66%"},
+		{"verify", []app.OpView{{ID: "x", Kind: "verify", ArchiveID: "a2", Done: 0, Total: 1}}, "Refreshing the fingerprint of Taxes · 0%"},
+		{"compact", []app.OpView{{ID: "x", Kind: "compact", ArchiveID: "a2", Done: 9, Total: 10}}, "Compacting Taxes · 90%"},
+		{"reclaim", []app.OpView{{ID: "x", Kind: "reclaim", ArchiveID: "a2", Done: 10, Total: 10}}, "Reclaiming space in Taxes · 100%"},
+		{"rotate", []app.OpView{{ID: "x", Kind: "rotate", ArchiveID: "a2", Done: 1, Total: 2}}, "Re-keying Taxes · 50%"},
+		{"dragout", []app.OpView{{ID: "x", Kind: "dragout", ArchiveID: "a1", Phase: "dragging"}}, "Dragging out from Photos 2024"},
+		// No total yet: no figure. 99.99% is not 100%: that is only the end.
+		{"planning", []app.OpView{{ID: "x", Kind: "add", ArchiveID: "a1"}}, "Adding to Photos 2024"},
+		{"nearly", []app.OpView{{ID: "x", Kind: "add", ArchiveID: "a1", Done: 9999, Total: 10000}}, "Adding to Photos 2024 · 99%"},
+		{"large", []app.OpView{{ID: "x", Kind: "add", ArchiveID: "a1", Done: 1 << 62, Total: 1<<63 + 1<<62}}, "Adding to Photos 2024 · 33%"},
+		// An archive the status does not have open: the verb alone.
+		{"not opened", []app.OpView{{ID: "x", Kind: "extract", ArchiveID: "zz", Done: 1, Total: 2}}, "Extracting · 50%"},
+		{"no archive", []app.OpView{{ID: "x", Kind: "rotate", Done: 1, Total: 2}}, "Re-keying · 50%"},
+		{"an id in capitals", []app.OpView{{ID: "x", Kind: "add", ArchiveID: "A1", Done: 1, Total: 2}}, "Adding to Photos 2024 · 50%"},
+		{"unknown kind", []app.OpView{{ID: "x", Kind: "later", ArchiveID: "a1"}}, "Working on Photos 2024"},
+		// Several: the latest started, the finished not counted, a tie in
+		// the second to the greater id, whatever order the status lists.
+		{"several", []app.OpView{
+			{ID: "a", Kind: "extract", ArchiveID: "a1", StartedAt: 100, Done: 1, Total: 2},
+			{ID: "b", Kind: "compact", ArchiveID: "a2", StartedAt: 200, Done: 3, Total: 4},
+			{ID: "c", Kind: "add", ArchiveID: "a1", StartedAt: 300, Finished: true},
+			{ID: "d", Kind: "add", ArchiveID: "a1", StartedAt: 50},
+		}, "Compacting Taxes · 75% · +2 more"},
+		{"a tie", []app.OpView{
+			{ID: "b", Kind: "compact", ArchiveID: "a2", StartedAt: 200},
+			{ID: "a", Kind: "extract", ArchiveID: "a1", StartedAt: 200},
+		}, "Compacting Taxes · +1 more"},
+		{"a tie, the other order", []app.OpView{
+			{ID: "a", Kind: "extract", ArchiveID: "a1", StartedAt: 200},
+			{ID: "b", Kind: "compact", ArchiveID: "a2", StartedAt: 200},
+		}, "Compacting Taxes · +1 more"},
+	} {
+		st := app.VaultStatus{State: app.StateUnlocked, Opened: opened, OpenArchives: len(opened), Ops: c.ops}
+		if got := runningLine(st); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The tray learns of an operation from its progress, since its start emits
+// no status, and follows it between statuses; an end that has been seen is
+// never undone by a progress event that arrives after it. The status it is
+// given is not written to: it is the payload the page is sent too.
+func TestTheTrayFollowsAnOperation(t *testing.T) {
+	st := app.VaultStatus{Opened: []app.ArchiveRef{{ID: "a1", Name: "Photos 2024"}}, Ops: []app.OpView{{ID: "o0", Kind: "verify", Finished: true}}}
+	st = withOp(st, app.OpView{ID: "o1", Kind: "extract", ArchiveID: "a1", Done: 1, Total: 4})
+	if got, want := runningLine(st), "Extracting from Photos 2024 · 25%"; got != want {
+		t.Fatalf("learnt from progress: %q, want %q", got, want)
+	}
+	shared := st
+	st = withOp(st, app.OpView{ID: "o1", Kind: "extract", ArchiveID: "a1", Done: 3, Total: 4})
+	if got, want := runningLine(st), "Extracting from Photos 2024 · 75%"; got != want {
+		t.Fatalf("moved: %q, want %q", got, want)
+	}
+	if got, want := runningLine(shared), "Extracting from Photos 2024 · 25%"; got != want || len(st.Ops) != 2 {
+		t.Fatalf("the earlier status was written to (%q), or the op was added twice (%d)", got, len(st.Ops))
+	}
+	st = withOp(st, app.OpView{ID: "o1", Kind: "extract", ArchiveID: "a1", Done: 4, Total: 4, Finished: true})
+	if got := runningLine(st); got != "" {
+		t.Fatalf("ended: %q", got)
+	}
+	st = withOp(st, app.OpView{ID: "o1", Kind: "extract", ArchiveID: "a1", Done: 3, Total: 4})
+	if got := runningLine(st); got != "" {
+		t.Fatalf("a late progress event undid the end: %q", got)
+	}
+	// A status built before the end and delivered after it: the end the
+	// tray has seen stands, and the status the page is sent is not touched.
+	tr := &tray{ended: map[string]bool{}}
+	tr.endedIn(st)
+	late := app.VaultStatus{Opened: st.Opened, Ops: []app.OpView{{ID: "o1", Kind: "extract", ArchiveID: "a1", Done: 3, Total: 4}}}
+	if got := runningLine(tr.endedIn(late)); got != "" {
+		t.Fatalf("a late status undid the end: %q", got)
+	}
+	if late.Ops[0].Finished {
+		t.Fatal("the late status itself was written to")
+	}
+	fresh := app.VaultStatus{Opened: st.Opened, Ops: []app.OpView{{ID: "o2", Kind: "add", ArchiveID: "a1"}}}
+	if got, want := runningLine(tr.endedIn(fresh)), "Adding to Photos 2024"; got != want {
+		t.Fatalf("another operation: %q, want %q", got, want)
 	}
 }
 

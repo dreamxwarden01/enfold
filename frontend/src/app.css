@@ -7,6 +7,12 @@
   /* The stage: the lock screen's panel width and top, which the boot
      failure's panel shares (APP.md §6, §2.4). */
   --stage-w: 440px; --stage-top: 14vh;
+  /* The rail's two widths (APP.md §6, Rail; direction 6, ruled
+     2026-10-18): expanded at a window of 1008 px and more, the 48 px
+     compact rail of icons below it — 164 px given back to the layer.
+     .shell reads them under the one query (lib/rail.ts
+     RAIL_COMPACT_QUERY says the same width to Rail.svelte). */
+  --rail-w: 212px; --rail-w-compact: 48px;
   --ground: #f1f1f4;
   --layer: #fbfbfd;
   --ink: #191a1d;
@@ -125,6 +131,13 @@
   --s4: 16px;
   --s5: 20px;
   --s6: 24px;
+  /* A page of settings (direction 10, phase 4a): Settings and the Vault
+     page are one column at most 760 px wide; every control in a row is
+     220 px, so the controls' column is one straight edge whatever their
+     values; and a row's description wraps at 52 characters. */
+  --page-col: 760px;
+  --ctl-w: 220px;
+  --prose-w: 52ch;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -449,6 +462,49 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
 .menu button:hover, .ctxmenu button:hover { background: var(--fill-1); transition-duration: var(--dur-hover); }
 .menu button:active, .ctxmenu button:active { background: var(--accent-line); transition-duration: 0s; }
 .menu button .i, .ctxmenu button .i { color: var(--ink-3); }
+/* What a menu says, as menus say it everywhere (direction 3, phase 4a): a
+   separator between groups, a command's key at the item's right in the
+   caption's second ink, a tick before a setting that is on, the danger ink
+   for a command that destroys, and a greyed item in the disabled ink with
+   its reason as its title. A menu at the right of its bar opens on the
+   button's right edge; a long one scrolls inside its cap (the crumbs'
+   ellipsis menu, lib/crumbs.ts menuRows), its rows never squeezed. */
+.menu.end { left: auto; right: 0; }
+/* A menu drawn over the window (MenuButton float; direction 6), placed by
+   the script against its button: the same box, falling 4 px as it fades
+   in under the button, rising 4 px above it; still under reduced motion. */
+.menu.floating { position: fixed; top: 0; left: 0; right: auto; z-index: 15; animation: menu-drop var(--dur-fast) var(--ease-enter); }
+.menu.floating.up { animation-name: menu-rise; }
+@keyframes menu-drop { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes menu-rise { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .menu.floating { animation: none; }
+}
+.menu.scrolls { overflow-y: auto; overscroll-behavior: contain; }
+.menu > button { flex: none; }
+.menu .msep { flex: none; height: 1px; margin: var(--s1) calc(-1 * var(--s1)); background: var(--stroke); }
+.menu button .mlabel { flex: 1 1 auto; }
+.menu button .cut { flex: 1 1 auto; max-width: 240px; }
+.menu button .acc { margin-left: auto; padding-left: var(--s6); font: var(--t-cap); color: var(--ink-2); }
+.menu button .tick { visibility: hidden; color: var(--ink); }
+.menu button .tick.on { visibility: visible; }
+.menu button.danger, .menu button.danger .i { color: var(--danger); }
+.menu button[aria-disabled="true"], .menu button[aria-disabled="true"] .i { color: var(--ink-dis); }
+.menu button[aria-disabled="true"]:hover { background: none; }
+/* A greyed item's reason is its second line (direction 6; lib/menu.ts
+   secondLine): the caption in the second ink, which is still read, under
+   the greyed label, wrapping at the menu's own measure rather than
+   widening it. The item grows to the two lines and its marks stay on the
+   first. */
+.menu button.two { align-items: flex-start; padding-top: var(--s1); padding-bottom: var(--s1); }
+.menu button.two > .i { margin-top: 3px; }
+.menu button.two .mlabel { display: flex; flex-direction: column; min-width: 0; }
+.menu button .mwhy { font: var(--t-cap); color: var(--ink-2); white-space: normal; max-width: 248px; }
+.menu button.two .acc { margin-top: 2px; }
+/* An icon alone on a button (the toolbar's More, the crumbs' ellipsis):
+   square, the icon in the middle. */
+.btn.icon-only { width: 32px; padding: 0; justify-content: center; }
+.btn.sm.icon-only { width: 28px; }
 
 .input {
   height: 32px; padding: 0 var(--s3); width: 100%;
@@ -613,12 +669,13 @@ progress:indeterminate { background: var(--accent-line); }
 /* ---------- shell: rail + layer ---------------------------------------- */
 .stage { position: relative; height: 100%; }
 .scene { position: absolute; inset: 0; }
-.shell { display: grid; grid-template-columns: 212px 1fr; height: 100%; }
+.shell { display: grid; grid-template-columns: var(--rail-w) 1fr; height: 100%; }
+@media (width < 1008px) { .shell { grid-template-columns: var(--rail-w-compact) 1fr; } }
 /* The rail's padding and the brand's put the mark's middle on the item
    icons' line, give or take the item's border pixel (APP.md §6), and the
    first item stays where it stood: 12 + 8 + 20 + 12. The brand is the
    strong weight in the display face — a name, not a heading. */
-.rail { display: flex; flex-direction: column; padding: var(--s3) var(--s2); gap: 2px; min-width: 0; }
+.rail { position: relative; display: flex; flex-direction: column; padding: var(--s3) var(--s2); gap: 2px; min-width: 0; }
 .brand { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) var(--s3); font: var(--t-strong); font-family: var(--font-display); }
 .brand .mark { width: 20px; height: 20px; flex: none; }
 .rail-item {
@@ -663,6 +720,93 @@ progress:indeterminate { background: var(--accent-line); }
   transition: --pct var(--dur-fast) var(--ease-enter);
 }
 .rail-foot { padding: var(--s2) 0 0; border-top: 1px solid var(--stroke); margin-top: var(--s2); }
+/* The vault head (direction 10, ruled 2026-10-18): the vault's name in the
+   strong weight over its state in caption ink-2, a quiet button with the
+   rail item's own hover and press, its text on the items' label edge. It
+   is never drawn current: the Vault item below is. */
+.vault-head {
+  display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-width: 0;
+  padding: var(--s1) var(--s3); margin-bottom: var(--s2);
+  border: 1px solid transparent; border-radius: var(--r-ctl); background: none; color: var(--ink); text-align: left;
+  transition: background var(--dur-out) var(--ease-enter);
+}
+.vault-head .ellipsis { max-width: 100%; }
+.vault-head:hover { background: var(--fill-1); transition-duration: var(--dur-hover); }
+.vault-head:active { background: var(--fill-2); transition-duration: 0s; }
+.vault-word { font: var(--t-cap); color: var(--ink-2); }
+/* The open archive's row (direction 3, ruled 2026-10-18): indented under
+   Archives, 32 px tall, the archive glyph at 20 px, the name cut by an
+   ellipsis, a 20 px × at its right that leaves it. The row is the item —
+   hover, the current fill and the pill (centred on its 30 px inside) —
+   and holds two buttons, since a button cannot hold the ×. */
+.rail-child { height: 32px; padding: 0 var(--s1) 0 calc(var(--s3) + var(--s4)); gap: var(--s1); }
+.rail-child::before { top: 7px; }
+.rail-child.current { background: var(--fill-1); color: var(--ink); }
+.rail-child.current::before { transform: scaleY(1); }
+.rail-child.current .rail-go .i { color: var(--accent-ink); }
+.rail-go {
+  flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: var(--s2);
+  padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left;
+}
+.rail-x, .x20 {
+  width: 20px; height: 20px; flex: none; display: grid; place-items: center; padding: 0;
+  border: none; border-radius: var(--r-sm); background: none; color: var(--ink-3);
+  transition: background var(--dur-out) var(--ease-enter), color var(--dur-out) var(--ease-enter);
+}
+.rail-x:hover, .x20:hover { background: var(--fill-1); color: var(--ink); transition-duration: var(--dur-hover); }
+.rail-x:active, .x20:active { background: var(--fill-2); color: var(--ink-2); transition-duration: 0s; }
+/* The compact rail (direction 6): 48 px, everything on its middle line —
+   the toggle and the padlock as 32 px buttons, the brand mark alone, the
+   items 40 px wide with the app's tooltip for their labels, the op mark on
+   the Archives icon's top-right corner, the open archive's glyph indented
+   4 px under it. */
+.rail.compact { padding: var(--s2) var(--s1); align-items: center; }
+.rail.compact .brand { padding: var(--s2) 0; }
+.rail.compact .rail-item { width: 40px; padding: 0; justify-content: center; }
+.rail.compact .rail-child { padding-left: var(--s2); }
+.rail.compact .rail-foot { align-self: stretch; display: flex; justify-content: center; }
+.rail-btn {
+  width: 32px; height: 32px; flex: none; display: grid; place-items: center; padding: 0;
+  border: 1px solid transparent; border-radius: var(--r-ctl); background: none; color: var(--ink-2);
+  transition: background var(--dur-out) var(--ease-enter), color var(--dur-out) var(--ease-enter);
+}
+.rail-btn:hover { background: var(--fill-1); color: var(--ink); transition-duration: var(--dur-hover); }
+.rail-btn:active { background: var(--fill-2); color: var(--ink-2); transition-duration: 0s; }
+.rail-btn.vault-state { margin-bottom: var(--s2); }
+.rail-ico { position: relative; display: grid; place-items: center; }
+/* On the compact rail's 20 px icon the mark sits off its top-right corner,
+   not on it: the 14 px ring over the glyph's lid read as a clipped icon
+   (the final shoot of phase 4a), so the compact ring is 10 px, still 2 px
+   thick, and stands out past the corner by most of its size. */
+.rail.compact .rail-mark { right: -6px; top: -5px; margin-top: 0; width: 7px; height: 7px; }
+.rail.compact .rail-mark.ring { right: -9px; top: -8px; width: 10px; height: 10px; }
+/* The flyout the toggle opens (NavigationView's labels): the menu's
+   surface and shadow, to the right of the rail, holding the expanded
+   rail's rows — the vault head, the items, the open archives by name —
+   without the ×. Under the dialogs' smoke, over the layer. */
+.rail-fly {
+  position: absolute; top: var(--s2); left: calc(100% + var(--s1)); z-index: 15;
+  width: calc(var(--rail-w) - var(--s4)); display: flex; flex-direction: column; gap: 2px; padding: var(--s1);
+  background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card); box-shadow: var(--shadow-pop);
+}
+.rail.compact .rail-fly .rail-item { width: 100%; padding: 0 var(--s3); justify-content: flex-start; }
+.rail.compact .rail-fly .rail-child { padding-left: calc(var(--s3) + var(--s4)); gap: var(--s2); }
+.rail-fly .vault-head { margin-bottom: var(--s1); }
+.rail.compact .rail-fly .rail-foot { display: block; }
+/* The app's own tooltip (lib/tip.ts; APP.md §6, Controls; ruled
+   2026-10-18): a caption on the surface with the stroke and the pop
+   shadow, 4 px from its element, fading in over the fast duration —
+   which is 0 under reduced motion. It takes no pointer, so it never
+   stands between the pointer and what it names. */
+.app-tip {
+  position: fixed; z-index: 60; max-width: 320px; padding: var(--s1) var(--s2);
+  font: var(--t-cap); color: var(--ink); background: var(--surface);
+  border: 1px solid var(--stroke); border-radius: var(--r-ctl); box-shadow: var(--shadow-pop);
+  pointer-events: none; overflow-wrap: anywhere; user-select: none;
+  opacity: 0; transition: opacity var(--dur-fast) var(--ease-enter);
+}
+.app-tip.on { opacity: 1; }
+.app-tip[hidden] { display: none; }
 .layer {
   background: var(--layer); border-top: 1px solid var(--stroke); border-left: 1px solid var(--stroke);
   border-top-left-radius: var(--r-card); display: grid; grid-template-rows: 1fr auto; min-width: 0; overflow: hidden;
@@ -686,6 +830,12 @@ progress:indeterminate { background: var(--accent-line); }
   border-top: 1px solid var(--stroke); background: var(--ground); color: var(--ink-2); font: var(--t-cap);
 }
 .cmdbar { display: flex; align-items: center; gap: var(--s1); flex: none; flex-wrap: wrap; }
+/* The Archives page's bar is one line that never wraps (direction 6): what
+   has no room folds into its More instead (lib/cmdbar.ts), so it stays
+   the 40 px of its ruled height at every width. */
+.cmdbar.oneline { flex-wrap: nowrap; min-height: 40px; }
+.cmdbar.oneline > * { flex: none; }
+.cmdbar.oneline > .grow { flex: 1 1 0; }
 .lockchip { display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); font-variant-numeric: tabular-nums; }
 .lockchip .i { color: var(--accent-ink); }
 /* The foot's progress line (direction 4): 160 px and 3 px high, the
@@ -922,6 +1072,12 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
    box — the boxed bar is kept for the last try and the kept copy (the
    Smart Card service not running, a broken vault; ruled 2026-10-17). */
 .unlock .panel .infoline.att, .unlock .panel .infoline.att .i, .cer-panel .infoline.att, .cer-panel .infoline.att .i { color: var(--attention); }
+/* A file opened from Explorer waiting for the unlock (direction 3, phase
+   4a): the file's name in the ink, and the 20 px × that forgets it on the
+   line's middle. */
+.unlock .panel .infoline.pending-open { align-items: center; }
+.unlock .panel .infoline.pending-open .i { margin-top: 0; }
+.unlock .panel .infoline.pending-open strong { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 /* Words that cross-fade in one place: both in one cell, a gap apart. */
 .xf { display: grid; justify-items: center; width: 100%; }
 .xf > * { grid-area: 1 / 1; }
@@ -976,22 +1132,25 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 /* ---------- archives / archive / keys ---------------------------------------- */
 .arch-split { display: grid; grid-template-columns: 1fr 300px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); }
 .arch-list { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; min-height: 0; }
-/* The inspector's Status column (APP.md §13): one word per fact, and
-   nothing at all until a presence pass has measured the path — a blank
-   cell is what "not measured" looks like, never "missing". */
-.status-cell { display: flex; align-items: center; gap: var(--s1); min-width: 0; }
-.status-cell .st {
+/* The chips after an archive's name (APP.md §13; direction 6, which took
+   the Status column into them): one word per fact, and nothing at all
+   until a presence pass has measured the path — no chip is what "not
+   measured" looks like, never "missing". */
+.chips .st {
   display: inline-flex; align-items: center; height: 20px; padding: 0 var(--s2); flex: none;
   border-radius: var(--r-sm); border: 1px solid var(--stroke); background: var(--surface-alt);
   color: var(--ink-2); font: var(--t-cap); white-space: nowrap;
 }
-.status-cell .st.open { background: var(--accent-wash); border-color: var(--accent-line); color: var(--accent-ink); }
-.status-cell .st.missing { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger); }
-.status-cell .st.forgotten { background: var(--danger-wash); border-color: var(--danger-line); color: var(--ink-2); }
+.chips .st.open { background: var(--accent-wash); border-color: var(--accent-line); color: var(--accent-ink); }
+.chips .st.missing { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger); }
+.chips .st.forgotten { background: var(--danger-wash); border-color: var(--danger-line); color: var(--ink-2); }
 /* "hidden" is read, so it keeps the second ink (APP.md §6, Type and
    spacing); it is quieter than its neighbours by having no fill, only the
    outline, never by an ink under the 6:1 floor. */
-.status-cell .st.hidden { background: transparent; }
+.chips .st.hidden { background: transparent; }
+/* What runs on the archive — a compaction, a refresh, a re-key — in the
+   attention tone: the open chip's shape, not its accent. */
+.chips .st.compacting, .chips .st.refreshing, .chips .st.rekeying { background: var(--attention-wash); border-color: var(--attention-line); color: var(--attention); }
 /* A sortable header's caret: shown on the column that sorts, turned for
    ascending. No motion vocabulary of its own. */
 thead th button { display: inline-flex; align-items: center; gap: var(--s1); }
@@ -1005,6 +1164,8 @@ thead th.num .sorter { flex-direction: row-reverse; }
 /* The filter box sits in the command bar and is a plain field. */
 .filterbox { display: inline-flex; align-items: center; }
 .filterbox .input { width: 168px; height: 30px; }
+/* On the Archives bar the filter is 200 px (direction 6). */
+.cmdbar.oneline .filterbox .input { width: 200px; }
 /* No clear button: Chromium's is a blue X of its own, not a Windows one
    (APP.md §6, Controls; ruled 2026-10-17). Esc still clears the box. */
 .filterbox .input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
@@ -1066,23 +1227,46 @@ thead th.num .sorter { flex-direction: row-reverse; }
 .details-actions { padding: var(--s3) var(--s4) var(--s4); display: flex; flex-direction: column; gap: var(--s2); margin-top: auto; border-top: 1px solid var(--stroke); }
 .details-actions .row2 { display: flex; gap: var(--s2); }
 .details-actions .row2 .btn { flex: 1; justify-content: center; }
-/* The Archive page's heading (APP.md §6, ruled 2026-09-10): the archive's
-   name alone, a button to the root and a drop target; no folder crumb
-   after it — the list's own `..` row shows where the page stands. */
-/* No vertical padding: the button is exactly the title's line, so this
-   head is as tall as every other page's (.layer-head's min-height, above).
-   The side padding is given back by the heading, not the button (ruled
-   2026-10-17): a negative margin on the button took 16 px off the
-   heading's shrink-to-fit width, which the button's max-width then
-   capped it at, so "Photos 2024" read "Photos 2…" in an empty head. The
-   heading now measures the whole button and the name ellipsizes only
-   when the head is really full. */
-.head-name { background: none; border: none; padding: 0 var(--s2); margin: 0; border-radius: var(--r-sm); font: inherit; color: inherit; letter-spacing: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.layer-head .t-title:has(> .head-name) { margin: 0 calc(-1 * var(--s2)); }
-.head-name:hover { background: var(--fill-1); }
-.head-name.drop-into { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); }
-.layer-head .t-title { min-width: 0; }
-.file-split { display: grid; grid-template-columns: 1fr 264px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); }
+/* The Archive page's head is its path (direction 3, phase 4a; the user's
+   rulings of 2026-10-14, the fold rule of 2026-10-18; lib/crumbs.ts): the
+   crumbs at the title's size, the ancestors buttons in the second ink with
+   the rail item's hover fill, the folder shown in the ink, 12 px chevrons in
+   the third ink between them. Each crumb is cut at its cap — 240 px, the
+   root 320 — with an end ellipsis and the app's tooltip; what does not fit
+   folds into the 28 px ellipsis button after the root. The crumbs take
+   the head's room left of *Close* (flex-basis 0, so their width is the
+   room, never their content, which is what the fold measures), and give
+   back the crumb's 8 px of padding at the left so the root's text stands
+   on the page's edge. No vertical padding: a crumb is exactly the title's
+   line, so this head is as tall as every other page's. */
+.crumbs { position: relative; flex: 1 1 0; min-width: 0; margin-left: calc(-1 * var(--s2)); }
+.crumbline { display: flex; align-items: center; min-width: 0; }
+.crumb {
+  display: inline-flex; align-items: center; flex: none; min-width: 0; max-width: var(--crumb-cap); height: 28px;
+  padding: 0 var(--s2); margin: 0; border: none; border-radius: var(--r-sm); background: none;
+  font: inherit; letter-spacing: inherit; color: var(--ink-2); white-space: nowrap;
+  transition: background var(--dur-out) var(--ease-enter), color var(--dur-out) var(--ease-enter);
+}
+/* The caps come from lib/crumbs.ts (CRUMB_CAP, ROOT_CAP), set on the
+   Archive page's head as custom properties, so the fold's arithmetic and
+   the drawn crumbs never disagree. */
+.crumb.root { max-width: var(--crumb-root-cap); }
+button.crumb:hover { background: var(--fill-1); color: var(--ink); transition-duration: var(--dur-hover); }
+button.crumb:active { background: var(--fill-2); transition-duration: 0s; }
+/* The folder shown gives way last, when even the root and it alone do
+   not fit the head. */
+.crumb.here { color: var(--ink); flex: 0 1 auto; }
+/* A crumb as a Move target under a drag of the selection (APP.md §6). */
+.crumb.drop-into { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-line); color: var(--ink); }
+.crumb-sep { display: inline-flex; flex: none; justify-content: center; width: calc(12px + 2 * var(--s1)); color: var(--ink-3); }
+.crumb-sep .i { width: 12px; height: 12px; }
+.crumbline .menu-wrap { flex: none; }
+/* The unseen copy the fold measures: the same crumbs at their caps, laid
+   out on one line where nothing can see or reach them. */
+.crumb-measure { position: absolute; left: 0; top: 0; display: flex; align-items: center; width: max-content; visibility: hidden; pointer-events: none; }
+.file-split { display: grid; grid-template-columns: 1fr 264px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); container: files / inline-size; }
+/* View › Preview pane off (direction 3): the list takes the whole width. */
+.file-split.bare { grid-template-columns: minmax(0, 1fr); }
 .file-split.dropping .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
 /* A drag of the selection onto a folder row, onto `..` or onto the heading
    is a Move (APP.md §6) — since 2026-09-11 the native drag of the one
@@ -1104,12 +1288,16 @@ tbody tr.drop-into td:last-child { box-shadow: inset 0 1px 0 var(--accent-line),
    2026-10-17; the other cells were centred on the whole row, 8 px under
    the name): 8 above the 20 px name, which is what centring it in 36
    gives, and 2 more above a 16 px caption or box, so their middles meet
-   the name's. The row grows under the line: 36 px with one line, 52 with
-   a description. The icon is a 20 px box so it stays on that line too. */
-tbody tr.refused td, .arch-split tbody td, .arch-split tbody td.chk, tbody tr.refused td.chk { height: auto; padding-top: calc(var(--s2) + var(--s1) / 2); padding-bottom: var(--s2); vertical-align: top; }
-tbody tr.refused td.sel-mark, .arch-split tbody td.sel-mark, .arch-split tbody td:last-child { padding-top: var(--s2); }
-.arch-split tbody .fname { align-items: flex-start; }
-.arch-split tbody .fname > .i { height: 20px; }
+   the name's. The row grows under the line. The icon is a 20 px box so it
+   stays on that line too. */
+tbody tr.refused td, tbody tr.refused td.chk { height: auto; padding-top: calc(var(--s2) + var(--s1) / 2); padding-bottom: var(--s2); vertical-align: top; }
+tbody tr.refused td.sel-mark { padding-top: var(--s2); }
+/* The Archives list's rows (direction 6): always two lines, 52 px — 8 above
+   the 20 px name, its 16 px second line, 8 below — and every other cell on
+   the name's line, as above. The selection's pill keeps the row's middle. */
+.arch-split tbody td { height: 52px; box-sizing: border-box; padding-top: calc(var(--s2) + var(--s1) / 2); padding-bottom: var(--s2); vertical-align: top; }
+.arch-split tbody td.sel-mark { padding-top: var(--s2); }
+.arch-split tbody tr[aria-selected="true"] > td:first-child::before { top: 18px; }
 tbody tr.refused td.sel-mark { white-space: normal; overflow: visible; }
 /* The note starts under the name's first letter: past the 14 px icon and
    its 8 px gap. */
@@ -1167,20 +1355,40 @@ tbody tr.up .fname { color: var(--ink-2); }
 .tablewrap .list-tail { height: 36px; flex: none; }
 .tablewrap .empty + .list-tail { height: 0; }
 .preview { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); overflow: hidden; }
-.preview .art { height: 186px; flex: none; border-bottom: 1px solid var(--stroke); background: var(--surface-alt); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+/* The art takes the pane's height (direction 3): at least the 186 px it
+   had, and whatever the facts and the action leave, so text and images
+   use the pane. */
+.preview .art { flex: 1 1 auto; min-height: 186px; border-bottom: 1px solid var(--stroke); background: var(--surface-alt); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .preview .art img, .preview .art video { max-width: 100%; max-height: 100%; object-fit: contain; }
 .preview .art audio { width: 90%; }
 .preview .art pre { margin: 0; padding: var(--s2) var(--s3); width: 100%; height: 100%; overflow: auto; font: var(--t-cap); font-family: var(--font-mono); color: var(--ink-2); white-space: pre-wrap; user-select: text; text-align: left; }
-.preview .art .none { font: var(--t-cap); color: var(--ink-2); }
 .preview .pname { padding: var(--s3) var(--s4) 0; font: var(--t-strong); display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .preview .pname .i { color: var(--ink-3); }
 .preview .pname span { overflow-wrap: anywhere; }
 .preview-actions { margin-top: auto; padding: var(--s3) var(--s4) var(--s4); border-top: 1px solid var(--stroke); display: flex; gap: var(--s2); }
 .preview-actions .btn { flex: 1; justify-content: center; }
-/* The columns take their content's height and grow to fill, never shrink: a save bar that follows
-   them in flow must sit after the content, not after a squeezed box (APP.md §6, the save bar). */
-.ks-cols { display: grid; grid-template-columns: 1fr 316px; gap: var(--s5); flex: 1 0 auto; padding-bottom: var(--s3); }
-.ks-col { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+/* The pane at rest and with several selected (direction 3, lib/archpane.ts):
+   the folder or the count at the section's size, its figures in caption
+   under it, then the archive's facts under a stroke. */
+.pane-body { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); min-height: 0; overflow-y: auto; }
+.pane-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pane-head .t-section { overflow-wrap: anywhere; }
+.pane-facts { padding-top: var(--s3); border-top: 1px solid var(--stroke); }
+.pane-facts .hint { font: var(--t-cap); color: var(--ink-2); white-space: nowrap; }
+/* A folder, or a file the pane cannot show: its type's icon at 48 px in
+   the third ink, the name, and what is so in caption, centred; the facts
+   follow as for any file. The icon's stroke is thinned to the 16 px
+   icon's own weight. */
+.pane-none { display: flex; flex-direction: column; align-items: center; gap: var(--s2); padding: var(--s6) var(--s4) var(--s1); text-align: center; flex: none; }
+.pane-none .i-48 { width: 48px; height: 48px; color: var(--ink-3); stroke-width: 0.8; }
+.pane-none .name { overflow-wrap: anywhere; }
+/* An empty folder (direction 3): its name at the section's size, both ways
+   to fill it under it and the drop in caption, centred in what the list
+   leaves under its header and `..`. The whole list stays the drop target. */
+.tablewrap:has(> .empty-folder) { display: flex; flex-direction: column; }
+.empty-folder { flex: 1 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s3); padding: var(--s6) var(--s5); text-align: center; }
+.empty-folder .t-section { overflow-wrap: anywhere; }
+.empty-folder .row { justify-content: center; flex-wrap: wrap; }
 .ks-head { display: flex; align-items: baseline; gap: var(--s3); }
 .ks-head .t-quiet { margin-left: auto; }
 .slot { display: flex; align-items: flex-start; gap: var(--s3); padding: var(--s3) var(--s4); background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); text-align: left; width: 100%; }
@@ -1188,7 +1396,16 @@ tbody tr.up .fname { color: var(--ink-2); }
 .slot .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--s1); }
 .slot .body b { font: var(--t-strong); }
 .slot .body .meta { font: var(--t-cap); color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.slot[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-wash); }
+/* A card's own actions (direction 10, phase 4a): small standard buttons
+   at its right, shown on hover and while focus is inside the card, and
+   held while its dialog is up (.held). Hidden by opacity, not visibility,
+   so Tab still reaches them and shows them; where nothing hovers (a touch
+   screen) they always show. */
+.slot-acts { display: flex; gap: var(--s2); align-self: center; flex: none; opacity: 0; transition: opacity var(--dur-hover) var(--ease-enter); }
+.slot:hover .slot-acts, .slot:focus-within .slot-acts, .slot.held .slot-acts { opacity: 1; }
+@media (hover: none) {
+  .slot-acts { opacity: 1; }
+}
 .slot .warnline { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); padding: var(--s1) var(--s2); border-radius: var(--r-ctl); background: var(--attention-wash); border: 1px solid var(--attention-line); color: var(--ink); font: var(--t-cap); }
 .slot .warnline .i { color: var(--attention); }
 .rule { display: flex; align-items: center; gap: var(--s2); min-height: 20px; color: var(--ink-2); font: var(--t-cap); }
@@ -1204,9 +1421,24 @@ tbody tr.up .fname { color: var(--ink-2); }
    the second ink: 20 + 16, no gap. */
 .setrow .lab { display: flex; flex-direction: column; min-width: 0; flex: 1 1 180px; }
 .setrow .lab b { font: var(--t-strong); }
-.setrow .lab span { font: var(--t-cap); color: var(--ink-2); }
+.setrow .lab span { font: var(--t-cap); color: var(--ink-2); max-width: var(--prose-w); }
 .setrow .ctl { margin-left: auto; flex: none; }
-.setrow select.input { width: auto; min-width: 140px; }
+.setrow .ctl.row { display: flex; gap: var(--s2); }
+.setrow select.input { width: var(--ctl-w); }
+/* A choice that applies when it is made (direction 10, phase 4a): the
+   control, then the line a refusal leaves under it in the danger ink, in
+   the control column's 220 px. */
+.setrow .ctl.choice { display: flex; flex-direction: column; gap: var(--s1); width: var(--ctl-w); }
+.setrow .ctl.choice .field-error { margin-top: 0; }
+/* The select wears the pending ring while its choice is written
+   (lib/pending.ts): inside the box, before the chevron, so nothing
+   around it moves. */
+.selwrap { position: relative; display: block; }
+.selwrap.pending::before { position: absolute; z-index: 1; top: 50%; right: 32px; margin-top: -7px; pointer-events: none; }
+/* Radios for a choice of three (Settings' close action): one per line,
+   the label in the ink, 8 apart. */
+.radios { display: flex; flex-direction: column; gap: var(--s2); margin: 0; padding: 0; border: 0; }
+.radios .check { cursor: default; }
 .setrow input.input { width: 220px; }
 /* A field that cannot be edited now — a forgotten record's name, a locked
    vault's — reads as one, rather than as a field that swallows typing:
@@ -1218,42 +1450,70 @@ tbody tr.up .fname { color: var(--ink-2); }
    itself never goes below 880 × 560. The queries are the body's own width, not the window's;
    the body is also the box the Archives page's panel is positioned against (below). */
 .layer-body { container-type: inline-size; position: relative; }
-@container (max-width: 840px) {
-  .ks-cols { grid-template-columns: 1fr; }
-  /* The file table gives up Modified first, so the name always keeps room
-     (APP.md §6, the Archive page): the column goes to nothing and its
-     cells with it, rather than standing there empty. */
-  .file-split .w-date { width: 0; }
-  .file-split thead th:nth-child(5), .file-split tbody td:nth-child(5) { display: none; }
-  .file-split thead th .hidden-sort.k-modified { display: inline; }
-  /* The focus ring keeps its right edge where the column went (APP.md §7,
-     ruled 2026-09-12): the edge is the last cell still shown, not the
-     last child, which is now a cell nobody draws. So do the row's
-     rounded end and the header's padding over it (ruled 2026-10-17). */
-  .file-split tbody tr:focus-visible > td:nth-child(4) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
-  .file-split tbody td:nth-child(4) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
-  .file-split thead th:nth-child(4) { padding-right: calc(var(--s3) + var(--s1)); }
+/* The file table gives up Modified first, so the name always keeps room
+   (APP.md §6, the Archive page): the column goes to nothing and its cells
+   with it, rather than standing there empty. The rule is the list's own
+   width (direction 3, phase 4a): measured on the files' split, whose width
+   is the body's, so with the pane shown it folds where it always did —
+   the body at 840 px, the list at 560 — and with the pane hidden through
+   View the list folds at those same 560 px of its own, which is what lets
+   a 900 px window with the compact rail keep Modified.
+   The focus ring keeps its right edge where the column went (APP.md §7,
+   ruled 2026-09-12): the edge is the last cell still shown, not the last
+   child, which is now a cell nobody draws. So do the row's rounded end and
+   the header's padding over it (ruled 2026-10-17). */
+@container files (max-width: 840px) {
+  .file-split:not(.bare) .w-date { width: 0; }
+  .file-split:not(.bare) thead th:nth-child(5), .file-split:not(.bare) tbody td:nth-child(5) { display: none; }
+  .file-split:not(.bare) thead th .hidden-sort.k-modified { display: inline; }
+  .file-split:not(.bare) tbody tr:focus-visible > td:nth-child(4) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
+  .file-split:not(.bare) tbody td:nth-child(4) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
+  .file-split:not(.bare) thead th:nth-child(4) { padding-right: calc(var(--s3) + var(--s1)); }
+}
+@container files (max-width: 560px) {
+  .file-split.bare .w-date { width: 0; }
+  .file-split.bare thead th:nth-child(5), .file-split.bare tbody td:nth-child(5) { display: none; }
+  .file-split.bare thead th .hidden-sort.k-modified { display: inline; }
+  .file-split.bare tbody tr:focus-visible > td:nth-child(4) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
+  .file-split.bare tbody td:nth-child(4) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
+  .file-split.bare thead th:nth-child(4) { padding-right: calc(var(--s3) + var(--s1)); }
 }
 /* Then Type, at the width where the three fixed columns would leave the
-   name less than a name; Name and Size always. */
-@container (max-width: 700px) {
-  .file-split .w-type { width: 0; }
-  .file-split thead th:nth-child(4), .file-split tbody td:nth-child(4) { display: none; }
-  .file-split thead th .hidden-sort.k-type { display: inline; }
-  /* And again, Size being the last cell shown from here down. */
-  .file-split tbody tr:focus-visible > td:nth-child(3) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
-  .file-split tbody td:nth-child(3) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
-  .file-split thead th:nth-child(3) { padding-right: calc(var(--s3) + var(--s1)); }
+   name less than a name — the body at 700 px with the pane, the list at
+   420 — Size being the last cell shown from there down; Name and Size
+   always. */
+@container files (max-width: 700px) {
+  .file-split:not(.bare) .w-type { width: 0; }
+  .file-split:not(.bare) thead th:nth-child(4), .file-split:not(.bare) tbody td:nth-child(4) { display: none; }
+  .file-split:not(.bare) thead th .hidden-sort.k-type { display: inline; }
+  .file-split:not(.bare) tbody tr:focus-visible > td:nth-child(3) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
+  .file-split:not(.bare) tbody td:nth-child(3) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
+  .file-split:not(.bare) thead th:nth-child(3) { padding-right: calc(var(--s3) + var(--s1)); }
 }
-/* The details pane scrolls on its own, and its save bar is in flow at the
-   foot of that pane and sticky there: it can never cover the last field
-   for good (APP.md §6, the save bar). */
-.arch-split .details .savebar-wrap { position: sticky; bottom: var(--s3); margin: auto var(--s3) var(--s3); z-index: 3; }
+@container files (max-width: 420px) {
+  .file-split.bare .w-type { width: 0; }
+  .file-split.bare thead th:nth-child(4), .file-split.bare tbody td:nth-child(4) { display: none; }
+  .file-split.bare thead th .hidden-sort.k-type { display: inline; }
+  .file-split.bare tbody tr:focus-visible > td:nth-child(3) { box-shadow: inset 0 2px 0 var(--focus-row), inset 0 -2px 0 var(--focus-row), inset -2px 0 0 var(--focus-row); }
+  .file-split.bare tbody td:nth-child(3) { border-right: var(--s1) solid transparent; border-radius: 0 8px 8px 0 / 0 4px 4px 0; }
+  .file-split.bare thead th:nth-child(3) { padding-right: calc(var(--s3) + var(--s1)); }
+}
+/* The pane's save bar stands in flow right under the two fields it saves
+   (direction 6): never sticky over the actions, and wrapping inside the
+   pane's own measure rather than overflowing it (APP.md §6, the save bar). */
+.arch-split .details .savebar-wrap { position: static; margin: 0; }
+.arch-split .details .savebar { flex-wrap: wrap; justify-content: flex-start; }
+.arch-split .details .sb-left { flex-basis: 100%; }
 
 /* ---------- the Archives page's bottom panel (APP.md §6, refined 2026-09-12) ----------
-   Below a fixed 1120 px of body — the width at which the 300 px pane
-   begins to squeeze the Name column shorter than *Last saved*, so a
-   threshold and not a proportion — the details are one element at the
+   Below a fixed 872 px of body (re-measured for direction 6's three
+   columns, 2026-10-19: the 300 px pane and its 16 px gap, then Size's 88
+   and Last saved's 136, leave the Name column 330 px there — its insets,
+   the archive glyph, a name kept no shorter than the Last saved column,
+   and the widest chip a row carries, *Refreshing fingerprint* (133 px),
+   beside it, measured in the shot at 299 of its 302; it was
+   1120 px with the old six columns), so a threshold and not a
+   proportion — the details are one element at the
    foot of the body instead of a column beside the list: its header is
    the whole of it when collapsed (a line of 44 px) and stays fixed at
    its top when it is open, with the body scrolling under it. The list is
@@ -1264,9 +1524,14 @@ tbody tr.up .fname { color: var(--ink-2); }
    threshold: the header is a heading, the panel is the side pane. */
 .arch-split { --panel-line: 44px; --panel-head: 64px; --panel-foot: var(--s3); }
 .details-head .chev, .details-head .head-line { display: none; }
-/* With no row the side pane is the count alone, as it was; the panel
-   below the threshold always has its header, named or not. */
+/* With no row the side pane is the vault's summary (direction 6); the
+   panel below the threshold always has its header, named or not. */
 .details.no-row .details-head { display: none; }
+/* An empty vault has no pane at all (direction 6): the list takes the
+   width, at every width. */
+.arch-split.bare { grid-template-columns: minmax(0, 1fr); padding-bottom: var(--s3); }
+/* The panel's actions stand in its header row only below the threshold. */
+.details-head .head-acts { display: none; }
 /* The inner and the body are boxes the bottom panel needs and the side
    pane does not: above the threshold they are no boxes at all, so the
    pane lays its heading, facts and actions out exactly as it always did. */
@@ -1280,10 +1545,11 @@ tbody tr.up .fname { color: var(--ink-2); }
 /* The stylesheet owns the threshold and this is how the script reads its
    answer: no box at all above it, one pixel below it. */
 .arch-probe { position: absolute; width: 0; height: 0; pointer-events: none; }
-@container (max-width: 1119.98px) {
+@container (max-width: 871.98px) {
   /* The room the collapsed panel takes, and 12 px of air over it, so the
      list's card and the panel's do not touch. */
   .arch-split { grid-template-columns: 1fr; padding-bottom: calc(var(--panel-line) + var(--panel-foot) + var(--s3)); }
+  .arch-split.bare { padding-bottom: var(--s3); }
   .arch-probe { width: 1px; }
   /* The card is the only thing a frame of the motion touches, and only
      its height: the script writes that to this element's own style, never
@@ -1313,8 +1579,14 @@ tbody tr.up .fname { color: var(--ink-2); }
     position: relative; display: block; flex: none;
     height: var(--panel-head); padding: 0; border-bottom: 1px solid var(--stroke);
   }
-  /* The control's ring is drawn inside it: the panel clips its own box. */
-  .details-head:focus-visible { outline-offset: -2px; box-shadow: none; }
+  /* The control is the whole header under its actions (direction 6): the
+     actions are buttons of their own, so they stand over the control at
+     its right rather than inside it, and the two shapes stop short of
+     them (--acts, their width, set by the page). The control's ring is
+     drawn inside it: the panel clips its own box. */
+  .details-head .head-tap { position: absolute; inset: 0; }
+  .details-head .head-tap:focus-visible { outline-offset: -2px; box-shadow: none; }
+  .details-head .head-acts { display: flex; align-items: center; gap: var(--s2); position: absolute; right: 38px; top: var(--s2); z-index: 1; }
   /* The cross-fade is the script's, not a transition of its own: the two
      opacities are a function of the card's height, written from the same
      frame as the height and the scroll (APP.md §6, one frame clock), so a
@@ -1323,10 +1595,10 @@ tbody tr.up .fname { color: var(--ink-2); }
      card's, which is what the panel starts and ends at. */
   /* Both shapes start at the card's inset; the stack — a 16 px caption
      over a 22 px name — sits 12 px down the 64. */
-  .details-head .head-stack { position: absolute; left: var(--s4); right: 42px; top: var(--s3); opacity: 0; will-change: opacity; }
+  .details-head .head-stack { position: absolute; left: var(--s4); right: calc(42px + var(--acts, 0px)); top: var(--s3); opacity: 0; will-change: opacity; }
   .details-head .head-stack h3 { margin-top: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .details-head .head-line {
-    position: absolute; left: var(--s4); right: 38px; top: 0; height: var(--panel-line);
+    position: absolute; left: var(--s4); right: calc(38px + var(--acts, 0px)); top: 0; height: var(--panel-line);
     display: flex; align-items: center; gap: var(--s2); min-width: 0; will-change: opacity;
   }
   .details-head .head-line .eyebrow { flex: none; }
@@ -1338,7 +1610,10 @@ tbody tr.up .fname { color: var(--ink-2); }
      itself and lands where the class says whatever the motion did. */
   .details-head .chev { display: block; position: absolute; right: var(--s3); top: 15px; color: var(--ink-3); transition: transform var(--dur-move) var(--ease-enter); }
   .details-head .chev.up { transform: rotate(180deg); }
-  .details.no-row .head-line .eyebrow, .details.no-row .chev { opacity: 0.5; }
+  .details.no-row .head-line .eyebrow { opacity: 0.5; }
+  /* With nothing selected the line cannot open, so it offers no chevron
+     (ruled 2026-10-19): the summary alone, read as it stands. */
+  .details.no-row .chev { display: none; }
   /* The body scrolls under the header, which is outside its scroller, and
      takes the rest of the inner's fixed height. A collapsed panel clips
      it, and clipped is not gone: it is `inert` from the first frame of a
@@ -1349,12 +1624,21 @@ tbody tr.up .fname { color: var(--ink-2); }
     will-change: transform; visibility: hidden; transition: visibility 0s linear var(--dur-move);
   }
   .details.up .details-body { visibility: visible; transition: visibility 0s; }
+  /* The panel's body in two columns (direction 6): the facts as a kv grid,
+     and the file with the name and description — each value beside its
+     label rather than across a 900 px panel from it. */
+  .arch-split .details .pbody { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: var(--s3) var(--s6); }
+}
+/* Under about 520 px of body the panel's two columns become one. */
+@container (max-width: 519.98px) {
+  .arch-split .details .pbody { grid-template-columns: minmax(0, 1fr); }
 }
 @container (max-width: 470px) {
   .setrow { flex-direction: column; align-items: stretch; gap: var(--s2); }
   .setrow .lab { flex: none; }
   .setrow .ctl { margin-left: 0; }
   .setrow select.input, .setrow input.input { width: 100%; }
+  .setrow .ctl.choice { width: 100%; }
   .setrow .ctl.row { justify-content: space-between; }
   .setrow .ctl.row input[type="range"] { flex: 1; width: auto; }
 }

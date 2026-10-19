@@ -28,6 +28,7 @@ import { answer as answerDrag, baseName, beginFlight, land, ownDrop } from "./dr
 import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
 import type { Decision } from "./closing";
 import { droppedArchives } from "./archlist";
+import { toLeave } from "./leave";
 import { tamperedShown, tier } from "./notices";
 import { dialogIsUp } from "./dialogs";
 
@@ -113,9 +114,38 @@ class Store {
   chosenSent = $state("");
   ops = $state<Record<string, OpView>>({});
   archives = $state<ArchiveSummary[]>([]);
+  // filesCheck: what the last *Find missing files* pass of this unlock
+  // answered (APP.md §13), from either page that runs it; null until one
+  // has, and dropped whenever the vault leaves Unlocked, since the
+  // presence it measured is the session's and goes with it. The Vault
+  // page's "Archive files:" line claims "all present" only on its word
+  // (lib/vaultfiles.ts): a record no pass has measured carries no note,
+  // so an empty count of notes is not by itself a presence.
+  filesCheck = $state<{ probed: number; missing: number } | null>(null);
   showHidden = $state(false);
   route = $state<Route>("archives");
   current = $state<string | null>(null);
+  // The open archive the page let go of with its *Close* while something
+  // still read it (APP.md §2.3): the core lists it in VaultStatus.Opened
+  // until the last body or its own operation ends, and the page stands
+  // meanwhile with *Force close* in its head (ruled 2026-10-18). Nothing
+  // more is read of it — every page-facing method answers
+  // archive.not_open — and it is dropped once the status stops naming it.
+  draining = $state<string | null>(null);
+  // The same for an archive the page does not hold: one left by its rail
+  // row's × or the inspector's *Close* while a reader or an operation
+  // still held it. The inspector offers *Force close* for it and the rail
+  // row loses its ×, since a second Leave would do nothing (APP.md §2.3).
+  // Pruned as the status stops naming them.
+  lingering = $state<string[]>([]);
+  // Opens on their way to the core: while one travels, a list or a status
+  // read before it landed cannot say that the archive the page holds has
+  // closed (closedUnderUs).
+  private opensInFlight = 0;
+  private openGen = 0;
+  // Whether a status has named the page's archive since it became current:
+  // only then does a status that stops naming it mean it closed.
+  private seenOpened: string | null = null;
   stat = $state<ArchiveStat | null>(null);
   // The open archive's file path, from its registry row: ArchiveStat does
   // not carry one, and the extract dialog is prefilled from the archive's
@@ -206,6 +236,19 @@ class Store {
   // there, and the lock screen at rest takes this once and opens its
   // import dialog (takeReplaceAsked), as the Archive page takes addAsked.
   replaceAsked = $state(false);
+  // The Vault page's *Test that a backup opens…*: the file picked, for
+  // the lock screen to check once it is at rest (askTestBackup).
+  testAsked = $state("");
+  // The Archives page's summary's *Export…* (direction 6): the export is
+  // the Vault page's, where its ceremony and its receipt are drawn, so the
+  // summary goes there and the page takes this once and starts it
+  // (askExport, takeExportAsked).
+  exportAsked = $state(false);
+  // *Import archives from a backup…*'s merge dialog, by the file picked
+  // for it (direction 10, phase 4a): mounted above every route
+  // (App.svelte), so the Vault page opens it as the Archives page does. A
+  // lock closes it: the core drops the merge's handle with every held key.
+  merging = $state("");
   // A merge handle, the records it read and whether that file fails its
   // own slot-region hash, until MergeRecords consumes it, the dialog
   // discards it, or a lock trigger drops it.
@@ -238,6 +281,23 @@ class Store {
   // The request openWhenUnlocked belongs to: the unlock's retry is that
   // request's, and a newer one accepted meanwhile drops it.
   private openWhenUnlockedSeq = 0;
+  // The file opened from Explorer whose key was not in this vault, kept
+  // when its dialog's *Import archives from a backup…* was taken: once the
+  // merge that followed succeeds and its dialog closes, the file is opened
+  // again, so the file the user double-clicked ends up open (direction 3,
+  // phase 4a). A cancelled picker or merge, a lock and a newer open forget
+  // it.
+  private importFor = "";
+  // The archive opened last, per vault, for the life of the process
+  // (direction 3, phase 4a): the vault's path and the archive's id. It is
+  // memory only — never settings.json, never any file: a name is the
+  // registry's, and even an id points at one .efd, since the envelope's
+  // archive_id is readable without a key, so a file on disk would record
+  // which archive was used last. A vault of another path drops it.
+  private lastOpened = $state<{ vault: string; id: string } | null>(null);
+  // The Archives list's one ask after an unlock: select and focus the row
+  // of the archive opened last, so Enter opens it (takeFocusAsked).
+  focusArchiveAsked = $state<string | null>(null);
   settings = $state<SettingsView | null>(null);
   toasts = $state<Toast[]>([]);
   // The last ceremony that ended with something to say on the lock screen
@@ -305,6 +365,19 @@ class Store {
   private toastId = 0;
   private lastActivity = 0;
 
+  // remembered: the archive opened last in this vault, by id; empty when
+  // none was opened in this process or the vault is another one.
+  get remembered(): string {
+    const l = this.lastOpened;
+    return l && this.status && l.vault === this.status.path ? l.id : "";
+  }
+
+  // previewPane: the Archive page's View › Preview pane (Settings.previewPane,
+  // true until the settings are read and whenever they say nothing).
+  get previewPane(): boolean {
+    return this.settings?.previewPane ?? true;
+  }
+
   get unlocked(): boolean {
     return this.status?.state === VaultState.StateUnlocked;
   }
@@ -316,6 +389,25 @@ class Store {
   // banner stays until the vault is replaced or unlocks clean.
   get tampered(): boolean {
     return tamperedShown(this.status);
+  }
+
+  // vaultName is the vault's name as the user last gave it (direction 10;
+  // APP.md §3, Settings): the setting *Rename…* writes, then the status's.
+  // The core moves the status's name with the setting and emits it, so the
+  // two agree; the setting first only covers the moment between the write
+  // and that status. Empty when neither has one.
+  get vaultName(): string {
+    return this.settings?.displayName || this.status?.displayName || "";
+  }
+
+  // checkFiles is *Find missing files* (APP.md §13), the Vault page's
+  // alone since phase 4a: the core answers once its pass has ended, and the answer is
+  // kept for the Vault page's line (filesCheck) — only while the vault is
+  // still Unlocked, since a lock meanwhile ended the session it measured.
+  async checkFiles(): Promise<{ probed: number; missing: number }> {
+    const r = await Archives.CheckFiles();
+    if (this.unlocked) this.filesCheck = { probed: r.probed, missing: r.missing };
+    return r;
   }
 
   get runningOps(): OpView[] {
@@ -576,6 +668,7 @@ class Store {
     const seq = ++this.lastOpenSeq;
     this.keyNotInVault = null;
     this.openWhenUnlocked = "";
+    this.importFor = "";
     const rest = paths.slice(1);
     if (rest.length) this.toast(moreNotOpened(rest.map(baseName)));
     await this.queueOpen(paths[0], seq);
@@ -662,10 +755,9 @@ class Store {
     }
   }
 
-  // openForShell opens an archive Explorer named. An archive already on
-  // the page is left first, exactly as leaving its page leaves it (APP.md
-  // §2.3): a route change does that on its own, but opening one archive
-  // over another never changes route, so the old handle would stay
+  // openForShell opens an archive Explorer named. An archive already open
+  // is left first: opening another is one of the explicit leaves (APP.md
+  // §2.3, ruled 2026-10-18), and the old handle would otherwise stay
   // mounted with no page holding it (the review's finding 4). The same
   // archive again is not a leave: it is the page it is already on.
   //
@@ -713,9 +805,121 @@ class Store {
   // owns *Import records…*, so the ask is handed to it and the route
   // follows.
   askImportRecords(): void {
+    this.importFor = this.keyNotInVault ?? "";
     this.keyNotInVault = null;
     this.importRecordsAsked = true;
     this.go("archives");
+  }
+
+  // mergeDone is the merge dialog's success, said once the dialog has
+  // closed: the file opened from Explorer that led to the import is opened
+  // now, by the chain Explorer's double-click takes (direction 3, phase
+  // 4a). A merge begun by hand has no file, and does nothing more.
+  mergeDone(): void {
+    const path = this.importFor;
+    this.importFor = "";
+    if (path) void this.openFiles([path]);
+  }
+
+  // forgetImport: the picker or the merge dialog closed without a merge;
+  // the file waits for nothing any more.
+  forgetImport(): void {
+    this.importFor = "";
+  }
+
+  // forgetOpenWhenUnlocked is the lock screen's × on "Unlock to open …"
+  // (direction 3, phase 4a): the file is not opened by the unlock. The
+  // unlock itself, begun or not, is the user's to finish or cancel.
+  forgetOpenWhenUnlocked(): void {
+    this.openWhenUnlocked = "";
+    this.openWhenUnlockedSeq = 0;
+  }
+
+  // takeFocusAsked is the Archives list's one read of the ask: the id, once.
+  takeFocusAsked(): string | null {
+    const id = this.focusArchiveAsked;
+    this.focusArchiveAsked = null;
+    return id;
+  }
+
+  private remember(id: string): void {
+    const vault = this.status?.path ?? "";
+    if (vault) this.lastOpened = { vault, id };
+  }
+
+  // applySettings is the one write of a choice that applies the moment it
+  // is made, as Windows applies one (direction 10, phase 4a; APP.md §6).
+  // It echoes the struct the core just read, so the lock times ride back
+  // with the read's own timeoutsFromVault: a read taken while Locked
+  // carries false and zeros, and the core writes timeouts only from a
+  // struct that carries true (APP.md §3, Settings; ruled 2026-10-19) — a
+  // choice made here never needs to tell the two apart. It covers
+  // every Settings choice, the Vault page's lock times and its name, and
+  // View › Preview pane. Settings.Set takes the whole struct, so each
+  // write reads the settings first and changes only its own fields in
+  // them, and the writes go one after another on one chain: two quick
+  // choices — on one control, or on two pages — land in their order and
+  // neither puts the other's field back. What the page shows moves at
+  // once; once a write has settled the settings are read again with the
+  // choices still queued laid over them, so a refusal puts the old value
+  // back without a later choice flickering. A refusal is thrown to the
+  // caller, which says it where the choice was made.
+  private settingsChain: Promise<void> = Promise.resolve();
+  private settingsQueued: Partial<SettingsView>[] = [];
+
+  applySettings(patch: Partial<SettingsView>): Promise<void> {
+    if (this.settings) this.settings = { ...this.settings, ...patch };
+    this.settingsQueued.push(patch);
+    const run = this.settingsChain.then(async () => {
+      try {
+        const now = await Settings.Get();
+        await Settings.Set({ ...now, ...patch });
+      } finally {
+        this.settingsQueued.shift();
+        try {
+          const read = await Settings.Get();
+          this.settings = Object.assign({ ...read }, ...this.settingsQueued);
+        } catch {
+          /* what is shown stands until the next read */
+        }
+      }
+    });
+    this.settingsChain = run.catch(() => {});
+    return run;
+  }
+
+  // choose is a control's choice through applySettings (direction 10,
+  // phase 4a): the control wears the pending ring while its write is
+  // under way (choosing, read by lib/pending.ts) and, refused, the
+  // code's line under it (choiceRefused) with the old value back. No
+  // toast on success: a choice that applied is its own confirmation
+  // (DECISIONS 2026-09-07). A refusal is said only for the latest choice
+  // of that control, so an older one refused cannot stand under a newer
+  // one that applied.
+  choosing = $state<Partial<Record<keyof SettingsView, Promise<void>>>>({});
+  choiceRefused = $state<Partial<Record<keyof SettingsView, string>>>({});
+
+  choose<K extends keyof SettingsView>(key: K, value: SettingsView[K]): Promise<void> {
+    delete this.choiceRefused[key];
+    const p: Promise<void> = this.applySettings({ [key]: value } as Partial<SettingsView>).then(
+      () => {
+        if (this.choosing[key] === p) delete this.choosing[key];
+      },
+      (e) => {
+        if (this.choosing[key] !== p) return;
+        delete this.choosing[key];
+        this.choiceRefused[key] = codeText(errorOf(e).code);
+      },
+    );
+    this.choosing[key] = p;
+    return p;
+  }
+
+  // setPreviewPane is View › Preview pane and Alt+P (direction 3, phase
+  // 4a): a choice applied at once through applySettings; the Archive page
+  // has no line under its menu, so a refusal is a toast.
+  setPreviewPane(on: boolean): Promise<void> {
+    return this.applySettings({ previewPane: on }).catch((e) => this.toast(codeText(errorOf(e).code), "error"));
   }
 
   private applyStatus(s: VaultStatus, snapshot = false): void {
@@ -724,8 +928,27 @@ class Store {
     // seq 0).
     if (s.seq < this.seq || (s.seq === this.seq && !snapshot)) return;
     const before = this.status?.state;
+    const prior = this.status;
     this.seq = s.seq;
     this.status = s;
+    // A vault file opened anew (a switch, an import, a create) carries the
+    // name the core just wrote into the settings with its path: the
+    // settings are read again, so vaultName, which reads them first, never
+    // shows the name of the vault before.
+    if (prior && (prior.path !== s.path || prior.displayName !== s.displayName)) void this.refreshSettings();
+    // The archive remembered is this vault's: another vault — another
+    // path, or none — drops it (direction 3, phase 4a).
+    if (this.lastOpened && this.lastOpened.vault !== s.path) this.lastOpened = null;
+    // An archive left while something still read it is gone once the
+    // status no longer names it (APP.md §2.3): its page goes with it.
+    const named = (s.opened ?? []).map((a) => a.id);
+    if (this.draining && !named.includes(this.draining)) this.drained();
+    if (this.lingering.some((x) => !named.includes(x))) this.lingering = this.lingering.filter((x) => named.includes(x));
+    // The page's archive closed by an act outside the store — the
+    // inspector's kill switch, say — is gone too, once a status that had
+    // named it stops naming it (the review of 2026-10-18).
+    if (this.current && named.includes(this.current)) this.seenOpened = this.current;
+    else if (this.current && this.seenOpened === this.current) this.closedUnderUs(this.current);
     // A status accepted after the first call failed is the evidence the
     // gate waited for, so it opens on it (APP.md §2.4, ruled 2026-10-18; it
     // cleared the failure and left the gate shut: a bare splash, no Retry).
@@ -771,6 +994,9 @@ class Store {
       // backups card).
       this.backup = null;
       this.backupRead++; // and a read still in flight is not believed
+      // So with the last Find missing files' answer: the presence it
+      // measured was this session's (filesCheck).
+      this.filesCheck = null;
       // The unlock's full stop (APP.md §6, Motion): the lock screen keeps
       // showing the ceremony's last frame for the settle after the state
       // says Unlocked — the Done event lands a few milliseconds after the
@@ -791,6 +1017,11 @@ class Store {
         void this.refreshSettings();
         if (this.stat) void this.refreshArchive(); // the receipt it owed is paid
         if (this.route === "lock") this.setRoute(this.current ? "archive" : "archives");
+        // Back on the list with nothing open, the archive opened last is
+        // the likely next one: its row is selected and focused, so Enter
+        // opens it (direction 3, phase 4a) — unless Explorer's file is
+        // about to be opened instead.
+        this.focusArchiveAsked = !this.current && !this.openWhenUnlocked && this.route === "archives" && this.remembered ? this.remembered : null;
         // The file Explorer handed over while the vault was locked
         // (APP.md §14): the unlock has landed, so the open is finished
         // now — once, whatever that attempt answers.
@@ -813,6 +1044,9 @@ class Store {
         // of the registry stands behind (APP.md §6).
         this.recordDraft = {};
         this.merge = null; // the core dropped the handle with every held key
+        this.merging = ""; // and the dialog that held it closes
+        this.importFor = ""; // and the merge that would have reopened the file with it
+        this.focusArchiveAsked = null;
         if (before === VaultState.StateUnlocked) {
           void this.refreshArchives();
           if (this.stat) void this.refreshArchive();
@@ -938,10 +1172,25 @@ class Store {
   }
 
   async refreshArchives(): Promise<void> {
+    const cur = this.current;
+    const gen = this.openGen;
     try {
       this.archives = (await Archives.List(this.showHidden)) ?? [];
       const here = this.current ? this.archives.find((a) => a.id === this.current) : undefined;
       if (here) this.currentPath = here.path;
+      // The list says an archive is closed as soon as the core does
+      // (archives.changed), which may be before a status says so: the
+      // drain is over, or the page's archive was closed outside the store,
+      // and the status is read for the rail's rows. Only a list asked for
+      // after the last open landed can say so (closedUnderUs).
+      if (here && !here.open && here.id === cur && gen === this.openGen && this.opensInFlight === 0) {
+        this.closedUnderUs(here.id);
+        void this.readStatus();
+      }
+      if (this.lingering.length && gen === this.openGen) {
+        const shut = new Set(this.archives.filter((a) => !a.open).map((a) => a.id));
+        if (this.lingering.some((x) => shut.has(x))) this.lingering = this.lingering.filter((x) => !shut.has(x));
+      }
     } catch (e) {
       const code = errorOf(e).code;
       if (code !== "vault.needs_unlock" && code !== "vault.none") this.toast(codeText(code), "error");
@@ -1022,12 +1271,69 @@ class Store {
     return asked;
   }
 
-  // closeOpened is the locked banners' and the lock screen's close
-  // (direction 9): one archive by its id — the kill switch, Archives.Close
-  // — or every open one (Archives.CloseAll). The archive page that showed
-  // one closed here has nothing left to show, so it is dropped as closed;
-  // an archive CloseAll could not close (one being compacted holds its
-  // handle) is said.
+  // askTestBackup is the Vault page's *Test that a backup opens…*
+  // (direction 10, phase 4a): the check opens the file on a copy, and the
+  // core runs it only while the vault is Locked (APP.md §2.1), so the
+  // page picks the file first, then the vault is locked and the path is
+  // handed to the lock screen, which at rest takes it once and starts the
+  // check on its stage (takeTestAsked) — as askReplaceVault hands the
+  // replace. A route that leaves the lock screen withdraws it (setRoute).
+  async askTestBackup(path: string): Promise<void> {
+    if (!path) return;
+    this.testAsked = path;
+    if (this.unlocked) {
+      try {
+        await Vault.Lock();
+      } catch (e) {
+        this.testAsked = "";
+        this.toast(codeText(errorOf(e).code), "error");
+        return;
+      }
+    }
+    this.go("lock");
+  }
+
+  // askExport is the Archives page's summary's *Export…*: to the Vault
+  // page, which starts its *Export backup…* once it is shown
+  // (takeExportAsked). A route that leaves the Vault page first
+  // withdraws it (setRoute), so no picker opens later unasked.
+  askExport(): void {
+    this.exportAsked = true;
+    this.go("keys");
+  }
+
+  // takeExportAsked is the Vault page's one read of exportAsked.
+  takeExportAsked(): boolean {
+    const asked = this.exportAsked;
+    if (asked) this.exportAsked = false;
+    return asked;
+  }
+
+  // takeTestAsked is the lock screen's one read of testAsked: the path,
+  // once.
+  takeTestAsked(): string {
+    const path = this.testAsked;
+    if (path) this.testAsked = "";
+    return path;
+  }
+
+  // leaveOpened is the *Close* of the Archives page's locked line, the
+  // lock screen's archives-open notice and the Archive page's
+  // archive.needs_reopen bar (APP.md §2.3, ruled 2026-10-19: one meaning
+  // for Close): the graceful leave of each archive named that a leave has
+  // not already left (lib/leave.ts). One still held after it is named
+  // draining or lingering, and the same button then reads *Force close*,
+  // which is closeOpened.
+  async leaveOpened(ids: readonly string[]): Promise<void> {
+    for (const id of toLeave(ids, (x) => this.leftHeld(x))) await this.closeArchive(id);
+  }
+
+  // closeOpened is the kill switch of those same three buttons and of the
+  // Archives page's *More* (*Force close*, *Force close all*; APP.md §2.3):
+  // one archive by its id — Archives.Close — or every open one
+  // (Archives.CloseAll). The archive page that showed one closed here has
+  // nothing left to show, so it is dropped as closed; an archive CloseAll
+  // could not close (one being compacted holds its handle) is said.
   async closeOpened(id?: string): Promise<void> {
     let kept: string[] = [];
     try {
@@ -1038,6 +1344,7 @@ class Store {
       return;
     }
     if (kept.length) this.toast(codeText(Code.CodeArchiveCompacting), "error");
+    this.lingering = id ? this.lingering.filter((x) => x !== id) : this.lingering.filter((x) => kept.includes(x));
     if (this.current && (id ? id === this.current : !kept.includes(this.current))) this.leaveArchive(true);
     await this.refreshArchives();
   }
@@ -1075,7 +1382,11 @@ class Store {
 
   async refreshSettings(): Promise<void> {
     try {
-      this.settings = await Settings.Get();
+      // A choice still on its way to the core stays shown over the read
+      // (applySettings), so a refresh landing between a choice and its
+      // write does not flick the control back.
+      const read = await Settings.Get();
+      this.settings = Object.assign({ ...read }, ...this.settingsQueued);
     } catch {
       /* the defaults stand */
     }
@@ -1115,15 +1426,40 @@ class Store {
   // land its stat, its route or its toast over the request that overtook
   // it (APP.md §14, the second review's finding 3). The mount it was
   // given goes back, since no page is going to show it.
+  //
+  // Leaving is explicit (APP.md §2.3, ruled 2026-10-18), so the archive
+  // already open is simply shown again — its row's Open, its rail row,
+  // Explorer naming it again — in the folder, sort and selection it was
+  // left in; one draining after its *Close* is mounted again and carries
+  // on where it stood. Another archive is opened over it only once the
+  // core has mounted the new one, and the old one is then left — waited
+  // for, so that A → B → A cannot have the leave of A land after A was
+  // opened again (the second review's finding 4).
   async openArchive(id: string, fresh?: () => boolean): Promise<boolean> {
+    // The shortcut asks the list too: an archive the list says is closed
+    // goes through Open, which joins a handle the core still holds and
+    // mounts one it does not (the review of 2026-10-18: a kill switch
+    // outside the store left a page to show for a closed handle).
+    if (id === this.current && this.draining !== id && this.archives.find((a) => a.id === id)?.open !== false) {
+      if (fresh && !fresh()) return false;
+      this.remember(id);
+      this.show();
+      return true;
+    }
     let stat: ArchiveStat;
+    this.opensInFlight++;
+    this.openGen++;
     try {
       stat = await Archives.Open(id);
     } catch (e) {
       if (fresh && !fresh()) return false;
       this.toast(codeText(errorOf(e).code), "error");
       return false;
+    } finally {
+      this.opensInFlight--;
+      this.openGen++;
     }
+    if (this.lingering.includes(id)) this.lingering = this.lingering.filter((x) => x !== id);
     if (fresh && !fresh()) {
       // Waited for, not fired off (the third review's finding 3): the
       // shell's opens run one after another, and a chain that advanced
@@ -1134,8 +1470,31 @@ class Store {
       if (id !== this.current) await this.releaseMount(id);
       return false;
     }
+    this.remember(id);
+    if (id === this.current) {
+      this.draining = null;
+      this.stat = stat;
+      this.show();
+      return true;
+    }
+    const prev = this.current;
+    if (prev) {
+      try {
+        await Archives.Leave(prev);
+      } catch {
+        /* an archive cannot fail to be left */
+      }
+      if (fresh && !fresh()) {
+        if (id !== this.current) await this.releaseMount(id);
+        return false;
+      }
+      if (this.current === prev) void this.dropArchive(true);
+      void this.refreshArchives();
+      void this.readStatus();
+    }
     this.stat = stat;
     this.current = id;
+    this.seenOpened = null;
     this.currentPath = this.archives.find((a) => a.id === id)?.path ?? "";
     this.dirId = ROOT_ID;
     this.page = null;
@@ -1144,6 +1503,11 @@ class Store {
     this.sel = emptySelection();
     this.focusAfter = null;
     this.setRoute("archive");
+    // The list is read again for the row's open: the archive now stays
+    // open while the list shows (APP.md §2.3, ruled 2026-10-18), and its
+    // row and inspector say so — *Close* is there — whether or not the
+    // core's archives.changed has arrived yet.
+    void this.refreshArchives();
     await this.loadPage();
     return true;
   }
@@ -1178,7 +1542,9 @@ class Store {
   // review's finding 9).
   async refreshArchive(): Promise<void> {
     const id = this.current;
-    if (!id || id === this.releasedForDelete) return; // let go of, its dialog still up
+    // Let go of, its dialog still up; or draining, when every read answers
+    // archive.not_open and would drop the page that holds Force close.
+    if (!id || id === this.releasedForDelete || id === this.draining) return;
     const t = ++this.statToken;
     try {
       const stat = await Archive.Stat(id);
@@ -1346,8 +1712,12 @@ class Store {
   // enterDir shows one directory of the open archive, by id; the name is
   // what the row said, for the message a folder that went leaves behind.
   // Entering a folder clears the selection and the anchor (APP.md §6).
-  async enterDir(dirId: string, name = ""): Promise<void> {
-    await this.navigate(dirId, name, null);
+  //
+  // A crumb going up the path names the folder it came through, which is
+  // selected and focused once its row is on screen, as `..` does (the
+  // head's crumbs, direction 3).
+  async enterDir(dirId: string, name = "", focusAfter: string | null = null): Promise<void> {
+    await this.navigate(dirId, name, focusAfter);
   }
 
   // goUp is the `..` row: one level up, and once the row of the folder
@@ -1490,6 +1860,8 @@ class Store {
   private dropArchive(closed: boolean): Promise<void> {
     const id = this.current;
     this.current = null;
+    this.seenOpened = null;
+    this.draining = null;
     this.releasedForDelete = null;
     this.stat = null;
     this.currentPath = "";
@@ -1520,12 +1892,27 @@ class Store {
     // §14, leaveForShell).
     if (id && !closed) {
       return Archives.Leave(id)
-        .then(() => this.refreshArchives())
+        .then(() => {
+          void this.readStatus();
+          return this.refreshArchives();
+        })
         .catch(() => {
           /* a page cannot fail to be left */
         });
     }
     return Promise.resolve();
+  }
+
+  // readStatus reads the status after a leave: the rail's rows are the
+  // archives it names (VaultStatus.Opened), and a leave that closed one is
+  // seen at once rather than at the core's next word.
+  private async readStatus(): Promise<void> {
+    try {
+      const st = await Vault.Status();
+      if (st) this.applyStatus(st, true);
+    } catch {
+      /* the next status says it */
+    }
   }
 
   leaveArchive(closed = false): void {
@@ -1534,7 +1921,80 @@ class Store {
   }
 
   go(route: Route): void {
-    this.setRoute(route);
+    if (route === "archive" && this.current) this.show();
+    else this.setRoute(route);
+  }
+
+  // show puts the open archive's page back (APP.md §2.3, ruled
+  // 2026-10-18): the store kept its folder, its sort and its selection
+  // while another page was up, and the core is asked for that folder
+  // again — what changed meanwhile lands, the selection keeps the ids that
+  // still exist — rather than starting from the root.
+  private show(): void {
+    const away = this.route !== "archive";
+    this.setRoute("archive");
+    if (away) void this.refreshArchive();
+  }
+
+  // closeArchive is the graceful leave asked for by name (APP.md §2.3,
+  // ruled 2026-10-18): the rail row's × and the Archive page's *Close*.
+  // Archives.Leave, then the status: an archive the core still names is
+  // draining — a preview body still served, or its own operation still
+  // running — and its page, when it is the one the store holds, stands
+  // with *Force close* until the status stops naming it. Anything else is
+  // gone, and the page goes back to the list.
+  async closeArchive(id: string): Promise<void> {
+    try {
+      await Archives.Leave(id);
+    } catch (e) {
+      this.toast(codeText(errorOf(e).code), "error");
+      return;
+    }
+    let still = false;
+    try {
+      const st = await Vault.Status();
+      still = (st.opened ?? []).some((a) => a.id === id);
+      this.applyStatus(st, true);
+    } catch {
+      /* unread: taken as closed, and the next status says otherwise */
+    }
+    if (id === this.current) {
+      if (still) this.draining = id;
+      else this.leaveArchive(true);
+    } else if (still && !this.lingering.includes(id)) {
+      this.lingering = [...this.lingering, id];
+    }
+    void this.refreshArchives();
+  }
+
+  // leftHeld: an archive a *Close* has left that something still holds —
+  // the page's own, draining, or another, lingering. Its kill switch is
+  // *Force close*, and its rail row has no × (APP.md §2.3).
+  leftHeld(id: string): boolean {
+    return this.draining === id || this.lingering.includes(id);
+  }
+
+  // drained ends the wait of a *Close* once the core no longer holds the
+  // archive: the page that stood for it goes too.
+  private drained(): void {
+    const id = this.draining;
+    this.draining = null;
+    if (id && id === this.current) this.leaveArchive(true);
+  }
+
+  // closedUnderUs drops the page's archive once the core has closed it by
+  // an act that did not go through the store (the review of 2026-10-18):
+  // left standing, the rail kept a row for a closed handle and an Open of
+  // it showed a page whose first read bounced back to the list. One let go
+  // of by its Delete archive… dialog stays until the dialog ends, and an
+  // open still travelling is not contradicted.
+  private closedUnderUs(id: string): void {
+    if (id !== this.current || id === this.releasedForDelete || this.opensInFlight > 0) return;
+    if (this.draining === id) {
+      this.drained();
+      return;
+    }
+    this.leaveArchive(true);
   }
 
   // settingsLocked: Settings was opened from the lock scene's gear, which
@@ -1568,11 +2028,6 @@ class Store {
     })();
   }
 
-  // settingsDraft holds the settings page's staged edits, key by key, so
-  // that they survive a visit to another page; the page diffs it against
-  // the saved settings (APP.md §6, the save bar).
-  settingsDraft = $state<Record<string, unknown>>({});
-
   // footNote is what the layer's foot says on the left: the page sets it
   // (APP.md §6).
   footNote = $state("");
@@ -1586,19 +2041,26 @@ class Store {
   // transition (APP.md §6): 1 into an archive, -1 back out, 0 sideways.
   nav = $state(0);
 
-  // Any route change away from the archive's page is leaving it, and the
-  // archive is left (APP.md §2.3): the rail, the breadcrumb's *Archives*,
-  // a *Delete archive…*. The lock screen is the one exception — it is a
-  // scene over the same page, `current` is kept and the unlock comes
-  // straight back to it (applyStatus), so the page was never left.
+  // A route change leaves nothing (APP.md §2.3, ruled 2026-10-18; it used
+  // to leave the archive, which made a glance at Settings close it): the
+  // archive stays open and mounted in the core, `current` and its folder,
+  // sort and selection are kept, and the rail names it on every page. It
+  // is left only by an explicit act — its rail row's ×, the head's
+  // *Close*, opening another, *Delete archive…* — or by the window
+  // closing (the shell's LeaveAll).
   private setRoute(route: Route): void {
     const from = this.route;
-    if (from === "archive" && route !== "archive" && route !== "lock" && this.current) void this.dropArchive(false);
     if (route !== "settings") this.settingsLocked = false;
     // The Tampered banner's ask is the lock screen's to take; a route
     // that leaves it (an unlock, the rail) withdraws it, so the import
     // never opens later unasked.
     if (route !== "lock") this.replaceAsked = false;
+    // The same for the Vault page's test of a backup (askTestBackup).
+    if (route !== "lock") this.testAsked = "";
+    // And for the summary's export, the Vault page's to take.
+    if (route !== "keys") this.exportAsked = false;
+    // A refusal said under a control belongs to the page it was said on.
+    if (route !== from) this.choiceRefused = {};
     this.nav = from === "archives" && route === "archive" ? 1 : from === "archive" && route === "archives" ? -1 : 0;
     this.route = route;
   }

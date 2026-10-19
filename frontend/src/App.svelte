@@ -15,6 +15,7 @@
   import OpenKeyDialog from "./components/OpenKeyDialog.svelte";
   import LayerFoot from "./components/LayerFoot.svelte";
   import ResultsDialog from "./components/ResultsDialog.svelte";
+  import MergeDialog from "./components/MergeDialog.svelte";
   import { fade, fly } from "svelte/transition";
   import { motion, delay, enter, GAP, OUT, MOVE } from "./lib/motion";
 
@@ -148,7 +149,7 @@
 
 {#if reveal}
   {#key reveal}
-    <RecoveryReveal url={reveal} kind={store.ceremony?.kind ?? ""} vaultName={store.status?.displayName ?? ""} recoveryId={store.ceremony?.recoveryId ?? ""} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
+    <RecoveryReveal url={reveal} kind={store.ceremony?.kind ?? ""} vaultName={store.vaultName} recoveryId={store.ceremony?.recoveryId ?? ""} ondone={() => { store.dismissReveal(reveal); void store.refreshSlots(); }} />
   {/key}
 {/if}
 
@@ -173,6 +174,15 @@
      the archive's page asks first. -->
 {#if store.results && !store.conflictQuestion && !store.refusedQuestion}
   <ResultsDialog op={store.results} onclose={() => (store.results = null)} />
+{/if}
+
+<!-- *Import archives from a backup…* (APP.md §13): above every route,
+     since the Vault page and the Archives page both open it (direction 10,
+     phase 4a; store.merging). Closed after a merge, the store has already
+     opened the file that led here, if one did (store.mergeDone); closed
+     without one, it forgets it. A lock closes it with the merge's handle. -->
+{#if store.merging}
+  <MergeDialog path={store.merging} onclose={() => { store.merging = ""; store.forgetImport(); }} />
 {/if}
 
 <Toasts />

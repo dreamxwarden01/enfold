@@ -8,6 +8,15 @@
   // swaps the label and disables both; success and failure are the
   // page's toast, not the bar's. Dirty is the caller's, derived by
   // diffing, never stored.
+  //
+  // The bar's one job (direction 10, phase 4a; DECISIONS 2026-09-07): a
+  // choice applies when it is made; text that can be wrong in between is
+  // saved by the bar. So the bar stands where several text fields are
+  // edited together and saved at once — the archive's name and
+  // description on the Archives page — and nowhere else: Settings and
+  // the Vault page are made of choices, which apply at once
+  // (store.choose), and the vault's name has its own one-field dialog
+  // (RenameVaultDialog).
   import { fade, fly, scale } from "svelte/transition";
   import { motion, enter, exit, FAST, LEAVE } from "../lib/motion";
   import { pending } from "../lib/pending";

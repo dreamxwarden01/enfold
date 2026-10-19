@@ -65,6 +65,7 @@ export type Intent =
   | { kind: "openFile" }
   | { kind: "filter" }
   | { kind: "lock" }
+  | { kind: "previewPane" }
   | { kind: "typeahead"; char: string }
   | { kind: "none" };
 
@@ -158,6 +159,9 @@ export function intent(k: KeyIn, ctx: KeyCtx): Intent {
     return NONE;
   }
   if (k.ctrl && k.shift && !k.alt && letter === "n") return files ? { kind: "newFolder" } : NONE;
+  // Alt+P shows or hides the Archive page's preview pane, as in Explorer
+  // (direction 3, phase 4a; the View menu's *Preview pane*).
+  if (k.alt && !k.ctrl && !k.shift && letter === "p") return files ? { kind: "previewPane" } : NONE;
 
   // A printable character, typed with or without Shift: type-ahead. AltGr
   // arrives as Ctrl+Alt, so a character typed with both is a character too

@@ -1,12 +1,17 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
-  import type { Collision, FileRow } from "../lib/api";
+  import type { Collision, Crumb, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyTitles, listCopy, typeLabel } from "../lib/strings";
+  import { archivePageCopy, archivesCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyTitles, listCopy, paneCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
-  import { statusNote } from "../lib/status";
+  import { freeWorthShowing } from "../lib/status";
+  import { methodWord } from "../lib/method";
+  import { CRUMB_CAP, ROOT_CAP, clampFolded, fold, menuRows } from "../lib/crumbs";
+  import { closeButton } from "../lib/leave";
+  import { folderFigures, paneShape, selectionFigures } from "../lib/archpane";
+  import { tip } from "../lib/tip";
   import { newNameProblem } from "../lib/validate";
   import { renameSelection } from "../lib/paths";
   import { ROOT_ID, canDrop, deleteBody, deleteTitle } from "../lib/tree";
@@ -24,6 +29,7 @@
   import type { RefusedDecision } from "../lib/refused";
   import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
   import { pending } from "../lib/pending";
+  import { compacting } from "../lib/archlist";
   import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, pageRows, target, typeahead } from "../lib/listkeys";
   import type { Intent } from "../lib/listkeys";
   import Dialog from "./Dialog.svelte";
@@ -41,10 +47,11 @@
   const id = $derived(store.current ?? "");
   const stat = $derived(store.stat);
   // The index is a tree (APP.md §3): a row is a record with an id, the
-  // folder shown is a directory id, and the heading is the page's own
-  // Crumbs' first entry — the archive's name — drawn from nothing else. No
-  // folder crumb is drawn (§6, ruled 2026-09-10): the list itself shows
-  // the folder, its first row `..` going up one level.
+  // folder shown is a directory id, and the head is the page's own Crumbs —
+  // root-inclusive, the archive's name first — drawn from nothing else
+  // (direction 3, phase 4a; reversing 2026-09-10's "the heading is the
+  // archive's name alone"). The list's first row `..` still goes up one
+  // level.
   const rows = $derived(store.page?.rows ?? []);
   const total = $derived(store.page?.total ?? 0);
   const crumbs = $derived(store.page?.crumbs ?? []);
@@ -53,9 +60,11 @@
   // In a folder — anywhere but the root — the parent is the crumb before
   // the last, and `..` is a row.
   const parentId = $derived(crumbs.length > 1 ? crumbs[crumbs.length - 2].id : null);
-  // The folder shown, by name — the archive's at the root — for the empty
-  // folder's line: "Trips is empty. Drop files here, or use Add."
+  // The folder shown, by name — the archive's at the root — for the pane at
+  // rest, the foot and the empty folder's "Trips is empty".
   const folderName = $derived(crumbs[crumbs.length - 1]?.name ?? "");
+  // Empty once its listing has landed: until then nothing is said of it.
+  const isEmpty = $derived(!!store.page && rows.length === 0);
   const sort = $derived(store.sort);
   // Everything on this page except *Delete archive...* stays usable after
   // a lock (APP.md §2.3): Page, Stat, the previews, Extract and every
@@ -68,6 +77,24 @@
   const lockedName = $derived(store.status?.opened?.find((a) => a.id === id)?.name || archiveName);
   // The locked banner's sentence, its first strong (direction 9's mock).
   const lockedLead = $derived(archivePageCopy.lockedBannerLead(lockedName));
+  // Draining after the head's Close (APP.md §2.3): the title of Force
+  // close says what still holds the archive.
+  const draining = $derived(id !== "" && store.draining === id);
+  const runningHere = $derived(store.runningOps.some((o) => o.archiveId === id));
+  const forceTitle = $derived(runningHere ? archivePageCopy.forceCloseRunning : archivePageCopy.forceCloseServing);
+  const drainNote = $derived(runningHere ? archivePageCopy.drainingRunning : archivePageCopy.drainingServing);
+  // A compaction is the one operation the kill switch refuses rather than
+  // cancels (CloseArchive answers archive.compacting), so Force close is
+  // greyed with that reason while one runs (the review of 2026-10-18).
+  const compactingHere = $derived(id !== "" && compacting({ id, forgottenAt: 0, state: stat?.state }, store.runningOps));
+  // While it drains, every page-facing call answers archive.not_open, so
+  // the toolbar's commands are greyed with why rather than each press
+  // ending in a toast (the review of 2026-10-18).
+  const closingWhy = $derived(draining ? archivePageCopy.closing : undefined);
+  // The archive.needs_reopen bar's button (APP.md §2.3, ruled 2026-10-19:
+  // one meaning for Close): the head's graceful *Close*, and, once that
+  // leave has left the archive draining, the head's *Force close*.
+  const reopenClose = $derived(closeButton("bar", id ? [id] : [], (x) => store.leftHeld(x)));
 
   // The selection is the store's (lib/selection.ts): ticks are the
   // selection and the selection is the ticks.
@@ -335,7 +362,8 @@
         if (parentId) nav(() => store.goUp());
         break;
       case "back":
-        // Back to the Archives list, leaving the archive as the rail does.
+        // Back to the Archives list; the archive stays open, as it does
+        // for the rail (APP.md §2.3, ruled 2026-10-18).
         store.go("archives");
         break;
       case "extract":
@@ -352,6 +380,9 @@
         break;
       case "refresh":
         void store.refreshArchive();
+        break;
+      case "previewPane":
+        void store.setPreviewPane(!store.previewPane);
         break;
       case "typeahead": {
         typed = typeahead(typed, i.char, now, typedAt);
@@ -574,14 +605,43 @@
     if (p) await addAt(dirId, { files: [], dirs: [p] });
   }
 
-  // One *Add* button, three ways to add (APP.md §6): the two pickers, and
-  // a folder made here, which is a record from the moment it is made.
-  // Each opens a picker or a dialog, so each ends with an ellipsis, as
-  // every command on this page that asks something first does.
+  // One *Add* button, three ways to add (APP.md §6; direction 3): the two
+  // pickers, then — under a separator, since it changes the archive's own
+  // tree rather than bringing files in — a folder made here, which is a
+  // record from the moment it is made, its key at its right as menus show
+  // an accelerator. Each opens a picker or a dialog, so each ends with an
+  // ellipsis, as every command on this page that asks something first does.
   const addItems: MenuItem[] = $derived([
-    { label: "Add files…", icon: "i-plus", run: () => void pickFiles() },
-    { label: "Add folder…", icon: "i-folder-add", run: () => void pickFolder() },
-    { label: commandCopy.createFolder, icon: "i-folder", run: askFolder },
+    { label: commandCopy.addFiles, icon: "i-file", run: () => void pickFiles() },
+    { label: commandCopy.addFolder, icon: "i-folder", run: () => void pickFolder() },
+    { label: commandCopy.createFolder, icon: "i-folder-add", keys: "Ctrl+Shift+N", sep: true, run: askFolder },
+  ]);
+
+  // More (direction 3): *Delete archive…* left the toolbar, where it stood
+  // beside the file-level *Delete…*, for this menu — in the danger ink, last
+  // — until phase 4b's row menu on the Archives list takes it too. Greyed
+  // as it was: locked (the registry write needs the session) or Tampered
+  // (APP.md §13, R25: the flow closes the archive before the write is even
+  // tried, so a refusal at the end would have shut it for nothing); and
+  // while the archive drains after its *Close*, with the toolbar's closing
+  // title (ruled 2026-10-19), since the head's *Force close* is the way.
+  const moreItems: MenuItem[] = $derived([
+    {
+      label: commandCopy.deleteArchive,
+      icon: "i-trash",
+      danger: true,
+      disabled: draining || !store.unlocked || tampered,
+      title: closingWhy ?? (!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined),
+      run: () => void askDeleteArchive(),
+    },
+  ]);
+
+  // View (direction 3): *Preview pane*, ticked while shown, Alt+P as in
+  // Explorer. Hiding it gives the list the whole width. The choice is
+  // Settings.previewPane, applied the moment it is made (store.setPreviewPane).
+  const paneOn = $derived(store.previewPane);
+  const viewItems: MenuItem[] = $derived([
+    { label: archivePageCopy.previewPane, keys: "Alt+P", checked: paneOn, run: () => void store.setPreviewPane(!paneOn) },
   ]);
 
   // New archive… ends here, on the new archive's empty root with the Add
@@ -651,7 +711,7 @@
   });
 
   // A drag of the selection onto a folder row, onto `..` (up one level) or
-  // onto the heading (to the root) is a Move (APP.md §6): the native drag
+  // onto an ancestor's crumb in the head (direction 3) is a Move (APP.md §6): the native drag
   // of the one gesture released over Enfold's own window — a self-drop —
   // whose landing the WebView's own drop reports here while the ids are in
   // flight (store.dragOut, lib/dragout.ts). It is refused whole and in
@@ -670,7 +730,6 @@
   let dropTarget = $state<{ id: string; at: DropAt } | null>(null);
   let moveError = $state<{ id: string; at: DropAt; text: string } | null>(null);
   const upTarget = $derived<DropTarget | null>(parentId ? { id: parentId, isDir: true } : null);
-  const headTarget: DropTarget = { id: ROOT_ID, isDir: true };
 
   // The names a drop carries: one File per item dropped, a folder as its
   // name.
@@ -851,6 +910,14 @@
     extracting = { ids: chosenIds, count: selected.size };
   }
 
+  // The pane at rest offers the archive whole (direction 3): the same
+  // dialog on *Everything*, its selection line greyed since nothing is
+  // selected.
+  function extractEverything() {
+    if ((stat?.records ?? 0) === 0) return;
+    extracting = { ids: [], count: 0 };
+  }
+
   async function doExtract(scope: ExtractScope, dir: string, policy: string) {
     const x = extracting;
     extracting = null;
@@ -934,9 +1001,10 @@
     }
   }
 
-  // *Close archive* is the kill switch (APP.md §2.3): it closes now,
-  // readers or not, dropping every preview body in flight — where simply
-  // leaving the page closes it only once nothing is reading it.
+  // The kill switch (APP.md §2.3) — the head's *Force close*, shown only
+  // while the archive drains — closes now, readers or not, dropping every
+  // preview body in flight, where *Close* (the head's and the banners')
+  // closes it only once nothing is reading it.
   // Refresh fingerprint from the copy_mismatch note: the Archives page's
   // command, run on this archive; the layer's foot shows it running.
   async function refreshFingerprint() {
@@ -1011,10 +1079,13 @@
   // The dialog's close: before the consent nothing was touched and the
   // page stays as it was; after it, whatever the act came to, the archive
   // is no longer open here and the page goes back to the list — the
-  // store's own leave, which reads the list again.
+  // store's own leave, which reads the list again. A route change leaves
+  // nothing any more (APP.md §2.3, ruled 2026-10-18), so the leave is
+  // asked for by name; the archive let go of already, it is a no-op in
+  // the core.
   function closeDeleteArchive() {
     deletingArchive = null;
-    if (released) store.go("archives");
+    if (released) store.leaveArchive();
   }
 
   // This page gone with the dialog still up — a lock scene drawn over it
@@ -1024,38 +1095,162 @@
     if (released) store.releasedForDelete = null;
   });
 
-  // The foot's note (LayerFoot, lib/status.ts): the archive's figures —
-  // singular at one, and the free space when it is worth knowing. Nothing
-  // counts down here: an open archive has no timeout of its own, locked
-  // vault or not (APP.md §2.3, ruled 2026-09-10).
+  // The foot's note (LayerFoot): where you are — "Trips · 3 items" — beside
+  // the lock state (direction 3, phase 4a). The archive's figures moved to
+  // the pane at rest. Nothing counts down here: an open archive has no
+  // timeout of its own, locked vault or not (APP.md §2.3, ruled 2026-09-10).
   $effect(() => {
-    store.footNote = statusNote(stat);
+    store.footNote = folderName ? archivePageCopy.foot(folderName, total) : "";
   });
+
+  // ---- the head's crumbs (direction 3, phase 4a; lib/crumbs.ts) ---------
+  // The path from the archive's name to the folder shown. Every crumb is
+  // cut at its cap (CRUMB_CAP, the root ROOT_CAP: lib/crumbs.ts, set on the
+  // head as --crumb-cap and --crumb-root-cap for app.css, so the fold and
+  // the drawing share one source) with the app's tooltip; when the
+  // path does not fit, the folders under the root fold into the ellipsis
+  // button's menu, the root and the folder shown always standing, and the
+  // parents added back from the folder shown outward while they fit. The
+  // crumbs are measured as drawn — an unseen copy of the row — and the fold
+  // is worked out again once per resize of the head.
+  let crumbsEl = $state<HTMLElement | undefined>();
+  let measureEl = $state<HTMLElement | undefined>();
+  let foldedCount = $state(0);
+  const names = $derived(crumbs.map((c) => c.name));
+  // The measured fold, clamped to the path now drawn (clampFolded): a
+  // path from seven deep to one deep never draws the folder shown inside
+  // the ellipsis menu for the frame before the new path is measured.
+  const folds = $derived(clampFolded(foldedCount, crumbs.length));
+  // What the head draws: the root, the ellipsis when anything folded, then
+  // the crumbs from the first one still shown to the folder shown.
+  const shownCrumbs = $derived(crumbs.map((c, i) => ({ c, i })).filter(({ i }) => i === 0 || i > folds));
+  const foldedCrumbs = $derived(crumbs.slice(1, 1 + folds).map((c, k) => ({ c, i: k + 1 })));
+  const foldedItems: MenuItem[] = $derived(foldedCrumbs.map(({ c, i }) => ({ label: c.name, icon: "i-folder", cut: true, run: () => goCrumb(i) })));
+
+  function measure() {
+    const head = crumbsEl;
+    const m = measureEl;
+    if (!head || !m) return;
+    const widths = Array.from(m.querySelectorAll<HTMLElement>("[data-m='crumb']"), (e) => e.getBoundingClientRect().width);
+    const sep = m.querySelector<HTMLElement>("[data-m='sep']")?.getBoundingClientRect().width;
+    const more = m.querySelector<HTMLElement>("[data-m='more']")?.getBoundingClientRect().width;
+    const f = fold(names, widths, head.clientWidth, { sep: sep ?? 20, more: more ?? 28 });
+    foldedCount = f.folded.length;
+  }
+
+  // Once per resize: the observer's reports within a frame are one
+  // measure.
+  let measuring = 0;
+  function measureSoon() {
+    if (measuring) return;
+    measuring = requestAnimationFrame(() => {
+      measuring = 0;
+      measure();
+    });
+  }
+
+  $effect(() => {
+    const head = crumbsEl;
+    if (!head) return;
+    const ro = new ResizeObserver(measureSoon);
+    ro.observe(head);
+    // The display face may land after the first measure.
+    void document.fonts?.ready.then(measureSoon);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(measuring);
+      measuring = 0;
+    };
+  });
+
+  // A new path is measured once it is drawn.
+  $effect(() => {
+    void names.join("/");
+    void tick().then(measure);
+  });
+
+  // A crumb goes to its folder, as the `..` row goes up: one navigation at
+  // a time, and the folder it came through selected and focused once its
+  // row is on screen.
+  function goCrumb(i: number) {
+    const c = crumbs[i];
+    if (!c || i >= crumbs.length - 1) return;
+    moveError = null;
+    nav(() => store.enterDir(c.id, c.name, crumbs[i + 1]?.id ?? null));
+  }
+
+  const crumbTarget = (c: Crumb): DropTarget => ({ id: c.id, isDir: true });
+
+  // ---- the pane (direction 3, phase 4a; lib/archpane.ts) -----------------
+  // At rest it describes where you are; with several selected it counts
+  // them; with one it previews it.
+  const shape = $derived(paneShape(selected.size, !!one));
+  const here = $derived(folderFigures(store.page));
+  const picked = $derived(selectionFigures(rows, selected));
+  const method = $derived(store.archives.find((a) => a.id === id)?.method);
+  const noPreview = $derived(!!one && !one.isDir && (kind === "none" || previewFailed));
 </script>
 
 <svelte:window onkeydown={onKey} ondrop={dropElsewhere} />
 
-<div class="layer-head">
-  <button type="button" class="btn subtle back" onclick={() => { store.leaveArchive(); }}>Archives</button>
-  <!-- The heading is the archive's name alone (APP.md §6, ruled
-       2026-09-10) — Page's Crumbs[0], never Stat — a button to the root
-       and a drop target, so a drag can move a selection to the top. -->
-  <h1 class="t-title">
-    <button
-      type="button"
-      class="head-name"
-      class:drop-into={isOver(ROOT_ID, "head")}
-      title={listCopy.toRoot}
-      onclick={() => void store.enterDir(ROOT_ID)}
-      ondragover={(e) => over(e, headTarget, "head")}
-      ondragleave={() => leave(headTarget, "head")}
-      ondrop={(e) => dropOn(e, headTarget, "head")}
-    >{archiveName}</button>
-  </h1>
-  <div class="grow"></div>
-  <!-- The kill switch (APP.md §2.3): leaving the page closes the archive
-       on its own, and this closes it even while something is playing. -->
-  <button type="button" class="btn sm" title={archivePageCopy.closeNow} onclick={close}>{commandCopy.closeArchive}</button>
+<div class="layer-head" style:--crumb-cap="{CRUMB_CAP}px" style:--crumb-root-cap="{ROOT_CAP}px">
+  <!-- The head is the path (direction 3, phase 4a; the user's rulings of
+       2026-10-14): the archive's name the root, the folder shown last in
+       the ink, its ancestors buttons in the second ink — each goes there,
+       and each is a Move drop target, a refusal said under the head — and
+       the leading *Archives* crumb gone, since the rail carries the list
+       and the open archive. Page's Crumbs, never Stat. -->
+  <nav class="crumbs" aria-label={archivePageCopy.crumbsLabel} bind:this={crumbsEl}>
+    <h1 class="t-title crumbline">
+      {#each shownCrumbs as { c, i }, j (c.id)}
+        {#if j > 0}<span class="crumb-sep" aria-hidden="true"><svg class="i"><use href="#i-chevron" /></svg></span>{/if}
+        {#if i === crumbs.length - 1}
+          <span class="crumb here" class:root={i === 0} aria-current="location" use:tip={{ text: c.name, cut: true }}><span class="ellipsis">{c.name}</span></span>
+        {:else}
+          <button
+            type="button"
+            class="crumb"
+            class:root={i === 0}
+            class:drop-into={isOver(c.id, "head")}
+            onclick={() => goCrumb(i)}
+            ondragover={(e) => over(e, crumbTarget(c), "head")}
+            ondragleave={() => leave(crumbTarget(c), "head")}
+            ondrop={(e) => dropOn(e, crumbTarget(c), "head")}
+            use:tip={{ text: c.name, cut: true }}
+          ><span class="ellipsis">{c.name}</span></button>
+        {/if}
+        {#if i === 0 && foldedCrumbs.length > 0}
+          <!-- What folded, in path order, behind one ellipsis (ruled
+               2026-10-14): each item cut at a folder's cap with its whole
+               name in the app's tooltip, the menu capped in height. -->
+          <span class="crumb-sep" aria-hidden="true"><svg class="i"><use href="#i-chevron" /></svg></span>
+          <MenuButton id="crumbs-more" label={archivePageCopy.folded(foldedCrumbs.length)} tipText={archivePageCopy.folded(foldedCrumbs.length)} icon="i-more" iconOnly small items={foldedItems} maxRows={menuRows(foldedCrumbs.length)} />
+        {/if}
+      {/each}
+    </h1>
+    <!-- The crumbs as they would be drawn, unseen, for the fold to
+         measure (lib/crumbs.ts): each at its cap, a separator and the
+         ellipsis button. -->
+    <span class="crumb-measure t-title" aria-hidden="true" bind:this={measureEl}>
+      {#each crumbs as c, i (c.id)}<span class="crumb" class:root={i === 0} data-m="crumb"><span class="ellipsis">{c.name}</span></span>{/each}
+      <span class="crumb-sep" data-m="sep"><svg class="i"><use href="#i-chevron" /></svg></span>
+      <span class="btn subtle sm icon-only" data-m="more"><svg class="i i-14"><use href="#i-more" /></svg></span>
+    </span>
+  </nav>
+  <!-- One exit (APP.md §2.3, ruled 2026-10-18): Close is the graceful
+       leave the rail row's × runs, one standard button. While the archive
+       drains after it — a preview still served, or its own operation
+       still running — the page stands and the kill switch takes its place
+       as Force close. -->
+  {#if draining}
+    <!-- Why the page still stands after its Close, said beside the
+         button rather than only in its title (the final shoot of phase
+         4a): the archive closes on its own once that work ends. -->
+    <span class="drain-note" role="status">{drainNote}</span>
+    <button type="button" class="btn" disabled={compactingHere} title={compactingHere ? codeText(Code.CodeArchiveCompacting) : forceTitle} onclick={close}>{commandCopy.forceClose}</button>
+  {:else}
+    <button type="button" class="btn" onclick={() => void store.closeArchive(id)}>{commandCopy.close}</button>
+  {/if}
 </div>
 
 <div class="layer-body">
@@ -1065,24 +1260,24 @@
          outside Enfold, and this page said nothing of it. -->
     <TamperedBar reason={store.status?.tamperedReason} />
   {/if}
-  {#if moveError && refusedAt(ROOT_ID, "head")}
+  {#if moveError && moveError.at === "head"}
+    <!-- A Move onto a crumb refused, said under the head it was aimed at. -->
     <div class="move-note">Not moved: {moveError.text}</div>
   {/if}
   <div class="cmdbar" bind:this={cmdbar}>
-    <MenuButton id="add" label="Add" icon="i-plus" items={addItems} />
+    <MenuButton id="add" label="Add" icon="i-plus" items={addItems} disabled={draining} title={closingWhy} />
     <!-- Greyed on Records, never on Files: a record count is the only
          thing that can say whether the tree holds anything, since a
          folder occupies no data region and an archive of folders alone
          reports 0 files while holding real records (APP.md §3). -->
-    <button type="button" class="btn subtle" disabled={(stat?.records ?? 0) === 0} title={(stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
-    <button type="button" class="btn subtle" disabled={!one} title={one ? keyTitles.rename : archivePageCopy.renameNeedsOne} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>{commandCopy.rename}</button>
-    <button type="button" class="btn subtle danger" disabled={selected.size === 0} title={selected.size === 0 ? archivePageCopy.deleteNeedsSome : keyTitles.delete} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.delete}</button>
+    <button type="button" class="btn subtle" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+    <button type="button" class="btn subtle" disabled={draining || !one} title={closingWhy ?? (one ? keyTitles.rename : archivePageCopy.renameNeedsOne)} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>{commandCopy.rename}</button>
+    <button type="button" class="btn subtle danger" disabled={draining || selected.size === 0} title={closingWhy ?? (selected.size === 0 ? archivePageCopy.deleteNeedsSome : keyTitles.delete)} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.delete}</button>
     <div class="grow"></div>
-    <!-- Tampered disables it here as it does on the Archives page (APP.md
-         §13, R25): the flow closes the archive before the write is even
-         attempted, so a refusal at the end would have shut the user's
-         archive for nothing. -->
-    <button type="button" class="btn subtle danger" disabled={!store.unlocked || tampered} title={!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined} onclick={() => void askDeleteArchive()}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.deleteArchive}</button>
+    <!-- [⋯ More] [View ▾] at the right (direction 3): the archive's own
+         command, and how the page is laid out. -->
+    <MenuButton id="more" label={archivePageCopy.more} title={archivePageCopy.more} icon="i-more" iconOnly end items={moreItems} />
+    <MenuButton id="view" label={archivePageCopy.view} end items={viewItems} />
   </div>
 
   {#if !store.unlocked}
@@ -1092,20 +1287,29 @@
       <svg class="i i-14"><use href="#i-lock" /></svg>
       <!-- What the lock left (direction 9, ruled 2026-10-18): this archive
            is still decrypted and still saves (APP.md §2.3), so the banner
-           is attention and carries the kill switch — the head's own
-           *Close archive*, the same act — beside the unlock. -->
+           is attention and carries the way out beside the unlock — the
+           head's own *Close*, the graceful leave, by the same word and the
+           same act (leaving is explicit and named once; the final shoot of
+           phase 4a found a kill switch here under another name). While
+           the archive drains after it, the head's *Force close* is the one
+           way left, and the banner offers nothing a second press would not
+           repeat. -->
       <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
-      <button type="button" class="btn sm" title={archivePageCopy.closeNow} onclick={close}>{commandCopy.closeArchive}</button>
+      {#if !draining}
+        <button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{commandCopy.close}</button>
+      {/if}
       <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
     </div>
   {/if}
   {#if stat?.state === "needs_reopen"}
-    <!-- The button is the head's *Close archive*, by the same word, since
-         it is the same act: it closes, and the archive is opened again
-         from the list. "Close and reopen" promised a reopen it does not do
-         (one word per thing, consequences first: APP.md §7, ruled
-         2026-10-17). -->
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span><button type="button" class="btn sm" onclick={close}>{commandCopy.closeArchive}</button></div>
+    <!-- The button is the head's *Close*, by the same word, since it is
+         the same act — the graceful leave: it closes, and the archive is
+         opened again from the list. "Close and reopen" promised a reopen
+         it does not do (one word per thing, consequences first: APP.md §7,
+         ruled 2026-10-17). While it drains after that leave, the same
+         button is the head's *Force close* (ruled 2026-10-19: one meaning
+         for Close, lib/leave.ts). -->
+    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span>{#if !reopenClose.force}<button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{reopenClose.label}</button>{/if}</div>
   {/if}
   {#if stat?.copyMismatch}
     <!-- The note names *Refresh fingerprint*, so the command stands in the
@@ -1114,7 +1318,8 @@
          registry write, greyed while Locked or Tampered as there. -->
     <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div>
   {/if}
-  <div class="file-split" class:dropping>
+  <!-- View › Preview pane off gives the list the whole width (direction 3). -->
+  <div class="file-split" class:dropping class:bare={!paneOn}>
     <!-- A click on the list's blank area — under the last row, or in the
          container beside the table — clears the selection and the anchor
          (APP.md §6); a click that lands on a row is the row's. The drop
@@ -1125,8 +1330,8 @@
     <div class="tablewrap" data-file-drop-target="true" data-archive-id={id} data-dir-id={dirId}
       role="region" aria-label="Files" bind:this={listEl} onclick={blank} onscroll={scrolled}
       ondragenter={() => { if (!store.dragOut) dropping = true; }} ondragover={overBlank} ondragleave={() => (dropping = false)} ondrop={() => (dropping = false)}>
-      {#if rows.length === 0 && !parentId}
-        <div class="empty">{listCopy.empty(folderName)}</div>
+      {#if isEmpty && !parentId}
+        {@render emptyFolder()}
       {:else}
         <!-- Four columns (APP.md §6, ruled 2026-09-10): Name, Size, Type,
              Modified, a checkbox heading every row and the header row.
@@ -1214,74 +1419,114 @@
             {/each}
           </tbody>
         </table>
-        {#if rows.length === 0}
-          <div class="empty">{listCopy.empty(folderName)}</div>
+        {#if isEmpty}
+          {@render emptyFolder()}
+        {:else}
+          <!-- One row's height of empty space under the last row, scrolled
+               or not, so the last row can be brought clear of the pane's
+               edge (APP.md §6). -->
+          <div class="list-tail" aria-hidden="true"></div>
         {/if}
-        <!-- One row's height of empty space under the last row, scrolled
-             or not, so the last row can be brought clear of the pane's
-             edge (APP.md §6). -->
-        <div class="list-tail" aria-hidden="true"></div>
       {/if}
     </div>
 
-    <aside class="preview" aria-label="Preview">
-      <div class="art">
-        {#if one && kind === "image" && previewUrl}
-          <img src={previewUrl} alt={one.name} />
-        {:else if one && kind === "video" && previewUrl}
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video src={previewUrl} controls controlslist="nodownload noplaybackrate" disablepictureinpicture></video>
-        {:else if one && kind === "audio" && previewUrl}
-          <audio src={previewUrl} controls controlslist="nodownload"></audio>
-        {:else if one && kind === "text" && previewText}
-          <pre>{previewText.text}{previewText.truncated ? "\n…" : ""}</pre>
-        {:else if previewLoading}
-          <!-- Keyed on the row, so a move from one loading preview to the
-               next waits its own 300 ms again. The ring is the one pending
-               rule (lib/pending.ts, app.css .pending). -->
-          {#key one?.id}
-            <span class="wait" aria-hidden="true" use:pending={true}></span>
-          {/key}
-        {:else if one && one.isDir}
-          <span class="none">Folder · {bytes(one.size)} inside</span>
-        {:else if one && previewFailed}
-          <span class="none">The preview could not be loaded — extract it</span>
+    {#if paneOn}
+      <aside class="preview" aria-label="Preview">
+        {#if shape === "rest"}
+          <!-- At rest the pane describes where you are (direction 3): the
+               folder — the root by the archive's name — and what it holds,
+               then the archive's facts, then the archive whole to extract.
+               It was a grey "Select a file" over a greyed accent slab. -->
+          <div class="pane-body">
+            <div class="pane-head">
+              <h2 class="t-section">{folderName}</h2>
+              <span class="t-quiet num">{paneCopy.figures(here.count, here.bytes)}</span>
+            </div>
+            <dl class="kv pane-facts">
+              <dt>{archivesCopy.facts.size}</dt><dd class="num">{stat ? bytes(stat.size) : ""}</dd>
+              <dt>{archivesCopy.facts.lastSaved}</dt><dd class="num">{stat?.lastSavedAt ? dateTime(stat.lastSavedAt) : "—"}</dd>
+              <dt>{archivesCopy.facts.unused}</dt><dd><span class="num">{stat ? bytes(stat.freeSpace) : ""}</span>{#if freeWorthShowing(stat?.freeSpace)}{" "}<span class="hint">{paneCopy.compactHint}</span>{/if}</dd>
+              <dt>{archivesCopy.facts.compression}</dt><dd>{methodWord(method)}</dd>
+            </dl>
+          </div>
+          <div class="preview-actions">
+            <button type="button" class="btn" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractEverything}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+          </div>
+        {:else if shape === "several"}
+          <!-- Several selected: how many and how much — the bytes once every
+               selected row is on hand — and the pane's one accent, the
+               dialog on the selection. -->
+          <div class="pane-body">
+            <div class="pane-head">
+              <h2 class="t-section num">{paneCopy.figures(picked.count, picked.bytes)}</h2>
+            </div>
+          </div>
+          <div class="preview-actions">
+            <!-- One accent per surface (ruled 2026-10-19): while the locked
+                 line shows, its *Unlock* is the page's, and this is a
+                 standard button. -->
+            <button type="button" class="btn" class:accent={store.unlocked} disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{paneCopy.extractSome(selected.size)}</button>
+          </div>
         {:else if one}
-          <span class="none">No preview for this type — extract it</span>
-        {:else}
-          <span class="none">{selected.size > 1 ? listCopy.selected(selected.size) : listCopy.selectOne}</span>
+          {@const size = bytes(one.size)}
+          {@const type = typeLabel(one.name, one.isDir)}
+          {@const stored = compressedText(one.storage, one.savedPercent)}
+          {@const modified = dateTime(one.modifiedAt)}
+          {#if one.isDir || noPreview}
+            <!-- A folder, or a file the pane cannot show: its type's icon
+                 and what is so, said as a fact of the type — extracting is
+                 offered below as an action, never as the cure. -->
+            <div class="pane-none">
+              <svg class="i i-48" aria-hidden="true"><use href="#{rowIcon(one)}" /></svg>
+              <span class="t-strong name">{one.name}</span>
+              <span class="t-quiet">{one.isDir ? paneCopy.folderInside(bytes(one.size)) : previewFailed ? paneCopy.previewFailed : paneCopy.noPreview(one.name)}</span>
+            </div>
+          {:else}
+            <!-- The art takes the pane's height (flex: 1 1 auto, at least
+                 186 px), so text and images use it. -->
+            <div class="art">
+              {#if kind === "image" && previewUrl}
+                <img src={previewUrl} alt={one.name} />
+              {:else if kind === "video" && previewUrl}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video src={previewUrl} controls controlslist="nodownload noplaybackrate" disablepictureinpicture></video>
+              {:else if kind === "audio" && previewUrl}
+                <audio src={previewUrl} controls controlslist="nodownload"></audio>
+              {:else if kind === "text" && previewText}
+                <pre>{previewText.text}{previewText.truncated ? "\n…" : ""}</pre>
+              {:else if previewLoading}
+                <!-- Keyed on the row, so a move from one loading preview to
+                     the next waits its own 300 ms again. The ring is the
+                     one pending rule (lib/pending.ts, app.css .pending). -->
+                {#key one.id}
+                  <span class="wait" aria-hidden="true" use:pending={true}></span>
+                {/key}
+              {/if}
+            </div>
+            <div class="pname"><svg class="i i-14"><use href="#{rowIcon(one)}" /></svg><span>{one.name}</span></div>
+          {/if}
+          <!-- The facts are the one label · value list (APP.md §6, Type and
+               spacing; ruled 2026-10-17): each value beside its label,
+               wrapping rather than cut — and the path under its label.
+               *Compressed* says how much smaller, never the method: "zstd +
+               dictionary" is Technical details' (APP.md §7, ruled 2026-10-17). -->
+          <div class="pfacts">
+            <dl class="kv">
+              <dt>{one.isDir ? "Size beneath" : "Size"}</dt><dd class="num" title={size}>{size}</dd>
+              <dt>{columnLabels.type}</dt><dd title={type}>{type}</dd>
+              {#if !one.isDir}
+                <div><dt>{compressedLabel}</dt><dd title={stored}>{stored}</dd></div>
+              {/if}
+              <dt>Modified</dt><dd class="num" title={modified}>{modified}</dd>
+            </dl>
+            <dl class="kv stk"><dt>Path</dt><dd>{one.path}</dd></dl>
+          </div>
+          <div class="preview-actions">
+            <button type="button" class="btn" disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+          </div>
         {/if}
-      </div>
-      {#if one}
-        {@const size = bytes(one.size)}
-        {@const type = typeLabel(one.name, one.isDir)}
-        {@const stored = compressedText(one.storage, one.savedPercent)}
-        {@const modified = dateTime(one.modifiedAt)}
-        <div class="pname"><svg class="i i-14"><use href="#{rowIcon(one)}" /></svg><span>{one.name}</span></div>
-        <!-- The facts are the one label · value list (APP.md §6, Type and
-             spacing; ruled 2026-10-17): each value beside its label, never
-             pushed to the pane's far edge, wrapping rather than cut — and
-             the path under its label, wrapping too.
-             *Compressed* says how much smaller, never the method: "zstd +
-             dictionary" is Technical details' (APP.md §7, ruled 2026-10-17). -->
-        <div class="pfacts">
-          <dl class="kv">
-            <dt>{one.isDir ? "Size beneath" : "Size"}</dt><dd class="num" title={size}>{size}</dd>
-            <dt>{columnLabels.type}</dt><dd title={type}>{type}</dd>
-            {#if !one.isDir}
-              <div><dt>{compressedLabel}</dt><dd title={stored}>{stored}</dd></div>
-            {/if}
-            <dt>Modified</dt><dd class="num" title={modified}>{modified}</dd>
-          </dl>
-          <dl class="kv stk"><dt>Path</dt><dd>{one.path}</dd></dl>
-        </div>
-      {/if}
-      <div class="preview-actions">
-        <!-- The selection's shortcut to the one dialog (direction 7): it
-             opens on the selection, as the toolbar's does with one. -->
-        <button type="button" class="btn accent" disabled={selected.size === 0} title={selected.size === 0 ? archivePageCopy.extractNeedsSome : keyTitles.extract} onclick={extractCommand}>{commandCopy.extract}</button>
-      </div>
-    </aside>
+      </aside>
+    {/if}
   </div>
 </div>
 
@@ -1424,7 +1669,26 @@
   </Dialog>
 {/if}
 
+<!-- An empty folder (direction 3): named — the root by the archive's
+     name — with both ways to fill it under the line and the drop said
+     last, in the caption, centred in the list, which stays the drop
+     target as a whole. -->
+{#snippet emptyFolder()}
+  <div class="empty-folder">
+    <h2 class="t-section">{archivePageCopy.emptyTitle(folderName)}</h2>
+    <div class="row">
+      <button type="button" class="btn" disabled={draining} onclick={() => void pickFiles()}><svg class="i i-14"><use href="#i-file" /></svg>{commandCopy.addFiles}</button>
+      <button type="button" class="btn" disabled={draining} onclick={() => void pickFolder()}><svg class="i i-14"><use href="#i-folder" /></svg>{commandCopy.addFolder}</button>
+    </div>
+    <span class="t-quiet">{archivePageCopy.emptyDrop}</span>
+  </div>
+{/snippet}
+
 <style>
+  /* The draining line beside *Force close*: caption ink-2 on one line, the
+     crumbs giving way to it (they are cut, never it). */
+  .drain-note { flex: none; font: var(--t-cap); color: var(--ink-2); white-space: nowrap; }
+
   /* The facts under the preview's name: the card's 16 at the sides, 12
      above and below and between the two lists (APP.md §6, Type and
      spacing). A long path wraps rather than being cut, so in a short

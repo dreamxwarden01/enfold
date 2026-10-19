@@ -8,8 +8,9 @@
 // the arithmetic of the movement over numbers the page measures.
 //
 // The state is two facts: whether the panel is up, and which archive it
-// names — the page's own pane row (lib/archlist.ts), handed here so the
-// two can never name different archives.
+// names — the page's one selected row (direction 6: one archive at a
+// time, no ticks), handed here so the two can never name different
+// archives.
 export interface BarState {
   readonly open: boolean;
   readonly id: string | null;

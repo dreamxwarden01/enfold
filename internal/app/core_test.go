@@ -1233,6 +1233,191 @@ func TestCloseAction(t *testing.T) {
 	}
 }
 
+// TestPreviewPane is the Archive page's View ▾ › Preview pane choice (APP.md
+// §6, direction 3): on by default and on for a file written before the
+// choice existed, off once the user has said so — written through Set like
+// Theme and read back by the next launch — and nothing else moved by it.
+func TestPreviewPane(t *testing.T) {
+	dir := t.TempDir()
+	if !defaultSettings().PreviewPane {
+		t.Fatal("the default is off")
+	}
+	if !loadSettings(dir).PreviewPane {
+		t.Fatal("with no file at all: off")
+	}
+	old := `{"vaultPath": "D:/Vaults/p.eks", "displayName": "Older", "closeAction": "tray", "theme": "dark"}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSettings(dir); !got.PreviewPane || got.Theme != "dark" || got.CloseAction != CloseTray {
+		t.Fatalf("a file from before the choice: %+v", got)
+	}
+	off := `{"theme": "dark", "previewPane": false}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(off), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSettings(dir); got.PreviewPane || got.Theme != "dark" {
+		t.Fatalf("a file that turned it off: %+v", got)
+	}
+
+	h := newHarness(t, nil, nil)
+	s := h.c.GetSettings()
+	if !s.PreviewPane {
+		t.Fatalf("a fresh core: %+v", s)
+	}
+	s.PreviewPane = false
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	got := h.c.GetSettings()
+	if got.PreviewPane || got.Theme != s.Theme || got.CloseAction != s.CloseAction {
+		t.Fatalf("get after set: %+v", got)
+	}
+	b, _ := os.ReadFile(filepath.Join(h.c.deps.DataDir, "settings.json"))
+	if !strings.Contains(string(b), `"previewPane": false`) {
+		t.Fatalf("settings file: %s", b)
+	}
+	if loadSettings(h.c.deps.DataDir).PreviewPane {
+		t.Fatal("the next launch reads it on")
+	}
+	// The one-field write of the close question keeps it as it is.
+	if e := h.c.SetCloseAction(CloseQuit); e != nil {
+		t.Fatal(e)
+	}
+	if h.c.GetSettings().PreviewPane || loadSettings(h.c.deps.DataDir).PreviewPane {
+		t.Fatal("SetCloseAction put the pane back")
+	}
+	s = h.c.GetSettings()
+	s.PreviewPane = true
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	if !h.c.GetSettings().PreviewPane || !loadSettings(h.c.deps.DataDir).PreviewPane {
+		t.Fatal("turned back on: not kept")
+	}
+}
+
+// TestRenameReachesTheStatus is Rename… on the Vault page (APP.md §3,
+// Settings; §6): the settings' name and the status's name move together,
+// so the tray, which reads only VaultStatus (§2.4), names the vault as the
+// window does — at once, not at the next open of the vault file.
+func TestRenameReachesTheStatus(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	stateEvents := func() int {
+		n := 0
+		for _, e := range h.rec.snapshot() {
+			if e.name == EventVaultState {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Locked: the name is this PC's setting and moves all the same.
+	h.rec.reset()
+	s := h.c.GetSettings()
+	s.DisplayName = "Home vault"
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	if got := h.status().DisplayName; got != "Home vault" {
+		t.Fatalf("the status after a rename: %q", got)
+	}
+	h.rec.waitFor(t, EventVaultState, func(p any) bool {
+		st, ok := p.(VaultStatus)
+		return ok && st.DisplayName == "Home vault" && st.State == StateLocked
+	})
+
+	// The same name again, or a save that names nothing, says nothing.
+	before := stateEvents()
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	s.DisplayName = ""
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	if got := stateEvents(); got != before {
+		t.Fatalf("an unchanged name emitted %d states", got-before)
+	}
+	if got := h.status().DisplayName; got != "Home vault" {
+		t.Fatalf("an empty name moved the status: %q", got)
+	}
+
+	// Unlocked, a new name and new lock times in one save: one status,
+	// carrying both.
+	h.unlockWithPassword()
+	s = h.c.GetSettings()
+	s.DisplayName, s.IdleMinutes, s.AbsoluteMinutes = "Personal vault", 15, 120
+	before = stateEvents()
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	if got := stateEvents() - before; got != 1 {
+		t.Fatalf("a rename with new lock times emitted %d states, want one", got)
+	}
+	evs := h.rec.snapshot()
+	last := evs[len(evs)-1]
+	if st, ok := last.payload.(VaultStatus); !ok || st.DisplayName != "Personal vault" || st.State != StateUnlocked {
+		t.Fatalf("the status emitted: %v %+v", last.name, last.payload)
+	}
+	if got := h.status().DisplayName; got != "Personal vault" {
+		t.Fatalf("the status after the second rename: %q", got)
+	}
+	if got := loadSettings(h.c.deps.DataDir).DisplayName; got != "Personal vault" {
+		t.Fatalf("the settings file: %q", got)
+	}
+}
+
+// TestSetSettingsTimeoutsOnlyFromAnUnlockedRead: the page echoes the struct
+// it read, and one read while Locked carries TimeoutsFromVault false and
+// zeros (APP.md §3, Settings; ruled 2026-10-19). Saved after an unlock — a
+// theme changed from a page that read while locked — it leaves the
+// registry's lock times as they are and writes nothing to the vault; a
+// struct read while Unlocked writes its new values.
+func TestSetSettingsTimeoutsOnlyFromAnUnlockedRead(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.unlockWithPassword()
+	s := h.c.GetSettings()
+	s.IdleMinutes, s.AbsoluteMinutes = 15, 120
+	if e := h.c.SetSettings(s); e != nil {
+		t.Fatal(e)
+	}
+	h.c.Lock()
+	h.rec.waitState(t, StateLocked)
+	stale := h.c.GetSettings()
+	if stale.TimeoutsFromVault || stale.IdleMinutes != 0 || stale.AbsoluteMinutes != 0 {
+		t.Fatalf("a read while locked: %+v", stale)
+	}
+	h.unlockWithPassword()
+	vaultFile := h.c.GetSettings().VaultPath
+	before, err := os.ReadFile(vaultFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.Theme = "dark"
+	if e := h.c.SetSettings(stale); e != nil {
+		t.Fatal(e)
+	}
+	if got := h.c.GetSettings(); got.IdleMinutes != 15 || got.AbsoluteMinutes != 120 || got.Theme != "dark" {
+		t.Fatalf("a save from a locked read moved the lock times: %+v", got)
+	}
+	if after, _ := os.ReadFile(vaultFile); string(after) != string(before) {
+		t.Fatal("a save from a locked read wrote the registry")
+	}
+	fresh := h.c.GetSettings()
+	if !fresh.TimeoutsFromVault {
+		t.Fatalf("a read while unlocked: %+v", fresh)
+	}
+	fresh.IdleMinutes, fresh.AbsoluteMinutes = 5, 30
+	if e := h.c.SetSettings(fresh); e != nil {
+		t.Fatal(e)
+	}
+	if got := h.c.GetSettings(); got.IdleMinutes != 5 || got.AbsoluteMinutes != 30 {
+		t.Fatalf("a save from an unlocked read: %+v", got)
+	}
+}
+
 // TestSetCloseActionMovesOneField is how Shell.CloseDecided remembers
 // (APP.md §2.4): the close question's answer alone, written over the
 // settings as they are — never a read-change-write of the whole snapshot

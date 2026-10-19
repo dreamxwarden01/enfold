@@ -1027,6 +1027,13 @@ export interface Settings {
     "lastArchiveFolder": string;
 
     /**
+     * PreviewPane is the Archive page's View ▾ › Preview pane choice (APP.md
+     * §6, direction 3): machine-local, applied the moment it is made and
+     * written through Set like Theme; true by default.
+     */
+    "previewPane": boolean;
+
+    /**
      * from the registry; 0 = default
      */
     "idleMinutes": number;

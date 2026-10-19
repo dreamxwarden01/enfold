@@ -42,6 +42,9 @@ describe("the file list", () => {
     [k("N", { ctrl: true, shift: true }), { kind: "newFolder" }],
     [k("F5"), { kind: "refresh" }],
     [k("l", { ctrl: true }), { kind: "lock" }],
+    // The preview pane's View item (direction 3, phase 4a), Explorer's key.
+    [k("p", { alt: true }), { kind: "previewPane" }],
+    [k("P", { alt: true }), { kind: "previewPane" }],
     [k("p"), { kind: "typeahead", char: "p" }],
     [k("P", { shift: true }), { kind: "typeahead", char: "P" }],
     [k("2"), { kind: "typeahead", char: "2" }],
@@ -57,7 +60,7 @@ describe("the file list", () => {
   });
 
   it("takes no other modifier on a command key", () => {
-    for (const key of [k("Delete", { shift: true }), k("F2", { ctrl: true }), k("Backspace", { ctrl: true }), k("ArrowLeft"), k("ArrowRight", { alt: true }), k("ArrowDown", { alt: true }), k("e", { ctrl: true, shift: true }), k("Escape", { shift: true }), k("ArrowDown", { ctrl: true, shift: true }), k("x", { ctrl: true }), k("p", { alt: true })]) {
+    for (const key of [k("Delete", { shift: true }), k("F2", { ctrl: true }), k("Backspace", { ctrl: true }), k("ArrowLeft"), k("ArrowRight", { alt: true }), k("ArrowDown", { alt: true }), k("e", { ctrl: true, shift: true }), k("Escape", { shift: true }), k("ArrowDown", { ctrl: true, shift: true }), k("x", { ctrl: true }), k("p", { alt: true, shift: true }), k("q", { alt: true })]) {
       expect(kind(intent(key, files))).toBe("none");
     }
   });
@@ -108,8 +111,8 @@ describe("the Archives list", () => {
     }
   });
 
-  it("has no parent, no back, no Extract and no Create folder", () => {
-    for (const key of [k("Backspace"), k("ArrowUp", { alt: true }), k("ArrowLeft", { alt: true }), k("e", { ctrl: true }), k("N", { ctrl: true, shift: true })]) {
+  it("has no parent, no back, no Extract, no Create folder and no preview pane", () => {
+    for (const key of [k("Backspace"), k("ArrowUp", { alt: true }), k("ArrowLeft", { alt: true }), k("e", { ctrl: true }), k("N", { ctrl: true, shift: true }), k("p", { alt: true })]) {
       expect(kind(intent(key, archives))).toBe("none");
     }
   });
@@ -118,7 +121,7 @@ describe("the Archives list", () => {
 describe("a text field", () => {
   it("keeps its own keys, Esc aside", () => {
     for (const ctx of [{ ...files, inField: true }, { ...archives, inField: true }]) {
-      for (const key of [k("ArrowDown"), k("Home"), k("End", { shift: true }), k(" "), k("a", { ctrl: true }), k("Backspace"), k("Delete"), k("F2"), k("p"), k("Enter"), k("l", { ctrl: true }), k("e", { ctrl: true }), k("f", { ctrl: true })]) {
+      for (const key of [k("ArrowDown"), k("Home"), k("End", { shift: true }), k(" "), k("a", { ctrl: true }), k("Backspace"), k("Delete"), k("F2"), k("p"), k("Enter"), k("l", { ctrl: true }), k("e", { ctrl: true }), k("f", { ctrl: true }), k("p", { alt: true })]) {
         expect(kind(intent(key, ctx))).toBe("none");
       }
       expect(intent(k("Escape"), ctx)).toEqual({ kind: "clear" });
@@ -177,7 +180,7 @@ describe("the scope of an intent", () => {
     for (const s of ["move", "extend", "focusOnly", "select", "toggle", "selectAll", "open", "typeahead"] as const) {
       expect(listScoped({ kind: s } as Intent)).toBe(true);
     }
-    for (const s of ["clear", "up", "back", "extract", "delete", "rename", "newFolder", "refresh", "details", "newArchive", "openFile", "filter", "lock"] as const) {
+    for (const s of ["clear", "up", "back", "extract", "delete", "rename", "newFolder", "refresh", "details", "newArchive", "openFile", "filter", "lock", "previewPane"] as const) {
       expect(listScoped({ kind: s } as Intent)).toBe(false);
     }
   });
@@ -282,7 +285,8 @@ describe("type-ahead", () => {
   it("takes a character typed with AltGr, which arrives as Ctrl+Alt", () => {
     expect(intent(k("@", { ctrl: true, alt: true }), files)).toEqual({ kind: "typeahead", char: "@" });
     expect(intent(k("é", { ctrl: true, alt: true, shift: true }), archives)).toEqual({ kind: "typeahead", char: "é" });
-    expect(kind(intent(k("p", { alt: true }), files))).toBe("none");
+    // Alt alone is not AltGr: Alt+Q is nothing (Alt+P is the preview pane's).
+    expect(kind(intent(k("q", { alt: true }), files))).toBe("none");
     expect(kind(intent(k("x", { ctrl: true }), files))).toBe("none");
   });
 

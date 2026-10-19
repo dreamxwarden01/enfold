@@ -37,7 +37,15 @@
     <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7.4" y="3.4" width="9.2" height="9.2" rx="1.6"/><path d="M12.6 15v1.6a1 1 0 0 1-1 1H4.4a1 1 0 0 1-1-1V7.4a1 1 0 0 1 1-1H6"/></symbol>
     <symbol id="i-rename" viewBox="0 0 20 20"><path d="m4 14.6 8.8-8.8 1.4 1.4-8.8 8.8H4v-1.4Z"/><path d="m11.6 7 1.4 1.4"/></symbol>
     <symbol id="i-eye" viewBox="0 0 20 20"><path d="M2.6 10s2.8-4.6 7.4-4.6S17.4 10 17.4 10s-2.8 4.6-7.4 4.6S2.6 10 2.6 10Z"/><circle cx="10" cy="10" r="2.2"/></symbol>
+    <!-- The compact rail's toggle (direction 6): three lines, NavigationView's own glyph. -->
+    <symbol id="i-menu" viewBox="0 0 20 20"><path d="M3.5 5.5h13"/><path d="M3.5 10h13"/><path d="M3.5 14.5h13"/></symbol>
     <symbol id="i-mark" viewBox="0 0 20 20"><path d="M3.2 6.4 10 2.6l6.8 3.8v7.2L10 17.4 3.2 13.6V6.4Z" class="mark-fill"/><path d="M10 2.6v7.1l6.8 3.9" class="mark-line"/><path d="M3.2 6.4 10 9.7" class="mark-line"/></symbol>
+    <!-- The toolbar's More and the crumbs' ellipsis (direction 3): three dots, filled, since a stroked dot of this size reads as nothing. -->
+    <symbol id="i-more" viewBox="0 0 20 20"><circle cx="4.8" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.2" cy="10" r="1.3" fill="currentColor" stroke="none"/></symbol>
+    <!-- The Archives bar's View (direction 6): a layout — a list beside a pane — not the eye Hide uses. -->
+    <symbol id="i-view" viewBox="0 0 20 20"><rect x="2.8" y="4" width="14.4" height="12" rx="1.6"/><path d="M12.2 4v12"/><path d="M5.4 7.6h4.2"/><path d="M5.4 10h4.2"/><path d="M5.4 12.4h4.2"/></symbol>
+    <!-- A menu's tick beside a setting that is on (View > Preview pane): the check of i-check without its circle. -->
+    <symbol id="i-tick" viewBox="0 0 20 20"><path d="m5 10.4 3.4 3.4L15.2 7"/></symbol>
   </defs>
 </svg>
 

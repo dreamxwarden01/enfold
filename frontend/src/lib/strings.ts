@@ -423,11 +423,19 @@ export function lockedOpenLead(names: readonly string[]): Lead {
 // archive is still decrypted and still saves, which "stays open while you
 // are here" did not say. The two titles are what stops *Delete archive…*,
 // said on the button itself, and the third is what the kill switch does
-// that leaving the page does not.
+// that leaving does not. *Force close* stands in the head only while the
+// archive drains after its *Close* (APP.md §2.3, ruled 2026-10-18), and its
+// title says what still holds it.
 export const archivePageCopy = {
   lockedBanner: (name: string): string => lockedOpenText([name]),
   lockedBannerLead: (name: string): Lead => lockedOpenLead([name]),
-  closeNow: "Closes the archive now, even while something is playing.",
+  forceCloseServing: "A preview is still being served from this archive. Force close stops it and closes the archive now.",
+  forceCloseRunning: "An operation is still running on this archive. Force close cancels it and closes the archive now.",
+  closing: "This archive is closing. Nothing more can be done in it.",
+  // Said beside the head's *Force close* while the archive drains (the
+  // final shoot of phase 4a): why the page still stands after its Close.
+  drainingRunning: "Closes when its operation ends",
+  drainingServing: "Closes when the preview ends",
   deleteNeedsUnlock: "Unlock the vault first: the record is the vault's.",
   deleteTampered: "This vault file does not match itself, so changes to it are off.",
   // A greyed command's title says why it is greyed (APP.md §6).
@@ -435,6 +443,76 @@ export const archivePageCopy = {
   renameNeedsOne: "Select one item to rename",
   deleteNeedsSome: "Select what to delete",
   extractNeedsSome: "Select what to extract",
+  // The foot's note (direction 3, phase 4a): the folder shown and its count;
+  // the archive's figures moved to the pane at rest.
+  foot: (folder: string, n: number): string => `${folder} · ${plural(n, "item")}`,
+  // The head's crumbs (ruled 2026-10-14 and 2026-10-18): the path from the
+  // archive's name, the folders that did not fit behind one ellipsis.
+  crumbsLabel: "Location",
+  folded: (n: number): string => `${plural(n, "folder")} in between`,
+  // The toolbar's two menus at its right: More, which holds *Delete
+  // archive…* until the row menus of phase 4b take it too, and View.
+  more: "More",
+  view: "View",
+  previewPane: "Preview pane",
+  // An empty folder (direction 3): named, with both ways to fill it under
+  // the line and the drop said last, in the caption.
+  emptyTitle: (folder: string): string => `${folder || "This folder"} is empty`,
+  emptyDrop: "or drop files here",
+};
+
+// typePlural is a file type said of every file of it: "PDF documents",
+// "disc images", "Go source files". The type's own name is the strings
+// table's (typeLabel); a name that is a mass noun or ends in y takes
+// "files" rather than an s, and a first word that is not a name — not an
+// acronym, a product or a format — is lower-cased mid-sentence.
+const massEnds = new Set(["data", "source", "text", "audio"]);
+const commonFirst = new Set(["disc", "application", "library", "icon", "settings", "style", "batch", "shell", "raw", "bitmap", "web", "log", "text", "rich", "file"]);
+export function typePlural(label: string): string {
+  const words = label.split(" ");
+  const last = words[words.length - 1].toLowerCase();
+  if (commonFirst.has(words[0].toLowerCase())) words[0] = words[0].toLowerCase();
+  const said = words.join(" ");
+  return massEnds.has(last) || last.endsWith("y") ? `${said} files` : `${said}s`;
+}
+
+// The Archive page's pane (direction 3, phase 4a; lib/archpane.ts): at
+// rest it describes the folder shown — "3 items · 9.3 KB", the bytes only
+// once every row is on hand — and the archive; with several selected it
+// counts them; with one it previews it. A file it cannot preview is said
+// as a fact of its type, and *Extract…* stands as an action of its own,
+// never as the cure for a missing preview.
+export const paneCopy = {
+  // An empty folder is "0 items", with no size beside it to say.
+  figures: (n: number, total: number | null): string => (total === null || n === 0 ? plural(n, "item") : `${plural(n, "item")} · ${bytes(total)}`),
+  // After the Unused space figure, when the strip would show it too
+  // (lib/status.ts freeWorthShowing): Compact is the Archives page's.
+  compactHint: "(Compact to reclaim)",
+  noPreview: (name: string): string => {
+    const label = typeLabel(name, false);
+    return label === plainFileType ? "No preview for this file" : `No preview for ${typePlural(label)}`;
+  },
+  folderInside: (size: string): string => `Folder · ${size} inside`,
+  previewFailed: "The preview could not be loaded",
+  extractSome: (n: number): string => `Extract ${plural(n, "item")}…`,
+};
+
+// ---- The rail (APP.md §6, Rail; directions 3, 6 and 10, ruled 2026-10-18) --
+//
+// The vault head names the vault and its state in the lock header's own
+// words (lockCopy.header); the open archive is a row of its own under
+// *Archives*, closed by its × — "Close Photos 2024" — and the compact
+// rail's padlock says the vault, its state and what a press does.
+export const railCopy = {
+  label: "Main",
+  archives: "Archives",
+  vaultPage: "Vault page",
+  // The vault head's name when there is no vault yet to name.
+  noVault: "Vault",
+  closeArchive: (name: string): string => `Close ${name}`,
+  openNav: "Open navigation",
+  closeNav: "Close navigation",
+  vaultButton: (name: string, word: string, act: string): string => [name, word, act].filter(Boolean).join(" · "),
 };
 
 // reclaimedText is what a finished *Reclaiming space* says: the bytes the
@@ -799,14 +877,8 @@ export const listCopy = {
   upLabel: "Up one level",
   tickAll: "Select everything in this folder",
   tickRow: (name: string): string => `Select ${name}`,
-  // An empty folder names itself, and the root the archive (the polish
-  // review's small fix 30), with both ways to fill it.
-  empty: (folder: string): string => `${folder || "This folder"} is empty. Drop files here, or use Add.`,
-  toRoot: "Back to the top of the archive",
   // the header cell's tooltip says what the first click will do
   sortBy: (column: string): string => `Sort by ${column}`,
-  selected: (n: number): string => `${n} selected`,
-  selectOne: "Select a file",
 };
 
 // The boot (APP.md §2.4): a first Status() that failed is a panel of its
@@ -883,15 +955,17 @@ export function moreNotOpened(names: string[]): string {
   return `${plural(names.length, "more archive")} ${names.length === 1 ? "was" : "were"} not opened: ${names.join(", ")}. Enfold opens one at a time.`;
 }
 
-// The Archives list (APP.md §6, ruled 2026-09-10): its rows and header
-// carry the file list's checkboxes; the details pane shows one row or,
-// with several ticked and none of them the last clicked, a count.
+// The Archives list (APP.md §6, §13; direction 6, phase 4a): one archive
+// selected at a time — no checkboxes, every action here takes one — the
+// details pane following it, and the vault's summary when none is.
 export const archivesCopy = {
+  // The page is the list of archives (direction 10): the vault's name is
+  // the rail head's.
+  title: "Archives",
   listLabel: "Archives",
-  tickAll: "Select every archive shown",
-  selectOne: "Select an archive.",
-  selectedCount: (n: number): string => `${plural(n, "archive")} selected`,
+  selectFirst: "Select an archive first.",
   selectedName: (name: string): string => `${name} selected`,
+  enterOpens: (name: string): string => `Enter opens ${name}`,
   // The bottom panel the details become in a narrow body (APP.md §6,
   // refined 2026-09-12): the same eyebrow the side pane carries, and a
   // header that is the control — so its name is what a click will do,
@@ -900,19 +974,66 @@ export const archivesCopy = {
   panelEyebrow: "Selected",
   panelShow: (name: string): string => `${name} — show the details`,
   panelHide: (name: string): string => `${name} — hide the details`,
-  panelNone: "No archive selected",
   // Open file… (Ctrl+O) and the empty page's buttons (APP.md §13, §14,
   // ruled 2026-10-14): an .efd from anywhere, opened the way Explorer's
   // double-click opens it.
   openFile: "Open file…",
   openFileTitle: "Open an archive",
-  emptyVault: "No archives in this vault yet.",
-  emptyOpen: "Open an .efd file…",
+  emptyVault: "No archives in this vault yet",
   // The list's other empty states.
   noMatch: "No archive matches that.",
-  allHidden: "No archives are shown. Hidden and forgotten ones are listed under Show hidden.",
+  allHidden: "No archives are shown. Hidden ones are listed under View › Show hidden, forgotten ones under View › Forgotten.",
+  noneForgotten: "No archive is forgotten.",
+  filter: "Filter archives",
+  // The bar's two menus (direction 6): More, the selected archive's verbs
+  // the bar has no room for and the ones that hide or destroy it; View,
+  // what the list shows. Forgotten is a view of its own, like the Recycle
+  // Bin, with its count, and a chip beside the title leads into it while
+  // any record is forgotten.
+  more: "More",
+  view: "View",
   showHidden: "Show hidden",
-  filter: "Filter",
+  forgottenView: (n: number): string => `Forgotten (${n})`,
+  forgottenPlain: "Forgotten",
+  forgottenChip: (n: number): string => `Forgotten · ${n}`,
+  forgottenChipOpen: "Show the forgotten archives",
+  forgottenChipClose: "Show every archive again",
+  forgottenNote: "A forgotten archive keeps its key for 30 days. After that its file cannot be opened.",
+  // A forgotten row's second line: the day its key goes (FORMAT.md §18.2,
+  // the thirty days direction 8's dialog names; lib/retention.ts).
+  keptUntil: (when: string): string => `Key kept until ${when}`,
+  // The pane with nothing selected (direction 6): the vault's summary,
+  // its last backup and what the list marks missing.
+  // Hidden ones are counted apart while the list does not show them, so
+  // the figure squares with the title's "N archives shown".
+  summary: (n: number, size: string, hidden = 0): string => `${plural(n, "archive")}${hidden > 0 ? `, ${hidden} hidden` : ""} · ${size}`,
+  // While locked the core lists only what is open, so the head says
+  // that and no figures (a count of the open ones is not the vault's).
+  summaryLocked: (open: number): string => (open > 0 ? `Locked · ${plural(open, "archive")} open` : "Locked"),
+  vaultFallback: "Vault",
+  noneOpen: "No archives are open.",
+  lastBackup: (when: string): string => `Last backup ${when}`,
+  // The summary's way to a new backup: the Vault page's *Export backup…*,
+  // started there (store.askExport); the line before it says what.
+  exportLink: "Export…",
+  missingRow: (name: string): string => `${name} — file missing`,
+  // The name and the description, edited behind the pane's pencil
+  // (direction 6) under the save bar, the one staged edit it is for.
+  // Why a menu item is greyed, said under it (direction 6, lib/menu.ts
+  // secondLine): the reason in a few words, since a menu says it of
+  // every item it stops — the codes' own sentences stay the buttons'
+  // titles.
+  why: {
+    locked: "Unlock the vault first.",
+    tampered: "Changes to this vault are off.",
+    forgotten: "Forgotten. Restore it first.",
+    alreadyForgotten: "Already forgotten.",
+    compacting: "Wait until its compaction ends.",
+  },
+  nameAndDescription: "Name and description",
+  editNameDescription: "Edit name and description",
+  noDescription: "No description",
+  descriptionHint: "Shown under the name in the list",
   // The details pane's facts (ruled 2026-10-17): user words only. The key
   // version and the KID went to Technical details, where the KID was
   // already shown once; "free" reads as the disk's, so the space inside
@@ -925,6 +1046,8 @@ export const archivesCopy = {
     compression: "Compression",
     unused: "Unused space",
     file: "File",
+    name: "Name",
+    description: "Description",
     foreign: "Last seen on another system at",
     fingerprint: "Fingerprint",
   },
@@ -951,6 +1074,9 @@ export const archivesCopy = {
   // name from VaultStatus.opened, and that they still save.
   lockedBanner: (names: readonly string[]): string => lockedOpenText(names),
   lockedBannerLead: (names: readonly string[]): Lead => lockedOpenLead(names),
+  // The pane's line for a forgotten record (APP.md §13): when it was
+  // forgotten, the undo, and the date its key goes.
+  forgottenLine: (on: string, purge: string): string => `${chipCopy.forgottenOn(on)}. Restore it to open it again; after ${purge} its key is gone.`,
 };
 
 // commandCopy is the verb table (the glossary above): a command's label
@@ -960,10 +1086,16 @@ export const archivesCopy = {
 export const commandCopy = {
   open: "Open",
   close: "Close",
-  // The kill switch (APP.md §2.3): the Archive page's head and the locked
-  // banners; *Close all* is the Archives page's for several left open.
+  // One meaning for *Close*, app-wide (APP.md §2.3, ruled 2026-10-19): the
+  // graceful leave, Archives.Leave, wherever it stands — the Archives
+  // page's locked line says *Close archive* / *Close all* for it. *Force
+  // close* (and *Force close all*) is the kill switch, Archives.Close or
+  // CloseAll, and stands only for an archive a leave left that something
+  // still holds (lib/leave.ts decides which).
   closeArchive: "Close archive",
   closeAll: "Close all",
+  forceClose: "Force close",
+  forceCloseAll: "Force close all",
   newArchive: "New archive…",
   hide: "Hide",
   unhide: "Unhide",
@@ -996,13 +1128,16 @@ export const commandCopy = {
   // One Extract… (direction 7): the toolbar's, the pane's and Ctrl+E's,
   // whose dialog asks the scope. There is no *Extract all…*.
   extract: "Extract…",
-  goThere: "Go there",
   lockNow: "Lock now",
   unlock: "Unlock",
   // The Archive page's own commands on its rows (APP.md §6).
   rename: "Rename…",
   delete: "Delete…",
   createFolder: "Create folder…",
+  // The Add menu's two pickers (direction 3): each opens a picker, so the
+  // ellipsis; *Create folder…* stands apart under the separator.
+  addFiles: "Add files…",
+  addFolder: "Add a folder…",
 };
 
 // keyHint is a command's title where a key runs it (direction 7; APP.md
@@ -1216,12 +1351,17 @@ export const dialogCopy = {
     title: (name: string): string => `Delete ${name}?`,
     body: (path: string): string => `Deletes ${path} for good, after checking that the file really is this archive. Its key is kept for 30 days in case a copy of the file turns up.`,
     primary: "Delete archive",
+    // What happened, then the undo and its date: a forgotten record shows
+    // in View › Forgotten alone, never under Show hidden (APP.md §13,
+    // ruled 2026-10-19). `until` is the purge's date.
+    forgotDone: (name: string, until: string): string => `The file stays where it is. You can restore ${name} from View › Forgotten until ${until}; after that its key is gone.`,
+    deletedDone: (until: string): string => `The file is gone. Its key is kept until ${until}, so you can restore the archive from View › Forgotten if a copy of the file turns up.`,
   },
   // `until` is the purge's date (APP.md §13): the first unlock after it
   // drops the key.
   forgetArchive: {
     title: (name: string): string => `Forget ${name}?`,
-    body: (until: string): string => `The file stays where it is. You can restore it from Show hidden until ${until}; after that its key is gone and the file cannot be opened.`,
+    body: (until: string): string => `The file stays where it is. You can restore it from View › Forgotten until ${until}; after that its key is gone and the file cannot be opened.`,
     primary: "Forget archive",
   },
   // The typed name is the brake of both (APP.md §13).
@@ -1240,7 +1380,7 @@ export const dialogCopy = {
   },
   forgetOnly: {
     title: (name: string): string => `Forget ${name} only?`,
-    body: "The file at that path stays exactly as it is. You can restore the archive from Show hidden for 30 days.",
+    body: "The file at that path stays exactly as it is. You can restore the archive from View › Forgotten for 30 days.",
     primary: "Forget archive",
   },
   unreachable: "That folder could not be reached, so nothing was deleted and nothing was forgotten.",
@@ -1344,7 +1484,23 @@ export const vaultCopy = {
   // A change's greyed title while Tampered (APP.md §13): the remedy is the
   // banner's button, on this page too (direction 9).
   changesOff: "Changes are off until this vault is replaced with a copy you trust; the banner above has the button.",
-  backups: "Backups",
+  // Section 3 (direction 10, phase 4a): every backup action in one row,
+  // the two that need a lock among them — they lock and hand the lock
+  // screen its ask.
+  backups: "Backups and copies",
+  backupsNote: "Choose a drive you keep apart from this PC.",
+  // What can be said of the archives' files (lib/vaultfiles.ts): the
+  // archive.file_missing notes counted over the whole registry; "all
+  // present" only on the word of a Find missing files pass of this
+  // unlock that measured every record; nothing while Locked, when the
+  // core lists no registry.
+  files: "Archive files:",
+  filesMissing: (n: number): string => `${n} missing`,
+  filesPresent: "all present",
+  filesUnread: "not checked yet",
+  filesLocked: "not known while the vault is locked",
+  filesUnmeasured: "none could be checked from this PC",
+  filesNoneOf: (n: number): string => `none missing of the ${n} checked`,
   // The backups card (direction 9, ruled 2026-10-18): the status, then
   // the consequence, then the buttons. The status compares the last
   // backup with what the vault holds — archives created and archives
@@ -1369,7 +1525,6 @@ export const vaultCopy = {
   backupCaveat: "Recorded here, not proof the file is still there.",
   // The consequence, the card's sentence.
   backupsLine: "Your archives open only with this vault file or a backup of it. The recovery key opens either one; it cannot replace them.",
-  importPointer: "To take archives out of a backup without replacing this vault, use Import archives from a backup… on the Archives page.",
   // What *Inspect a backup…* reads off the file's label.
   inspected: {
     file: "File",
@@ -1383,10 +1538,35 @@ export const vaultCopy = {
     no: "No, another vault",
     older: (when: string): string => `Older than this vault (changed ${when}).`,
     newer: "Newer than this vault. Lock, then replace this vault with it from the lock screen.",
-    testHint: "To prove it opens, lock the vault and use Test that a backup opens… on the lock screen.",
   },
   thisVault: "This vault",
   name: "Name",
+  // The vault's name is edited here only, through its one-field dialog
+  // (direction 10): the form rule — the primary stays enabled, and an
+  // empty or unchanged name is marked in the field.
+  renameTitle: "Rename the vault",
+  // A setting of this PC's (Settings.displayName), which the core's status,
+  // and so the tray, follows at once (APP.md §3, Settings); the line says
+  // what the name is, not where it is shown.
+  renameLine: "The name this PC gives the vault. The file keeps its own name.",
+  renamePrimary: "Rename",
+  sameName: "This is the vault's name already.",
+  nameLong: (max: number): string => `Up to ${max} characters.`,
+  // The lock times are the vault's policy, written into it (direction
+  // 10): each applies the moment it is chosen, one write per choice.
+  unlockToChange: "Unlock to change",
+  // The lock times' selects while the vault is locked (ruled 2026-10-19):
+  // the core reads them from the vault, so locked it has none to give, and
+  // "10 minutes (default)" would be a time the vault may not keep.
+  unlockToSee: "Unlock to see",
+  // The pickers' own titles (Shell.SaveFile, Shell.PickFiles).
+  exportPicker: "Export a backup of the vault",
+  inspectPicker: "Inspect a backup",
+  idleLock: "Lock when idle",
+  idleLine: (value: string): string => `After ${value} without mouse or keyboard. Up to 30 minutes.`,
+  absoluteLock: "Always lock after",
+  absoluteLine: "Even while you are working. Up to 8 hours.",
+  defaultValue: (value: string): string => `${value} (default)`,
   lastChanged: "Last changed",
   file: "File",
   password: "Password with every YubiKey",
@@ -1423,6 +1603,8 @@ export const vaultCopy = {
 // *Start again* only where it does start again.
 export const lockCopy = {
   regionLabel: "Enfold, vault locked",
+  // The lead of a test of a backup: the file it opens, by its name.
+  testingFile: (name: string): string => `Testing ${name}`,
   header: {
     locked: "Locked",
     unlocking: "Unlocking",
@@ -1589,8 +1771,16 @@ export const lockCopy = {
     names.length === 1
       ? { head: `${names[0]} is still open in Enfold, decrypted.`, rest: "Changes to it are still saved." }
       : { head: `${plural(names.length, "archive")} are still open in Enfold, decrypted.`, rest: "Changes to them are still saved." },
+  // The notice's close is the graceful leave; *Force close* / *Force
+  // close them* once a leave has left the archives still held (APP.md
+  // §2.3, ruled 2026-10-19; lib/leave.ts).
   closeIt: "Close it",
   closeThem: "Close them",
+  forceCloseThem: "Force close them",
+  // A file opened from Explorer while locked (direction 3): the line says
+  // the open waits for the unlock, the file's name in strong after it.
+  unlockToOpen: "Unlock to open",
+  forgetOpen: (file: string): string => `Do not open ${file}`,
   // The rebuild's bar, around the damaged file's path.
   rebuildFileAt: "The file at",
   rebuildKept: "is not a readable vault. It is kept as a dated copy in Enfold's folder, never deleted: archives that only it holds can be opened only with it, if it can ever be repaired.",
@@ -1664,16 +1854,15 @@ export const importCopy = {
 // The rows' names and lines. *Look* is gone until a second look exists
 // (the ruling of 2026-09-06 stands); the recovery record is hidden until
 // volume exports ship and comes back as *Repair data*.
+//
+// Settings is this PC only (direction 10, phase 4a): the lock times and
+// the vault's name went to the Vault page, and every choice here applies
+// the moment it is made — no save bar, no toast on success.
 export const settingsCopy = {
   title: "Settings",
-  session: "Session",
-  unlockToChange: "Unlock to change",
-  idleLock: "Lock when idle",
-  idleLine: (value: string): string => `After ${value} without mouse or keyboard. Up to 30 minutes.`,
-  absoluteLock: "Always lock after",
-  absoluteLine: "Even while you are working. Up to 8 hours.",
-  defaultValue: (value: string): string => `${value} (default)`,
+  window: "Window",
   closeAction: "When the window closes",
+  closeActionLine: "In the tray the vault stays unlocked until it locks. Open archives close with the window.",
   // The section holds the dictionary threshold alone while the recovery
   // record is hidden, so it is named for that (ruled 2026-10-17; it was
   // *Exports*).
@@ -1682,15 +1871,21 @@ export const settingsCopy = {
   repairDataLine: "Used by volume exports (coming in 1.1).",
   dictionary: "Dictionary for small files",
   dictionaryLine: "Files below this size share a compression dictionary.",
+  dictionaryOff: "Off",
   appearance: "Appearance",
   theme: "Theme",
   themeLine: "The window's own theme follows at the next open.",
-  vault: "Vault",
-  vaultName: "Vault name",
-  vaultNameLine: "Shown on the lock screen and in the tray.",
+  themeChoices: [
+    ["system", "Follow Windows"],
+    ["light", "Light"],
+    ["dark", "Dark"],
+  ] as [string, string][],
   about: "About",
+  version: "Enfold 0.1.0",
   aboutLine: "Encrypted, compressed archives unlocked with a YubiKey.",
-  foot: "These settings are this PC's; the lock times travel with the vault.",
+  dataFolder: "Data folder",
+  dataFolderLine: "%LOCALAPPDATA%\\Enfold: the vault, the settings and the log.",
+  foot: "These settings are this PC's.",
 };
 
 // compressedText is the preview's *Compressed* fact (ruled 2026-10-17:

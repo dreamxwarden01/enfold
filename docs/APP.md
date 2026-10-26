@@ -1822,8 +1822,10 @@ time** (ruled 2026-10-18, phase 4a of the design review's direction 6; it reopen
 only, 2026-09-10's one list idiom, under which its rows and header carried the file list's
 checkboxes and rules: every action here takes one archive, so a second tick only greyed them,
 and the pane said "3 archives selected" in place of the archive it could describe — the file
-list, whose commands take many, keeps its boxes): no checkbox and no header tick; a click
-selects the row, the arrows move the selection (*The lists' keys*, below), and Shift, Ctrl,
+list, whose commands take many, keeps its boxes): no checkbox and no header tick; a row leads
+with the archive glyph and its name 8 px after it, the header's *Name* standing over the names,
+as on the file list (ruled 2026-10-26; it stood over the glyph); a click selects the row, the
+arrows move the selection (*The lists' keys*, below), and Shift, Ctrl,
 Ctrl+Space and Ctrl+A add nothing; a right-click selects the row and opens its menu, and one on
 the blank area clears the selection and opens the blank area's (§13, *The row's menu*; ruled
 2026-10-26); a selected row is the wash and the pill, the sort glyph the
@@ -1924,9 +1926,20 @@ column — Name and Type ascending on the first click, Modified descending (newe
 ascending, the second click the other way, the cell wearing the one sort glyph of both lists,
 a 10 px chevron in the third ink, turned for ascending (ruled 2026-10-17; it was an arrow
 character here and a chevron on the Archives list) — and the choice stays while the
-archive is open; **a checkbox heads every row** and the header row — shown on the row under the
-pointer, on a selected or focused row, and on every row once anything is selected, Explorer's
-own compromise (ruled 2026-10-17) — and the list is a list, not a spreadsheet: the header in
+archive is open; **a checkbox heads every row** and the header row — a row's in one 16 px
+slot that it shares with the row's type icon, 16 px in from the card's edge with the header's
+box over it, the name starting 8 px after the slot and the header's *Name* over the names, as on
+the Archives list (ruled 2026-10-26; the icon stood in the name's cell after the box's column,
+and the header's *Name* over the icons): at rest the slot holds the icon in the third ink, and
+the icon gives way to the box, the two cross-fading in place, on the row under the pointer, the
+row with the keyboard's focus and a selected row, and while the box has its own focus or tick,
+so a slot shows one of the two, never both and never neither;
+while something is selected the other rows keep their icons (ruled 2026-10-26, reversing
+2026-10-17's "on every row once anything is selected"), so the folder rows a drag can land on,
+which it never carries, keep theirs; the picking stays in the header, whose tick-all box shows
+with the header under the pointer, with its own focus or tick, and while anything is selected;
+`..` has no box, so its slot always holds the folder icon — and the list is a list, not a
+spreadsheet: the header in
 caption type on the card's ground with the one stroke under it, no rule under any row, a
 row's hover a subtle fill with 4 px rounded ends inset 4 px from the card, and its selection
 the accent wash with a 3 px pill at its left edge, never bold; a click on a row's checkbox toggles that

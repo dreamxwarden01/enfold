@@ -5171,3 +5171,39 @@ user offered *Details* or *Properties*. Ruled *Details…* — the research's ow
 archive row; *Properties* would promise Explorer's whole sheet while the pane holds the facts —
 wherever the archive row's dialog is named, the dialog titled *Details*; the Tampered banner's
 *Why?* and the second-register table keep their names.
+
+**The lead of the file list: one slot, the icon at rest, the box when picking; the header over
+the names** (2026-10-26). The user's second finding in the real window: with nothing selected,
+the space before a file's name reads empty — the hidden checkbox column, then the type icon,
+then the name — and Explorer was named as the reference ("compress the lead; the row's box is
+more compact than the header's"), with the icon itself in question. A study was run before
+anything was built: an Opus agent measured the user's screenshots and Explorer's (at 125 %, the
+first ink in an Enfold row stood 52 CSS px from the card's edge and the name at 74, against
+about 24 and 38 in Explorer: 4 px transparent end, 40 px box column, 12 px cell padding, 14 px
+icon, 8 px gap), built three faithful mock variants from app.css itself — *a* Explorer-tight
+(box and icon packed side by side, first ink at 32), *b* one slot (the icon stands in the box's
+16 px slot at rest and gives way to the box when the box would show, first ink at 17, the name
+at 40 like the Archives list's 38), *c* no icon (the control: 40 px of nothing before every
+name) — shot them in both themes, and an independent judge ranked them; the user saw the contact
+sheets and a live page. **Ruled *b*, with *b′*.** The icon stays: it carries no fact the Type
+column lacks, but it sits at the scan edge, it is the only kind cue once Type folds in a narrow
+list, and the only folder-versus-file mark at the name; in front of the Type words it would
+repeat them and fold with them, so that was not taken. The markup: the icon leaves `.fname` and
+stands in `td.chk` inside a 16 × 16 `.chk-slot` grid after the input, so one slot shows the
+glyph or the box and never neither; the `..` row's folder glyph stands in the same slot with no
+input and always shows; the name starts right after the slot (`td.sel-mark` padding 0, the name
+at 40, the move-note under it at the same edge). *b′* is the reveal rule: a row's box shows on
+the row under the pointer, the focused row and a selected row, and when its own input is focused
+or ticked — and on no other row because something else is selected, which reverses 2026-10-17's
+"every box once anything is selected": in *b* that clause would have taken every icon away for
+the whole of a selection, including the folder glyphs of the rows a Move drag is aimed at, and
+the user chose to keep the other rows' icons. The header's tick-all box keeps showing on hover,
+on focus, when all are ticked and while anything is selected, so the picking affordance stays
+where Ctrl+A's receipt is. The header word *Name* stands over the names on both lists (the file
+list's at 40; the Archives list's moves from over its glyph to over its names), the user's third
+call. Left as it was: the 16 px box (20 physical px at 125 %, against Explorer's 16 — the user's
+"more compact" was read as spacing, not size, and no variant tried a smaller box), the 40 px
+check column, the pill at the row's left edge and the 4 px rounded ends; the preview pane's name
+line, the viewer and the conflict dialog keep their own icons. Not taken: *a* (the icon
+permanent but 32 px of blank left and the pill crowding the box at 5 px), *c* (no icon: a narrow
+list would show no kind at all).

@@ -967,8 +967,7 @@ tbody tr:focus-visible > td:last-child { box-shadow: inset 0 2px 0 var(--focus-r
    a tick floating by the name (ruled 2026-10-17). */
 tbody tr[aria-selected="true"] td, tbody tr[aria-selected="true"]:hover td { background-color: var(--accent-wash); }
 tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 1.5px; background: var(--accent); }
-.fname { color: var(--ink); display: flex; align-items: center; gap: var(--s2); min-width: 0; font: var(--t-body); }
-.fname .i { color: var(--ink-3); flex: none; }
+.fname { color: var(--ink); display: flex; align-items: center; min-width: 0; font: var(--t-body); }
 .fname span { overflow: hidden; text-overflow: ellipsis; }
 /* The name takes what the fixed columns leave and ellipsizes, down to a
    floor that still reads as the start of a name (APP.md §6, the Archive
@@ -1333,10 +1332,15 @@ tbody tr.refused td.sel-mark { padding-top: var(--s2); }
 .arch-split tbody td { height: 52px; box-sizing: border-box; padding-top: calc(var(--s2) + var(--s1) / 2); padding-bottom: var(--s2); vertical-align: top; }
 .arch-split tbody td.sel-mark { padding-top: var(--s2); }
 .arch-split tbody tr[aria-selected="true"] > td:first-child::before { top: 18px; }
+/* The header's word stands over the names, as on the file list (ruled
+   2026-10-26), not over the archive glyph: the row's 4 px end and 12 px
+   padding, the 14 px glyph and its 8 px gap, 38 px from the card's edge. */
+.arch-split thead th:first-child { padding-left: calc(var(--s3) + var(--s1) + 14px + var(--s2)); }
 tbody tr.refused td.sel-mark { white-space: normal; overflow: visible; }
-/* The note starts under the name's first letter: past the 14 px icon and
-   its 8 px gap. */
-.move-note { display: block; color: var(--danger); font: var(--t-cap); padding: var(--s1) 0 0 calc(14px + var(--s2)); white-space: normal; }
+/* The note starts under the name's first letter, which is the cell's own
+   edge since the type icon moved into the check column's slot (ruled
+   2026-10-26; it started past the icon and its gap before). */
+.move-note { display: block; color: var(--danger); font: var(--t-cap); padding: var(--s1) 0 0; white-space: normal; }
 .layer-body > .move-note { padding: 0 0 var(--s1); }
 ul.plain { list-style: none; margin: var(--s2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); font: var(--t-body); color: var(--ink-2); }
 ul.plain li { overflow-wrap: anywhere; }
@@ -1350,30 +1354,53 @@ p.dim { color: var(--ink-2); }
 .file-split .w-type { width: 132px; }
 .file-split .w-date { width: 134px; }
 /* A checkbox heads every row and the header row: ticks are the selection.
-   The cell is the box's and nothing else's, so a click there is the box's.
-   The Archives list carries the same boxes under the same rules (APP.md §6).
-   The 16 px box stands 16 px from the card's edge in the header and in a
-   row alike (a row's first 4 px are its transparent end), clear of the
-   selection's pill: 40 px with the 8 after it. */
+   One slot (ruled 2026-10-26): in a row the box shares its 16 px slot with
+   the row's type icon, so the check column is the row's whole lead. The
+   slot stands 16 px from the card's edge in a row (a row's first 4 px are
+   its transparent end) and the header's box at 16 too, clear of the
+   selection's pill: 40 px with the 8 after it, and those 8 are now the
+   gap before the name. So the name cell and the header's Name take no
+   left padding of their own: the name starts at 40, and the header's word
+   stands over the names, no longer over the icons. */
 .file-split .w-check, .arch-split .w-check { width: 40px; }
 .file-split th.chk, .arch-split th.chk { padding: 0 0 0 var(--s4); }
 .file-split td.chk, .arch-split td.chk { padding: 0 0 0 var(--s3); }
+.file-split td.sel-mark { padding-left: 0; }
+.file-split thead th.col-name { padding-left: 0; }
 /* A grid, block-level so the cell has no line box round it, and a grid
    so the tick (input[type="checkbox"]::after, above) has its centre: the
    `display: block` this rule carried from Chromium's own box beat the
    global inline-grid and left a ticked box a solid square (ruled
    2026-10-17). */
 .file-split .chk input, .arch-split .chk input { display: grid; cursor: default; }
-/* Explorer's compromise (APP.md §6, ruled 2026-10-17): the boxes show on
-   the row under the pointer, on a selected row, on the row with the
-   keyboard's focus, and on every row once anything is selected — then the
-   list is visibly in the business of picking. The header's shows with the
-   header under the pointer, the same selection, or its own focus. Hidden,
+/* The slot: one 16 × 16 grid cell, the box and the icon after it stacked
+   in it, the 14 px icon centred. It is block-level like the box it wraps,
+   so it stands where the box stood, 10 px under the row's top, and in a
+   refused row on the name's first line (above). The icon keeps the third
+   ink it had beside the name and never takes a click: the cell is still
+   the box's, so a click there is the box's, shown or not. */
+.chk .chk-slot { display: grid; place-items: center; width: 16px; height: 16px; }
+.chk .chk-slot > * { grid-area: 1 / 1; }
+.chk .glyph { color: var(--ink-3); pointer-events: none; transition: opacity var(--dur-out) var(--ease-enter); }
+/* The reveal (APP.md §6; ruled 2026-10-26, reversing 2026-10-17's "every
+   box once anything is selected"): a row's box shows on the row under the
+   pointer, the row with the keyboard's focus and a selected row, and with
+   its own focus or tick, never on a row only because another is selected.
+   So the rows a drag can land on keep their icons through it. The picking
+   stays in the header: the tick-all box shows with the header under the
+   pointer, its own focus or tick, and while anything is selected. Hidden,
    a box is still there to be clicked the moment its row is hovered. */
 .chk input { opacity: 0; transition: opacity var(--dur-out) var(--ease-enter); }
 tbody tr:hover .chk input, tbody tr:focus-visible .chk input, tbody tr[aria-selected="true"] .chk input,
 thead tr:hover .chk input, .chk input:focus-visible, .chk input:checked,
-table:has(tbody tr[aria-selected="true"]) .chk input { opacity: 1; transition-duration: var(--dur-hover); }
+table:has(tbody tr[aria-selected="true"]) thead .chk input { opacity: 1; transition-duration: var(--dur-hover); }
+/* The icon gives way exactly where the box shows, selector for selector
+   with the rows' half of the rule above and on its durations, so a slot
+   shows one of the two and never neither. The header has no icon; the
+   `..` row has no box, so its folder always shows. If the reveal changes,
+   this rule changes with it. */
+tbody tr:hover .chk input + .glyph, tbody tr:focus-visible .chk input + .glyph, tbody tr[aria-selected="true"] .chk input + .glyph,
+.chk input:focus-visible + .glyph, .chk input:checked + .glyph { opacity: 0; transition-duration: var(--dur-hover); }
 .file-split td.type { color: var(--ink-2); }
 /* The header cells sort: the sorting column wears the one sort glyph of
    both lists, the 10 px chevron (#i-chevdown) in the third ink, turned for
@@ -1383,7 +1410,8 @@ thead th .sorter:hover { background: var(--fill-1); color: var(--ink); }
 /* A hidden column's sort stays in force, and the Name cell then carries
    that key's name and chevron (the container queries below show it). */
 thead th .hidden-sort { display: none; margin-left: var(--s2); color: var(--ink-2); }
-/* `..`: up one level, pinned first, no checkbox, never selected. */
+/* `..`: up one level, pinned first, no checkbox (its slot holds the folder
+   icon alone), never selected. */
 tbody tr.up .fname { color: var(--ink-2); }
 /* One row's height of empty space under the last row, scrolled or not
    (APP.md §6): a spacer inside the scroller, so it scrolls with the rows. */

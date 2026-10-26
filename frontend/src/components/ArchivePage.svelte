@@ -1776,9 +1776,12 @@
       {:else}
         <!-- Four columns (APP.md §6, ruled 2026-09-10): Name, Size, Type,
              Modified, a checkbox heading every row and the header row.
-             Each header cell sorts by its column; when the pane narrows
-             the columns give way from the right, and the Name cell then
-             carries the hidden column's key beside its chevron (app.css). -->
+             A row's box shares one slot with its type glyph, the input
+             first so the CSS can hide the glyph after a shown box (ruled
+             2026-10-26, app.css). Each header cell sorts by its column;
+             when the pane narrows the columns give way from the right,
+             and the Name cell then carries the hidden column's key beside
+             its chevron (app.css). -->
         <table>
           <colgroup><col class="w-check" /><col /><col class="w-size" /><col class="w-type" /><col class="w-date" /></colgroup>
           <thead>
@@ -1797,8 +1800,9 @@
           <tbody bind:this={rowsEl}>
             {#if parentId && upTarget}
               <!-- `..` (APP.md §6): up one level, pinned at the top under
-                   every sort, no checkbox, never selected; it takes
-                   focus like any row, and a drop on it moves up. -->
+                   every sort, no checkbox (its slot holds only the
+                   folder glyph), never selected; it takes focus like any
+                   row, and a drop on it moves up. -->
               <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
               <tr
                 class="up"
@@ -1813,9 +1817,9 @@
                 ondragleave={() => leave(upTarget, "up")}
                 ondrop={(e) => dropOn(e, upTarget, "up")}
               >
-                <td class="chk"></td>
+                <td class="chk"><span class="chk-slot"><svg class="i i-14 glyph" aria-hidden="true"><use href="#i-folder" /></svg></span></td>
                 <td class="sel-mark">
-                  <div class="fname"><svg class="i i-14"><use href="#i-folder" /></svg><span>{listCopy.up}</span></div>
+                  <div class="fname"><span>{listCopy.up}</span></div>
                   {#if moveError && refusedAt(upTarget.id, "up")}<span class="move-note">Not moved: {moveError.text}</span>{/if}
                 </td>
                 <td></td>
@@ -1841,10 +1845,9 @@
                 ondragleave={() => leave({ id: r.id, isDir: r.isDir }, "row")}
                 ondrop={(e) => dropOn(e, { id: r.id, isDir: r.isDir }, "row")}
               >
-                <td class="chk"><input type="checkbox" checked={selected.has(r.id)} tabindex="-1" aria-label={listCopy.tickRow(r.name)} onclick={(e) => tick1(e, r)} ondblclick={(e) => e.stopPropagation()} /></td>
+                <td class="chk"><span class="chk-slot"><input type="checkbox" checked={selected.has(r.id)} tabindex="-1" aria-label={listCopy.tickRow(r.name)} onclick={(e) => tick1(e, r)} ondblclick={(e) => e.stopPropagation()} /><svg class="i i-14 glyph" aria-hidden="true"><use href="#{rowIcon(r)}" /></svg></span></td>
                 <td class="sel-mark">
                   <div class="fname">
-                    <svg class="i i-14"><use href="#{rowIcon(r)}" /></svg>
                     <span>{r.name}</span>
                   </div>
                   {#if moveError && refusedAt(r.id, "row")}<span class="move-note">Not moved: {moveError.text}</span>{/if}

@@ -506,7 +506,7 @@ describe("the drag out in flight (beginDragOut)", () => {
     m.DragOut.mockRejectedValueOnce(new Error("drag.busy"));
     await store.beginDragOut(["x"]);
     expect(store.dragOut).toBeNull();
-    expect(store.toasts.map((t) => t.kind)).toEqual(["error"]);
+    expect(store.notices.map((t) => t.kind)).toEqual(["error"]);
   });
 
   it("lands nothing without a flight", async () => {
@@ -649,7 +649,7 @@ describe("the close the shell cancelled", () => {
     await store.decideClose("tray", false);
     expect(store.closeAsked).toBe(true);
     expect(store.closeBusy).toBe(false);
-    expect(store.toasts.length).toBe(1);
+    expect(store.notices.length).toBe(1);
   });
 });
 
@@ -721,9 +721,9 @@ describe("a file opened from Explorer (APP.md §14)", () => {
     await store.openFromShell(request(1, FILE, ["D:\\Archives\\b.efd", "D:\\Archives\\c.efd"]));
     expect(m.OpenPath).toHaveBeenCalledTimes(1);
     expect(m.OpenPath).toHaveBeenCalledWith(FILE);
-    expect(store.toasts.length).toBe(1);
+    expect(store.notices.length).toBe(1);
     // Named, not only counted (APP.md §14), and by their leaves.
-    expect(store.toasts[0].text).toContain("2 more archives were not opened: b.efd, c.efd.");
+    expect(store.notices[0].text).toContain("2 more archives were not opened: b.efd, c.efd.");
   });
 
   it("goes to the lock scene with the path kept, and finishes the open on the unlock — once", async () => {
@@ -871,7 +871,7 @@ describe("a file opened from Explorer (APP.md §14)", () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(store.current).toBe("fresh"); // not the stale one's id
     expect(store.route).toBe("archive");
-    expect(store.toasts.length).toBe(0); // and it said nothing
+    expect(store.notices.length).toBe(0); // and it said nothing
     expect(m.Leave).toHaveBeenCalledWith("stale"); // its mount went back
   });
 
@@ -1025,8 +1025,8 @@ describe("a file opened from Explorer (APP.md §14)", () => {
     m.OpenPath.mockRejectedValueOnce(Object.assign(new Error("archive.open_elsewhere"), { cause: { code: "archive.open_elsewhere", path: open } }));
     await store.openFromShell(request(1, "D:\\Downloads\\photos (1).efd"));
     expect(store.keyNotInVault).toBeNull();
-    expect(store.toasts.length).toBe(1);
-    expect(store.toasts[0].text).toBe(`This archive is already open from ${open}. Close it there first.`);
+    expect(store.notices.length).toBe(1);
+    expect(store.notices[0].text).toBe(`This archive is already open from ${open}. Close it there first.`);
   });
 
   it("says so and stops when the retry after an unlock is refused again", async () => {
@@ -1038,7 +1038,7 @@ describe("a file opened from Explorer (APP.md §14)", () => {
     m.handlers["vault.state"]({ data: status(2, "unlocked") });
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(store.openWhenUnlocked).toBe(""); // not armed for a second unlock
-    expect(store.toasts.length).toBe(1);
+    expect(store.notices.length).toBe(1);
   });
 
   it("puts up the key's dialog when no record here holds the archive", async () => {
@@ -1047,7 +1047,7 @@ describe("a file opened from Explorer (APP.md §14)", () => {
     await store.openFromShell(request(1));
     expect(store.keyNotInVault).toBe(FILE);
     expect(store.route).toBe("archives"); // nowhere new: nothing was opened
-    expect(store.toasts.length).toBe(0);
+    expect(store.notices.length).toBe(0);
     // Its one action hands Import records… to the Archives page.
     store.askImportRecords();
     expect(store.keyNotInVault).toBeNull();
@@ -1060,11 +1060,11 @@ describe("a file opened from Explorer (APP.md §14)", () => {
     m.OpenPath.mockRejectedValueOnce(refusal("archive.not_an_archive"));
     await store.openFromShell(request(1));
     expect(store.keyNotInVault).toBeNull();
-    expect(store.toasts.length).toBe(1);
-    expect(store.toasts[0].kind).toBe("error");
+    expect(store.notices.length).toBe(1);
+    expect(store.notices[0].kind).toBe("error");
     m.OpenPath.mockRejectedValueOnce(refusal("archive.forgotten"));
     await store.openFromShell(request(2));
-    expect(store.toasts.length).toBe(2);
+    expect(store.notices.length).toBe(2);
   });
 
   it("asks for nothing when the launch carried no file", async () => {
@@ -1154,7 +1154,7 @@ describe("replacing a tampered vault from a page (askReplaceVault)", () => {
     await store.askReplaceVault();
     expect(store.route).toBe("settings");
     expect(store.replaceAsked).toBe(false);
-    expect(store.toasts.length).toBe(1);
+    expect(store.notices.length).toBe(1);
   });
 });
 
@@ -1185,7 +1185,7 @@ describe("closing what a lock left open (closeOpened)", () => {
     expect(m.CloseAll).toHaveBeenCalledTimes(1);
     // the archive still open keeps its page
     expect(store.current).toBe("a");
-    expect(store.toasts.at(-1)?.kind).toBe("error");
+    expect(store.notices.at(-1)?.kind).toBe("error");
     await store.closeOpened();
     expect(store.current).toBeNull();
   });
@@ -1764,7 +1764,7 @@ describe("choices that apply at once (applySettings, choose)", () => {
     expect(m.SettingsSet).toHaveBeenCalledWith({ ...saved, idleMinutes: 5 });
     expect(store.choosing.idleMinutes).toBeUndefined();
     expect(store.choiceRefused.idleMinutes).toBeUndefined();
-    expect(store.toasts.length).toBe(0); // a choice that applied is its own confirmation
+    expect(store.notices.length).toBe(0); // a choice that applied is its own confirmation
   });
 
   it("puts the old value back and says the refusal under the control, with no toast", async () => {
@@ -1775,7 +1775,7 @@ describe("choices that apply at once (applySettings, choose)", () => {
     expect(store.settings?.absoluteMinutes).toBe(0);
     expect(store.choiceRefused.absoluteMinutes).toBeTruthy();
     expect(store.choosing.absoluteMinutes).toBeUndefined();
-    expect(store.toasts.length).toBe(0);
+    expect(store.notices.length).toBe(0);
   });
 
   it("lands two quick choices in order, neither putting the other's field back", async () => {
@@ -1895,7 +1895,7 @@ describe("testing that a backup opens, from the Vault page (askTestBackup)", () 
     await store.askTestBackup("E:/backup.eks");
     expect(store.route).toBe("keys");
     expect(store.testAsked).toBe("");
-    expect(store.toasts.length).toBe(1);
+    expect(store.notices.length).toBe(1);
   });
 });
 
@@ -1975,5 +1975,108 @@ describe("the merge dialog over every route, and the list's notes", () => {
     m.handlers["vault.state"]({ data: { ...status(2, "locked"), displayName: "Travel vault", path: "E:/t.eks" } });
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(store.vaultName).toBe("Travel vault");
+  });
+});
+
+// The InfoBars (direction 4, phase 4b; lib/infobar.ts): what toasts were.
+// The store keeps them and their clock; the hosts only draw them.
+describe("the InfoBars", () => {
+  it("lets a success go after its lifetime and keeps an error", () => {
+    vi.useFakeTimers();
+    store.notice("Details copied", "success");
+    store.notice("The disk is full.", "error");
+    vi.advanceTimersByTime(3000 + 50 * 14 + 5);
+    expect(store.notices.map((n) => n.kind)).toEqual(["error"]);
+    vi.advanceTimersByTime(60_000);
+    expect(store.notices).toHaveLength(1);
+    store.dismissNotice(store.notices[0].id);
+    expect(store.notices).toEqual([]);
+  });
+
+  it("stops the clock while the bars are hovered or the window is away", () => {
+    vi.useFakeTimers();
+    store.notice("Saved");
+    vi.advanceTimersByTime(1000);
+    store.pauseNotices({ hovered: true });
+    vi.advanceTimersByTime(20_000);
+    expect(store.notices).toHaveLength(1);
+    store.pauseNotices({ hovered: false, away: true });
+    vi.advanceTimersByTime(20_000);
+    expect(store.notices).toHaveLength(1);
+    store.pauseNotices({ away: false });
+    vi.advanceTimersByTime(3250 - 1000 - 10);
+    expect(store.notices).toHaveLength(1);
+    vi.advanceTimersByTime(20);
+    expect(store.notices).toEqual([]);
+  });
+
+  it("holds a page's bar under a dialog, and gives a dialog's bar to the page once it closes", async () => {
+    vi.useFakeTimers();
+    store.notice("On the page");
+    store.noticeHost(1);
+    vi.advanceTimersByTime(20_000);
+    expect(store.notices).toHaveLength(1);
+    store.notices = [...store.notices, { id: 99, text: "In the dialog", kind: "error", inDialog: true, left: Infinity }];
+    store.noticeHost(-1);
+    await Promise.resolve();
+    expect(store.notices.every((n) => !n.inDialog)).toBe(true);
+    vi.advanceTimersByTime(3000 + 50 * 11 + 5);
+    expect(store.notices.map((n) => n.text)).toEqual(["In the dialog"]);
+  });
+
+  // A dialog covered by another unmounts its host as the covering one
+  // mounts its own, in one flush: the count touches zero between them,
+  // and the lower dialog's bars stay the dialogs'.
+  it("keeps a dialog's bars in the dialogs when one covers another", async () => {
+    store.noticeHost(1);
+    store.notices = [{ id: 99, text: "In the dialog", kind: "error", inDialog: true, left: Infinity }];
+    store.noticeHost(-1);
+    store.noticeHost(1);
+    await Promise.resolve();
+    expect(store.notices[0].inDialog).toBe(true);
+    store.noticeHost(-1);
+    await Promise.resolve();
+    expect(store.notices[0].inDialog).toBe(false);
+  });
+
+  it("holds the page's bars while the viewer stands", () => {
+    vi.useFakeTimers();
+    store.notice("Saved");
+    store.pauseNotices({ viewerUp: true });
+    vi.advanceTimersByTime(20_000);
+    expect(store.notices).toHaveLength(1);
+    store.pauseNotices({ viewerUp: false });
+    vi.advanceTimersByTime(3250 + 10);
+    expect(store.notices).toEqual([]);
+  });
+});
+
+// The list's wash (direction 4, list motion): the ids an add on the
+// archive shown made, from its outcomes, for a while.
+describe("the rows an operation added", () => {
+  it("keeps the added and created ids of an add on the archive shown", async () => {
+    vi.useFakeTimers();
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    await open(["x"]);
+    m.Stat.mockResolvedValue(stat(2));
+    m.Page.mockResolvedValue(reply(2, ["x", "n1", "d2"], 3));
+    const results = [
+      { path: "C:/a", name: "n1", isDir: false, outcome: "added", id: "n1", size: 1, modifiedAt: 1 },
+      { path: "C:/d", name: "d2", isDir: true, outcome: "created", id: "d2", size: 0, modifiedAt: 1 },
+      { path: "C:/s", name: "s", isDir: false, outcome: "skipped", size: 0, modifiedAt: 0 },
+    ];
+    m.handlers["op.done"]({ data: { id: "o9", archiveId: "a", kind: "add", done: 1, total: 1, items: 2, dragItems: 0, phase: "", startedAt: 1, finished: true, returned: 0, results } });
+    expect([...store.fresh].sort()).toEqual(["d2", "n1"]);
+    vi.advanceTimersByTime(4001);
+    expect(store.fresh.size).toBe(0);
+  });
+
+  it("forgets them on a change of folder", async () => {
+    await open(["x", "d1"]);
+    store.markFresh(["x"]);
+    m.Page.mockResolvedValueOnce(reply(2, [], 0, [{ id: ROOT, name: "A" }, { id: "d1", name: "d1" }]));
+    await store.enterDir("d1", "d1");
+    expect(store.fresh.size).toBe(0);
   });
 });

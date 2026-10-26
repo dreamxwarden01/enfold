@@ -111,8 +111,8 @@ export function vaultFigures(all: readonly FigureRow[]): { count: number; size: 
 // answers archive.compacting to every operation that needs its handle
 // (§2.3) — Open itself mounts the handle, but the Archive page's first
 // Page and Stat are refused, so an Open landed on an empty page under an
-// error toast, and Close is refused outright. The page greys those commands with the code's
-// own words rather than letting each one end in an error toast (ruled
+// error InfoBar, and Close is refused outright. The page greys those commands with the code's
+// own words rather than letting each one end in an error InfoBar (ruled
 // 2026-10-14). The codes are the core's strings, as the Status column's
 // note is.
 export interface RowFacts {

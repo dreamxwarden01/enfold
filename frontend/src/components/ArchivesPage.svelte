@@ -20,17 +20,20 @@
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, keyHint, keyTitles, pendingCopy, sinceText, vaultCopy } from "../lib/strings";
+  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, keyHint, keyTitles, pendingCopy, sinceText, vaultCopy } from "../lib/strings";
   import { bytes, date, dateTime, plural } from "../lib/format";
   import { chipKinds, compacting, fingerprintOf, folderOf, rowRefusal, vaultFigures, viewRows } from "../lib/archlist";
   import type { ChipKind, ListView } from "../lib/archlist";
   import { fold, folded } from "../lib/cmdbar";
-  import { groups } from "../lib/menu";
+  import { KEY_ECHO_MS, groups, keyAnchor } from "../lib/menu";
+  import type { MenuClose } from "../lib/menu";
+  import { archCommands, blankMenu, rowMenu } from "../lib/archcmds";
+  import type { ArchCmd, ArchFacts, ArchItem } from "../lib/archcmds";
   import { closeButton } from "../lib/leave";
   import { backupLine } from "../lib/backup";
   import { CLOSED, canExpand, collapse, edgeY, escape, expand, inContact, naturalEnd, openHeight, overScroll, picked, pushScroll, reveals, rideReachesHome, rideScroll, springScroll, toggle } from "../lib/archbar";
   import type { BarState, ListMetrics } from "../lib/archbar";
-  import { MOVE, enter, motion } from "../lib/motion";
+  import { MOVE, enter, motion, slideIn, unfold } from "../lib/motion";
   import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
   // The pending action, by another name: `pending` here is the save bar's
   // list of staged edits.
@@ -40,6 +43,7 @@
   import type { Intent } from "../lib/listkeys";
   import { DEFAULT_METHOD, METHODS, METHOD_NOTE, methodWord } from "../lib/method";
   import { foreignPath } from "../lib/paths";
+  import { fieldMenu } from "../lib/fieldmenu";
   import { purgeAfter } from "../lib/retention";
   import { DESCRIPTION_RULE, descriptionProblem, nameProblem } from "../lib/validate";
   import Dialog from "./Dialog.svelte";
@@ -50,8 +54,10 @@
   import ArchiveDetailsDialog from "./ArchiveDetailsDialog.svelte";
   import DeleteArchiveDialog from "./DeleteArchiveDialog.svelte";
   import TamperedBar from "./TamperedBar.svelte";
+  import NoticeSlot from "./NoticeSlot.svelte";
   import MenuButton from "./MenuButton.svelte";
   import type { MenuItem } from "./MenuButton.svelte";
+  import ContextMenu from "./ContextMenu.svelte";
 
   // The selection (direction 6, phase 4a): one archive, by id — a click
   // selects it, the arrows move it, and Shift and Ctrl add nothing here.
@@ -64,6 +70,20 @@
   // Forgotten view, which lists the forgotten records alone. A page's own
   // choice, back to the list each time the page is shown.
   let view = $state<ListView>("list");
+
+  // A change of view plays the list's folder change (direction 4, list
+  // motion; lib/motion.ts): the rows fade in from 8 px — the Forgotten view
+  // from the right, as a place gone into, the list from the left, as one
+  // come back to — while the header and the commands stay still. Only the
+  // tbody moves, in place, so the focus stays where it was.
+  let rowsEl: HTMLTableSectionElement | undefined = $state();
+  let viewShown: ListView = "list";
+  $effect(() => {
+    const v = view;
+    if (v === viewShown) return;
+    viewShown = v;
+    slideIn(untrack(() => rowsEl), v === "forgotten" ? 1 : -1);
+  });
 
   // every: the whole registry, hidden and forgotten records included, for
   // what the store's own list cannot say while Show hidden is off — the
@@ -185,7 +205,7 @@
   let sortAsc = $state(true);
 
   function fail(e: unknown) {
-    store.toast(codeText(errorOf(e).code), "error");
+    store.notice(codeText(errorOf(e).code), "error");
   }
 
   async function run(p: Promise<unknown>) {
@@ -384,6 +404,9 @@
         break;
       case "refresh":
         void store.refreshArchives();
+        break;
+      case "menu":
+        keyMenu(atRow);
         break;
       case "typeahead": {
         typed = typeahead(typed, i.char, now, typedAt);
@@ -1197,15 +1220,14 @@
   const purge = $derived(pane ? purgeAfter(pane.forgottenAt) : 0);
 
   // ---- the selected archive's commands, as menus hold them -----------------
-  // One table of the row's verbs for the bar, its More and the pane's More
-  // (direction 6): each item greyed with its reason, which the menu draws as
-  // its second line (lib/menu.ts secondLine).
+  // One table of the row's commands (lib/archcmds.ts; directions 6 and 7)
+  // for the bar, its More, the pane's More and the row's own menu: each
+  // item greyed by one rule with its reason, which a menu draws as its
+  // second line (lib/menu.ts secondLine), and each run by one function
+  // (runArch). The bar's own buttons keep the codes' sentences as titles.
   const verbStop = $derived(!one || !unlocked || tampered || !!rowStop);
   const verbWhy = $derived(!one ? archivesCopy.selectFirst : (opReason ?? rowWhy));
-  // The same reasons as a menu says them, in a few words (archivesCopy.why).
   const why = archivesCopy.why;
-  const lockWhy = $derived(!unlocked ? why.locked : tampered ? why.tampered : undefined);
-  const verbMenuWhy = $derived(lockWhy ?? (rowStop === "archive.forgotten" ? why.forgotten : rowStop ? why.compacting : undefined));
 
   function refreshFingerprint() {
     if (one) void run(Archives.Verify(one.id));
@@ -1226,35 +1248,85 @@
     if (a) void run(a.hidden ? Archives.Unhide(a.id) : Archives.Hide(a.id));
   }
 
-  // The three verbs that fold, in the bar's order (lib/cmdbar.ts).
-  const verbItems = $derived<MenuItem[]>([
-    { label: commandCopy.refreshFingerprint, icon: "i-check", disabled: verbStop, title: verbMenuWhy, run: refreshFingerprint },
-    { label: commandCopy.compact, icon: "i-box", disabled: verbStop, title: verbMenuWhy, run: askCompact },
-    { label: commandCopy.rekeyArchive, icon: "i-rotate", disabled: verbStop, title: verbMenuWhy, run: askRekey },
-  ]);
-
-  // *Close* for an archive that is open — the graceful leave, the head's
-  // and the rail row's by the same word, through the store (APP.md §2.3;
-  // the review of 2026-10-18) — or, once a Close has left one that
-  // something still holds, the kill switch as *Force close*.
-  const closeItems = $derived<MenuItem[]>(
-    !one?.open
-      ? []
-      : store.leftHeld(one.id)
-        ? [{ label: commandCopy.forceClose, disabled: compactStop, title: compactStop ? why.compacting : store.runningOps.some((o) => o.archiveId === one.id) ? archivePageCopy.forceCloseRunning : archivePageCopy.forceCloseServing, run: () => void store.closeOpened(one.id) }]
-        : [{ label: commandCopy.close, disabled: compactStop, title: compactStop ? why.compacting : undefined, run: () => void store.closeArchive(one.id) }],
+  // The row's facts the table greys by: the vault, then the row.
+  const facts = $derived<ArchFacts | null>(
+    one
+      ? {
+          unlocked,
+          tampered,
+          open: !!one.open,
+          held: store.leftHeld(one.id),
+          running: store.runningOps.some((o) => o.archiveId === one.id),
+          forgotten: hideStop,
+          compacting: compactStop,
+          hidden: !!one.hidden,
+          missing: one.note === "archive.file_missing",
+          foreign,
+          detailsRead: !!det,
+        }
+      : null,
   );
+  const cmds = $derived(archCommands(facts));
 
-  const hideItems = $derived<MenuItem[]>([
-    { label: one?.hidden ? commandCopy.unhide : commandCopy.hide, icon: "i-eye", disabled: !one || !unlocked || hideStop, title: !unlocked ? why.locked : hideStop ? why.forgotten : undefined, run: toggleHidden },
-  ]);
+  // runArch: one function per command, whichever surface offered it — the
+  // bar, a More, the row's menu. *Close* is the graceful leave, the head's
+  // and the rail row's by the same word (APP.md §2.3); *Force close* the
+  // kill switch, once a Close has left the archive held.
+  function runArch(cmd: ArchCmd) {
+    const a = one;
+    if (!a) return;
+    switch (cmd) {
+      case "open":
+        openRow(a.id);
+        break;
+      case "close":
+        void store.closeArchive(a.id);
+        break;
+      case "forceClose":
+        void store.closeOpened(a.id);
+        break;
+      case "showInExplorer":
+        void run(Shell.Reveal(a.path));
+        break;
+      case "refreshFingerprint":
+        refreshFingerprint();
+        break;
+      case "compact":
+        askCompact();
+        break;
+      case "rekey":
+        askRekey();
+        break;
+      case "hide":
+      case "unhide":
+        toggleHidden();
+        break;
+      case "details":
+        if (det) showDetails = true;
+        break;
+      case "locate":
+        void locate(a);
+        break;
+      case "forget":
+        startDelete("forget", a);
+        break;
+      case "delete":
+        startDelete("delete", a);
+        break;
+      case "restore":
+        restore(a);
+        break;
+    }
+  }
 
-  // The two that destroy, last and in the danger ink (direction 6). A
-  // record already forgotten has nothing more to forget.
-  const destroyItems = $derived<MenuItem[]>([
-    { label: commandCopy.forgetArchive, icon: "i-x", danger: true, disabled: !one || !unlocked || tampered || hideStop || compactStop, title: lockWhy ?? (hideStop ? why.alreadyForgotten : compactStop ? why.compacting : undefined), run: () => startDelete("forget", one) },
-    { label: commandCopy.deleteArchive, icon: "i-trash", danger: true, keys: "Del", disabled: !one || !unlocked || tampered || compactStop, title: lockWhy ?? (compactStop ? why.compacting : undefined), run: () => startDelete("delete", one) },
-  ]);
+  const asMenu = (items: ArchItem[]): MenuItem[] => items.map((i) => ({ ...i, run: () => runArch(i.cmd) }));
+  // The three verbs that fold, in the bar's order (lib/cmdbar.ts); Close
+  // while the row is open; Hide; the two that destroy, last and in the
+  // danger ink (direction 6).
+  const verbItems = $derived(asMenu(cmds.verbs));
+  const closeItems = $derived(asMenu(cmds.close));
+  const hideItems = $derived(asMenu(cmds.hide));
+  const destroyItems = $derived(asMenu(cmds.destroy));
 
   // ---- the bar's fold (lib/cmdbar.ts) ---------------------------------------
   // kept: how many of the three verbs the bar has room for. The bar is
@@ -1361,6 +1433,121 @@
     void run(Archives.Restore(a.id)).then(() => store.refreshArchives());
   }
 
+  // ---- the row menus (direction 7, Explorer's habits; lib/archcmds.ts) ------
+  // A right-click on a row selects it — one archive at a time — and opens
+  // its menu: the same commands as the bar and the pane's More, Open the
+  // default (bold, Enter). The Forgotten view's rows offer Restore and
+  // Delete archive… alone. The list's blank area offers what makes or
+  // brings an archive: New archive…, Open file…. Shift+F10 and the Menu key
+  // open the focused row's menu under it (lib/menu.ts keyAnchor), or the
+  // blank area's with no row; Escape closes it and the focus goes back to
+  // the row. The menu is the app's (ContextMenu): 2026-09-06 turned
+  // WebView2's own off, and an app-drawn menu is not that one.
+  let ctx = $state<{ x: number; y: number; row: string | null; key: boolean } | null>(null);
+  // When a menu was last opened from the keyboard: the WebView's own
+  // contextmenu event that follows the key is its echo (KEY_ECHO_MS).
+  let keyMenuAt = -Infinity;
+  const echo = () => performance.now() - keyMenuAt < KEY_ECHO_MS;
+
+  const rowItems = $derived(asMenu(rowMenu(cmds, view === "forgotten")));
+  const blankItems = $derived<MenuItem[]>(blankMenu(unlocked, tampered).map((i) => ({ ...i, run: i.cmd === "newArchive" ? openCreate : () => void openFile() })));
+  const ctxItems = $derived(!ctx ? [] : ctx.row ? rowItems : blankItems);
+
+  function rowCtx(e: MouseEvent, a: ArchiveSummary) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (echo()) return;
+    const rides = willRide(a.id);
+    pick(a.id);
+    (e.currentTarget as HTMLElement).focus({ preventScroll: true });
+    if (!rides) {
+      ctx = { x: e.clientX, y: e.clientY, row: a.id, key: false };
+      return;
+    }
+    const x = e.clientX;
+    afterRide(a.id, (el) => {
+      ctx = { x, y: el.getBoundingClientRect().bottom, row: a.id, key: false };
+    });
+  }
+
+  // With the narrow panel up, picking another row sends the list riding
+  // that row to its first line (moveBar → shift, APP.md §6) over the
+  // frames of the glide. A menu put up at once would stand where the row
+  // was, and the ride's scroll would close it (ContextMenu closes on a
+  // scroll under it). So the menu waits for the ride: the effect that
+  // starts it runs on the next tick, then the one frame clock is watched
+  // until it stops, and the menu opens under the row where it came to
+  // rest. A later menu, or a press that took the selection elsewhere,
+  // drops the wait.
+  let rideWait = 0;
+  function willRide(id: string): boolean {
+    return narrow && bar.open && bar.id !== id;
+  }
+  function afterRide(id: string, open: (el: HTMLElement) => void) {
+    const mine = ++rideWait;
+    void tick().then(() => {
+      const wait = () => {
+        if (mine !== rideWait || selId !== id) return;
+        if (frame) {
+          requestAnimationFrame(wait);
+          return;
+        }
+        const el = listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(id)}"]`);
+        if (el) open(el);
+      };
+      wait();
+    });
+  }
+
+  // The blank area: as a click there does, it clears the selection. A
+  // header cell is not blank.
+  function blankCtx(e: MouseEvent) {
+    e.preventDefault();
+    const t = e.target as HTMLElement;
+    if (echo() || t.closest("thead") || t.closest("tbody tr")) return;
+    selId = null;
+    ctx = { x: e.clientX, y: e.clientY, row: null, key: false };
+  }
+
+  // keyMenu: the row the keys start from (focusIndex), selected as a
+  // right-click selects it; with none, the blank area's menu at the
+  // list's top left, under its header.
+  function keyMenu(a: ArchiveSummary | null) {
+    keyMenuAt = performance.now();
+    if (!a) {
+      const box = listEl?.getBoundingClientRect();
+      if (!box) return;
+      const head = listEl?.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+      ctx = { ...keyAnchor({ left: box.left, bottom: box.top + head }), row: null, key: true };
+      return;
+    }
+    const rides = willRide(a.id);
+    pick(a.id);
+    const el = listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(a.id)}"]`);
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    if (rides) {
+      afterRide(a.id, (at) => {
+        ctx = { ...keyAnchor(at.getBoundingClientRect()), row: a.id, key: true };
+      });
+      return;
+    }
+    // reveal scrolls now and the rect below is read after it, so the
+    // menu stands under the row where it has come to; the scroll event
+    // the browser sends next frame is the opening's (ContextMenu).
+    if (!(narrow && bar.open)) reveal(el);
+    ctx = { ...keyAnchor(el.getBoundingClientRect()), row: a.id, key: true };
+  }
+
+  // A key or a command puts the focus back on the row; a press elsewhere
+  // leaves it where that press put it.
+  function closeCtx(how: MenuClose) {
+    const c = ctx;
+    ctx = null;
+    if (how === "pointer" || !c?.row) return;
+    listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(c.row)}"]`)?.focus({ preventScroll: true });
+  }
+
   // The foot's note (LayerFoot): the one selected, else how many are, else
   // how many there are. The archive opened last, while it is the one row
   // selected, says what Enter does (direction 3, phase 4a).
@@ -1414,11 +1601,6 @@
      §14; ruled 2026-10-14). The file list's own target, on the Archive
      page, carries the ids. -->
 <div class="layer-body" bind:this={bodyEl} data-file-drop-target="true">
-  {#if tampered}
-    <!-- First on the page, above the commands it greys (direction 9;
-         APP.md §13): the danger tier, with its fix. -->
-    <TamperedBar reason={st?.tamperedReason} />
-  {/if}
   {#if !emptyShown}
     <!-- The command bar (direction 6): one 40 px line that never wraps.
          Open, the one accent; then what makes or brings an archive; then
@@ -1443,7 +1625,7 @@
       {#if kept > 2}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={askRekey}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</button>{/if}
       <div class="barslot" data-bar="fixed"><MenuButton id="arch-more" label={archivesCopy.more} title={one ? archivesCopy.more : archivesCopy.selectFirst} icon="i-more" iconOnly disabled={!one} items={barMore} /></div>
       <div class="grow"></div>
-      <label class="filterbox" data-bar="fixed"><span class="vh">{archivesCopy.filter}</span><input class="input" type="search" placeholder={archivesCopy.filter} title={keyTitles.filter} bind:this={filterEl} bind:value={filter} /></label>
+      <label class="filterbox" data-bar="fixed"><span class="vh">{archivesCopy.filter}</span><input class="input" type="search" placeholder={archivesCopy.filter} title={keyTitles.filter} bind:this={filterEl} bind:value={filter} use:fieldMenu /></label>
       <div class="barslot" data-bar="fixed"><MenuButton id="arch-view" label={archivesCopy.view} icon="i-view" end items={viewItems} /></div>
     </div>
     <!-- The verbs as the bar draws them, unseen, so a folded one is still
@@ -1456,22 +1638,36 @@
     </div>
   {/if}
 
-  {#if !unlocked}
-    <!-- The locked banner: one line of 40 px, everything on it centred
-         (APP.md §7, ruled 2026-09-11). Attention since direction 9 (ruled
-         2026-10-18): what the lock left open is still decrypted and still
-         saves (APP.md §2.3), so it names them (VaultStatus.opened) and
-         offers their close beside the unlock: the leave, or the kill
-         switch once a leave has left them held (ruled 2026-10-19). -->
-    <div class="bar line attention">
-      <svg class="i i-14"><use href="#i-lock" /></svg>
-      <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
-      {#if openedNames.length > 0}
-        <button type="button" class="btn sm" onclick={closeLocked}>{lockedClose.label}</button>
-      {/if}
-      <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
-    </div>
-  {/if}
+  <!-- The notice slot (direction 4, phase 4b; NoticeSlot): the page's
+       stateful banners between the commands and the list, in their tiers'
+       order, each opening and closing its height so the list slides; and
+       the InfoBars over the list's top, stopping at its column. -->
+  <NoticeSlot beside={emptyShown ? undefined : "archives"}>
+    {#if tampered}
+      <!-- Danger, first (direction 9; APP.md §13): the Tampered banner,
+           with its fix. It stood above the commands it greys until the
+           slot (direction 4) gave every banner one place under them. -->
+      <div class="fold" transition:unfold><TamperedBar reason={st?.tamperedReason} /></div>
+    {/if}
+    {#if !unlocked}
+      <!-- The locked banner: one line of 40 px, everything on it centred
+           (APP.md §7, ruled 2026-09-11). Attention since direction 9 (ruled
+           2026-10-18): what the lock left open is still decrypted and still
+           saves (APP.md §2.3), so it names them (VaultStatus.opened) and
+           offers their close beside the unlock: the leave, or the kill
+           switch once a leave has left them held (ruled 2026-10-19). -->
+      <div class="fold" transition:unfold>
+        <div class="bar line attention">
+          <svg class="i i-14"><use href="#i-lock" /></svg>
+          <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
+          {#if openedNames.length > 0}
+            <button type="button" class="btn sm" onclick={closeLocked}>{lockedClose.label}</button>
+          {/if}
+          <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
+        </div>
+      </div>
+    {/if}
+  </NoticeSlot>
 
   {#if view === "forgotten"}
     <!-- The Forgotten view says what it is, once, above its rows. -->
@@ -1479,7 +1675,11 @@
   {/if}
 
   <div class="arch-split" class:bare={emptyShown} bind:this={splitEl}>
-    <div class="arch-list">
+    <!-- The list's whole column is its blank area for a right-click
+         (direction 7), the room under a short table included; a row's
+         own menu stops the event before it gets here. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="arch-list" oncontextmenu={blankCtx}>
       <!-- A click on the list's blank area clears the selection (APP.md
            §6); a click that lands on a row is the row's, and a header
            cell sorts. -->
@@ -1523,13 +1723,13 @@
                 {#if view === "forgotten"}<th scope="col"><span class="vh">{archivesCopy.forgottenChipOpen}</span></th>{/if}
               </tr>
             </thead>
-            <tbody>
+            <tbody bind:this={rowsEl}>
               {#each rows as a, i (a.id)}
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
                 <!-- data-id: how the panel finds the row it must bring to
                      the list's first line (lib/archbar.ts). The keys are
                      the page's one handler (onKey), not the row's. -->
-                <tr data-id={a.id} tabindex={selId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={selId === a.id} class:forgotten={a.forgottenAt > 0} onclick={() => click(a.id)} ondblclick={() => openRow(a.id)}>
+                <tr data-id={a.id} tabindex={selId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={selId === a.id} class:forgotten={a.forgottenAt > 0} onclick={() => click(a.id)} oncontextmenu={(e) => rowCtx(e, a)} ondblclick={() => openRow(a.id)}>
                   <td class="sel-mark">
                     <div class="aname">
                       <svg class="i i-14"><use href="#i-box" /></svg>
@@ -1733,11 +1933,11 @@
                         <div class="fields" id="ar-fields">
                           <div class="field">
                             <div class="field-top"><label for="ar-name">{archivesCopy.facts.name}</label></div>
-                            <input id="ar-name" class="input" class:invalid={nameChanged && !!nameProblem(draft.name)} aria-invalid={nameChanged && nameProblem(draft.name) ? "true" : undefined} bind:value={store.recordDraft[pane.id].name} disabled={!editable} title={editReason} />
+                            <input id="ar-name" class="input" class:invalid={nameChanged && !!nameProblem(draft.name)} aria-invalid={nameChanged && nameProblem(draft.name) ? "true" : undefined} bind:value={store.recordDraft[pane.id].name} disabled={!editable} title={editReason} use:fieldMenu />
                           </div>
                           <div class="field">
                             <div class="field-top"><label for="ar-desc">{archivesCopy.facts.description}</label><span class="hint">{archivesCopy.descriptionHint}</span></div>
-                            <textarea id="ar-desc" class="input area" class:invalid={descChanged && !!descriptionProblem(draft.description)} aria-invalid={descChanged && descriptionProblem(draft.description) ? "true" : undefined} rows="2" bind:value={store.recordDraft[pane.id].description} disabled={!editable} title={editReason}></textarea>
+                            <textarea id="ar-desc" class="input area" class:invalid={descChanged && !!descriptionProblem(draft.description)} aria-invalid={descChanged && descriptionProblem(draft.description) ? "true" : undefined} rows="2" bind:value={store.recordDraft[pane.id].description} disabled={!editable} title={editReason} use:fieldMenu></textarea>
                           </div>
                           {#if pending.length > 0}
                             <SaveBar items={pending} {invalid} busy={saving} onsave={() => void saveRecord()} ondiscard={discard} />
@@ -1787,6 +1987,15 @@
     <i class="arch-probe" bind:this={probeEl}></i>
   </div>
 </div>
+
+<!-- A row's menu, or the blank area's (direction 7): keyed on the open,
+     so a second right-click elsewhere is a menu of its own, placed anew. -->
+{#if ctx}
+  {@const c = ctx}
+  {#key c}
+    <ContextMenu x={c.x} y={c.y} keyboard={c.key} items={ctxItems} label={c.row ? (one?.name ?? "") : archivesCopy.listLabel} onclose={closeCtx} />
+  {/key}
+{/if}
 
 <!-- The vault's summary's head (direction 6): the name strong, then the
      figures — over every record but the forgotten, hidden ones included

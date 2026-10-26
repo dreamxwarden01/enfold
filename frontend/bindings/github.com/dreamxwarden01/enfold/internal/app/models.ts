@@ -996,6 +996,11 @@ export interface Reader {
 
 /**
  * Settings is the machine-local settings file plus the registry's timeouts.
+ * The timeouts travel with TimeoutsFromVault: GetSettings sets it, with the
+ * registry's values, only while Unlocked, and SetSettings writes the
+ * timeouts back only from a struct that carries it true, so a struct read
+ * while Locked — false, zeros — never puts the defaults over the vault's
+ * own lock times (APP.md §3, Settings; ruled 2026-10-19).
  */
 export interface Settings {
     "vaultPath": string;

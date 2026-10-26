@@ -34,6 +34,10 @@
     <symbol id="i-shield" viewBox="0 0 20 20"><path d="M10 2.8 16 5v5.2c0 3.4-2.4 6-6 7-3.6-1-6-3.6-6-7V5l6-2.2Z"/><path d="M7.6 9.8h4.8v3.4H7.6z"/><path d="M9 9.8V8.6a1 1 0 0 1 2 0v1.2"/></symbol>
     <symbol id="i-rotate" viewBox="0 0 20 20"><path d="M16.2 10a6.2 6.2 0 1 1-1.9-4.5"/><path d="M16.4 3.4v3.4H13"/></symbol>
     <symbol id="i-save" viewBox="0 0 20 20"><path d="M4.4 3.6h9l3 3v9.8H4.4V3.6Z"/><path d="M7 3.6v4h5v-4"/><path d="M7 16.4v-4.6h6v4.6"/></symbol>
+    <!-- Move to… (direction 7): a folder with an arrow going into it. -->
+    <symbol id="i-move" viewBox="0 0 20 20"><path d="M2.6 9V5.4h5.1l1.5 2h8.2V15a1 1 0 0 1-1 1h-6.2"/><path d="M2.6 13.4h6"/><path d="m6.6 11.2 2.2 2.2-2.2 2.2"/></symbol>
+    <!-- Restore (direction 7, the Forgotten view's row menu): back the way it went. -->
+    <symbol id="i-undo" viewBox="0 0 20 20"><path d="M5.2 8.4h7.2a3.8 3.8 0 0 1 0 7.6H9.4"/><path d="m8.2 5.2-3 3.2 3 3.2"/></symbol>
     <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7.4" y="3.4" width="9.2" height="9.2" rx="1.6"/><path d="M12.6 15v1.6a1 1 0 0 1-1 1H4.4a1 1 0 0 1-1-1V7.4a1 1 0 0 1 1-1H6"/></symbol>
     <symbol id="i-rename" viewBox="0 0 20 20"><path d="m4 14.6 8.8-8.8 1.4 1.4-8.8 8.8H4v-1.4Z"/><path d="m11.6 7 1.4 1.4"/></symbol>
     <symbol id="i-eye" viewBox="0 0 20 20"><path d="M2.6 10s2.8-4.6 7.4-4.6S17.4 10 17.4 10s-2.8 4.6-7.4 4.6S2.6 10 2.6 10Z"/><circle cx="10" cy="10" r="2.2"/></symbol>

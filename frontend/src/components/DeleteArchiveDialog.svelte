@@ -24,6 +24,7 @@
   import { date } from "../lib/format";
   import { RETENTION_SECONDS } from "../lib/retention";
   import { nextMark, onLeave } from "../lib/forms";
+  import { fieldMenu } from "../lib/fieldmenu";
   import { CONFIRM_NAME, confirmNameProblem } from "../lib/validate";
   import Dialog from "./Dialog.svelte";
 
@@ -218,7 +219,7 @@
          2026-10-17). -->
     <div class="field">
       <div class="field-top"><label for="del-name">{dialogCopy.confirmName}</label><span class="hint">{name}</span></div>
-      <input id="del-name" class="input" class:invalid={!!nameSaid} aria-invalid={nameSaid ? "true" : undefined} bind:value={typed} onblur={leave} oninput={() => (mark = nextMark("change", mark, confirmNameProblem(typed, name)))} disabled={phase === "busy"} />
+      <input id="del-name" class="input" class:invalid={!!nameSaid} aria-invalid={nameSaid ? "true" : undefined} bind:value={typed} onblur={leave} oninput={() => (mark = nextMark("change", mark, confirmNameProblem(typed, name)))} disabled={phase === "busy"} use:fieldMenu />
       {#if nameSaid}<div class="field-error">{nameSaid === CONFIRM_NAME ? CONFIRM_NAME : nameSaid}</div>{/if}
     </div>
   {:else if phase === "done"}

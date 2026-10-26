@@ -77,6 +77,14 @@
      contrast goes the other way — so it reads as a ring inside the
      selected row's own wash and not as the black outer ring of a button. */
   --focus-row: #0b5a50;
+  /* The viewer (direction 7; Viewer.svelte): dark in both themes, as a
+     photo viewer is, so a picture is judged against the same ground. */
+  --viewer-bg: #1d1e22;
+  --viewer-ink: #f3f3f6;
+  --viewer-ink-2: #b5b6be;
+  --viewer-ctl: rgba(255, 255, 255, 0.08);
+  --viewer-ctl-hover: rgba(255, 255, 255, 0.14);
+  --viewer-stroke: rgba(255, 255, 255, 0.16);
   --shadow-card: 0 1px 2px rgba(16, 17, 20, 0.06), 0 2px 8px rgba(16, 17, 20, 0.05);
   --shadow-pop: 0 8px 24px rgba(16, 17, 20, 0.13);
   --shadow-window: 0 12px 40px rgba(16, 17, 20, 0.16), 0 2px 6px rgba(16, 17, 20, 0.1);
@@ -103,6 +111,9 @@
   --loop-pulse: 2.4s;
   --loop-ring: 1s;   /* the pending ring's turn */
   --loop-run: 1.4s;  /* the indeterminate progress line's run */
+  /* List motion (direction 4, phase 4b; lib/motion.ts WASH): a row an
+     operation added wears the accent wash this long, fading out. */
+  --dur-wash: 1200ms;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI Semibold", "Segoe UI", system-ui, sans-serif;
   --font-text: "Segoe UI Variable Text", "Segoe UI Variable Small", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
@@ -119,7 +130,7 @@
   --t-sub: 600 20px/28px var(--font-display);
   --t-hero: 600 28px/36px var(--font-display);
   /* The 4 px grid: every inset and gap is one of these (APP.md §6). A
-     card's inset is 16 (12 for a strip: a bar, an op row, a toast); an
+     card's inset is 16 (12 for a strip: a bar, an op row, an InfoBar); an
      icon sits 8 from its label (12 beside a 20 px icon); the layer's
      gutter is 24. Fixed heights stay what they were ruled — the 40 px
      locked line, the 42 px op row, the 44/64 panel, the 36 px rows, the
@@ -137,6 +148,11 @@
      values; and a row's description wraps at 52 characters. */
   --page-col: 760px;
   --ctl-w: 220px;
+  /* The side panes beside the two lists (APP.md §6): the Archives page's
+     details and the Archive page's preview. The InfoBars over a list stop
+     at its column, so they read these too (.nslot.beside-*). */
+  --pane-w-archives: 300px;
+  --pane-w-files: 264px;
   --prose-w: 52ch;
 }
 
@@ -194,6 +210,12 @@
     --focus-outer: #ffffff;
     --focus-inner: #1c1c20;
     --focus-row: #6adcc5;
+    --viewer-bg: #0c0c0e;
+    --viewer-ink: #f3f3f6;
+    --viewer-ink-2: #b5b6be;
+    --viewer-ctl: rgba(255, 255, 255, 0.08);
+    --viewer-ctl-hover: rgba(255, 255, 255, 0.14);
+    --viewer-stroke: rgba(255, 255, 255, 0.16);
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
     --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
     --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
@@ -250,13 +272,19 @@
   --focus-outer: #ffffff;
   --focus-inner: #1c1c20;
   --focus-row: #6adcc5;
+  --viewer-bg: #0c0c0e;
+  --viewer-ink: #f3f3f6;
+  --viewer-ink-2: #b5b6be;
+  --viewer-ctl: rgba(255, 255, 255, 0.08);
+  --viewer-ctl-hover: rgba(255, 255, 255, 0.14);
+  --viewer-stroke: rgba(255, 255, 255, 0.16);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
   --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
   --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur-tap: 0ms; --dur-leave: 0ms; --dur-hover: 0ms; --dur-fast: 0ms; --dur-out: 0ms; --dur-move: 0ms; --dur-pop-step: 0ms; --dur-pop: 0ms; }
+  :root { --dur-tap: 0ms; --dur-leave: 0ms; --dur-hover: 0ms; --dur-fast: 0ms; --dur-out: 0ms; --dur-move: 0ms; --dur-pop-step: 0ms; --dur-pop: 0ms; --dur-wash: 0ms; }
 }
 
 /* ---------- page ---------------------------------------- */
@@ -445,15 +473,16 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
   background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card);
   box-shadow: var(--shadow-pop);
 }
-/* The one opened by a right-click (APP.md §13) is the same box, placed at
-   the pointer: the shell disables WebView2's own, so this is the only
-   context menu there is. */
+/* The one opened by a right-click (APP.md §13; direction 7) is the same
+   box (.menu ctxmenu), placed at the pointer or under the focused row and
+   above everything else. It is the app's own: 2026-09-06 turned WebView2's
+   context menu off, and this one is drawn by the page. */
 .ctxmenu {
   position: fixed; z-index: 40; min-width: 132px;
-  display: flex; flex-direction: column; padding: var(--s1);
-  background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card);
-  box-shadow: var(--shadow-pop);
 }
+/* The box holds the focus of a menu opened by the pointer, before an arrow
+   picks an item: it is not a place to mark. */
+.ctxmenu:focus { outline: none; }
 .menu button, .ctxmenu button {
   display: flex; align-items: center; gap: var(--s2); min-height: 28px; padding: 0 var(--s2); white-space: nowrap;
   border: none; background: none; border-radius: var(--r-ctl); font: var(--t-body); color: var(--ink); text-align: left;
@@ -489,6 +518,10 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
 .menu button .tick { visibility: hidden; color: var(--ink); }
 .menu button .tick.on { visibility: visible; }
 .menu button.danger, .menu button.danger .i { color: var(--danger); }
+/* The default item — what Enter and a double-click do — is bold and first
+   (direction 7, as Explorer draws it); its key and its reason keep their
+   caption face. */
+.menu button.default { font: var(--t-strong); }
 .menu button[aria-disabled="true"], .menu button[aria-disabled="true"] .i { color: var(--ink-dis); }
 .menu button[aria-disabled="true"]:hover { background: none; }
 /* A greyed item's reason is its second line (direction 6; lib/menu.ts
@@ -614,7 +647,7 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 1.5
 progress:indeterminate { background: var(--accent-line); }
 
 /* Cards are flat: a 1 px stroke and no shadow (APP.md §6, Controls; ruled
-   2026-10-17). A shadow says a thing floats — a menu, a toast, the save
+   2026-10-17). A shadow says a thing floats — a menu, an InfoBar, the save
    bar, the bottom panel over the list, a dialog — and a card in the layer
    does not; it floated on one while the list beside it was flat. */
 .card { background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); }
@@ -813,7 +846,9 @@ progress:indeterminate { background: var(--accent-line); }
 }
 /* Pages share the layer's first row, so an outgoing page fades under the incoming one; the foot
    is the second row, outside the crossfade (LayerFoot). */
-.page { grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+/* position: relative holds the viewer (Viewer.svelte), which stands over
+   the page's area of the layer and under the foot and the rail. */
+.page { grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; position: relative; }
 .layer > .layer-foot { grid-row: 2; }
 /* One head height on every page — the line of a 32 px button, whether the
    head carries one (the Archive page's) or only its title — so the body
@@ -1130,7 +1165,7 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .digits span { font: var(--t-sub); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; padding: var(--s2) 0; background: var(--surface-alt); border: 1px solid var(--stroke); border-radius: var(--r-ctl); user-select: text; }
 
 /* ---------- archives / archive / keys ---------------------------------------- */
-.arch-split { display: grid; grid-template-columns: 1fr 300px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); }
+.arch-split { display: grid; grid-template-columns: 1fr var(--pane-w-archives); gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); }
 .arch-list { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; min-height: 0; }
 /* The chips after an archive's name (APP.md §13; direction 6, which took
    the Status column into them): one word per fact, and nothing at all
@@ -1264,7 +1299,7 @@ button.crumb:active { background: var(--fill-2); transition-duration: 0s; }
 /* The unseen copy the fold measures: the same crumbs at their caps, laid
    out on one line where nothing can see or reach them. */
 .crumb-measure { position: absolute; left: 0; top: 0; display: flex; align-items: center; width: max-content; visibility: hidden; pointer-events: none; }
-.file-split { display: grid; grid-template-columns: 1fr 264px; gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); container: files / inline-size; }
+.file-split { display: grid; grid-template-columns: 1fr var(--pane-w-files); gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); container: files / inline-size; }
 /* View › Preview pane off (direction 3): the list takes the whole width. */
 .file-split.bare { grid-template-columns: minmax(0, 1fr); }
 .file-split.dropping .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
@@ -1686,7 +1721,7 @@ tbody tr.up .fname { color: var(--ink-2); }
   .sb-note { flex-basis: 100%; padding-right: 0; }
 }
 
-/* ---------- dialogs, toasts ---------------------------------------- */
+/* ---------- dialogs, the notice slot, InfoBars ---------------------------------------- */
 .backdrop { position: fixed; inset: 0; background: var(--smoke); display: flex; align-items: center; justify-content: center; z-index: 20; }
 /* The dialog is WinUI's ContentDialog (APP.md §6, Controls; ruled
    2026-10-17), in two parts: the body — the title (sub, 20/28), the prose
@@ -1727,12 +1762,84 @@ tbody tr.up .fname { color: var(--ink-2); }
 .dialog.green { border-color: transparent; transition: border-color var(--dur-move) var(--ease-enter); }
 .dialog.green .dialog-body { color: var(--touch-ink); transition: color var(--dur-move) var(--ease-enter); }
 .dialog.green .dialog-body::before { opacity: 1; transition: opacity var(--dur-move) var(--ease-enter); }
-/* Toasts (APP.md §6): at the top of the window, centred on the window — not on the content
-   layer — dropping in a few pixels as they fade and rising as they leave; only for what the
-   page cannot say in place. */
-.toasts { position: fixed; top: var(--s4); left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: var(--s2); z-index: 30; pointer-events: none; }
-.toast { max-width: min(520px, calc(100vw - 2 * var(--s6))); padding: var(--s2) var(--s3); border-radius: var(--r-card); background: var(--surface); border: 1px solid var(--stroke); box-shadow: var(--shadow-pop); font: var(--t-body); color: var(--ink); pointer-events: auto; text-align: center; text-wrap: balance; }
-.toast.error { border-color: var(--danger-line); background: var(--danger-wash); }
+/* The notice slot (NoticeSlot.svelte; direction 4, phase 4b; APP.md §6,
+   Notices): the page's stateful banners in flow, in their tiers' order,
+   and the InfoBars over the list under them.
+   - The slot gives back the container's gap it would add when it holds
+     nothing: each banner carries that gap under it instead, so an empty
+     slot leaves the toolbar and the list exactly one gap apart, and the
+     slot's bottom edge is the list's top. --slot-gap is the container's
+     gap: the layer body's 12, the Vault column's 24, nothing on the lock
+     screen's stage, whose notices keep their own spacing.
+   - It stands over the list (z-index), so the bars it carries do too.
+   - A banner opens and closes its height (lib/motion.ts unfold): a one-track
+     grid whose track runs minmax(0, 0fr) → minmax(0, 1fr), the banner at
+     its own height at the track's top, clipped while it moves, so it is
+     uncovered and covered rather than squeezed; the gap under it travels
+     with it. */
+.nslot { --slot-gap: var(--s3); position: relative; z-index: 5; flex: none; display: flex; flex-direction: column; margin-bottom: calc(-1 * var(--slot-gap)); }
+/* The page columns (the Vault page, Settings): their own 24 px gap, and
+   the bars in flow carry it too, as the banners above them do. */
+.vpage > .nslot, .spage > .nslot { --slot-gap: var(--s6); --bars-gap: var(--s6); }
+.u-stage > .nslot, .boot-stack > .nslot { --slot-gap: 0px; width: min(var(--stage-w), 100%); }
+.fold { display: grid; grid-template-rows: minmax(0, 1fr); }
+.fold > * { align-self: start; min-width: 0; margin-bottom: var(--slot-gap); }
+/* The InfoBars (InfoBars.svelte): at the slot's bottom edge, 8 px into the
+   list and 12 in from its sides, floating with --shadow-pop, so they cover
+   the top of the list for their while and never move it — newest on top.
+   Each is one 40 px line like the locked banner's (the 28 px × with 5 px of
+   air, the border's pixel included), growing for a sentence that wraps:
+   the tier's icon (lib/infobar.ts noticeIcon) on the first line, the words
+   left-aligned. Info and success stand on the surface, an error in the
+   danger wash. */
+.nslot-bars { position: absolute; top: calc(100% + var(--s2)); left: var(--s3); right: var(--s3); }
+/* Over a list with its side pane beside it, the bars stop at the list's
+   column, 12 in from its right edge as from its left: the pane's facts —
+   the Selected header, the overview's attention box — are not the bars' to
+   cover (the final shoot of phase 4b found them running over the pane).
+   The pane's width and the split's gap are the grid's own (.arch-split,
+   .file-split); under the Archives page's threshold the pane is the bottom
+   panel and the list has the whole width again. */
+.nslot.beside-archives .nslot-bars { right: calc(var(--pane-w-archives) + var(--s4) + var(--s3)); }
+.nslot.beside-files .nslot-bars { right: calc(var(--pane-w-files) + var(--s4) + var(--s3)); }
+@container (max-width: 871.98px) { .nslot.beside-archives .nslot-bars { right: var(--s3); } }
+/* In flow (NoticeSlot flow, the dialogs' host): each bar opens its height
+   as a banner does and stands flat, floating over nothing; the lock
+   screen's sit 8 above its notices, as the notices sit apart, and the
+   Vault and Settings columns' 24 apart, as their banners do. */
+.nslot.flow .nslot-bars { position: static; }
+.ibars.flow { gap: 0; }
+.ibars.flow > .fold > * { margin-bottom: var(--bars-gap, var(--s2)); }
+.ibars.flow .ibar { box-shadow: none; }
+.ibars { display: flex; flex-direction: column; gap: var(--s2); pointer-events: none; }
+.ibar {
+  pointer-events: auto; display: flex; align-items: flex-start; gap: var(--s2); padding: 5px 5px 5px var(--s3);
+  border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); box-shadow: var(--shadow-pop);
+  font: var(--t-body); color: var(--ink); text-align: left;
+}
+.ibar > .i { margin-top: 7px; color: var(--ink-2); }
+.ibar.success > .i { color: var(--accent-ink); }
+.ibar.error { background: var(--danger-wash); border-color: var(--danger-line); }
+.ibar.error > .i { color: var(--danger); }
+.ibar-text { flex: 1; min-width: 0; padding: 4px 0; overflow-wrap: anywhere; }
+.ibar-x { flex: none; width: 28px; height: 28px; padding: 0; justify-content: center; color: var(--ink-2); }
+/* In a dialog (Dialog.svelte): a bar raised while the dialog is up, since
+   the page's slot is under the dim — in flow between the body and the
+   foot band, inset as the body is, each opening its height as a banner
+   does, so it never covers what the dialog says; flat, as it floats over
+   nothing. */
+.dialog-bars { flex: none; padding: 0 var(--s6); --bars-gap: var(--s3); }
+
+/* List motion (direction 4, phase 4b; lib/motion.ts): a row an operation
+   added wears half the selection's wash, fading out over --dur-wash — a
+   layer over the cell's own background, so a selected or hovered row
+   keeps its fill under it and the keyboard's ring (a box-shadow) is left
+   alone; a row a Delete takes fades out over --dur-leave before the list
+   is read again. Both are nothing under reduced motion. */
+@property --row-wash { syntax: "<color>"; inherits: false; initial-value: transparent; }
+tbody tr.fresh > td { background-image: linear-gradient(var(--row-wash), var(--row-wash)); animation: row-wash var(--dur-wash) var(--ease-exit); }
+@keyframes row-wash { from { --row-wash: color-mix(in srgb, var(--accent-wash) 50%, transparent); } to { --row-wash: transparent; } }
+tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-exit); }
 
 /* The recovery key's print sheet (APP.md §3 Keys): hidden on screen; the
    one thing a print shows, so a print from any other view shows nothing. */

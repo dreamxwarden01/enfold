@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buttonKey, contextPlacement, dropPlacement, groups, menuKey, secondLine } from "./menu";
+import { buttonKey, contextPlacement, dropPlacement, groups, keyAnchor, menuKey, secondLine } from "./menu";
 
 describe("buttonKey (APP.md §6, Menus)", () => {
   it("opens on the first item with Down, Enter and Space", () => {
@@ -185,5 +185,11 @@ describe("where a floating menu goes", () => {
     const tall = { width: 200, height: 690 };
     expect(dropPlacement({ left: 10, right: 90, top: 100, bottom: 128 }, tall, view)).toEqual({ x: 10, y: 6, up: false });
     expect(dropPlacement({ left: 10, right: 90, top: 600, bottom: 628 }, tall, view)).toEqual({ x: 10, y: 6, up: true });
+  });
+});
+
+describe("keyAnchor (direction 7)", () => {
+  it("stands 8 px in from the row's left edge, under the row", () => {
+    expect(keyAnchor({ left: 240, bottom: 300 })).toEqual({ x: 248, y: 300 });
   });
 });

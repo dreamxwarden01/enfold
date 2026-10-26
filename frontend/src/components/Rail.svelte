@@ -9,6 +9,7 @@
   import { railMark } from "../lib/foot";
   import { codeText, railCopy, settingsCopy, vaultCopy } from "../lib/strings";
   import { tip } from "../lib/tip";
+  import { dialogIsUp } from "../lib/dialogs";
 
   // The rail (APP.md §6, Rail; directions 3, 6 and 10, ruled 2026-10-18).
   // Expanded at a window of 1008 px and more: the brand row (direction 5's
@@ -57,7 +58,7 @@
   // The padlock's press is the foot's own act: Lock now while unlocked,
   // Unlock otherwise — the lock scene, which says what comes first.
   function vaultAct() {
-    if (head.unlocked) Vault.Lock().catch((e) => store.toast(codeText(errorOf(e).code), "error"));
+    if (head.unlocked) Vault.Lock().catch((e) => store.notice(codeText(errorOf(e).code), "error"));
     else store.unlock();
   }
 
@@ -82,7 +83,12 @@
     fn();
   }
 
+  // The flyout owns its Escape before the error InfoBars do: its toggle
+  // carries ESC_OWNER_ATTR (lib/dialogs.ts), so App.svelte's escNotice
+  // leaves this key alone while it is open. A key someone already took is
+  // not taken twice.
   function flyKey(e: KeyboardEvent) {
+    if (e.defaultPrevented) return;
     if (e.key === "Escape") {
       e.preventDefault();
       flyOpen = false;
@@ -98,6 +104,18 @@
     all[next]?.focus();
   }
 
+  // While the flyout is open its Escape is its own wherever the focus has
+  // gone (Tab can leave it): escNotice leaves every Escape to an open
+  // popover, so the flyout must answer even a key aimed outside it, or an
+  // error InfoBar could not be closed by the key until a press closed the
+  // flyout. A dialog's or a menu's Escape stays theirs.
+  function flyEsc(e: KeyboardEvent) {
+    if (!flyOpen || e.key !== "Escape" || e.defaultPrevented || dialogIsUp() || document.querySelector('[role="menu"]')) return;
+    e.preventDefault();
+    flyOpen = false;
+    toggleEl?.focus();
+  }
+
   function outside(e: PointerEvent) {
     if (!flyOpen) return;
     const t = e.target as Node;
@@ -106,13 +124,13 @@
   }
 </script>
 
-<svelte:window onpointerdown={outside} />
+<svelte:window onpointerdown={outside} onkeydown={flyEsc} />
 
 <nav class="rail" class:compact aria-label={railCopy.label} in:fly={motion(MOVE, { x: -12, delay: delay(GAP), easing: enter })}>
   {#if compact}
     <button
       type="button" class="rail-btn" bind:this={toggleEl}
-      aria-label={flyOpen ? railCopy.closeNav : railCopy.openNav} aria-expanded={flyOpen} aria-controls="rail-fly"
+      aria-label={flyOpen ? railCopy.closeNav : railCopy.openNav} aria-expanded={flyOpen} aria-controls="rail-fly" data-owns-esc
       use:tip={{ text: flyOpen ? railCopy.closeNav : railCopy.openNav, side: "end" }}
       onclick={() => (flyOpen = !flyOpen)}
     ><svg class="i"><use href="#i-menu" /></svg></button>

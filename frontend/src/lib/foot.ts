@@ -166,7 +166,7 @@ function reveal(path: string | undefined): DoneAction | undefined {
 }
 
 // doneLine is what the foot says when an operation ends, or null when the
-// ending is said elsewhere: a failure keeps its error toast; a drag out
+// ending is said elsewhere: a failure keeps its error InfoBar; a drag out
 // that was a self-drop or cancelled said nothing to begin with. An
 // extract that comes back with a question — conflicts under Ask, a name
 // the destination refused — says what it did write, "Extracted 10 of 13

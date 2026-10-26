@@ -6,7 +6,7 @@
   // more…" with a popover — and offers Discard and Save. Invalid input
   // greys Save and says why, in the bar and never only there; saving
   // swaps the label and disables both; success and failure are the
-  // page's toast, not the bar's. Dirty is the caller's, derived by
+  // page's InfoBar, not the bar's. Dirty is the caller's, derived by
   // diffing, never stored.
   //
   // The bar's one job (direction 10, phase 4a; DECISIONS 2026-09-07): a

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, locksNow, pageRows, target, typeahead } from "./listkeys";
+import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, locksNow, pageRows, survivor, target, typeahead } from "./listkeys";
 import type { Intent, KeyCtx, KeyIn } from "./listkeys";
 
 // The lists' keys (direction 7; APP.md §6): one keymap, Explorer's habits.
@@ -165,6 +165,40 @@ describe("a control inside the list's region", () => {
   });
 });
 
+describe("the row's menu from the keyboard (direction 7)", () => {
+  it("is Shift+F10 or the Menu key, on both lists", () => {
+    for (const ctx of [files, archives, { ...files, onUp: true }, { ...archives, onControl: true }]) {
+      expect(intent(k("F10", { shift: true }), ctx)).toEqual({ kind: "menu" });
+      expect(intent(k("ContextMenu"), ctx)).toEqual({ kind: "menu" });
+      expect(intent(k("ContextMenu", { shift: true }), ctx)).toEqual({ kind: "menu" });
+    }
+  });
+
+  it("is not F10 alone, nor with Ctrl or Alt", () => {
+    for (const key of [k("F10"), k("F10", { shift: true, ctrl: true }), k("F10", { shift: true, alt: true }), k("ContextMenu", { ctrl: true }), k("ContextMenu", { alt: true })]) {
+      expect(kind(intent(key, files))).toBe("none");
+    }
+  });
+
+  it("leaves a text field its own menu and a dialog its keys", () => {
+    // A field's menu is the field's (lib/fieldmenu.ts), opened by its own
+    // listener before the page's.
+    expect(kind(intent(k("F10", { shift: true }), { ...files, inField: true }))).toBe("none");
+    expect(kind(intent(k("ContextMenu"), { ...archives, inField: true }))).toBe("none");
+    expect(kind(intent(k("ContextMenu"), { ...files, dialogUp: true }))).toBe("none");
+  });
+});
+
+describe("Move to… (direction 7)", () => {
+  it("is Ctrl+Shift+M on the file list alone", () => {
+    expect(intent(k("M", { ctrl: true, shift: true }), files)).toEqual({ kind: "moveTo" });
+    expect(intent(k("m", { ctrl: true, shift: true }), files)).toEqual({ kind: "moveTo" });
+    expect(kind(intent(k("M", { ctrl: true, shift: true }), archives))).toBe("none");
+    expect(kind(intent(k("m", { ctrl: true }), files))).toBe("none");
+    expect(kind(intent(k("M", { ctrl: true, shift: true }), { ...files, inField: true }))).toBe("none");
+  });
+});
+
 describe("a dialog over the page", () => {
   it("takes every key, Esc included", () => {
     for (const ctx of [{ ...files, dialogUp: true }, { ...archives, dialogUp: true }, { ...files, dialogUp: true, inField: true }]) {
@@ -175,12 +209,22 @@ describe("a dialog over the page", () => {
   });
 });
 
+describe("the viewer over the layer", () => {
+  it("leaves the page behind no key, as a dialog does, while Ctrl+L stays the foot's", () => {
+    const up = { ...files, viewerUp: true };
+    for (const key of [k("ArrowDown"), k("ArrowRight"), k("Escape"), k("Enter"), k(" "), k("Delete"), k("e", { ctrl: true }), k("M", { ctrl: true, shift: true }), k("F10", { shift: true }), k("p")]) {
+      expect(kind(intent(key, up))).toBe("none");
+    }
+    expect(locksNow(k("l", { ctrl: true }), { inField: false, dialogUp: false })).toBe(true);
+  });
+});
+
 describe("the scope of an intent", () => {
   it("keeps the list's own keys to the list and lets the commands run from the page", () => {
-    for (const s of ["move", "extend", "focusOnly", "select", "toggle", "selectAll", "open", "typeahead"] as const) {
+    for (const s of ["move", "extend", "focusOnly", "select", "toggle", "selectAll", "open", "typeahead", "menu"] as const) {
       expect(listScoped({ kind: s } as Intent)).toBe(true);
     }
-    for (const s of ["clear", "up", "back", "extract", "delete", "rename", "newFolder", "refresh", "details", "newArchive", "openFile", "filter", "lock", "previewPane"] as const) {
+    for (const s of ["clear", "up", "back", "extract", "delete", "rename", "newFolder", "refresh", "details", "newArchive", "openFile", "filter", "lock", "previewPane", "moveTo"] as const) {
       expect(listScoped({ kind: s } as Intent)).toBe(false);
     }
   });
@@ -307,5 +351,22 @@ describe("locksNow, the foot's Ctrl+L on every page", () => {
   it("leaves a field its keys and a dialog its own", () => {
     expect(locksNow(key({}), { inField: true, dialogUp: false })).toBe(false);
     expect(locksNow(key({}), { inField: false, dialogUp: true })).toBe(false);
+  });
+});
+
+describe("survivor, the row that keeps the place after a Delete", () => {
+  const ids = ["a", "b", "c", "d", "e"];
+  it("is the first row after the last one gone", () => {
+    expect(survivor(ids, new Set(["b"]))).toBe("c");
+    expect(survivor(ids, new Set(["b", "d"]))).toBe("e");
+  });
+  it("is the nearest before when nothing stays after", () => {
+    expect(survivor(ids, new Set(["e"]))).toBe("d");
+    expect(survivor(ids, new Set(["c", "d", "e"]))).toBe("b");
+  });
+  it("is none when every row goes or none of them is listed", () => {
+    expect(survivor(ids, new Set(ids))).toBeNull();
+    expect(survivor(ids, new Set(["z"]))).toBeNull();
+    expect(survivor([], new Set(["a"]))).toBeNull();
   });
 });

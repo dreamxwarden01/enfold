@@ -21,7 +21,7 @@ import { dragOutCopy, opCopy } from "./strings";
 // page and on another archive's page too, where the verb alone does not
 // say whose it is (ruled 2026-10-14). The name is the registry row's
 // (OpView carries only the id); without one the label is the verb and its
-// count, as the finished operation's toast still says it.
+// count, as the finished operation's InfoBar still says it.
 //
 // A drag out is named by what it carries (APP.md §3, ruled 2026-09-11
 // after the first real drag, whose staging was over before the foot
@@ -34,7 +34,7 @@ import { dragOutCopy, opCopy } from "./strings";
 // already on the screen, never a strip that flashes. Its count is the
 // records the gesture named, folders included (OpView.DragItems,
 // stripCount), not the files the extraction writes. With no phase given
-// it is the finished operation's name, as its toast counts it.
+// it is the finished operation's name, as its InfoBar counts it.
 export function opLabel(kind: string, items = 0, phase = "", archive = ""): string {
   switch (kind) {
     case "dragout":
@@ -136,7 +136,7 @@ export function hasBar(kind: string, phase = ""): boolean {
   return !(kind === "dragout" && phase === "dragging");
 }
 
-// opErrorLine is the toast a finished operation's error makes: the
+// opErrorLine is the InfoBar a finished operation's error makes: the
 // operation's name, then the code's copy — except where the copy already
 // names the operation and its outcome in full, as the reclaim's does
 // ("Saved. Reclaiming space did not finish."), where a name in front would

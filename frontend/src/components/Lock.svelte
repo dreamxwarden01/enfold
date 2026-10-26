@@ -33,6 +33,7 @@
   import MenuButton from "./MenuButton.svelte";
   import KeyArt from "./KeyArt.svelte";
   import TamperedBar from "./TamperedBar.svelte";
+  import NoticeSlot from "./NoticeSlot.svelte";
 
   const st = $derived(store.status);
   const c = $derived(store.ceremony);
@@ -355,7 +356,7 @@
       await Vault.FinishSetup(first.kind, first.label, first.entangle);
     } catch (e) {
       store.dropChosen();
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -365,7 +366,7 @@
     try {
       await Vault.OpenVaultFile(st.missingPath, ""); // the name it already has
     } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -396,7 +397,7 @@
     try {
       await Keys.VerifyBackup(path);
     } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -425,7 +426,7 @@
       await Vault.BeginUnlock(method);
       if (store.ceremonyIsOver) store.dismissCeremony();
     } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -477,7 +478,7 @@
       await Vault.CreateVault(rebuild ? dest : createPath, createName, first.kind, first.label, first.entangle, createReplaces ? createConfirm : !!createPath);
     } catch (e) {
       store.dropChosen();
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -571,6 +572,11 @@
   </div>
 
   <div class="u-stage">
+    <!-- The InfoBars (direction 4, phase 4b; NoticeSlot): at the top of the
+         stage, above the notices, the panel's width — in flow, each opening
+         its height, since a bar floating here would cover the panel's
+         heading, and an error stays until it is closed. -->
+    <NoticeSlot flow />
     {#if !firstRun && noticeList.length > 0}
       <!-- Notices stand above the panel, its width, so nothing warns from
            below the buttons (APP.md §6, ruled 2026-10-17). -->

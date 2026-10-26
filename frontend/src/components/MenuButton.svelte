@@ -29,6 +29,9 @@
     // checked: a setting the item turns on and off; the tick says it is on.
     checked?: boolean;
     danger?: boolean;
+    // isDefault: what Enter and a double-click on the row do — a row's
+    // menu draws it bold and first (direction 7, as Explorer's do).
+    isDefault?: boolean;
     disabled?: boolean;
     // title: why a greyed item is greyed — drawn as its second line — or,
     // for one that can run, what it does, as the native tooltip.
@@ -80,6 +83,9 @@
   // A tick slot is kept on every item of a menu that has a setting in it,
   // so the labels line up.
   const ticks = $derived(items.some((i) => i.checked !== undefined));
+  // And an icon's slot on every item of a menu where any item has one, so
+  // an item without (the pane's *Close*) lines up with the rest.
+  const icons = $derived(items.some((i) => !!i.icon));
   // 28 px a row, the menu's 4 px padding and its stroke (app.css .menu).
   const cap = $derived(maxRows > 0 ? `max-height: calc(${maxRows} * 28px + 2 * var(--s1) + 2px)` : undefined);
 
@@ -205,7 +211,7 @@
           use:tip={item.cut ? { text: item.label, cut: true } : ""}
         >
           {#if ticks}<svg class="i i-14 tick" class:on={item.checked} aria-hidden="true"><use href="#i-tick" /></svg>{/if}
-          {#if item.icon}<svg class="i i-14" aria-hidden="true"><use href="#{item.icon}" /></svg>{/if}
+          {#if item.icon}<svg class="i i-14" aria-hidden="true"><use href="#{item.icon}" /></svg>{:else if icons}<span class="i i-14" aria-hidden="true"></span>{/if}
           {#if item.cut}
             <span class="ellipsis cut">{item.label}</span>
           {:else if secondLine(item)}

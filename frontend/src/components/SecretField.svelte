@@ -57,10 +57,14 @@
   <label for={id}>{label}</label>
   {#if hint}<span class="hint num" class:attention={hintTone === "attention"} class:danger={hintTone === "danger"}>{hint}</span>{/if}
 </div>
+<!-- data-secret: no menu of the page's own reaches this field
+     (lib/fieldmenu.ts; direction 7) — a secret never passes through the
+     page's menu code, and the WebView's own menu is off (2026-09-06). -->
 <input
   {id}
   bind:this={el}
   bind:value
+  data-secret=""
   class="input secret"
   class:invalid
   type={text ? "text" : "password"}

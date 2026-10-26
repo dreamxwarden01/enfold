@@ -31,6 +31,10 @@ export interface KeyCtx {
   inField: boolean;
   // dialogUp: a dialog is over the page, which then takes no key.
   dialogUp: boolean;
+  // viewerUp: the viewer is up over the layer (direction 7; lib/viewer.ts),
+  // which takes its own keys; the page behind takes none, as under a
+  // dialog. Ctrl+L stays the foot's (locksNow), which reads no viewer.
+  viewerUp?: boolean;
   // typing: a type-ahead buffer is live (within TYPEAHEAD_MS), so a Space
   // is part of the name being typed rather than a selection.
   typing?: boolean;
@@ -66,6 +70,8 @@ export type Intent =
   | { kind: "filter" }
   | { kind: "lock" }
   | { kind: "previewPane" }
+  | { kind: "menu" }
+  | { kind: "moveTo" }
   | { kind: "typeahead"; char: string }
   | { kind: "none" };
 
@@ -83,8 +89,9 @@ const STEPS: Record<string, Step> = {
 
 // intent maps a key pressed on a list's page to what it means there.
 export function intent(k: KeyIn, ctx: KeyCtx): Intent {
-  // A dialog over the page takes every key itself (lib/dialogs.ts).
-  if (ctx.dialogUp) return NONE;
+  // A dialog over the page takes every key itself (lib/dialogs.ts), and
+  // so does the viewer over the layer (lib/viewer.ts viewerKey).
+  if (ctx.dialogUp || ctx.viewerUp) return NONE;
   const files = ctx.list === "files";
   const letter = k.key.length === 1 ? k.key.toLowerCase() : "";
   const plain = !k.ctrl && !k.alt && !k.shift;
@@ -100,6 +107,12 @@ export function intent(k: KeyIn, ctx: KeyCtx): Intent {
     if (!files && ctrlOnly && letter === "o") return { kind: "openFile" };
     return NONE;
   }
+
+  // Shift+F10 and the Menu key open the focused row's own menu, the one a
+  // right-click opens (direction 7, Explorer's habits) — on both lists;
+  // with no row to act on, the list's blank-area menu. Shift is allowed
+  // with the Menu key, as Windows reads it; Ctrl and Alt are not.
+  if (opensMenu(k)) return { kind: "menu" };
 
   // Lock now, on every page while unlocked: the foot's own command, so
   // the foot acts on it (LayerFoot, through locksNow) and the list pages
@@ -159,6 +172,9 @@ export function intent(k: KeyIn, ctx: KeyCtx): Intent {
     return NONE;
   }
   if (k.ctrl && k.shift && !k.alt && letter === "n") return files ? { kind: "newFolder" } : NONE;
+  // Move to… (direction 7): the selection into a folder chosen in a tree,
+  // the keyboard's way to what a drag does.
+  if (k.ctrl && k.shift && !k.alt && letter === "m") return files ? { kind: "moveTo" } : NONE;
   // Alt+P shows or hides the Archive page's preview pane, as in Explorer
   // (direction 3, phase 4a; the View menu's *Preview pane*).
   if (k.alt && !k.ctrl && !k.shift && letter === "p") return files ? { kind: "previewPane" } : NONE;
@@ -171,10 +187,17 @@ export function intent(k: KeyIn, ctx: KeyCtx): Intent {
   return NONE;
 }
 
+// opensMenu: Shift+F10 or the Menu key — the row's menu on a list, a text
+// field's own menu in a field (lib/fieldmenu.ts), which reads the same keys.
+export function opensMenu(k: KeyIn): boolean {
+  return (k.key === "ContextMenu" && !k.ctrl && !k.alt) || (k.key === "F10" && k.shift && !k.ctrl && !k.alt);
+}
+
 // SCOPED: the intents that belong to the list itself, taken only while
 // the focus is in the list (or nowhere, on the page's body). The rest are
 // the page's commands and run from anywhere on it but a text field.
-const LIST_SCOPED = new Set<Intent["kind"]>(["move", "extend", "focusOnly", "select", "toggle", "selectAll", "open", "typeahead"]);
+// The menu key is the list's too: its menu is the focused row's.
+const LIST_SCOPED = new Set<Intent["kind"]>(["move", "extend", "focusOnly", "select", "toggle", "selectAll", "open", "typeahead", "menu"]);
 
 export function listScoped(i: Intent): boolean {
   return LIST_SCOPED.has(i.kind);
@@ -295,4 +318,24 @@ export function jump(names: readonly string[], buffer: string, from: number | nu
 // (the caller checks the menu and the vault).
 export function locksNow(k: KeyIn, ctx: { inField: boolean; dialogUp: boolean }): boolean {
   return intent(k, { list: "archives", onUp: false, ...ctx }).kind === "lock";
+}
+
+// survivor names the row that takes the focus and the selection when the
+// rows `gone` leave the list (a Delete): the first row after the last one
+// gone that stays, else the nearest before the first one gone, else none —
+// Explorer's habit, so a keyboard user keeps their place (direction 4,
+// list motion: the focus is kept across the motion; the final shoot of
+// phase 4b found it dropped to the body).
+export function survivor(ids: readonly string[], gone: ReadonlySet<string>): string | null {
+  let last = -1;
+  let first = -1;
+  ids.forEach((id, i) => {
+    if (!gone.has(id)) return;
+    if (first < 0) first = i;
+    last = i;
+  });
+  if (first < 0) return null;
+  for (let i = last + 1; i < ids.length; i++) if (!gone.has(ids[i])) return ids[i];
+  for (let i = first - 1; i >= 0; i--) if (!gone.has(ids[i])) return ids[i];
+  return null;
 }

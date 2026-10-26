@@ -3,7 +3,7 @@
   import { store } from "./lib/state.svelte";
   import { bootCopy, codeText } from "./lib/strings";
   import Icons from "./components/Icons.svelte";
-  import Toasts from "./components/Toasts.svelte";
+  import NoticeSlot from "./components/NoticeSlot.svelte";
   import Rail from "./components/Rail.svelte";
   import Lock from "./components/Lock.svelte";
   import ArchivesPage from "./components/ArchivesPage.svelte";
@@ -18,6 +18,9 @@
   import MergeDialog from "./components/MergeDialog.svelte";
   import { fade, fly } from "svelte/transition";
   import { motion, delay, enter, GAP, OUT, MOVE } from "./lib/motion";
+  import { ESC_OWNERS, dialogIsUp } from "./lib/dialogs";
+  import { escCloses } from "./lib/infobar";
+  import { isTextEntry } from "./lib/listkeys";
 
   const st = $derived(store.status);
   const theme = $derived(store.settings?.theme ?? "system");
@@ -78,21 +81,52 @@
     try {
       await Shell.OpenDataFolder();
     } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
+  // The InfoBars' time waits while the window does not have the focus or is
+  // hidden (direction 4; lib/infobar.ts), so a bar is never gone before it
+  // could be read. Told by the window's own focus and blur, not read from
+  // document.hasFocus() at boot: a WebView that starts without the focus
+  // inside an active window would otherwise hold every bar until a click.
+  function away(blurred = false) {
+    store.pauseNotices({ away: blurred || document.visibilityState === "hidden" });
+  }
+
+  // Esc closes the newest error InfoBar (direction 4; APP.md §6, Notices) —
+  // only when nothing else owns the key: no dialog, menu, open popover
+  // (the rail's flyout, the foot's flyouts) or viewer is up and the focus
+  // is not in a field (lib/infobar.ts escCloses, lib/dialogs.ts
+  // ESC_OWNERS — the one order). It is taken before the page's own
+  // listeners (the capture phase, and prevented, which the list's keymap
+  // respects), so a list's Esc clears its selection only once no error is
+  // left to close; otherwise the key falls through untouched.
+  function escNotice(e: KeyboardEvent) {
+    if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    const n = escCloses(store.notices, {
+      dialogUp: dialogIsUp(),
+      ownerUp: document.querySelector(ESC_OWNERS) !== null,
+      inField: !!t && isTextEntry(t.tagName, t.getAttribute("type") ?? "", t.isContentEditable),
+    });
+    if (!n) return;
+    e.preventDefault();
+    store.dismissNotice(n.id);
+  }
+
   // What a report needs: the heading, the code and when it failed.
   async function copyDetails() {
     try {
       await navigator.clipboard.writeText(bootCopy.details(store.bootCode, new Date(store.bootFailedAt || Date.now()).toISOString()));
-      store.toast(bootCopy.copied);
+      store.notice(bootCopy.copied, "success");
     } catch {
-      store.toast(bootCopy.copyFailed, "error");
+      store.notice(bootCopy.copyFailed, "error");
     }
   }
 </script>
 
-<svelte:window onpointerdown={activity} onkeydown={activity} onwheel={activity} />
+<svelte:window onpointerdown={activity} onkeydown={activity} onwheel={activity} onkeydowncapture={escNotice} onfocus={() => away()} onblur={() => away(true)} />
+<svelte:document onvisibilitychange={() => away()} />
 
 <Icons />
 <!-- Nothing is drawn until the first status is accepted (APP.md §2.4):
@@ -103,6 +137,10 @@
 {#if !store.booted}
   <div class="splash">
     {#if store.bootFailed}
+      <!-- Its InfoBars (Copy details, Open data folder) stand where the lock
+           screen's do: at the top of the panel's column, above it. -->
+      <div class="boot-stack">
+      <NoticeSlot flow />
       <div class="boot-failed" role="alert">
         <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
         <h1 class="t-title">{bootCopy.title}</h1>
@@ -112,6 +150,7 @@
           <button type="button" class="btn" onclick={() => void openDataFolder()}>{bootCopy.openFolder}</button>
           <button type="button" class="btn" onclick={() => void copyDetails()}>{bootCopy.copyDetails}</button>
         </div>
+      </div>
       </div>
     {:else}
       <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
@@ -185,16 +224,17 @@
   <MergeDialog path={store.merging} onclose={() => { store.merging = ""; store.forgetImport(); }} />
 {/if}
 
-<Toasts />
-
 <style>
   .splash { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ink-2); }
   /* The boot failure's panel stands where the lock screen's does: 440 px,
      its top at 14vh, 28 px in, a flat 1 px stroke (app.css .unlock .panel;
      APP.md §6). The splash's centring gives way to it. */
   .splash:has(.boot-failed) { align-items: flex-start; padding: 0 var(--s6); }
+  /* The panel's column, its top at 14vh: the notice slot first, empty but
+     for the InfoBars, in flow above the panel (app.css .nslot.flow). */
+  .boot-stack { width: min(var(--stage-w), 100%); margin-top: var(--stage-top); display: flex; flex-direction: column; }
   .boot-failed {
-    width: min(var(--stage-w), 100%); box-sizing: border-box; margin-top: var(--stage-top); padding: calc(var(--s6) + var(--s1));
+    width: 100%; box-sizing: border-box; padding: calc(var(--s6) + var(--s1));
     display: flex; flex-direction: column; gap: var(--s3); color: var(--ink);
     background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card);
   }

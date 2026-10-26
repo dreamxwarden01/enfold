@@ -22,6 +22,20 @@
 import { dropVerdict } from "./tree";
 import { clean } from "./paths";
 
+// A preview is never a drag source (APP.md §6, the pane and the viewer).
+// An <img> is draggable by default, and WebView2 turns a page's own drag
+// into a native OLE drag (DECISIONS, drag out, researched): dropped on the
+// desktop or in Explorer, Chromium hands the target the picture's bytes as
+// a file with a made-up name — the decrypted picture written to disk — or
+// at least a shortcut to the loopback URL. So every preview's <img> says
+// draggable="false", and the viewer and the pane's box cancel any
+// dragstart inside them with noDrag, so a later media element, or a
+// selection of the text, cannot reopen the path. The one drag out of
+// Enfold is the rows' own, through Shell.DragOut.
+export function noDrag(e: Event): void {
+  e.preventDefault();
+}
+
 // A press becomes a drag once the pointer has moved past this many pixels
 // on either axis — Explorer's own SM_CXDRAG / SM_CYDRAG default — so a
 // click with a tremor in it stays a click.
@@ -31,10 +45,12 @@ export function pastThreshold(dx: number, dy: number, threshold = DRAG_THRESHOLD
   return Math.abs(dx) > threshold || Math.abs(dy) > threshold;
 }
 
-// Where a self-drop landed: a folder row, the `..` row (up one level) or
-// the heading (the root) — the three surfaces a Move may be dropped on —
-// or elsewhere on the page, which is nothing.
-export type DropAt = "row" | "up" | "head";
+// Where a self-drop landed: a folder row, the `..` row (up one level), the
+// heading (an ancestor's crumb) or the list's blank area of a folder a
+// spring-loaded hover entered (lib/springload.ts; the folder shown, which
+// is not the one the drag came from) — the surfaces a Move may be dropped
+// on — or elsewhere on the page, which is nothing.
+export type DropAt = "row" | "up" | "head" | "list";
 
 export interface Landing {
   id: string;

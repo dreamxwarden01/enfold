@@ -6,6 +6,7 @@
   import { DIALOG_HOST, inPopover, isTopDialog, registerDialog } from "../lib/dialogs";
   import type { DialogHost } from "../lib/dialogs";
   import { dialogCopy } from "../lib/strings";
+  import InfoBars from "./InfoBars.svelte";
 
   interface Props {
     title: string;
@@ -217,6 +218,10 @@
     {/if}
     {@render children()}
   </div>
+  <!-- The InfoBars raised while a dialog is up, which the page's slot,
+       under the dim, cannot show (direction 4; lib/infobar.ts): in the
+       topmost dialog only, over the body's foot, just above the band. -->
+  {#if !covered}<div class="dialog-bars"><InfoBars host="dialog" flow /></div>{/if}
   <!-- A ceremony panel in the body draws the foot while it is mounted:
        its buttons follow the ceremony's step (lib/dialogs DialogHost). -->
   {#if host.foot}

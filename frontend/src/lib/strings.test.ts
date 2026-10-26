@@ -132,7 +132,7 @@ describe("one word per thing", () => {
 // The verb table and the dialog template (strings.ts head).
 describe("the verb table", () => {
   it("ends a command with an ellipsis exactly when a dialog or a picker follows", () => {
-    const opensNothing = ["open", "close", "closeArchive", "closeAll", "hide", "unhide", "restore", "refreshFingerprint", "showInExplorer", "findMissing", "reopen", "lockNow", "unlock", "forceClose", "forceCloseAll"];
+    const opensNothing = ["open", "close", "closeArchive", "closeAll", "hide", "unhide", "restore", "refreshFingerprint", "showInExplorer", "findMissing", "reopen", "lockNow", "unlock", "forceClose", "forceCloseAll", "copyName"];
     for (const [k, v] of Object.entries(commandCopy)) {
       expect(v.endsWith("…"), k).toBe(!opensNothing.includes(k));
     }
@@ -295,7 +295,8 @@ describe("the receipts' words", () => {
     // the same words whatever the reason; the cause is the Why?'s
     expect(tamperedCopy(Code.CodeTamperedGeneration)).toBe(tamperedCopy());
     expect(warningCopy(Code.CodeVaultTampered, Code.CodeTamperedHash)).toBe(tamperedCopy());
-    expect(vaultCopy.changesOff).toBe("Changes are off until this vault is replaced with a copy you trust; the banner above has the button.");
+    // no "above": the banner stands under the commands on the list pages
+    expect(vaultCopy.changesOff).toBe("Changes are off until this vault is replaced with a copy you trust; the banner on this page has the button.");
   });
   it("splits each banner where its strong first sentence ends", () => {
     expect(tamperedLead()).toEqual({ head: "This vault file does not match itself, so it may have been changed outside Enfold.", rest: "Changes to the vault are off until you replace it with a copy you trust. Your archive files are not affected." });

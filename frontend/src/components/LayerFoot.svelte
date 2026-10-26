@@ -7,7 +7,8 @@
   // reflows the strip; a greyed one keeps its shape", is kept by a slot
   // that never reflows at all.
   //
-  // The left slot cycles, cross-fading in 140 ms: the page's note at rest;
+  // The left slot cycles, the old line leaving before the new one comes
+  // (the house crossfade, GAP): the page's note at rest;
   // the running operation — its name with its archive (lib/ops.ts
   // opLabel), a 160 px progress line, the bytes and the time left
   // (lib/foot.ts), and Cancel where a cancel means something; then how it
@@ -28,7 +29,7 @@
   import type { OpView } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { lockLine } from "../lib/format";
-  import { motion, enter, FAST, LEAVE } from "../lib/motion";
+  import { motion, delay, enter, FAST, GAP, LEAVE } from "../lib/motion";
   import { cancellable, hasBar, opLabel, showsCancel, stripCount } from "../lib/ops";
   import { fraction, latestOp, progressCaption, standingNotices, staysUnlocked, timeLeft, track } from "../lib/foot";
   import type { DoneAction, Track } from "../lib/foot";
@@ -124,7 +125,7 @@
       await Archive.CancelOp(opId);
     } catch (e) {
       cancelling = cancelling.filter((id) => id !== opId);
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -149,7 +150,7 @@
     try {
       await Shell.Reveal(a.path);
     } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -180,7 +181,12 @@
     open = "";
   }
 
+  // The flyouts own their Escape before the error InfoBars do: their
+  // toggles carry ESC_OWNER_ATTR (lib/dialogs.ts), so App.svelte's
+  // escNotice leaves the key alone while one is open, whichever window
+  // listener runs first; and a key already taken is not taken twice.
   function key(e: KeyboardEvent) {
+    if (e.defaultPrevented) return;
     if (e.key === "Escape" && open) {
       e.preventDefault();
       e.stopPropagation();
@@ -204,7 +210,7 @@
   }
 
   function lockNow() {
-    Vault.Lock().catch((e) => store.toast(codeText(errorOf(e).code), "error"));
+    Vault.Lock().catch((e) => store.notice(codeText(errorOf(e).code), "error"));
   }
 </script>
 
@@ -226,7 +232,11 @@
 <div class="layer-foot">
   <div class="foot-left">
     {#key slot}
-      <div class="foot-slot" in:fade={motion(FAST, { easing: enter })} out:fade={motion(LEAVE)}>
+      <!-- The house crossfade (lib/motion.ts GAP): the old line leaves
+           fast first and the new one waits GAP for it, so two lines are
+           never read on top of each other — the final shoot of phase 4b
+           caught a drag's line and the note under it, both half drawn. -->
+      <div class="foot-slot" in:fade={motion(FAST, { delay: delay(GAP), easing: enter })} out:fade={motion(LEAVE, { easing: enter })}>
         {#if slot.startsWith("done:") && store.done}
           {@const d = store.done}
           <span class="done" class:neutral={d.tone === "neutral"}>
@@ -247,7 +257,7 @@
             {/if}
             {#if showsCancel(o.kind, o.phase)}{@render cancelButton(o)}{/if}
             {#if running.length > 1}
-              <button type="button" class="btn subtle xs" data-pop-toggle aria-expanded={open === "ops"} aria-label={footCopy.moreLabel(running.length - 1)} onclick={() => toggle("ops")}>{footCopy.more(running.length - 1)}</button>
+              <button type="button" class="btn subtle xs" data-pop-toggle data-owns-esc aria-expanded={open === "ops"} aria-label={footCopy.moreLabel(running.length - 1)} onclick={() => toggle("ops")}>{footCopy.more(running.length - 1)}</button>
             {/if}
           </span>
         {:else}
@@ -260,10 +270,10 @@
   {#if store.unlocked && st}
     <span class="foot-right">
       {#if notices.length > 0}
-        <!-- The standing notices, gathered (direction 4; the toast still
+        <!-- The standing notices, gathered (direction 4; the InfoBar still
              marks the moment one arrives, ruled 2026-10-13). The Tampered
              one is the page's banner and is not listed. -->
-        <button type="button" class="btn subtle xs notice-btn" data-pop-toggle aria-expanded={open === "notices"} onclick={() => toggle("notices")}><span class="att-dot {tier(notices[0])}" aria-hidden="true"></span>{footCopy.notices(notices.length)}</button>
+        <button type="button" class="btn subtle xs notice-btn" data-pop-toggle data-owns-esc aria-expanded={open === "notices"} onclick={() => toggle("notices")}><span class="att-dot {tier(notices[0])}" aria-hidden="true"></span>{footCopy.notices(notices.length)}</button>
       {/if}
       <!-- The nearer of the idle deadline and the absolute one (APP.md §6,
            ruled 2026-09-12): the absolute cap locks regardless of activity,
@@ -274,7 +284,7 @@
            it sends Activity at once, not through the page's throttle, and
            nothing extends the cap (lib/foot.ts staysUnlocked). -->
       <span class="lockchip" class:urgent={line?.urgent}><svg class="i i-14"><use href="#i-unlock" /></svg>{line?.text}</span>
-      {#if stay}<button type="button" class="btn subtle xs" onclick={() => Vault.Activity().catch((e) => store.toast(codeText(errorOf(e).code), "error"))}>{footCopy.stayUnlocked}</button>{/if}
+      {#if stay}<button type="button" class="btn subtle xs" onclick={() => Vault.Activity().catch((e) => store.notice(codeText(errorOf(e).code), "error"))}>{footCopy.stayUnlocked}</button>{/if}
       <button type="button" class="btn subtle xs" title={keyTitles.lockNow} onclick={lockNow}>{commandCopy.lockNow}</button>
     </span>
   {:else}

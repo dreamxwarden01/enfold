@@ -5077,3 +5077,73 @@ menu's 240 px cut is a literal, since the menu is portalled out of the head's cu
 the locked Vault page shows the timeouts' default for a frame right after an unlock; the add
 collisions still lack sizes and dates. Nothing of phase 4a has been seen in a real window; the
 rail's two forms and the crumbs' fold are what the user's eye should judge first.
+
+## 2026-10-26 — Phase 4b: row menus, the viewer, Move to…; InfoBars, the notice slot, list motion
+
+**Phase 4b, built** (2026-10-26). The user asked for the second half of phase 4 and said they
+would look at the whole after it. Built in three parts in sequence (the menus; the viewer and
+*Move to…*; the notices and the motion), each reviewed and repaired, the whole shot against the
+mock and read, a spec pass reviewed against the code, an integration review and its repair, then
+a short fix pass. **The menus**: the app's own context menu (`ContextMenu` on `lib/menu.ts`, the
+component that draws every menu) on every row of both lists — a right-click selects an
+unselected row first and keeps a selection; the default item bold and first; the key at the
+item's right; a greyed item's reason as its second line; the danger ink for the destructive ones
+— on the lists' blank areas (*Create folder…*, *Add files…*, *Add a folder…*; *New archive…*,
+*Open file…*), on every text field that is not a secret (*Cut*, *Copy*, *Paste*, *Select all*;
+*Paste* through the page's clipboard read and greyed with "Use Ctrl+V" where the WebView refuses
+it) and on the Technical details dialog (*Copy all as text*); Shift+F10 and the Menu key open
+the focused row's menu, bringing a row scrolled out of view back first; the file menu reads
+*Open · Extract… · ─ · Rename… · Move to… · ─ · Delete… · ─ · Copy name*, the archive row's the
+bar's own commands with *Technical details…*, *Locate…* on a missing row and *Restore* in the
+Forgotten view, one command list per row shared by the bar, the pane's More and the menu. This
+is not the WebView2 menu 2026-09-06 turned off, which stays off. **The viewer**: Enter on a
+file, a double-click or the menu's *Open* opens it large over the layer on the pane's own
+pipeline — a dark stage in both themes, a 40 px bar with the name, its place among the folder's
+previewable files, its facts, *Extract…* and ×; ← → Home End step, Esc or Enter closes and the
+focus returns to the row; video and audio with their own controls; a PDF, a HEIC or any kind the
+pane cannot show opens on its type at 96 px with "No preview for PDF documents" and *Extract…* —
+no renderer in the window (2026-09-13 kept); a picture is only ever shrunk to fit, never
+enlarged; nothing is written and nothing kept after it closes; a picture cannot be dragged out
+of the viewer or the pane as a file (the integration review's catch: an <img> is draggable by
+default and Chromium hands a dragged image to the drop target as a file). **Move to…** from the
+menu, Ctrl+Shift+M and More: a dialog with the archive's folder tree read lazily from `Page`,
+the current folder and the moved folders' own subtrees greyed with their reasons, *Create
+folder…* in place, *Move* the accent; and spring-loaded folders during a self-drag (700 ms over
+a folder enters it, over `..` goes up). **InfoBars replace toasts** (2026-09-07's top-centre
+placement superseded): `store.notice(text, kind)` with info, success and error; the bars stand
+in the page's notice slot over the list's top under the banners, the list's width, with the
+tier's icon, left-aligned text and a ×; info and success leave after 3 s plus 50 ms a character,
+at most 8 s, pausing while hovered, while the window is away and while the viewer is up; errors
+stay until closed; three at a time, newest first, the rest waiting; a repeat of the same words
+takes the top with a whole life; Esc closes the newest error after a dialog, a menu, a popover
+and the viewer have had the key; on the Vault and Settings pages, the lock screen and the boot
+failure the bars stand in flow at the top, and inside the topmost dialog while one is up. **The
+notice slot** between the command bar and the list holds the stateful banners in direction 9's
+order and opens and closes each one's height over 220 ms, so the list slides; the Tampered
+banner stands in it, under the commands it greys (reversing 2026-10-18's "first in the body", so
+one slot holds every notice; the greyed commands' title now says "the banner on this page has
+the button"). **List motion**: the tbody fades in from ±8 px on a folder change, rows an
+operation added wear a 1.2 s accent wash at half the selection's, a deleted row fades 100 ms
+before the list re-reads; the Forgotten view fades the same way; nothing under reduced motion.
+With this the ten directions of the 2026-10-13 review are all built; direction 5's window is
+what remains.
+
+**Chosen along the way, and left** (2026-10-26). Ruled: "Extract here" and "Properties" are not
+offered (Enfold has no "here" on disk; the pane is the facts); Space keeps selecting and Enter
+opens, Explorer's split; *Rename…* in the menu acts on the clicked row of a multi-selection
+while the toolbar's stays greyed, Explorer's way; *Close* and *Force close* stand in the
+Archives row menu since the row's commands are one list; in the Move to… tree Enter on an open
+or leaf folder presses *Move*, and the arrows do not wrap at the ends; a small picture stays its
+own size in the viewer; the secret fields (the PIN, the password, the recovery cells, the
+readback) get no menu at all; the rail's flyout takes Esc on the window while open so an error
+bar never holds it; the shorter "Restore it first" replaces "Forgotten. Restore it first."; the
+InfoBars stand in flow where there is no list, moving the lock panel down a bar's height, since
+a floating bar covered its heading; Delete fades its rows and Move does not. Left for the user's
+real window, since headless Edge cannot say: whether WebView2 under Wails answers
+`navigator.clipboard.readText()` (the field menu's *Paste*; Ctrl+V works regardless), the
+spring's 600 ms freshness and 4 px rest slop under a real `Shell.DragOut` drag, the away pause
+through the window's focus and visibility events, the viewer's mono text weight on a dark stage.
+Left as work: the merge list does not pin the file the user opened; the viewer counts a `none`
+kind opened by Enter into its sequence; the bars' sizes are literals where no control-size token
+exists; a few older rulings still say "toast" and stand under the InfoBars paragraph's blanket
+sentence. Nothing of phase 4b has been seen in a real window.

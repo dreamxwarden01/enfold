@@ -101,7 +101,7 @@
       savedTo = p;
     } catch (e) {
       const code = errorOf(e).code;
-      store.toast(code === "ceremony.stale_prompt" ? revealCopy.notHeld : codeText(code), "error");
+      store.notice(code === "ceremony.stale_prompt" ? revealCopy.notHeld : codeText(code), "error");
     }
   }
 
@@ -194,8 +194,11 @@
             <div class="field">
               <div class="field-top"><label for="rb-{g}">{revealCopy.group(g + 1)}</label></div>
               <span class="cellbox">
+                <!-- data-secret: the readback is the key's digits, and gets
+                     no menu of the page's own (lib/fieldmenu.ts). -->
                 <input
                   id="rb-{g}"
+                  data-secret=""
                   class="input cell"
                   type="text"
                   inputmode="numeric"

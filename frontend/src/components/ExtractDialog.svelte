@@ -20,6 +20,7 @@
   // empty field extracts nowhere (APP.md §7, ruled 2026-10-17).
   import { untrack } from "svelte";
   import Dialog from "./Dialog.svelte";
+  import { fieldMenu } from "../lib/fieldmenu";
   import { Shell } from "../lib/api";
   import { POLICIES, destinationEmpty, destinationForScope, followScope, rememberPolicy, startingPolicy, startingScope } from "../lib/extract";
   import type { ExtractScope } from "../lib/extract";
@@ -97,6 +98,7 @@
         aria-invalid={attempted && empty ? "true" : undefined}
         aria-describedby={attempted && empty ? "xd-said" : undefined}
         oninput={() => (attempted = false)}
+        use:fieldMenu
       />
       <button type="button" class="btn" onclick={browse}>Browse…</button>
     </div>

@@ -1548,7 +1548,8 @@ right, and beside it, at rest and at first run, a gear that opens Settings, whic
 changes (ruled 2026-10-17); the brand where Motion's *Lock* anchors it; the notices — the warnings, the
 "workstation-lock detection unavailable" one among them (the BitLocker warnings went with §9's
 checks, 2026-09-13), the archives still open — above the panel at its width, never below its
-buttons, ranked by tier, danger first (*Notices and their tiers*, below; ruled 2026-10-18). **The step line** draws the states of §2.2 that an unlock passes through: a YubiKey's
+buttons, ranked by tier, danger first (*Notices and their tiers*, below; ruled 2026-10-18), and
+above them the InfoBars, in flow (*InfoBars*, below; ruled 2026-10-26). **The step line** draws the states of §2.2 that an unlock passes through: a YubiKey's
 three steps, *YubiKey · PIN and password · Touch* (*PIN* alone on a vault that asks for no
 password; the PIN's step is named in its fields' order, ruled 2026-10-17, it read *Password and
 PIN* live and *PIN* at rest), or the recovery key's two, *Recovery key · Unlock*. It is a caption
@@ -1805,7 +1806,9 @@ checkboxes and rules: every action here takes one archive, so a second tick only
 and the pane said "3 archives selected" in place of the archive it could describe — the file
 list, whose commands take many, keeps its boxes): no checkbox and no header tick; a click
 selects the row, the arrows move the selection (*The lists' keys*, below), and Shift, Ctrl,
-Ctrl+Space and Ctrl+A add nothing; a selected row is the wash and the pill, the sort glyph the
+Ctrl+Space and Ctrl+A add nothing; a right-click selects the row and opens its menu, and one on
+the blank area clears the selection and opens the blank area's (§13, *The row's menu*; ruled
+2026-10-26); a selected row is the wash and the pill, the sort glyph the
 one 10 px chevron (ruled 2026-10-17); a click on the list's blank area clears the selection;
 the details follow the selected row, and with none the pane is the vault's summary (§13) — the
 commands Open / New archive… / Open file… / Refresh fingerprint (*Verify* until 2026-10-18,
@@ -1836,7 +1839,7 @@ the dialog's own replace prompt said; a cancelled dialog creates nothing, and a 
 is opened at once, on its empty root with the Add menu open, rather than left as a ticked row (ruled 2026-10-14);
 *Open file…* (Ctrl+O) picks a file from anywhere — the picker is §3's `PickFiles`, unfiltered, and
 a file that is not an archive is the core's `archive.not_an_archive` — and opens it by §14's path, and an `.efd`
-dropped on the page opens the same way — the first of several, the rest named in a toast — while
+dropped on the page opens the same way — the first of several, the rest named in an InfoBar — while
 a drop of anything else there does nothing (ruled 2026-10-14) — **the archive opened last** is
 remembered (ruled 2026-10-18, phase 4a of direction 3), by its id and the vault's path, in the
 page's memory alone for the life of the process — never written to any file, and dropped by a
@@ -1914,11 +1917,17 @@ or on the page's body — an input keeps its own select-all, and while a dialog 
 behind it is inert and takes no shortcut; the rest of the keys are *The lists' keys*, below; **Shift+click** extends from the anchor — the last row clicked without Shift — and with
 nothing selected there is no anchor, so it selects the clicked row alone; the list always keeps
 one row's height of empty space under its last row, also when it scrolls, so the last row can be
-brought clear of the pane's edge; **the preview pane** (264 px) **describes where you are**
+brought clear of the pane's edge; **the list moves only in its body** — a change of folder fades
+the rows in from the side they came from, a row an operation added wears a fading wash, a row a
+Delete takes fades out first (Motion, *Lists*; ruled 2026-10-26, phase 4b of direction 4) — and
+**a Delete keeps the place**: the row after the last one deleted takes the selection and the
+keyboard focus, else the nearest row before, and with no row left `..` takes the focus, or the
+empty folder's first command at the root (`lib/listkeys.ts` `survivor`; Explorer's habit — the
+focus fell to the page's body); **the preview pane** (264 px) **describes where you are**
 (ruled 2026-10-18, phase 4a of direction 3; at rest it was a grey "Select a file" over a greyed
 accent slab, and a file it could not show said "Extract…" as if that were the cure) — shown or
 hidden by *View › Preview pane* (Alt+P), `Settings.PreviewPane` (§3), true by default, a choice
-applied the moment it is made with no save bar and, refused, a toast with the old value back;
+applied the moment it is made with no save bar and, refused, an error InfoBar with the old value back;
 hidden, the list takes the whole width. **At rest**, nothing selected: the folder's name at the
 section size (the root by the archive's name) and its count, "3 items · 9.3 KB" — the bytes
 only once every row of the folder is loaded, the count alone while it pages, "0 items" for an
@@ -1934,11 +1943,12 @@ selection. **One selected**: the art box takes the pane's height (flex 1 1 auto,
 comes from the name at once, and while its URL or text is on its way the art box keeps its size
 and says nothing — a 14 px ring, 2 px of the accent turning once a second, appears only once
 the wait passes 300 ms. A folder, a file of a kind the pane cannot show, or a preview whose call
-failed (its toast said so as well) gets a centred block instead — its type's icon at 48 px in
+failed (its InfoBar said so as well) gets a centred block instead — its type's icon at 48 px in
 the third ink, the name, and "Folder · 15 MB inside", "No preview for PDF documents" (the
 type's plural, `strings.ts` `typePlural`; "No preview for this file" for a plain file) or "The
 preview could not be loaded" — said as a fact of the type: extracting is offered below as an
-action and never as the cure (ruled 2026-10-14 and 2026-10-18). Then the facts and the path, as
+action and never as the cure (ruled 2026-10-14 and 2026-10-18). The art is never a drag source
+(*The viewer*, below: a dragged picture would land on the desktop decrypted). Then the facts and the path, as
 before, and a standard *Extract…* on the selection. The foot's note is the folder and its count,
 "Trips · 3 items" (the archive's own figures moved to the pane at rest) — the running operation and how it
 ended are said in the layer's foot, the window's status bar, so an operation never moves the
@@ -1949,9 +1959,11 @@ the right an icon-only [⋯ More] and [View ▾] — while the archive drains, A
 and Delete… are greyed (§2.3). *Add* is one menu: *Add files…* and *Add a folder…* (it read *Add
 folder…*), each with its icon, then a separator and *Create folder…* with Ctrl+Shift+N at its
 right (a directory record, made at once whether or not a file is added into it — FORMAT R39).
-*More* holds *Delete archive…* alone, in the danger ink, greyed with its reason while the vault
-is locked or Tampered — it stood at the toolbar's right beside the file-level *Delete…* — until
-phase 4b's row menu on the Archives list takes it too. *View* holds *Preview pane*, a setting
+*More* holds *Move to…* with Ctrl+Shift+M at its right, greyed with "Select what to move" while
+nothing is selected (ruled 2026-10-26, phase 4b of direction 7), then a separator and *Delete
+archive…*, in the danger ink, greyed with its reason while the vault is locked or Tampered — it
+stood at the toolbar's right beside the file-level *Delete…*; the Archives list's row menu offers
+it too (§13). *View* holds *Preview pane*, a setting
 with its tick while the pane shows and Alt+P at its right. Then
 *Extract…* (one command for the selection or the whole archive, the extract dialog's scope line
 asking which, §3; titled *Extract… (Ctrl+E)*, greyed with "This archive holds nothing yet"
@@ -1977,11 +1989,24 @@ greyed says why in its title instead — "Select what to extract", "Select one i
 selection onto a folder row, onto the `..` row (up one level) or onto an ancestor's crumb in
 the head (to that folder; the root's is the root) is `Move`,
 refused in place with the reason (§3) and never a half-moved selection — the reason sits under
-the target row, or under the head for a crumb, until the next click; an op of the open archive that reports a failed or skipped
+the target row, or under the head for a crumb or for the blank area of a folder a spring
+entered, until the next click; **spring-loaded folders** (ruled 2026-10-26, phase 4b of
+direction 7, Explorer's habit; `lib/springload.ts`): during the list's own drag of its
+selection, a hover resting 700 ms on a folder row the drag does not carry enters that folder,
+and on the `..` row goes up — even into the folder the drag came from, since the drag may be on
+its way further up — and the drag goes on, its drop landing where the pointer is in the folder
+now shown: a folder row, `..`, or, in a folder a spring entered, the list's blank area, which is
+then that folder and is washed as a folder row is under the drag (in the folder the drag came
+from the blank area is no target, as before). A hover counts as resting while its dragovers keep
+coming at least every 600 ms. After a spring nothing springs again until the pointer has moved
+more than 4 px (the drag threshold) from where it stood, so the row that comes under a still
+pointer — the `..` that takes the first folder's place — is neither climbed nor entered. A file
+row and a crumb never spring, and a drag from outside the window never does: it is an add (§3);
+an op of the open archive that reports a failed or skipped
 item opens the results dialog at once, and an op of another archive says it in the foot's done
 line, whose *Details* opens the same dialog from any page (*The foot*, below; ruled 2026-10-18 —
 it was a *What happened* dialog here and the summary as a toast elsewhere); a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
-is said by a toast naming it, the page having walked its crumbs upwards; the name column takes the width the others do not need — Size, Type and Modified are fixed;
+is said by an InfoBar naming it, the page having walked its crumbs upwards; the name column takes the width the others do not need — Size, Type and Modified are fixed;
 drag-and-drop in (§3's drop) and out (§3's drag out — the staged route; the same native drag
 serves the list's own moves, a self-drop being a `Move`); the extract dialog and the conflict dialogs of §3; the
 locked banner — one 40 px attention line naming this archive as decrypted and still saving, with
@@ -1991,11 +2016,112 @@ no timeout of the archive's own (§2.3); **a file opened from Explorer whose key
 vault** and that the user then brought in through the key-not-in-vault dialog's *Import
 archives from a backup…* is opened once a merge succeeds and its dialog closes (ruled
 2026-10-18, direction 3; it was left unopened), and forgotten by a picker or a merge dialog
-closed without a merge, a lock, or any newer open). **Vault** — the rail item and the page title (ruled
+closed without a merge, a lock, or any newer open).
+
+**The Archive page's menus** (ruled 2026-10-26, phase 4b of the design review's direction 7,
+Explorer's habits; `lib/filemenu.ts`; the menu is the app's own, §6 *Menus*). A right-click on
+a row that is not selected selects it alone first, as a click does; on a selected row it keeps
+the selection; either way the row takes the focus. Shift+F10 and the Menu key open the focused
+row's (*The lists' keys*, below). A file's menu: *Open* (the default, bold and first, Enter:
+the viewer, never *Extract*) · *Extract…* Ctrl+E · ─ · *Rename…* F2 · *Move to…* Ctrl+Shift+M ·
+─ · *Delete…* Del, in the danger ink · ─ · *Copy name*. A folder's: the same without *Copy
+name*, its *Open* entering the folder. The `..` row has none. *Extract…*, *Move to…* and
+*Delete…* act on the whole selection, as their toolbar buttons and keys do; *Rename…* and *Copy
+name* on the row the menu was opened on, so *Rename…* is offered on a multi-selection there while
+the toolbar's stays greyed with "Select one item to rename"; *Copy name* writes the name through
+the runtime's clipboard (`Clipboard.SetText`, as the dialogs' *Copy* and *Copy details* do). The list's blank area — a
+right-click there clears the selection, as a click does; a header cell is not blank — offers what
+makes something here: *Create folder…* Ctrl+Shift+N · ─ · *Add files…* · *Add a folder…*. While
+the archive drains after its *Close* every item but *Copy name* is greyed with "This archive is
+closing". Two commands are not offered: "Extract here" — Enfold has no "here" on disk, and
+*Extract…* with its prefilled destination is the one command — and *Properties*, the pane being
+the facts. Each item carries its icon; *Open* is the open glyph on every menu, the eye being
+*Hide*'s and *Unhide*'s alone.
+
+**The viewer** (ruled 2026-10-26, phase 4b of direction 7; `Viewer.svelte`, `lib/viewer.ts`) is
+a file looked at large inside the window — the long look, where the pane is the quick one —
+opened on a file by Enter, a double-click or the row menu's *Open*, never while the archive
+drains. It stands over the page's area of the layer, the head, the commands, the banners, the
+list and the pane, which are inert behind it; the rail and the foot stay live beside it, and a
+dialog it opens stands over it. It is dark in both themes (`--viewer-*`), as a photo viewer is.
+Its 40 px bar holds the name (strong, cut with the app's tooltip), "4 of 13", the file's size,
+type and date in one caption line, then *Extract…* with "Ctrl+E" after its label in the caption
+ink — the extract dialog on the file shown, greyed with the closing reason while the archive
+drains — and a 28 px × titled *Close (Esc)*. Under it the stage, a 32 px round *Previous (←)*
+and *Next (→)* at its sides, greyed at the ends. **It shows exactly what the pane can show,
+larger** (`previewKind`): a picture at its own size, only ever shrunk to fit and never enlarged; a
+video with its controls, no download, no playback rate and no picture-in-picture window; a sound
+with its controls under its type's icon; text in the mono at 13/20 on a panel 100 characters
+wide, or the stage's width when that is less, whatever the lines' lengths, scrolling inside itself, read under the pane's 64 KB cap, a cut text
+ending in "…" over the line "Only the first 64 KB are shown here." (the viewer's own; the pane
+shows the "…" alone). A kind the WebView cannot show — a PDF, a HEIC, anything `previewKind`
+calls *none* — opens on its type's icon at 96 px and the pane's words, "No preview for PDF
+documents", with *Extract…* in the bar as an action of its own and never as the cure: no
+renderer is ever put in the window (2026-09-13). A preview the core refused says the code's line
+there; a wait shows the pending ring after 300 ms, as the pane's. **"4 of 13" counts the
+folder's files the viewer can show**, in the list's order, among the rows loaded; its total does
+not change with where the viewer was opened, and a file outside it — a *none* kind opened by
+Enter, unless every file of the folder is one — shows no counter. ← and → step through those files and the file it was opened on, so a
+PDF opened by Enter can be stepped from and back to; a folder whose files are all *none* kinds
+steps through all of them. The steps stop at the ends, as the list's do, and a long folder pages
+in once the viewer stands within 3 files of the last file it can step to among the rows loaded. The selection follows it: the
+file shown is the row selected. **Its keys**: ← → step, Home and End go to the first and the
+last, Esc and Enter close it, Ctrl+E is its *Extract…* — only while the focus is in the viewer or
+on the page's body; a button in its bar keeps its own Enter and Space, a player with the focus
+its arrows, Home, End and Space, the text panel with the focus its Home and End (its arrows still
+step), a dialog over it every key, and the rail and the foot theirs. **Nothing is written**: it
+reads what the pane reads, from the same pipeline — the no-store loopback URL (§4) and
+`PreviewText` — one read per file shown, a reply for a file stepped past dropped; while it is up
+the pane asks for nothing, one body being served at a time, and reads again when it closes; on
+closing the URL is dropped and every player's source cleared, so a stream stops at once. **A
+preview is never a drag source**, here or in the pane: an `<img>` is draggable by default, and
+WebView2 turns a page's drag into a native OLE drag, so a picture dropped on the desktop would be
+written there decrypted; every preview's picture and player says `draggable="false"`, and the
+viewer and the pane's box cancel any `dragstart` inside them (`lib/dragout.ts` `noDrag`). The
+one drag out of Enfold is the rows' own, through `Shell.DragOut` (ruled 2026-10-26). It
+closes by itself when the file shown leaves the folder. Closed, it puts the focus on the row it
+showed, brought into view the nearest way.
+
+**Move to…** (ruled 2026-10-26, phase 4b of direction 7; `MoveToDialog.svelte`,
+`lib/movetree.ts`) moves the selection into a folder chosen in a tree — the keyboard's way to
+what a drag does, and past the one level a drag reaches without a spring. Ctrl+Shift+M, the row
+menu's *Move to…* and the toolbar's *More* open it on the selection as it stands, never while the
+archive drains. It is a dialog titled for what moves — "Move beach.jpg to…", "Move 3 items to…".
+**The tree** is the archive's folders, folders only, read a folder at a time as it is first
+opened (`Archive.Page(id, dir, "name", 0, 500)`, directories first in name order, the folders
+kept): the root is the archive, by its name and its glyph, open; the folders down to the one shown
+are opened as the dialog opens, so where the items are now is in view and selected. A folder
+that cannot take the move is greyed and says why at its right — the folder the items are in now,
+"Already here", and a moved folder and every folder beneath it, "A folder cannot move into
+itself" — and can still be selected, so a folder can be made inside it. A folder whose first 500
+items are all folders, with more after them — directories coming first, only then can a folder
+be missing — says "More than 500 items: some folders are not shown" where its last folders would
+be (`movetree.ts` `cut`); a folder of more than 500 items whose first 500 end on a file has every
+folder in the tree and shows no note; a refused read says the code's line there, and opening the folder again tries again.
+Rows are 28 px, 18 px a level, in a 264 px box that scrolls, so the dialog does not grow as
+folders open; the selected row wears the accent wash. Its keys are the tree's, Explorer's: ↑ ↓,
+Home and End move the selection; → opens a closed folder or steps into an open one's first
+folder; ← closes an open one or steps out to its parent; Enter opens a closed folder that can
+open, and on any other row presses *Move*; a character typed is type-ahead, as in the lists. Under
+the tree a subtle *Create folder…* turns into a field, "New folder in 2024", with *Create* beside
+it — judged as *Create folder*'s is against every name in that folder, files included (§6,
+*Forms*), Enter creating and Esc putting the button back with the dialog still up — and the new
+folder is selected, so *Move* goes into it, the page's listing read again. Then one caption line:
+where the move goes, "To Photos 2024 › 2024", or why it cannot. The foot band holds *Move*, the
+accent, greyed with that reason while the folder selected cannot take it and showing the
+pending ring while the move runs, and *Cancel*. A refusal — a name already there (`file.exists`),
+as a drag's *Move* is refused — is said in that line in the danger ink, the code's own words, and
+the dialog stays. A move that lands clears the selection, which went with the items, and reads
+the folder shown again; *Cancel* or Esc moves nothing and puts the focus back on the selection's
+anchor row. It calls `Archive.Move` with the ids as they stood when it opened, as a drag moves its
+flight's.
+
+**Vault** — the rail item and the page title (ruled
 2026-10-17: they read *Keystore*, a format word, while every sentence said "vault"; the spec's
 "Keys page", in older rulings, is this page, and the spec now calls it the Vault page throughout)
 — is everything about the one vault in one column, at most 760 px, its banners (Tampered,
-locked, setup) inside the column, and no save bar (ruled 2026-10-18, phase 4a of the design
+setup, locked) and its InfoBars in the notice slot first in the column (*Notices and their
+tiers*, below; ruled 2026-10-26), and no save bar (ruled 2026-10-18, phase 4a of the design
 review's direction 10: the vault's name and its lock times stood on Settings under the save bar,
 the name shown here read-only). One accent per surface: *Add an unlock method…* while the vault
 is unlocked, not Tampered and no backup is owed; *Export backup…* while one is owed; the locked
@@ -2050,7 +2176,8 @@ makes the page read the settings again.
 **Settings is this PC only** (ruled 2026-10-18, phase 4a of the design review's direction 10;
 it held the lock times and the vault's name under the save bar, beside this PC's own choices,
 "These settings are this PC's; the lock times travel with the vault"). One column, at most
-760 px, four sections: **Window** — *When the window closes* as three radios, *Ask each time*,
+760 px, its notice slot first (*Notices and their tiers*, below; ruled 2026-10-26: the Tampered
+banner, then the InfoBars in flow), then four sections: **Window** — *When the window closes* as three radios, *Ask each time*,
 *Keep running in the tray*, *Quit* (§2.3; it was a select), under the line "In the tray the
 vault stays unlocked until it locks. Open archives close with the window."; **Appearance** —
 *Theme*, *Follow Windows* · *Light* · *Dark*; **Compression** — *Dictionary for small files* (the
@@ -2062,7 +2189,7 @@ a second look exists. **Every choice applies the moment it is made**, as Windows
 (§3, one ordered write): the pending ring on a select while it saves (the close action's radios
 have none) and, refused, the
 code's line under the control in the danger ink with the old value back; no save bar, and no
-toast on success, a choice that applied being its own confirmation (2026-09-07's rule for a
+InfoBar on success, a choice that applied being its own confirmation (2026-09-07's rule for a
 saved setting, kept). The foot reads "These settings are this PC's." The page opens from the
 lock screen's gear too, needing no vault.
 
@@ -2092,6 +2219,11 @@ the preview behind every arrow. Both lists:
   searches from the focused row itself, so the row found stays found as the name is typed on.
   While a name is being typed, Space belongs to it; a character typed with AltGr (Ctrl+Alt on
   Windows) counts as one.
+- Shift+F10 and the Menu key (Shift allowed with it, Ctrl and Alt not; `opensMenu`, the intent
+  *menu*) open the focused row's menu — the one a right-click opens — selecting the row first as
+  a right-click does, and with no row to act on the blank area's menu at the list's top left,
+  under its header (ruled 2026-10-26, phase 4b of direction 7; §6, *Menus*). The `..` row has no
+  menu. In a text field the same keys open the field's own menu.
 - Ctrl+L is *Lock now* on every page while unlocked (*The foot*, below).
 The file list:
 - Selection: Shift with an arrow, Home, End, PgUp or PgDn extends from the anchor by the click's
@@ -2101,18 +2233,25 @@ The file list:
   row reaches it and leaves nothing selected; Home and End go to the first and last rows that can
   be selected; Enter or Space on it goes up.
 - Opening: Enter on a folder opens it, and a second Enter or double-click while a folder is still
-  opening is ignored. Enter on a file selects it and does nothing more until the viewer (phase 4)
-  — it is never *Extract*, which is always a named command (ruled 2026-10-17). Going up —
+  opening is ignored. Enter on a file — and a double-click, and the row menu's *Open* — selects it
+  and opens the viewer on it (*The viewer*, above; ruled 2026-10-26, phase 4b of direction 7,
+  replacing "selects it and does nothing more until the viewer"), and while the archive drains it
+  selects it and does nothing more; it is never *Extract*, which is always a named command (ruled
+  2026-10-17). Space keeps selecting, as Explorer's does. Going up —
   Backspace, Alt+Up or `..`, by key or by mouse — focuses the folder just left once its row is
   on screen, and selects it unless something else has been selected by then (in a long parent the row
   may arrive a page later, and a choice made meanwhile is not taken away).
 - Commands: Backspace or Alt+Up goes to the parent; Alt+Left goes back to the Archives list,
   the archive staying open as it does for the rail (§2.3, ruled 2026-10-18); Ctrl+E opens
   *Extract…* (on the selection, or on *Everything* when nothing is selected, §3); Del opens
-  *Delete…* for the selection; F2 opens *Rename…* for one selected row; Ctrl+Shift+N opens
+  *Delete…* for the selection; F2 opens *Rename…* for one selected row; Ctrl+Shift+M opens *Move
+  to…* for the selection, and does nothing with none (ruled 2026-10-26); Ctrl+Shift+N opens
   *Create folder…*; F5 reads the archive again; Alt+P shows or hides the preview pane, as in
   Explorer (plain Alt, not AltGr; *View › Preview pane*, ruled 2026-10-18). Alt+Enter does
-  nothing here until phase 4.
+  nothing here: there is no *Properties*, the pane being the facts (ruled 2026-10-26; it waited
+  for phase 4).
+- While the viewer is up the page behind takes no key, as under a dialog, and the viewer's keys
+  are its own (*The viewer*, above); Ctrl+L still locks.
 The Archives list is single-select (ruled 2026-10-18, direction 6, its checkboxes gone): Shift
 or Ctrl with the arrows, Ctrl+Space and Ctrl+A do nothing there. Enter opens the
 row; Ctrl+N opens *New archive…*; Ctrl+O opens *Open file…* from anywhere on the page, the Filter
@@ -2122,7 +2261,8 @@ description* behind its pencil and puts the focus in the Name field with the nam
 raising the narrow panel first when it is down; Ctrl+F focuses the
 Filter; Alt+Enter opens *Technical details…* for the selected row; F5 reads the list again; Esc
 collapses the panel when it is up (ruled 2026-09-11) and is otherwise left alone, so the Filter's
-own Esc still clears it.
+own Esc still clears it. On either list an error InfoBar takes Esc first while one stands and the
+focus is not in a field (*InfoBars*, below).
 **Where a key acts**: a list's own keys — the moves, select, toggle, select-all, open and
 type-ahead — act while the focus is in the list or on the page's body; a page's commands act
 from anywhere in the window but a text field, which keeps its own keys, Esc and the Archives
@@ -2132,15 +2272,16 @@ list's tick-all box, the empty vault's *New archive…*, *Open file…* and *Imp
 backup…*, the empty folder's *Add files…* and *Add a folder…*, the Forgotten view's *Restore* and
 *Delete archive…*, the Missing chip — keeps its own Enter and Space, so the headers sort and the boxes tick from the
 keyboard; a row's own tick box (outside the Tab order, reached by a click) is part of its row,
-so Space there selects as on the row. While a dialog is up, or from an open menu or popover, no
-list key acts. The focus ring is `:focus-visible`'s (*The focus ring on a selectable row*,
+so Space there selects as on the row. While a dialog or the viewer is up, or from an open menu or
+popover, no list key acts. The focus ring is `:focus-visible`'s (*The focus ring on a selectable row*,
 Motion). **A command whose key exists says it in its title** as "Label (Key)" (`strings.ts`
 `keyHint`, `keyTitles`): *Extract… (Ctrl+E)*, *Delete… (Del)*, *Rename… (F2)*, *New archive…
 (Ctrl+N)*, *Open file… (Ctrl+O)*, *Delete archive… (Del)*, *Technical details… (Alt+Enter)*,
 *Filter (Ctrl+F)*, *Lock now (Ctrl+L)* and the pane's pencil, *Edit name and description (F2)*;
 a greyed command keeps its reason as its title instead. A menu item says its key at its right
-instead (§6, *Menus*): *Create folder…* Ctrl+Shift+N, *Preview pane* Alt+P, and the Archives
-page's *Delete archive…* Del.
+instead, in the same words without the parentheses (§6, *Menus*): *Create folder…*
+Ctrl+Shift+N, *Preview pane* Alt+P, *Move to…* Ctrl+Shift+M, the Archives page's *Delete
+archive…* Del, and every row menu's keys.
 
 **The foot: the window's status bar** (ruled 2026-10-18, phase 3 of the design review's
 direction 4, "status gets a home and an ending"). The layer's foot (`LayerFoot`; Motion, *Pages*)
@@ -2149,8 +2290,10 @@ the 42 px operation strip that stood above the list, and pushed it down as an op
 is retired. 2026-09-11's rule for the drag out's strip, "a button that vanishes reflows the
 strip; a greyed one keeps its shape", is kept by a slot that never reflows at all.
 - **The left slot** says the page's note at rest; the running operation while one runs; then how
-  it ended, the done line; then the note again — one at a time, cross-fading in 140 ms and out
-  in 100 ms. A done line holds its time even while another operation still runs, and the slot's
+  it ended, the done line; then the note again — one at a time, by the house crossfade: the old
+  line leaves over 100 ms fast first and the new one comes in over 140 ms a gap (60 ms) later, so
+  two lines are never drawn over each other (ruled 2026-10-26; they crossed at once, and a drag's
+  line and the note under it were caught both half drawn). A done line holds its time even while another operation still runs, and the slot's
   *Cancel* and *+N* wait behind it; a flyout already open keeps the running operations' *Cancel*
   meanwhile.
 - **The running line**: the operation's name with its count and its archive (`lib/ops.ts`
@@ -2166,7 +2309,7 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   only while more than 10 s remain, and the minutes round up, so "about 2 min" is never a
   promise kept late. Then a 24 px subtle *Cancel* where a cancel means something (§2.3, *What a
   cancel means*), which reads *Cancelling…*, greyed, from the press until the operation ends
-  (ruled 2026-10-14) — a refusal (`op.committing`) gives it back, with its toast. A compaction
+  (ruled 2026-10-14) — a refusal (`op.committing`) gives it back, with its error InfoBar. A compaction
   and a re-key show no *Cancel*. When the foot is narrow the extras give way so the name stays
   whole: first the time left, then the line's length (160 px down to 64), and only then does the
   name take an ellipsis (measured whole at a 1024 px window).
@@ -2202,8 +2345,8 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   refreshed"; "Stopped. Reclaiming space in Photos 2024 did not finish"; "Stopped. Photos 2024
   is as it was" for a compaction or a re-key the core stopped. This retires 2026-10-14's neutral
   "Adding 3 files: Stopped." toast; a reclaim's figure moves from its toast to the line; another
-  archive's trouble, a toast until now, is the line with *Details*. A failure keeps its error
-  toast and gets no line (InfoBars are phase 4). An extract under *Ask* that wrote nothing and
+  archive's trouble, a toast until now, is the line with *Details*. A failure is an error
+  InfoBar and gets no line (*InfoBars*, below; ruled 2026-10-26). An extract under *Ask* that wrote nothing and
   comes back with a question — a conflict, a refused name or path — says nothing, the question
   being its news; one that wrote some says "Extracted 9 of 13 files to …" [*Show in Explorer*]
   under its question, and each re-issue its answer makes has a line of its own. Two endings of
@@ -2222,8 +2365,8 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   extract's skipped file, which is the one already in the destination; never an archive path. The
   first 12 rows and a count of the rest. *Copy details* and *Close* are equal standard buttons,
   nothing here being the suggested act; *Copy details* writes the title, the summary and every row
-  through the runtime's clipboard (`Clipboard.SetText`, as every Copy does) and toasts "Details
-  copied". It closes on the backdrop as well, its one act being *Close* (ruled 2026-10-18: it was
+  through the runtime's clipboard (`Clipboard.SetText`) and raises "Details
+  copied", a success InfoBar, in the dialog (*InfoBars*, below). It closes on the backdrop as well, its one act being *Close* (ruled 2026-10-18: it was
   *What happened*, the count first, rows as "name — reason", with *Close* the accent).
 - **The rail's mark**: while anything runs, the rail's *Archives* item wears an 8 px accent dot
   at its right edge, 12 px in and centred in its 36 px row, seen from every page — a 48 GB
@@ -2257,8 +2400,9 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   their banner is the page's own — gather behind a subtle *1 notice* / *2 notices* button with a
   6 px attention dot, before the lock chip; it opens the same popover at the foot's right, one row
   per warning ranked by tier (*Notices and their tiers*, below), each with its tier's icon in its
-  tier's colour and its words. The `vault.warning` toast still marks the moment one arrives
-  (ruled 2026-10-13), and the lock screen keeps its list. One popover at a time. Ctrl+L presses
+  tier's colour and its words. An InfoBar still marks the moment one arrives
+  (`vault.warning`; ruled 2026-10-13, an InfoBar since 2026-10-26 — *InfoBars*, below), and the
+  lock screen keeps its list. One popover at a time. Ctrl+L presses
   *Lock now* on every page while unlocked: the key is read by the foot, the one place on every
   page, through the lists' keymap (`lib/listkeys.ts` `locksNow`), so a text field, a dialog, a
   menu or a popover keeps it, and the button is titled *Lock now (Ctrl+L)*.
@@ -2477,13 +2621,25 @@ on the plain bar: it only informs.
 The state sets the place. On the lock screen the notices stand above the panel at its width in
 one ranked list — danger, then attention, then info, the core's order kept within a tier — and
 the archives still open rank among them as attention, under the Tampered banner and above an info
-line. While the vault is unlocked the Tampered banner is the first element of a page's body,
-above its command bar (*The Tampered banner*, below); a page's other notices keep their places —
-on an archive's page the locked line, `archive.needs_reopen` and `archive.copy_mismatch` stand
-under the command bar — and the status's standing warnings, the Tampered ones aside, are
-gathered behind the foot's *1 notice* button, whose popover lists them in this ranked order with
-each tier's icon and colour (*The foot*, above; ruled 2026-10-18, direction 4 — it was "later"
-here), while a warning that arrives meanwhile is still marked by the `vault.warning` toast. The notices
+line. **On a page they stand in its notice slot** (ruled 2026-10-26, phase 4b of the design
+review's direction 4; `NoticeSlot`): one place for what a page has to say, between its commands
+and its list on the Archives and Archive pages, and first in the column on the Vault page and
+Settings (the Settings page's banners and bars now stand in its 760 px column, as the Vault
+page's do). The slot holds the page's stateful banners — the ones that change what the page can
+do — in direction 9's fixed order, danger, then attention, then info, so a banner that appears
+takes its tier's place rather than pushing in at the top: on the Archives page the Tampered
+banner, then the locked line; on an archive's page the Tampered banner, then the locked line,
+`archive.needs_reopen` and `archive.copy_mismatch`; on the Vault page the Tampered banner, the
+setup line, then the plain locked line; on Settings the Tampered banner. Each banner opens and
+closes its height (Motion, *Lists*), so the list slides when the page's state changes and moves
+for nothing else — never for an InfoBar, an operation or the countdown. An empty slot adds no
+space: it gives back the gap its container would put after it, so the commands and the list
+stand one gap apart (`--slot-gap`, the layer body's 12 px, the page column's 24, 0 on the lock
+screen's stage). The Archive page's line under the head for a refused *Move* stays where it is.
+The status's standing warnings, the Tampered ones aside, are gathered behind the foot's *1
+notice* button, whose popover lists them in this ranked order with each tier's icon and colour
+(*The foot*, above; ruled 2026-10-18, direction 4 — it was "later" here), while a warning that
+arrives meanwhile is marked by an InfoBar (below). The notices
 that carry a lead open with their first sentence in the strong weight (600, the ink), the rest
 following in the body weight: the Tampered banner, the locked lines of the Archives page and an
 archive's page, the archives-open notice and the backups card's bar. The split is written into
@@ -2493,9 +2649,58 @@ the lock screen's warnings other than the Tampered one (`vault.stale`, `settings
 `token.reset_failed` and the rest) and an archive's page's `archive.copy_mismatch` and
 `archive.needs_reopen` bars.
 
-**The Tampered banner** (danger) stands first among the lock screen's notices and is the first
-element of every page's body while the vault is Tampered — the Archives page (above its command
-bar), an archive's page, the Vault page and Settings, Settings opened from the lock screen's gear
+**InfoBars** (ruled 2026-10-26, phase 4b of the design review's direction 4; `lib/infobar.ts`,
+`InfoBars.svelte`) are what the page cannot say in place — an error a call came back with and
+whose own surface is gone, the moment a status warning arrives (`vault.warning`), and the few
+facts no surface holds: a copy made ("Details copied"), a folder the page stood in that went, the
+`.efd` files a drop did not open, the archives a purge made unopenable. Never a confirmation of
+something the page already shows — a saved setting is the bar leaving, a choice that applied is
+its own confirmation — and never how an operation ended, which is the foot's done line (*The
+foot*). They replace the toasts (§6, *Controls*): wherever an older ruling in this spec says a
+toast, it is now an InfoBar of the kind its words take. The store raises one by
+`store.notice(text, kind)`, a kind of three: *info*, *success* (a copy that worked) and *error*
+(a failure); a warning's arrival takes its tier's — *info* for the info tier, *error* for every
+other. A bar is a card on the surface with the stroke, 12 px in: the kind's icon from the tiers'
+set (`noticeIcon`: the info circle in the second ink, the accent check for a success, the error
+circle in the danger ink on the danger wash and line for an error), its sentence left-aligned in
+the body type (the unknown code's fallback with its code in muted mono, §7), and a 28 px subtle
+× titled *Close*; one line is 40 px, as the locked banner is, and a longer sentence wraps.
+- **How long**: info and success go by themselves after 3 s plus 50 ms a character, at most 8 s;
+  an error stays until its × is pressed. A bar's time stops while the pointer is over any bar,
+  while the window has lost the focus or is hidden (told by the window's focus, blur and
+  visibility events, never read once at start), and, for a page's bar, while a dialog covers the
+  page — so no bar is gone before it could be read.
+- **How many**: at most three are shown, newest on top; the rest wait, their time stopped, and
+  come in as shown ones go. The same words of the same kind are never shown twice: a repeat takes
+  the top with a whole lifetime and the earlier one goes.
+- **Esc** closes the newest error, and its × is titled *Close (Esc)*, only when no dialog, menu,
+  open popover (the compact rail's flyout, the foot's operations and notices flyouts) or viewer
+  is up and the focus is not in a text field. One Esc closes one thing, in one order: a dialog,
+  a menu, a popover, the viewer, the newest error, then the list — so with the flyout open and
+  an error up, the first Esc closes the flyout and the second the error (`lib/infobar.ts`
+  `escCloses`, `lib/dialogs.ts` `ESC_OWNERS`: a popover's toggle carries `data-owns-esc` beside
+  its `aria-expanded`). An open popover takes its Esc wherever the focus is, so an error is
+  never held behind a flyout the key cannot reach. It is read before the page's own keys, so a list's Esc clears its
+  selection once no error is left to close, and otherwise the key goes on to the list
+  untouched.
+- **Where they stand**: in the page's notice slot, after its banners. On the Archives and Archive
+  pages they float with `--shadow-pop` at the slot's bottom edge, which is the list's top — 8 px
+  into the list, 12 px in from its left edge, stopping 12 px short of its column's right edge —
+  so they never move the list and never cover the side pane (the details or the preview); with
+  the pane off, or under the Archives page's threshold where it is the bottom panel, they take
+  the list's width. Everywhere there is no list to hold still they stand in flow, flat, each
+  opening and closing its height (Motion, *Lists*), so what is under them slides down rather than
+  being covered while an error stays: on the Vault page and Settings at the top of the column,
+  under the banners, at the cards' width and 24 px apart; on the lock screen above the panel's
+  notices, at the panel's width; on the boot failure's panel, above it. A bar raised while a
+  dialog is up is that dialog's: it stands in flow in the topmost dialog, between its body and its
+  foot band, while the page's own bars wait under the dim, their time stopped; once the last
+  dialog closes every bar is the page's, with the time it had left.
+
+**The Tampered banner** (danger) stands first among the lock screen's notices and first in every
+page's notice slot while the vault is Tampered — the Archives page and an archive's page (under
+their commands, ruled 2026-10-26 with the slot; it stood above the commands it greys, 2026-10-18),
+the Vault page and Settings (first in the column), Settings opened from the lock screen's gear
 included — so a vault file that may have been changed outside Enfold is never news to the lock
 screen alone (ruled 2026-10-18; it was an amber bar on the lock screen, the Archives page and the
 Vault page). Every one of these surfaces draws it from one predicate, `VaultStatus.Tampered` or a
@@ -2520,7 +2725,10 @@ changes are off*, a dialog whose one action is *Close* (so the backdrop closes i
 The Vault page's acts, the Archives page's *Compact…*, *Re-key archive…* and *Refresh
 fingerprint*, and the *Refresh fingerprint* in an archive's page's `archive.copy_mismatch` note
 are greyed while Tampered with the title "Changes are off until this vault is replaced with a copy
-you trust; the banner above has the button." (`vaultCopy.changesOff`). The other changes the state
+you trust; the banner on this page has the button." (`vaultCopy.changesOff`). The title names no
+side (ruled 2026-10-26): the banner stands under the commands on the Archives and Archive pages
+and over the acts on the Vault page, so "the banner above", its earlier words, was false once
+the banner moved into the notice slot. The other changes the state
 greys are not titled so: an archive's page's *Delete archive…* keeps its own title, "This vault
 file does not match itself, so changes to it are off." (`archivePageCopy.deleteTampered`), and the
 Archives page's *New archive…* (in the command bar and in the empty list), *Import archives from a
@@ -2554,7 +2762,7 @@ an open archive still does). One archive is named, several are counted, in three
   *Unlock*.
 A close from these that closes the archive whose page is shown drops that page as closed, and an
 archive `CloseAll` kept — one being compacted holds its handle — is said with
-`archive.compacting`'s toast. The Vault page's locked line ("Unlock the vault to change its
+`archive.compacting`'s error InfoBar. The Vault page's locked line ("Unlock the vault to change its
 unlock methods." with *Unlock*) names no archive and stays the plain bar.
 
 **Forms and their errors.** A field that holds something wrong is marked once the user leaves it
@@ -2606,7 +2814,8 @@ correction — the store keeps them across the derivation step, which unmounts t
 equal by hand: *tap* 90 ms (press feedback), *hover* 120 ms in and 160 ms out (a control
 answers at once and settles when left), *leave* 100 ms, *fast* 140 ms (enter), *move* 220 ms
 (the only long one: a change of scene), *settle* 320 ms (the one deliberate pause, below),
-*gap* 60 ms (what arrives waits this long for what leaves). Entering eases out
+*gap* 60 ms (what arrives waits this long for what leaves), and *wash* 1200 ms (`--dur-wash`,
+the fade of a row an operation added, *Lists* below; ruled 2026-10-26). Entering eases out
 (`cubic-bezier(0.2, 0, 0, 1)`); a thing that travels away eases in; a crossfade's exit eases
 *out* — fast first, 80 ms for a page — so that no two texts share a spot at readable opacity,
 which is what a ghost is. Nothing travels more than 12 px; one thing moves at a time, staggered
@@ -2679,6 +2888,37 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   minute — and *Lock now*
   while unlocked, the standing notices' button before them; the closed padlock, *Locked* and *Unlock* while locked with archives still
   open (ruled 2026-10-17: it read *Keystore locked*).
+- *Lists.* (ruled 2026-10-26, phase 4b of the design review's direction 4, "status gets a home
+  and an ending"; `lib/motion.ts`). Of a list only its body moves — never its header, the
+  commands or the pane; the banners above it open and close their height (below), and the body
+  slides for them without moving itself — and the keyboard focus stays where it was, since the rows are moved
+  in place and never remounted:
+  - *A change of folder* fades the file list's body in over the fast duration (140 ms) on the
+    entering curve while it travels 8 px: from the right going deeper, from the left going up or
+    across — judged on the crumbs of the listing that landed, so a folder gone from under the
+    page that leaves it higher up comes in from the left too (`travel`, `slideIn`). The travel
+    moves in whole device pixels (`slideSteps`: a keyframe every 1/14 of the time along the curve,
+    each snapped to 1/dpr px and held), since a body painted at a fractional offset drew a seam
+    at every cell's edge across the selection's wash and the focus ring. The Archives list does
+    the same for a change of view: into the Forgotten view from the right, back from the left.
+  - *A row an operation added* — an add's added and created records on the archive shown, the
+    folder *Create folder…* made — wears half the selection's wash (`color-mix` at 50% with
+    nothing) fading out over *wash*, 1200 ms, on the exit's curve. It is a layer over the row's
+    own fill, so the selection and the focus ring are untouched. The store keeps those ids 4 s
+    (`FRESH_HOLD`) and drops them on a change of folder.
+  - *A row a Delete takes* fades out over *leave*, 100 ms, before the Delete is sent, and stays
+    faded until a listing no longer holds it, whichever re-read brings that; a refusal brings it
+    back with its error bar. A *Move* takes its rows away without a fade.
+  - *A stateful banner* in the notice slot (*Notices and their tiers*) opens and closes its
+    height — the grid's row from `minmax(0, 0fr)` to `minmax(0, 1fr)` with its opacity, over
+    *move* (220 ms) on the entering curve, clipped while it moves — so the list under it slides
+    rather than jumps (`unfold`); a banner already standing when its page is drawn does not
+    animate. An InfoBar in flow opens and closes its height the same way; a floating one comes
+    in with a 6 px drop over the fast duration, leaves with a fade over *leave*, and the others
+    close up behind it.
+  - *The viewer* (§6, *The viewer*) fades in over the fast duration and travels nothing; it goes
+    at once when closed.
+  None of it plays under reduced motion: the tokens collapse to 0, `--dur-wash` with them.
 - *Rail.* The rail is a NavigationView (ruled 2026-10-17; its shape ruled 2026-10-18, phase 4a
   of the design review's directions 3, 6 and 10; `lib/rail.ts` decides what it shows,
   `Rail.svelte` draws it). **Expanded**, at a window of 1008 px and more, it is 212 px
@@ -2741,10 +2981,59 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   pane* Alt+P, *Delete archive…* Del); a setting carries a tick while on (`menuitemcheckbox`); a
   command that destroys is in the danger ink; a greyed item stays reachable by the arrows, does
   nothing when chosen, and says its reason in a few words as a second caption line under its
-  label — an enabled item says nothing more, its title staying the native tooltip; a menu over a
+  label — on the row menus of both lists, the blank areas' menus and every menu the Archives
+  page's one table feeds (§13, `archivesCopy.why`), a phrase with no closing full stop ("Select
+  what to move", "This archive is closing", "Restore it first" — ruled 2026-10-26: the Archives
+  page's table alone ended in one, and "Forgotten. Restore it first." became "Restore it first").
+  Two menus still say a reason in the full sentence of a button's title and keep its full stop
+  until their own short phrases are written: an archive's page's toolbar *More* while the archive
+  drains ("This archive is closing. Nothing more can be done in it.", `archivePageCopy.closing`,
+  on *Move to…* and *Delete archive…*) and on *Delete archive…* while locked or Tampered
+  (`archivePageCopy.deleteNeedsUnlock`, `deleteTampered`), and the Archives page's *View* on
+  *Forgotten* with none forgotten ("No archive is forgotten.", `archivesCopy.noneForgotten`). An
+  enabled item says nothing more, its title staying the native tooltip; a menu over a
   box that clips (the Archives pane, the bottom panel) is drawn over the window against its
   button, above it when there is no room below; a long menu is capped in height and scrolls; an
-  item whose name is cut takes the app's tooltip.
+  item whose name is cut takes the app's tooltip. **The context menu is the app's own** (ruled
+  2026-10-26, phase 4b of the design review's direction 7, Explorer's habits): a right-click opens
+  `ContextMenu` on a row of either list, on a list's blank area, in a text field that is not a
+  secret, and on a value in the *Technical details* dialog (§13). 2026-09-06 turned WebView2's own
+  context menu off — its *Save image as* wrote a decrypted preview to Downloads — and that ruling
+  stands and is untouched: this menu is drawn by the page, offers only the app's commands, and is
+  not WebView2's. It is drawn as a button's menu is (above) and adds two marks: **the default
+  item** — what Enter and a double-click do — **is bold and first**, and **a command's key stands
+  at its right** in the caption's second ink, in the words a title puts in parentheses
+  (`strings.ts` `keyNames`, which `keyTitles` reads, so a menu and a title never name a key two
+  ways: *Open* Enter, *Extract…* Ctrl+E, *Rename…* F2, *Move to…* Ctrl+Shift+M, *Delete…* Del,
+  *Create folder…* Ctrl+Shift+N, *New archive…* Ctrl+N, *Open file…* Ctrl+O, *Technical
+  details…* Alt+Enter, *Cut* Ctrl+X, *Copy* Ctrl+C, *Paste* Ctrl+V, *Select all* Ctrl+A). It stands
+  at the pointer, or — opened by Shift+F10 or the Menu key — 8 px in from the focused row's left
+  edge and under it, where Explorer puts it (`lib/menu.ts` `keyAnchor`), a row scrolled out of
+  sight first brought into view the nearest way, clear of the header; either way it is pulled
+  back inside the window. Opened by the keyboard its first item takes the focus; opened by the
+  pointer nothing is highlighted until an arrow is pressed. The arrows walk it, Enter and Space
+  take an item. Esc or Tab, a press elsewhere, the mouse wheel, a resize or the window losing the
+  focus closes it, and so does a scroll under it once it has stood two frames — the scroll that
+  brings its own row into view as it opens does not. Esc, Tab or a command puts the focus back
+  on the row or the field it was opened from — a blank area's menu opened by Shift+F10 with no row
+  focused has no row to return to, and the focus falls to the document's body as the menu goes
+  (harmless: the list's keys still answer there); a press elsewhere leaves the
+  focus where that press put it. The WebView's own `contextmenu` event that follows the key on Windows, within 600 ms, is
+  that key's echo and is spent (`KEY_ECHO_MS`). The menus of the two lists are the Archive
+  page's (§6, *The Archive page's menus*) and the Archives page's (§13, *The row's menu*).
+  **A text field's menu** is *Cut* · *Copy* · *Paste* · ─ · *Select all*, on a right-click,
+  Shift+F10 or the Menu key in the field, through one action (`lib/fieldmenu.ts` `use:fieldMenu`)
+  that every plain field of the app wears — `TextField`, the Archives page's Filter, the record's
+  name and description, the extract destination, the delete dialogs' typed name, the import
+  path, an unlock method's name. *Cut* and *Copy* act on the field's selection and are greyed
+  with none; *Paste* reads the clipboard through the WebView (`navigator.clipboard.readText()`),
+  only when chosen, and writes it over the selection, and where the WebView refuses that read
+  the item is greyed with "Use Ctrl+V", the key that still pastes; *Select all* selects the field,
+  greyed while it is empty; a read-only field keeps *Copy* and *Select all*. **A secret field
+  gets no menu at all**: the PIN and the password (`SecretField`), the recovery key's cells
+  (`RecoveryInput`) and its readback (`RecoveryReveal`) carry `data-secret`, and the action
+  refuses any field inside that mark or of type password, so a secret never passes through the
+  page's menu code; a right-click there does nothing, WebView2's menu being off.
 - *The save bar* (`SaveBar`) **has one job** (ruled 2026-10-18, phase 4a of the design review's
   direction 10): text that can be wrong in between — today the name and the description of an
   archive, behind the Archives page's pencil (§13) — is staged and saved by the bar. A choice
@@ -2773,7 +3062,7 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   as wide as it was (*The foot*'s pending ring, ruled 2026-10-18; it swapped the label at once
   and showed no ring). Success is the bar leaving — nothing else says so, a save of a name being
   no operation with an ending to report; failure is
-  the page's toast, and the draft stays, so Save can be pressed again. Discard is one
+  the page's error InfoBar, and the draft stays, so Save can be pressed again. Discard is one
   action, instant, unconfirmed. Ctrl+S saves while the bar is up and valid. The draft survives a
   visit to another page (the store keeps it). Validation is delta-aware where that applies:
   only a problem the edit introduced blocks Save; one that was already there is shown, not
@@ -2814,8 +3103,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   question (every waiting name's *Skip* with its tick on), the compare list's *Cancel* skipping
   them all — never *Replace* (§3); while a
   dialog is up the page behind it is inert (`inert` on the shell), so no list shortcut fires. Only a dialog whose one act is *Close* —
-  the details modal, the results dialog (its *Copy details* beside *Close* taking nothing away),
-  a toast's expansion — closes on the backdrop as
+  the details modal, the results dialog (its *Copy details* beside *Close* taking nothing away)
+  — closes on the backdrop as
   well. A popover (a menu) closes on any click outside, as menus do. The Archive page's dialogs
   that ask for a name or a path — *Rename…*, *Create folder…*, the extract dialog, a refused
   name's *Rename…* — are forms (ruled 2026-10-14; the Archives page's *New archive…* is not one
@@ -2852,7 +3141,7 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   No capitals and no tracking: an eyebrow or a step label is a caption as written, in
   sentence case. A link that runs in a sentence takes that sentence's type: in a caption line
   it is a caption, never a step larger than its own words. Every inset and gap is on a 4 px grid (4, 8, 12, 16, 20, 24): a card's inset
-  is 16 and a strip's (a bar, a toast) 12 — and 12 for the compact cards of a first
+  is 16 and a strip's (a bar, an InfoBar) 12 — and 12 for the compact cards of a first
   way in, which must fit a dialog (ruled 2026-10-17); an icon stands 8 from its label, 12
   beside a 20 px icon; the layer's gutter is 24. The fixed heights stay as ruled — the 40 px
   locked line, the 34 px foot (the 42 px op row went with the operation strip, ruled
@@ -2935,19 +3224,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   354 px measured in Edge, 356 on the 4 px grid — so the box, 519 px, never jumps as the steps
   swap (ruled 2026-10-17; it was the mock's 380, which left 26 px of nothing under the tallest).
   A button that grows to share a row centres its label, as a wide one does
-  (*Continue*, *Unlock*, *Start again*). *Toasts* are for what the page cannot say in place — an error the
-  action's own surface is gone for — never a confirmation of something the page already shows
-  (a saved setting is the bar leaving). Since 2026-10-18, and until phase 4's InfoBars take
-  their place, they are narrowed to errors, to the moment a status warning arrives
-  (`vault.warning`), and to the few facts no surface holds — a copy made ("Details copied"), a
-  folder the page stood in that went, the `.efd` files a drop did not open, the keys a purge
-  dropped: how an operation ended is the foot's done line and never a toast (*The foot*; a
-  cancel's neutral "Stopped." toast, a reclaim's figure and another archive's summary were
-  toasts). Where they go, ruled 2026-09-07 for whatever toasts come
-  next: at the top of the window, centred on the window — not on the content layer — dropping
-  in a little as they fade (a few pixels down, never sliding in from the top edge) and leaving
-  upward as they fade out; `Toasts` does this, 16 px from the top (ruled 2026-10-17, on the 4 px grid; it was 14), centred on the window's
-  width, the text centred and balanced. The controls are Windows' own, not a web page's
+  (*Continue*, *Unlock*, *Start again*). What the page cannot say in place is an InfoBar in the
+  page's notice slot (*InfoBars*, under *Notices and their tiers*, above; ruled 2026-10-26, phase
+  4b of the design review's direction 4): the toasts, and 2026-09-07's ruling that put them at
+  the top of the window, centred on it, dropping in a little and leaving upward — `Toasts`, 16 px
+  from the top, the text centred and balanced — are superseded. The controls are Windows' own, not a web page's
   (ruled 2026-10-17, from WinUI's values; the mockup's stills of WinUI states had become the
   states themselves). One rule for what looks like a link: a command is a button — *Cancel*,
   *Lock now*, "Use recovery key instead" are subtle buttons, 24 px high in the layer's foot —
@@ -2974,8 +3255,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   Checkboxes and radios are 20 px (16 in a list's rows), the accent filled when on — a radio
   an accent ring round a dot; a slider is a 4 px track, the accent up to the value, under a
   20 px thumb with a 12 px accent core; progress is a 3 px accent line over a 1 px track. A
-  card is flat, a 1 px stroke and no shadow: a shadow says a thing floats — a menu, a toast,
-  the save bar, the bottom panel over the list, a dialog. The Settings page and the Vault page's
+  card is flat, a 1 px stroke and no shadow: a shadow says a thing floats — a menu, a floating
+  InfoBar, the save bar, the bottom panel over the list, a dialog. The Settings page and the Vault page's
   *This vault* are Windows Settings' list: each setting a card of its own, 4 px from the next
   (ruled 2026-10-17; they were rows ruled off inside one card); the Vault page's ways to
   unlock are separate cards the same 4 px apart (ruled 2026-10-17; they stood 12 apart). A
@@ -3036,7 +3317,11 @@ the registry keeps and is never "verified" (§2.3; ruled 2026-10-18); and, since
 archive's *row* in the rail is where it stands while it is open, the *Forgotten
 view* is the Archives list of forgotten records (View › Forgotten, the chip), and *Backups and
 copies* is the Vault page's section of every backup command (the lock screen's menu by the same
-name) — and a verb table
+name); and, since phase 4b (ruled 2026-10-26), an *InfoBar* is what the page cannot say in place,
+a bar in the page's notice slot (§6, *InfoBars*; the word *toast* is retired with them), *the
+viewer* is a file looked at large inside the window from the Archive page (§6, *The viewer*),
+and *Move to…* is the selection moved into a folder chosen in the archive's folder tree (§6,
+*Move to…*) — and a verb table
 (`commandCopy`: *Forget archive…* / *Restore*, *Re-key archive…* / *Re-key vault…*, *Refresh
 fingerprint*, *Close* — the graceful leave, wherever it stands: the Archive page's head and its
 locked line, the rail row's × ("Close Photos 2024"), the Archives page's *More* — and *Force
@@ -3048,7 +3333,7 @@ still held after it (ruled 2026-10-19; they were the kill switch), *Add files…
 missing files*, and four backup verbs only:
 *Inspect a backup…*, *Test that a backup opens…*, *Import archives from a backup…*, *Replace this
 vault with a copy…* — *Replace with a copy…* on a banner's button — with *Restore from a vault or
-backup…* at first run); a command ends with "…" exactly when a dialog or a picker follows, and
+backup…* at first run; and, since phase 4b, *Move to…* and *Copy name*); a command ends with "…" exactly when a dialog or a picker follows, and
 the dialog's primary repeats its verb and object. A consequence dialog's title is a question
 naming the object and its body at most two sentences, the consequence for the user's files and
 then the safety net (`dialogCopy`), the mechanism behind a "How this works" disclosure. Two
@@ -3061,7 +3346,7 @@ a label quoted from a screen is the screen's word. Chips are in sentence case; a
 app's ISO form in lists, facts and dialogs, and relative ("yesterday, 03:24", "22 days ago",
 `sinceText`) only where recency is the point — the last unlock, the last backup. A code with no copy of its own is never shown raw: it reads
 "Something went wrong (archive.foo). The log in the data folder has the details.", with the
-code set in muted mono where a toast shows it (ruled 2026-10-14; the fallback had been
+code set in muted mono where an InfoBar shows it (ruled 2026-10-14; the fallback had been
 "Error: archive.foo").
 
 ## 8. Memory hygiene
@@ -3158,6 +3443,30 @@ with a layout glyph, holds *Show hidden* (ticked while on) and *Forgotten (N)* (
 view is up), greyed when nothing is forgotten and while locked, where it reads *Forgotten*.
 *Find missing files* and *Import archives from a backup…* left the bar for the Vault page (§6).
 
+**The row's menu** (ruled 2026-10-26, phase 4b of the design review's direction 7, Explorer's
+habits; `lib/archcmds.ts`). A right-click on a row selects it — one archive at a time (§6) — and
+opens its menu, the app's own (§6, *Menus*); Shift+F10 and the Menu key open the focused row's
+(§6, *The lists' keys*). On the list: *Open* (the default, bold and first, Enter) with *Close* —
+or *Force close*, once a *Close* has left the archive held (§2.3) — while the archive is open, and
+*Show in Explorer*, greyed "Last seen on another system" on a path of another platform's syntax ·
+─ · *Refresh fingerprint* · *Compact…* · *Re-key archive…* · *Hide* or *Unhide* · ─ · *Technical
+details…* (Alt+Enter), and *Locate…* only while the row is *Missing* · ─ · *Forget archive…* ·
+*Delete archive…* (Del), both in the danger ink. In the Forgotten view a record can only come back
+or go: *Restore* · ─ · *Delete archive…*. The list's blank area — the whole list column under the
+header — clears the selection as a click there does and offers what makes or brings an archive:
+*New archive…* (Ctrl+N; greyed while locked or Tampered) and *Open file…* (Ctrl+O, never greyed:
+a locked vault answers with the lock scene, as a double-click in Explorer does, §14). Every
+command here comes from one table (`archCommands`) and runs through one function, shared by the
+bar, its *More*, the pane's *More* and the row's menu, so a command is greyed by one rule and
+says one reason wherever it is offered — the menus' few words (`archivesCopy.why`: "Unlock the
+vault first", "Changes to this vault are off", "Restore it first", "Already forgotten", "Wait
+until its compaction ends"), while the bar's own buttons keep the codes' sentences as their
+titles. With the narrow panel up, a menu asked for on another row waits for the panel to ride
+that row to its line (§6, the bottom panel) and opens under the row where it came to rest — at
+the pointer's x for a right-click, at the key's anchor for a key — since a menu put up at once
+would stand where the row was. *Properties* is not offered: the pane is the facts, and Alt+Enter
+opens *Technical details…*.
+
 **The rows**: columns *Name*, *Size* (`last_stored_size`, the registry's last observation of the
 file; right-aligned) and *Last saved* — no *Files* and no *Key vN* column (ruled 2026-10-14,
 reversing the 2026-09-07 column set: the core counts files only for an open archive, and an
@@ -3207,7 +3516,11 @@ revision, last writer, `last_seq` and
 `hash_at_seq` as two rows, *Last seq* and *Fingerprint at seq* (*N/A* while no fingerprint was
 taken), the hash as *Fingerprint (SHA-256 of the file)* (ruled 2026-10-18; they were one row,
 *Last seq / hash at seq*, and *Ciphertext hash*), the policy bits — every value selectable
-(`user-select: text`) with a right-click *Copy* on it and no *Copy* buttons, the hash wrapping
+(`user-select: text`) and no *Copy* buttons, a right-click on a value opening the app's menu
+(§6, *Menus*) of two items: *Copy*, that value (greyed on an empty "—"), and *Copy all as text*,
+every row of the dialog in its order as "Label: value" lines, for a report (ruled 2026-10-26,
+phase 4b of the design review's direction 7; it was *Copy* alone), both through the runtime's
+clipboard (`Clipboard.SetText`) — the hash wrapping
 onto a second line rather than being cut and reading *N/A* while it is all zero (no fingerprint
 taken yet, §2.3), one caption under the rows ("A fingerprint tells this file from another copy
 of it, such as a restored backup. It is not a check of the file's contents."), the modal

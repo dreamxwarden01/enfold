@@ -32,9 +32,9 @@
   async function copy() {
     try {
       await Clipboard.SetText(detailsText(title, summary, rows));
-      store.toast(resultsCopy.copied);
+      store.notice(resultsCopy.copied, "success");
     } catch {
-      store.toast(resultsCopy.copyFailed, "error");
+      store.notice(resultsCopy.copyFailed, "error");
     }
   }
 
@@ -42,7 +42,7 @@
     try {
       await Shell.Reveal(path);
     } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 </script>

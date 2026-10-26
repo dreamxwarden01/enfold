@@ -123,18 +123,25 @@ export function dropPlacement(anchor: Anchor, box: Size, view: Size, end = false
   return { x, y: margin, up: true };
 }
 
-// ---- the context menu (APP.md §13) ------------------------------------
+// ---- the context menu (APP.md §13; direction 7) --------------------------
 //
-// A value in the details modal is selectable and a right-click on it opens
-// a menu of one item, *Copy*. The shell disables WebView2's own context
-// menu, so this is the only one there is. Its keyboard is the machine
-// above — one item, so the arrows land on it and Enter takes it — and
-// where the box goes is here.
+// A right-click opens the app's own menu: on a row of either list, on a
+// list's blank area, in a text field that is not a secret, and on a value
+// in the details modal. 2026-09-06 turned WebView2's own context menu off
+// — its "Save image as" wrote a decrypted preview to Downloads — and that
+// ruling stands: these menus are drawn by the page (ContextMenu.svelte),
+// offer only the app's own commands, and are not WebView2's. Their
+// keyboard is the machine above, and where the box goes is here.
 
 export interface Size {
   width: number;
   height: number;
 }
+
+// How a context menu closed, for its opener to put the focus back: a key
+// (Escape, Tab) or a command taken return it to what opened the menu — the
+// row, the field — and a press elsewhere leaves it where that press put it.
+export type MenuClose = "key" | "choose" | "pointer";
 
 export interface Point {
   x: number;
@@ -155,4 +162,38 @@ export function contextPlacement(at: Point, box: Size, view: Size, margin = 6): 
     return Math.max(margin, extent - size - margin);
   };
   return { x: place(at.x, box.width, view.width), y: place(at.y, box.height, view.height) };
+}
+
+// ---- a row's menu from the keyboard (direction 7) -----------------------
+//
+// Shift+F10 and the Menu key open the menu a right-click opens, with no
+// pointer to place it at: it stands at the focused row's left edge, 8 px
+// in, under the row — where Explorer puts it — and contextPlacement then
+// pulls it inside the window like any other.
+export const KEY_INSET = 8;
+
+export function keyAnchor(row: Pick<Anchor, "left" | "bottom">): Point {
+  return { x: row.left + KEY_INSET, y: row.bottom };
+}
+
+// The Menu key and Shift+F10 also raise the WebView's own contextmenu
+// event once the key is answered (on Windows, as the key comes up); one
+// arriving this soon after a menu was opened from the keyboard is that
+// echo, and is spent.
+export const KEY_ECHO_MS = 600;
+
+// ---- the commands a row's menu offers (direction 7) ---------------------
+//
+// A page's commands as a menu holds them: what each one is called, its key,
+// its icon, whether it is the default (drawn bold, first — what Enter and
+// a double-click do), whether it destroys, and, when it cannot run, why.
+// The pages keep one function per command and map cmd to it, so the bar,
+// the pane's More and the row's menu run the same thing.
+export interface CmdItem<C extends string> extends Groupable, Explained {
+  cmd: C;
+  label: string;
+  icon?: string;
+  keys?: string;
+  isDefault?: boolean;
+  danger?: boolean;
 }

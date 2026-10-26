@@ -14,6 +14,7 @@
   import { backupLine as backupDone, checkedLine } from "../lib/foot";
   import { date, dateTime, leaf, minutesLabel } from "../lib/format";
   import { pending } from "../lib/pending";
+  import { fieldMenu } from "../lib/fieldmenu";
   import { filesLine } from "../lib/vaultfiles";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
@@ -21,6 +22,8 @@
   import PendingLabel from "./PendingLabel.svelte";
   import RenameVaultDialog from "./RenameVaultDialog.svelte";
   import TamperedBar from "./TamperedBar.svelte";
+  import NoticeSlot from "./NoticeSlot.svelte";
+  import { unfold } from "../lib/motion";
 
   const st = $derived(store.status);
   const s = $derived(store.settings);
@@ -59,7 +62,7 @@
   const greyed = $derived(!unlocked ? codeText("vault.needs_unlock") : tampered ? vaultCopy.changesOff : undefined);
 
   function fail(e: unknown) {
-    store.toast(codeText(errorOf(e).code), "error");
+    store.notice(codeText(errorOf(e).code), "error");
   }
 
   // Every ceremony this page starts can change the unlock methods or the
@@ -347,16 +350,29 @@
        final shoot of phase 4a: the locked line ran the body's width, its
        Unlock far past the cards). -->
   <div class="vpage">
-  {#if tampered}
-    <!-- First on the page (direction 9; APP.md §6, The Tampered banner): the danger tier, with
-         the fix every greyed change here points at. -->
-    <TamperedBar reason={st?.tamperedReason} />
-  {/if}
-  {#if !unlocked}
-    <div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button></div>
-  {:else if st?.setupNeeded}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine}</span></div>
-  {/if}
+  <!-- The notice slot (direction 4, phase 4b; NoticeSlot): the banners at
+       the top of the column in their tiers' order, each opening and
+       closing its height, and the InfoBars in flow under them, each
+       opening its height as the lock screen's do: a floating bar covered
+       the column's first heading and its commands (the final shoot of
+       phase 4b), and a page with no list has nothing to hold still. The
+       backups line stays in its card: it is the card's fact, not the
+       page's state. -->
+  <NoticeSlot flow>
+    {#if tampered}
+      <!-- First on the page (direction 9; APP.md §6, The Tampered banner): the danger tier, with
+           the fix every greyed change here points at. -->
+      <div class="fold" transition:unfold><TamperedBar reason={st?.tamperedReason} /></div>
+    {/if}
+    {#if st?.setupNeeded && unlocked}
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine}</span></div></div>
+    {/if}
+    {#if !unlocked}
+      <!-- Locked is the safe state: the plain bar, no tier's colour
+           (direction 9, ruled 2026-10-18). -->
+      <div class="fold" transition:unfold><div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button></div></div>
+    {/if}
+  </NoticeSlot>
     <section class="vsec" aria-labelledby="vs-methods">
       <!-- The vault-wide acts stand in the section's head, apart from the
            cards, so none reads as a card's (direction 10). -->
@@ -565,7 +581,7 @@
              key, which must be named, has none: an invented name there
              read as a default already filled in. -->
         <div class="field-top"><label for="ak-label">{addKind === "token" ? dialogCopy.addUnlockMethod.nameKey : dialogCopy.addUnlockMethod.nameRecovery}</label><span class="hint">{addKind === "token" ? dialogCopy.addUnlockMethod.optional : dialogCopy.addUnlockMethod.nameRecoveryHint}</span></div>
-        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? dialogCopy.addUnlockMethod.keyPlaceholder : undefined} />
+        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? dialogCopy.addUnlockMethod.keyPlaceholder : undefined} use:fieldMenu />
       </div>
     {/if}
     {#if addKind === "token" && ent?.on}

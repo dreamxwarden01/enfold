@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockTime, date, ext, fileIcon, hashText, keyId, lockLine, nearerDeadline, plural, recoveryWords } from "./format";
+import { clockTime, date, ext, fileIcon, hashText, keyId, labelledText, lockLine, nearerDeadline, plural, recoveryWords } from "./format";
 
 // The foot's countdown (APP.md §6, ruled 2026-09-12 after a review found
 // the foot reading the idle deadline alone): the absolute cap locks the
@@ -188,5 +188,12 @@ describe("ext", () => {
     expect(ext(".env")).toBe("");
     expect(ext("README")).toBe("");
     expect(ext("")).toBe("");
+  });
+});
+
+describe("labelledText (the details modal's Copy all as text)", () => {
+  it("is one Label: value line per row, the empty ones included", () => {
+    expect(labelledText([{ label: "Archive ID", value: "ab12" }, { label: "Last writer", value: "—" }, { label: "Revision", value: "7" }])).toBe("Archive ID: ab12\nLast writer: —\nRevision: 7");
+    expect(labelledText([])).toBe("");
   });
 });

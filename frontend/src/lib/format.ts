@@ -203,3 +203,11 @@ export function hashText(hex: string | undefined): string {
   if (h === "" || /^0+$/.test(h)) return "N/A";
   return h;
 }
+
+// labelledText: rows of a label · value list as plain text, one
+// "Label: value" line each — the details modal's *Copy all as text*, for a
+// bug report (direction 7). Every row, the dashes of an empty value too,
+// so the text says what the dialog says.
+export function labelledText(rows: readonly { label: string; value: string }[]): string {
+  return rows.map((r) => `${r.label}: ${r.value}`).join("\n");
+}

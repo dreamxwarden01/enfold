@@ -4,7 +4,7 @@
   // lock times and the vault's name are the vault's and live on the Vault
   // page. Every row is a choice that applies the moment it is made, as
   // Windows Settings applies one — no save bar (SaveBar's one job), no
-  // toast on success: a choice that applied is its own confirmation. A
+  // InfoBar on success: a choice that applied is its own confirmation. A
   // refusal is said under the control, and the old value comes back
   // (store.choose). One column at most 760 px wide, every control 220 px,
   // so the controls' column is one straight edge. The page works from the
@@ -15,6 +15,8 @@
   import { closeChoices } from "../lib/closing";
   import { pending } from "../lib/pending";
   import TamperedBar from "./TamperedBar.svelte";
+  import NoticeSlot from "./NoticeSlot.svelte";
+  import { unfold } from "../lib/motion";
 
   const s = $derived(store.settings);
 
@@ -50,15 +52,24 @@
 <div class="layer-head"><h1 class="t-title">{settingsCopy.title}</h1></div>
 
 <div class="layer-body">
-  {#if store.tampered}
-    <!-- First on every page (direction 9; APP.md §13), Settings opened
-         from the lock screen's gear included: these settings are this
-         PC's, but the vault beside them may have been changed outside
-         Enfold, and the fix is one press away. -->
-    <TamperedBar reason={store.status?.tamperedReason} />
-  {/if}
-  {#if s}
-    <div class="spage">
+  <div class="spage">
+    <!-- The notice slot (direction 4, phase 4b; NoticeSlot) at the top of
+         the column, as on the Vault page: the Tampered banner opening and
+         closing its height, and the InfoBars in flow under it, at the
+         cards' width, each opening its height (the final shoot of phase
+         4b: in the body, outside the column, a floating bar ran past the
+         cards and covered the first heading; a page with no list has
+         nothing to hold still, and a bar must not hide its commands). -->
+    <NoticeSlot flow>
+      {#if store.tampered}
+        <!-- First on every page (direction 9; APP.md §13), Settings opened
+             from the lock screen's gear included: these settings are this
+             PC's, but the vault beside them may have been changed outside
+             Enfold, and the fix is one press away. -->
+        <div class="fold" transition:unfold><TamperedBar reason={store.status?.tamperedReason} /></div>
+      {/if}
+    </NoticeSlot>
+    {#if s}
       <section class="ssec" aria-labelledby="st-window">
         <div class="ks-head"><h2 id="st-window" class="t-section">{settingsCopy.window}</h2></div>
         <div class="setcard">
@@ -129,8 +140,8 @@
           <div class="setrow"><dl class="kv stk grow"><dt>{settingsCopy.dataFolder}</dt><dd>{settingsCopy.dataFolderLine}</dd></dl></div>
         </div>
       </section>
-    </div>
-  {/if}
+    {/if}
+  </div>
 </div>
 
 

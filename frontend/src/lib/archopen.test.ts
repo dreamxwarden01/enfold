@@ -96,21 +96,21 @@ describe("a drop on the Archives page", () => {
     await settle();
     expect(m.OpenPath).toHaveBeenCalledTimes(1);
     expect(m.OpenPath).toHaveBeenCalledWith(FILE);
-    expect(store.toasts.map((t) => t.text)).toEqual([expect.stringContaining("spare.efd")]);
+    expect(store.notices.map((t) => t.text)).toEqual([expect.stringContaining("spare.efd")]);
   });
 
   it("does nothing at all for a drop of other files", async () => {
     drop(["C:\\x\\notes.txt", "C:\\x\\photo.jpg"]);
     await settle();
     expect(m.OpenPath).not.toHaveBeenCalled();
-    expect(store.toasts).toEqual([]);
+    expect(store.notices).toEqual([]);
   });
 
   it("leaves a drop elsewhere as it was: a toast off the file list, an add onto it", async () => {
     store.go("settings");
     drop([FILE]);
     expect(m.OpenPath).not.toHaveBeenCalled();
-    expect(store.toasts.map((t) => t.kind)).toEqual(["error"]);
+    expect(store.notices.map((t) => t.kind)).toEqual(["error"]);
     drop(["C:\\x\\notes.txt"], "a");
     expect(store.drop?.archiveId).toBe("a");
   });

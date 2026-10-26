@@ -258,7 +258,9 @@ phase 4a) is a setting like the theme: true by default, and Settings.Set
 - the page's own choice - writes it into the settings Settings.Get reads
 back. Stage it off with POST /mock/state {"settings": {"previewPane": false}}
 (a merge, so the other settings stay) and a reload; {"previewPane": true}
-puts it back. The tray's running line (direction 10) is the shell's and has
+puts it back. Archive.PreviewText, for the pane and the viewer alike,
+answers state["text"] - {"text": {"text": "...", "truncated": true}} stages
+a cut one. The tray's running line (direction 10) is the shell's and has
 no stand-in here. A Settings.Set that gives the vault a new displayName
 (the Vault page's Rename...) moves the status's name too and emits
 vault.state, as the core's SetSettings does (APP.md 3, Settings).

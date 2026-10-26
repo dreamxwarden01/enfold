@@ -7,7 +7,7 @@
   // says so, because a user who double-clicked an archive deserves to
   // know it is still whole.
   //
-  // A dialog and not a toast because a toast carries no action (Toasts
+  // A dialog and not an InfoBar because an InfoBar carries no action (InfoBars.svelte
   // draws text alone), and the way in is the only thing worth saying here.
   import { openCopy } from "../lib/strings";
   import { baseName } from "../lib/dragout";

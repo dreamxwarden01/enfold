@@ -1,9 +1,10 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
+  import { Clipboard } from "@wailsio/runtime";
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { Collision, Crumb, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, archivesCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyTitles, listCopy, paneCopy, typeLabel } from "../lib/strings";
+  import { archivePageCopy, archivesCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyNames, keyTitles, listCopy, noticeCopy, paneCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
   import { freeWorthShowing } from "../lib/status";
@@ -16,7 +17,7 @@
   import { renameSelection } from "../lib/paths";
   import { ROOT_ID, canDrop, deleteBody, deleteTitle } from "../lib/tree";
   import type { DropTarget, Kinded } from "../lib/tree";
-  import { ownNames, pastThreshold } from "../lib/dragout";
+  import { noDrag, ownNames, pastThreshold } from "../lib/dragout";
   import type { DropAt, Flight, PendingMove } from "../lib/dragout";
   import type { ExtractScope } from "../lib/extract";
   import { allOf, collisionPlan, conflictsOf, namesFor, planIsEmpty, reissuePlan, restExtracted, shownName } from "../lib/conflicts";
@@ -30,8 +31,17 @@
   import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
   import { pending } from "../lib/pending";
   import { compacting } from "../lib/archlist";
-  import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, pageRows, target, typeahead } from "../lib/listkeys";
+  import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, pageRows, survivor, target, typeahead } from "../lib/listkeys";
   import type { Intent } from "../lib/listkeys";
+  import { KEY_ECHO_MS, keyAnchor } from "../lib/menu";
+  import type { MenuClose } from "../lib/menu";
+  import { fileBlankItems, fileRowItems } from "../lib/filemenu";
+  import type { FileBlankCmd, FileCmd } from "../lib/filemenu";
+  import { PREVIEW_TEXT_CAP } from "../lib/viewer";
+  import { spring, springKey, springs } from "../lib/springload";
+  import ContextMenu from "./ContextMenu.svelte";
+  import MoveToDialog from "./MoveToDialog.svelte";
+  import Viewer from "./Viewer.svelte";
   import Dialog from "./Dialog.svelte";
   import CommandRows from "./CommandRows.svelte";
   import type { CommandRow } from "./CommandRows.svelte";
@@ -43,6 +53,8 @@
   import type { MenuItem } from "./MenuButton.svelte";
   import TextField from "./TextField.svelte";
   import TamperedBar from "./TamperedBar.svelte";
+  import NoticeSlot from "./NoticeSlot.svelte";
+  import { LEAVE, delay, slideIn, travel, unfold } from "../lib/motion";
 
   const id = $derived(store.current ?? "");
   const stat = $derived(store.stat);
@@ -55,6 +67,31 @@
   const rows = $derived(store.page?.rows ?? []);
   const total = $derived(store.page?.total ?? 0);
   const crumbs = $derived(store.page?.crumbs ?? []);
+
+  // List motion (direction 4, phase 4b; lib/motion.ts). A change of folder
+  // fades the rows in from 8 px on the side they came from — into a folder
+  // from the right, up from the left — while the header and the commands
+  // stay still: the tbody alone moves, in place, so nothing is remounted
+  // and the keyboard focus stays where it was. Judged on the listing that
+  // landed (its crumbs), not on the request, so a folder gone from under
+  // the page that leaves it higher up comes in from the left too.
+  let rowsEl: HTMLTableSectionElement | undefined = $state();
+  let placeShown: string[] = [];
+  $effect(() => {
+    const place = crumbs.map((c) => c.id);
+    const from = travel(placeShown, place);
+    placeShown = place;
+    if (from !== 0) slideIn(untrack(() => rowsEl), from);
+  });
+  // The rows a Delete takes, fading out before the list is read again;
+  // kept faded until the listing no longer holds them, whichever re-read
+  // brings that — the page's own or the archive's change event's.
+  let leaving = $state<ReadonlySet<string>>(new Set());
+  $effect(() => {
+    if (leaving.size === 0) return;
+    const live = new Set(rows.map((r) => r.id));
+    if (![...untrack(() => leaving)].some((id) => live.has(id))) leaving = new Set();
+  });
   const archiveName = $derived(crumbs[0]?.name ?? "");
   const dirId = $derived(store.dirId);
   // In a folder — anywhere but the root — the parent is the crumb before
@@ -89,7 +126,7 @@
   const compactingHere = $derived(id !== "" && compacting({ id, forgottenAt: 0, state: stat?.state }, store.runningOps));
   // While it drains, every page-facing call answers archive.not_open, so
   // the toolbar's commands are greyed with why rather than each press
-  // ending in a toast (the review of 2026-10-18).
+  // ending in an InfoBar (the review of 2026-10-18).
   const closingWhy = $derived(draining ? archivePageCopy.closing : undefined);
   // The archive.needs_reopen bar's button (APP.md §2.3, ruled 2026-10-19:
   // one meaning for Close): the head's graceful *Close*, and, once that
@@ -111,6 +148,10 @@
   let previewText = $state<{ text: string; truncated: boolean } | null>(null);
   let kind = $state<PreviewKind>("none");
   let previewFailed = $state(false);
+  // previewClosing: a file selected while the archive drains, which the
+  // pane did not ask for — its kind stays "none", so the pane draws the
+  // icon and a line, and the line says the archive is closing.
+  let previewClosing = $state(false);
 
   let renaming = $state<FileRow | null>(null);
   let renameTo = $state("");
@@ -193,7 +234,7 @@
   let dropping = $state(false);
 
   function fail(e: unknown) {
-    store.toast(codeText(errorOf(e).code), "error");
+    store.notice(codeText(errorOf(e).code), "error");
   }
 
   const rowIcon = (r: FileRow) => fileIcon(r.name, r.isDir);
@@ -297,6 +338,9 @@
         onUp: !!t?.closest("tr.up"),
         inField: !!t && isTextEntry(t.tagName, t.getAttribute("type") ?? "", t.isContentEditable),
         dialogUp: dialogIsUp(),
+        // The viewer takes its own keys (Viewer.svelte); the page behind
+        // takes none while it is up, as under a dialog.
+        viewerUp,
         typing: typed !== "" && now - typedAt <= TYPEAHEAD_MS,
         // A sort button, the tick-all box (and on the Archives page the
         // empty vault's buttons) sit in the list's region but keep their
@@ -348,16 +392,21 @@
         moveError = null;
         break;
       case "open": {
-        // Enter opens a folder. A file's Enter is the viewer's, which is
-        // phase 4's: until then it selects the row and does nothing more —
+        // Enter opens a folder, and a file in the viewer (openFile) —
         // never Extract, which is always a named command (ruled
-        // 2026-10-17).
+        // 2026-10-17). Space keeps selecting, as in Explorer.
         const r = atRow ?? one;
         if (!r) break;
         store.selectClick(r.id);
-        open(r);
+        openItem(r);
         break;
       }
+      case "menu":
+        keyMenu(from);
+        break;
+      case "moveTo":
+        if (selected.size > 0) askMoveTo(chosenIds);
+        break;
       case "up":
         if (parentId) nav(() => store.goUp());
         break;
@@ -478,6 +527,211 @@
     nav(() => store.enterDir(r.id, r.name));
   }
 
+  // Open, a row's default — Enter, a double-click, the menu's bold first
+  // item (direction 7): a folder is entered, a file is looked at.
+  function openItem(r: FileRow) {
+    if (r.isDir) open(r);
+    else openFile(r);
+  }
+
+  // A file's Open is the viewer's (direction 7; Viewer.svelte, lib/viewer.ts):
+  // the file large, inside the window, over the layer, read from the
+  // loopback URL with no-store as the pane reads it — nothing decrypted
+  // written to disk. The row opened is the one selected, and the selection
+  // follows the viewer as it steps, so the row shown is the selected row;
+  // closing it puts the focus back on that row. Never while the archive
+  // drains: every read would answer archive.not_open (the menu's Open is
+  // greyed then too).
+  let viewing = $state<{ id: string; pinned: string } | null>(null);
+  const viewerUp = $derived(viewing !== null);
+
+  function openFile(r: FileRow) {
+    store.selectClick(r.id);
+    if (draining) return;
+    moveError = null;
+    viewing = { id: r.id, pinned: r.id };
+  }
+
+  function viewStep(to: string) {
+    if (!viewing) return;
+    store.selectClick(to);
+    viewing = { ...viewing, id: to };
+  }
+
+  function closeViewer() {
+    const v = viewing;
+    viewing = null;
+    if (!v) return;
+    // The page is no longer inert once the viewer is gone: then the row
+    // shown takes the focus, brought into view the nearest way.
+    void tick().then(() => {
+      const el = listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(v.id)}"]`);
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      reveal(el);
+    });
+  }
+
+  // The viewer's *Extract…* (Ctrl+E there too): the one dialog, on the file
+  // shown, over the viewer.
+  function viewExtract(r: FileRow) {
+    extracting = { ids: [r.id], count: 1 };
+  }
+
+  // Move to… (direction 7; Ctrl+Shift+M, the row menu and More;
+  // MoveToDialog.svelte, lib/movetree.ts): the selection into a folder
+  // chosen in a tree, the keyboard's way to what a drag does. It moves the
+  // ids as they stood when the dialog opened, as a drag moves its flight's;
+  // the title names the item when it is one.
+  let moving = $state<{ ids: string[]; name: string } | null>(null);
+  function askMoveTo(ids: string[]) {
+    if (draining || ids.length === 0) return;
+    const name = ids.length === 1 ? (rows.find((r) => r.id === ids[0])?.name ?? "") : "";
+    moving = { ids: [...ids], name };
+  }
+
+  // Moved: as a drag's Move ends (moveTo below) — the selection goes with
+  // the items, and the folder shown is read again.
+  async function movedTo() {
+    moving = null;
+    moveError = null;
+    store.clearSelection();
+    await store.refreshArchive();
+  }
+
+  // Cancelled: nothing moved, and the focus goes back to the row the keys
+  // start from, the selection's anchor, as a menu's Escape puts it back.
+  function cancelMoveTo() {
+    moving = null;
+    const at = store.sel.anchor;
+    if (!at) return;
+    void tick().then(() => listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(at)}"]`)?.focus({ preventScroll: true }));
+  }
+
+  // ---- the row menus (direction 7, Explorer's habits; lib/filemenu.ts) ----
+  // A right-click on a row opens its menu, selecting the row first when it
+  // is not selected and keeping the selection when it is (Explorer's rule;
+  // the keymap's click rule, store.selectClick). Extract…, Move to… and
+  // Delete… act on the whole selection; Rename… and Copy name on the row
+  // the menu is about. The list's blank area has a menu of its own —
+  // Create folder…, Add files…, Add a folder… — and the `..` row none.
+  // Shift+F10 and the Menu key open the focused row's menu under it
+  // (lib/menu.ts keyAnchor), or the blank area's with no row to act on;
+  // Escape closes it and the focus goes back to the row. The menu is the
+  // app's (ContextMenu): 2026-09-06 turned WebView2's own off, and an
+  // app-drawn menu is not that one.
+  let ctx = $state<{ x: number; y: number; row: FileRow | null; key: boolean } | null>(null);
+  // When a menu was last opened from the keyboard: the WebView's own
+  // contextmenu event that follows the key is its echo (KEY_ECHO_MS).
+  let keyMenuAt = -Infinity;
+
+  const ctxItems: MenuItem[] = $derived.by(() => {
+    const c = ctx;
+    if (!c) return [];
+    const r = c.row;
+    if (r) return fileRowItems(r.isDir, draining).map((i) => ({ ...i, run: () => runRowCmd(i.cmd, r) }));
+    return fileBlankItems(draining).map((i) => ({ ...i, run: () => runBlankCmd(i.cmd) }));
+  });
+
+  function runRowCmd(cmd: FileCmd, r: FileRow) {
+    switch (cmd) {
+      case "open":
+        openItem(r);
+        break;
+      case "extract":
+        extractCommand();
+        break;
+      case "rename":
+        askRename(r);
+        break;
+      case "moveTo":
+        askMoveTo(chosenIds);
+        break;
+      case "delete":
+        void askDelete();
+        break;
+      case "copyName":
+        // The runtime's clipboard, as the details modal's Copy: the
+        // WebView's is not dependable under the custom scheme.
+        void Clipboard.SetText(r.name).catch(() => {});
+        break;
+    }
+  }
+
+  function runBlankCmd(cmd: FileBlankCmd) {
+    switch (cmd) {
+      case "createFolder":
+        askFolder();
+        break;
+      case "addFiles":
+        void pickFiles();
+        break;
+      case "addFolder":
+        void pickFolder();
+        break;
+    }
+  }
+
+  const echo = () => performance.now() - keyMenuAt < KEY_ECHO_MS;
+
+  function rowMenu(e: MouseEvent, r: FileRow) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (echo()) return;
+    if (!selected.has(r.id)) {
+      moveError = null;
+      store.selectClick(r.id);
+    }
+    (e.currentTarget as HTMLElement).focus({ preventScroll: true });
+    ctx = { x: e.clientX, y: e.clientY, row: r, key: false };
+  }
+
+  // The blank area: as a click there does, it clears the selection, then
+  // offers what makes something here. A header cell is not blank.
+  function blankMenu(e: MouseEvent) {
+    e.preventDefault();
+    const t = e.target as HTMLElement;
+    if (echo() || t.closest("thead") || t.closest("tbody tr")) return;
+    store.clearSelection();
+    moveError = null;
+    ctx = { x: e.clientX, y: e.clientY, row: null, key: false };
+  }
+
+  // keyMenu: Shift+F10 or the Menu key on the row the keys start from
+  // (focusIndex) — selected first, as a right-click selects it — or, with
+  // none, the blank area's menu at the list's top left, under its header.
+  function keyMenu(from: number | null) {
+    if (from === -1) return; // `..` has no menu
+    const r = from !== null ? rows[from] : null;
+    keyMenuAt = performance.now();
+    if (!r) {
+      const box = listEl?.getBoundingClientRect();
+      if (!box) return;
+      const head = listEl?.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+      ctx = { ...keyAnchor({ left: box.left, bottom: box.top + head }), row: null, key: true };
+      return;
+    }
+    if (!selected.has(r.id)) store.selectClick(r.id);
+    const el = listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(r.id)}"]`);
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    // reveal scrolls now and the rect below is read after it, so a row
+    // scrolled out of sight is brought back and the menu stands under it;
+    // the scroll event the browser sends next frame is the opening's, and
+    // ContextMenu does not close on it.
+    reveal(el);
+    ctx = { ...keyAnchor(el.getBoundingClientRect()), row: r, key: true };
+  }
+
+  // A key or a command puts the focus back on the row the menu was about;
+  // a press elsewhere leaves it where that press put it.
+  function closeCtx(how: MenuClose) {
+    const c = ctx;
+    ctx = null;
+    if (how === "pointer" || !c?.row) return;
+    listEl?.querySelector<HTMLElement>(`tr[data-id="${CSS.escape(c.row.id)}"]`)?.focus({ preventScroll: true });
+  }
+
   // A long folder pages in as the list scrolls (APP.md §3, lib/paging.ts):
   // near the end, the next page is asked for — and again when a page did
   // not reach far enough to make the list scroll at all.
@@ -518,21 +772,41 @@
   // The preview follows the single selection. Every row is committed - an
   // operation commits at its end (APP.md §2.3) - so nothing here waits
   // for a save.
+  //
+  // While the archive drains after its Close (APP.md §2.3) every read
+  // answers archive.not_open, which would stand as an error bar: the pane
+  // asks for nothing then. The row it already previews keeps its preview —
+  // one still being served is what the drain waits on — and a file
+  // selected meanwhile says the archive is closing. previewOf is the row
+  // the pane's preview was set for.
+  let previewOf = "";
   $effect(() => {
     const r = one;
+    if (draining && !viewerUp && r && r.id === previewOf) return;
+    previewOf = "";
     previewUrl = "";
     previewText = null;
     previewFailed = false;
+    previewClosing = false;
     kind = "none";
+    // While the viewer is up it reads the file itself, and the pane behind
+    // it asks for nothing: one body served at a time, read again when the
+    // viewer closes.
+    if (viewerUp) return;
     if (!r || r.isDir) return;
+    previewOf = r.id;
     const k = previewKind(r.name);
+    if (draining && k !== "none") {
+      previewClosing = true;
+      return;
+    }
     kind = k;
     const failed = (e: unknown) => {
       if (one === r) previewFailed = true;
       fail(e);
     };
     if (k === "text") {
-      Archive.PreviewText(id, r.id, 64 * 1024).then((t) => { if (one === r) previewText = t; }).catch(failed);
+      Archive.PreviewText(id, r.id, PREVIEW_TEXT_CAP).then((t) => { if (one === r) previewText = t; }).catch(failed);
     } else if (k !== "none") {
       Archive.PreviewURL(id, r.id).then((u) => { if (one === r) previewUrl = u; }).catch(failed);
     }
@@ -544,7 +818,7 @@
   // kind the pane cannot show, never of one still on its way — and a 14 px
   // ring appears only once the wait passes 300 ms, so a quick preview
   // never flashes it (the polish review's direction 4, ruled 2026-10-14).
-  // A call that failed stops the wait; its toast says why.
+  // A call that failed stops the wait; its InfoBar says why.
   const previewLoading = $derived(!!one && !one.isDir && kind !== "none" && !previewUrl && !previewText && !previewFailed);
 
   // A change of folder or of archive leaves no refusal standing against a
@@ -618,15 +892,26 @@
   ]);
 
   // More (direction 3): *Delete archive…* left the toolbar, where it stood
-  // beside the file-level *Delete…*, for this menu — in the danger ink, last
-  // — until phase 4b's row menu on the Archives list takes it too. Greyed
+  // beside the file-level *Delete…*, for this menu — in the danger ink, last;
+  // the Archives list's row menu offers it too (direction 7). Greyed
   // as it was: locked (the registry write needs the session) or Tampered
   // (APP.md §13, R25: the flow closes the archive before the write is even
   // tried, so a refusal at the end would have shut it for nothing); and
   // while the archive drains after its *Close*, with the toolbar's closing
   // title (ruled 2026-10-19), since the head's *Force close* is the way.
+  // *Move to…* stands first in it (direction 7), the selection's, with its
+  // key; greyed while nothing is selected or while the archive drains.
   const moreItems: MenuItem[] = $derived([
     {
+      label: commandCopy.moveTo,
+      icon: "i-move",
+      keys: keyNames.moveTo,
+      disabled: draining || selected.size === 0,
+      title: closingWhy ?? (selected.size === 0 ? archivePageCopy.moveNeedsSome : undefined),
+      run: () => askMoveTo(chosenIds),
+    },
+    {
+      sep: true,
       label: commandCopy.deleteArchive,
       icon: "i-trash",
       danger: true,
@@ -676,7 +961,7 @@
     const name = newFolder.trim();
     creating = false;
     try {
-      await Archive.CreateFolder(id, dirId, name);
+      store.markFresh([await Archive.CreateFolder(id, dirId, name)]);
       await store.refreshArchive();
     } catch (e) {
       fail(e);
@@ -692,7 +977,7 @@
     if (!d) return;
     store.drop = null;
     if (d.archiveId !== id) {
-      store.toast("Drop files onto the archive they belong in.", "error");
+      store.notice(noticeCopy.dropOtherArchive, "error");
       return;
     }
     // The target is an id or it is nothing: a drop the page cannot vouch
@@ -700,7 +985,7 @@
     // the root would write the files somewhere the user did not aim at,
     // and the core cannot refuse it — the root always resolves (§3).
     if (!d.dirId) {
-      store.toast("Drop files onto the file list.", "error");
+      store.notice(noticeCopy.dropOffList, "error");
       return;
     }
     const kinds = d.isDir ?? [];
@@ -746,9 +1031,12 @@
     return files !== f.ids.length;
   }
 
-  function over(e: DragEvent, t: DropTarget, at: DropAt) {
+  function over(e: DragEvent, t: DropTarget, at: DropAt, name = "") {
     const f = store.dragOut;
-    if (!f || foreignHover(e, f)) return;
+    if (!f || foreignHover(e, f)) {
+      springer.cancel();
+      return;
+    }
     // Ours: the runtime's document-level listener must not see it, since
     // it would set the effect to none over the heading, which is outside
     // the file-drop target, and Explorer's cursor over a file row would
@@ -758,18 +1046,65 @@
     const ok = canDrop(t, f);
     if (e.dataTransfer) e.dataTransfer.dropEffect = ok ? "move" : "none";
     dropTarget = ok ? { id: t.id, at } : null;
+    springOver(e, t, at, f.ids, name);
   }
 
-  // The list's blank area under our own drag: no effect, and a release
-  // there is nothing (APP.md §3). A row's handler has already stopped the
-  // event by the time it would reach here.
+  // Spring-loaded folders (direction 7; lib/springload.ts): our own drag
+  // resting 700 ms on a folder row enters it, and on `..` goes up, as
+  // Explorer's do; the drag goes on, and the drop lands where the pointer
+  // is in the folder now shown — a folder row, `..`, or the list's blank
+  // area (overBlank). A drag from outside the window never springs: it
+  // is an add (APP.md §3), and `over` has left it to the runtime already.
+  // Each hover carries the pointer's place: once a spring fires, nothing
+  // arms again until the pointer moves (lib/springload.ts), or the `..`
+  // now under a still pointer would go up again, and the folder row it
+  // left would be entered again, every 700 ms.
+  const springer = spring();
+  const pointOf = (e: DragEvent) => ({ x: e.clientX, y: e.clientY });
+
+  function springOver(e: DragEvent, t: DropTarget, at: DropAt, carried: string[], name: string) {
+    if (!springs(t, at, carried)) {
+      springer.hover(null, pointOf(e), () => {});
+      return;
+    }
+    springer.hover(springKey(t, at), pointOf(e), () => {
+      if (!store.dragOut) return;
+      dropTarget = null;
+      if (at === "up") nav(() => store.goUp());
+      else nav(() => store.enterDir(t.id, name));
+    });
+  }
+
+  // The spring goes with the flight, and with the page.
+  $effect(() => {
+    if (!store.dragOut) springer.cancel();
+  });
+  $effect(() => () => springer.cancel());
+
+  // The list's blank area under our own drag (APP.md §3). In the folder
+  // the drag came from it is no target — no effect, and a release there is
+  // nothing; in a folder a spring entered it is that folder — the folder
+  // shown takes the move, washed as a row is. A row's handler has already
+  // stopped the event by the time it would reach here.
+  const hereTarget = $derived<DropTarget>({ id: dirId, isDir: true });
+
   function overBlank(e: DragEvent) {
     const f = store.dragOut;
     if (!f || foreignHover(e, f)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
-    dropTarget = null;
+    springer.hover(null, pointOf(e), () => {});
+    const ok = canDrop(hereTarget, f);
+    if (e.dataTransfer) e.dataTransfer.dropEffect = ok ? "move" : "none";
+    dropTarget = ok ? { id: hereTarget.id, at: "list" } : null;
+  }
+
+  // A drop on the blank area: the folder shown's, when it is a target;
+  // otherwise it goes on to the window's own listener (dropElsewhere) and
+  // the runtime's, as before.
+  function dropBlank(e: DragEvent) {
+    dropping = false;
+    if (store.dragOut && isOver(hereTarget.id, "list")) dropOn(e, hereTarget, "list");
   }
 
   function leave(t: DropTarget, at: DropAt) {
@@ -782,6 +1117,7 @@
   function dropOn(e: DragEvent, t: DropTarget, at: DropAt) {
     const f = store.dragOut;
     if (!f) return;
+    springer.cancel();
     dropTarget = null;
     if (!ownNames(dropNames(e), f)) {
       // Someone else's files: the runtime's listener gets the drop and
@@ -799,6 +1135,7 @@
   // has had it already, and what it reports (store.drop) is told apart by
   // its paths. A foreign drop ends the flight the same way, as nothing.
   function dropElsewhere(e: DragEvent) {
+    springer.cancel();
     dropTarget = null;
     const f = store.dragOut;
     if (f) store.dragLanded(ownNames(dropNames(e), f) ? "elsewhere" : "foreign");
@@ -883,15 +1220,38 @@
     }
   }
 
+  // The rows go first (direction 4, list motion): they fade out over
+  // LEAVE, and only then is the Delete sent — so the archive's own change
+  // event, which re-reads the list, cannot take them before they have
+  // faded. A refusal brings them back with its InfoBar.
+  //
+  // The place is kept (the motion keeps the focus where it was): the row
+  // after the last one taken — else the nearest before — is selected and
+  // takes the focus as soon as the Delete is done, through the same
+  // store.focusAfter the way up uses (lib/listkeys.ts survivor; Explorer's
+  // habit). With no row left it is `..`, or the empty folder's first
+  // command once the listing lands. The final shoot of phase 4b found the
+  // focus dropped to the body and the selection empty.
   async function doDelete() {
     const d = deleting;
     deleting = null;
     if (!d) return;
+    const gone = new Set(d.ids);
+    const keep = survivor(rows.map((r) => r.id), gone);
+    leaving = gone;
+    await new Promise((r) => setTimeout(r, delay(LEAVE)));
     try {
       await Archive.Delete(id, d.ids);
       store.clearSelection();
+      if (keep) store.focusAfter = keep;
       await store.refreshArchive();
+      if (!keep) {
+        await tick();
+        const el = listEl?.querySelector<HTMLElement>("tr.up") ?? listEl?.querySelector<HTMLElement>("button, [tabindex='0']");
+        el?.focus();
+      }
     } catch (e) {
+      leaving = new Set();
       fail(e);
     }
   }
@@ -1193,7 +1553,9 @@
 
 <svelte:window onkeydown={onKey} ondrop={dropElsewhere} />
 
-<div class="layer-head" style:--crumb-cap="{CRUMB_CAP}px" style:--crumb-root-cap="{ROOT_CAP}px">
+<!-- While the viewer is up the page under it is inert: no key, no click,
+     no tab stop reaches it (the viewer is over it). -->
+<div class="layer-head" style:--crumb-cap="{CRUMB_CAP}px" style:--crumb-root-cap="{ROOT_CAP}px" inert={viewerUp || undefined}>
   <!-- The head is the path (direction 3, phase 4a; the user's rulings of
        2026-10-14): the archive's name the root, the folder shown last in
        the ink, its ancestors buttons in the second ink — each goes there,
@@ -1253,15 +1615,11 @@
   {/if}
 </div>
 
-<div class="layer-body">
-  {#if tampered}
-    <!-- First on every page (direction 9; APP.md §13): the archive keeps
-         saving, but the vault file it reports to may have been changed
-         outside Enfold, and this page said nothing of it. -->
-    <TamperedBar reason={store.status?.tamperedReason} />
-  {/if}
-  {#if moveError && moveError.at === "head"}
-    <!-- A Move onto a crumb refused, said under the head it was aimed at. -->
+<div class="layer-body" inert={viewerUp || undefined}>
+  {#if moveError && (moveError.at === "head" || moveError.at === "list")}
+    <!-- A Move onto a crumb refused, said under the head it was aimed at —
+         and one dropped on the list's blank area of a folder a spring
+         entered, said here too, above the list it was aimed at. -->
     <div class="move-note">Not moved: {moveError.text}</div>
   {/if}
   <div class="cmdbar" bind:this={cmdbar}>
@@ -1280,44 +1638,61 @@
     <MenuButton id="view" label={archivePageCopy.view} end items={viewItems} />
   </div>
 
-  {#if !store.unlocked}
-    <!-- One line of 40 px, everything on it centred (APP.md §7, ruled
-         2026-09-11): .bar.line. -->
-    <div class="bar line attention">
-      <svg class="i i-14"><use href="#i-lock" /></svg>
-      <!-- What the lock left (direction 9, ruled 2026-10-18): this archive
-           is still decrypted and still saves (APP.md §2.3), so the banner
-           is attention and carries the way out beside the unlock — the
-           head's own *Close*, the graceful leave, by the same word and the
-           same act (leaving is explicit and named once; the final shoot of
-           phase 4a found a kill switch here under another name). While
-           the archive drains after it, the head's *Force close* is the one
-           way left, and the banner offers nothing a second press would not
-           repeat. -->
-      <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
-      {#if !draining}
-        <button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{commandCopy.close}</button>
-      {/if}
-      <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
-    </div>
-  {/if}
-  {#if stat?.state === "needs_reopen"}
-    <!-- The button is the head's *Close*, by the same word, since it is
-         the same act — the graceful leave: it closes, and the archive is
-         opened again from the list. "Close and reopen" promised a reopen
-         it does not do (one word per thing, consequences first: APP.md §7,
-         ruled 2026-10-17). While it drains after that leave, the same
-         button is the head's *Force close* (ruled 2026-10-19: one meaning
-         for Close, lib/leave.ts). -->
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span>{#if !reopenClose.force}<button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{reopenClose.label}</button>{/if}</div>
-  {/if}
-  {#if stat?.copyMismatch}
-    <!-- The note names *Refresh fingerprint*, so the command stands in the
-         note: the Archives page's command bar, where it otherwise lives,
-         is not on this page (direction 9; APP.md §2.3 Verify). It is a
-         registry write, greyed while Locked or Tampered as there. -->
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div>
-  {/if}
+  <!-- The notice slot (direction 4, phase 4b; NoticeSlot): the page's
+       stateful banners between the commands and the list, in their tiers'
+       order — danger, then attention — each opening and closing its
+       height so the list slides; and the InfoBars over the list's top,
+       stopping at its column when the preview pane stands beside it. -->
+  <NoticeSlot beside={paneOn ? "files" : undefined}>
+    {#if tampered}
+      <!-- Danger, first (direction 9; APP.md §13): the archive keeps
+           saving, but the vault file it reports to may have been changed
+           outside Enfold, and this page said nothing of it. It stood above
+           the commands until the slot (direction 4) gave every banner one
+           place under them. -->
+      <div class="fold" transition:unfold><TamperedBar reason={store.status?.tamperedReason} /></div>
+    {/if}
+    {#if !store.unlocked}
+      <!-- One line of 40 px, everything on it centred (APP.md §7, ruled
+           2026-09-11): .bar.line. -->
+      <div class="fold" transition:unfold>
+        <div class="bar line attention">
+          <svg class="i i-14"><use href="#i-lock" /></svg>
+          <!-- What the lock left (direction 9, ruled 2026-10-18): this archive
+               is still decrypted and still saves (APP.md §2.3), so the banner
+               is attention and carries the way out beside the unlock — the
+               head's own *Close*, the graceful leave, by the same word and the
+               same act (leaving is explicit and named once; the final shoot of
+               phase 4a found a kill switch here under another name). While
+               the archive drains after it, the head's *Force close* is the one
+               way left, and the banner offers nothing a second press would not
+               repeat. -->
+          <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
+          {#if !draining}
+            <button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{commandCopy.close}</button>
+          {/if}
+          <button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button>
+        </div>
+      </div>
+    {/if}
+    {#if stat?.state === "needs_reopen"}
+      <!-- The button is the head's *Close*, by the same word, since it is
+           the same act — the graceful leave: it closes, and the archive is
+           opened again from the list. "Close and reopen" promised a reopen
+           it does not do (one word per thing, consequences first: APP.md §7,
+           ruled 2026-10-17). While it drains after that leave, the same
+           button is the head's *Force close* (ruled 2026-10-19: one meaning
+           for Close, lib/leave.ts). -->
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span>{#if !reopenClose.force}<button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{reopenClose.label}</button>{/if}</div></div>
+    {/if}
+    {#if stat?.copyMismatch}
+      <!-- The note names *Refresh fingerprint*, so the command stands in the
+           note: the Archives page's command bar, where it otherwise lives,
+           is not on this page (direction 9; APP.md §2.3 Verify). It is a
+           registry write, greyed while Locked or Tampered as there. -->
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div></div>
+    {/if}
+  </NoticeSlot>
   <!-- View › Preview pane off gives the list the whole width (direction 3). -->
   <div class="file-split" class:dropping class:bare={!paneOn}>
     <!-- A click on the list's blank area — under the last row, or in the
@@ -1327,9 +1702,9 @@
          name: a stale id is refused, where a stale path would resolve to
          whatever folder now happens to carry that name (§3). -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
-    <div class="tablewrap" data-file-drop-target="true" data-archive-id={id} data-dir-id={dirId}
-      role="region" aria-label="Files" bind:this={listEl} onclick={blank} onscroll={scrolled}
-      ondragenter={() => { if (!store.dragOut) dropping = true; }} ondragover={overBlank} ondragleave={() => (dropping = false)} ondrop={() => (dropping = false)}>
+    <div class="tablewrap" class:drop-into={isOver(hereTarget.id, "list")} data-file-drop-target="true" data-archive-id={id} data-dir-id={dirId}
+      role="region" aria-label="Files" bind:this={listEl} onclick={blank} oncontextmenu={blankMenu} onscroll={scrolled}
+      ondragenter={() => { if (!store.dragOut) dropping = true; }} ondragover={overBlank} ondragleave={() => (dropping = false)} ondrop={dropBlank}>
       {#if isEmpty && !parentId}
         {@render emptyFolder()}
       {:else}
@@ -1353,7 +1728,7 @@
               {/each}
             </tr>
           </thead>
-          <tbody>
+          <tbody bind:this={rowsEl}>
             {#if parentId && upTarget}
               <!-- `..` (APP.md §6): up one level, pinned at the top under
                    every sort, no checkbox, never selected; it takes
@@ -1366,8 +1741,9 @@
                 class:refused={refusedAt(upTarget.id, "up")}
                 aria-label={listCopy.upLabel}
                 onclick={(e) => { e.stopPropagation(); moveError = null; }}
+                oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 ondblclick={() => nav(() => store.goUp())}
-                ondragover={(e) => over(e, upTarget, "up")}
+                ondragover={(e) => over(e, upTarget, "up", listCopy.up)}
                 ondragleave={() => leave(upTarget, "up")}
                 ondrop={(e) => dropOn(e, upTarget, "up")}
               >
@@ -1387,12 +1763,15 @@
                 data-id={r.id}
                 tabindex={selected.has(r.id) || (selected.size === 0 && i === 0 && !parentId) ? 0 : -1}
                 aria-selected={selected.has(r.id)}
+                class:fresh={store.fresh.has(r.id)}
+                class:leaving={leaving.has(r.id)}
                 class:drop-into={isOver(r.id, "row")}
                 class:refused={refusedAt(r.id, "row")}
                 onpointerdown={(e) => pointerdown(e, r)}
                 onclick={(e) => click(e, r)}
-                ondblclick={() => open(r)}
-                ondragover={(e) => over(e, { id: r.id, isDir: r.isDir }, "row")}
+                oncontextmenu={(e) => rowMenu(e, r)}
+                ondblclick={() => openItem(r)}
+                ondragover={(e) => over(e, { id: r.id, isDir: r.isDir }, "row", r.name)}
                 ondragleave={() => leave({ id: r.id, isDir: r.isDir }, "row")}
                 ondrop={(e) => dropOn(e, { id: r.id, isDir: r.isDir }, "row")}
               >
@@ -1431,7 +1810,7 @@
     </div>
 
     {#if paneOn}
-      <aside class="preview" aria-label="Preview">
+      <aside class="preview" aria-label="Preview" ondragstart={noDrag}>
         {#if shape === "rest"}
           <!-- At rest the pane describes where you are (direction 3): the
                folder — the root by the archive's name — and what it holds,
@@ -1475,21 +1854,22 @@
           {#if one.isDir || noPreview}
             <!-- A folder, or a file the pane cannot show: its type's icon
                  and what is so, said as a fact of the type — extracting is
-                 offered below as an action, never as the cure. -->
+                 offered below as an action, never as the cure. A file
+                 selected while the archive drains says it is closing. -->
             <div class="pane-none">
               <svg class="i i-48" aria-hidden="true"><use href="#{rowIcon(one)}" /></svg>
               <span class="t-strong name">{one.name}</span>
-              <span class="t-quiet">{one.isDir ? paneCopy.folderInside(bytes(one.size)) : previewFailed ? paneCopy.previewFailed : paneCopy.noPreview(one.name)}</span>
+              <span class="t-quiet">{one.isDir ? paneCopy.folderInside(bytes(one.size)) : previewClosing ? paneCopy.closing : previewFailed ? paneCopy.previewFailed : paneCopy.noPreview(one.name)}</span>
             </div>
           {:else}
             <!-- The art takes the pane's height (flex: 1 1 auto, at least
                  186 px), so text and images use it. -->
             <div class="art">
               {#if kind === "image" && previewUrl}
-                <img src={previewUrl} alt={one.name} />
+                <img src={previewUrl} alt={one.name} draggable="false" />
               {:else if kind === "video" && previewUrl}
                 <!-- svelte-ignore a11y_media_has_caption -->
-                <video src={previewUrl} controls controlslist="nodownload noplaybackrate" disablepictureinpicture></video>
+                <video src={previewUrl} controls controlslist="nodownload noplaybackrate" disablepictureinpicture draggable="false"></video>
               {:else if kind === "audio" && previewUrl}
                 <audio src={previewUrl} controls controlslist="nodownload"></audio>
               {:else if kind === "text" && previewText}
@@ -1673,6 +2053,48 @@
      name — with both ways to fill it under the line and the drop said
      last, in the caption, centred in the list, which stays the drop
      target as a whole. -->
+<!-- A row's menu, or the blank area's (direction 7): keyed on the open,
+     so a second right-click elsewhere is a menu of its own, placed anew. -->
+{#if ctx}
+  {@const c = ctx}
+  {#key c}
+    <ContextMenu x={c.x} y={c.y} keyboard={c.key} items={ctxItems} label={c.row?.name ?? folderName} onclose={closeCtx} />
+  {/key}
+{/if}
+
+<!-- Move to… (direction 7): the folder tree over the page. -->
+{#if moving}
+  <MoveToDialog
+    archiveId={id}
+    archiveName={archiveName || (stat?.name ?? "")}
+    rootId={ROOT_ID}
+    current={dirId}
+    trail={crumbs.map((c) => c.id)}
+    ids={moving.ids}
+    name={moving.name}
+    onmoved={() => void movedTo()}
+    oncreated={() => void store.refreshArchive()}
+    oncancel={cancelMoveTo}
+  />
+{/if}
+
+<!-- The viewer (direction 7): over the page's area of the layer, under
+     every dialog — its own Extract… opens over it. -->
+{#if viewing}
+  <Viewer
+    archiveId={id}
+    {rows}
+    current={viewing.id}
+    pinned={viewing.pinned}
+    more={hasMore(store.page)}
+    extractWhy={closingWhy}
+    onstep={viewStep}
+    onclose={closeViewer}
+    onextract={viewExtract}
+    onmore={() => void store.loadMore()}
+  />
+{/if}
+
 {#snippet emptyFolder()}
   <div class="empty-folder">
     <h2 class="t-section">{archivePageCopy.emptyTitle(folderName)}</h2>
@@ -1719,4 +2141,8 @@
   .collide .kd.clash { color: var(--attention); }
   .collide .more { color: var(--ink-2); }
   .merge { margin: 0; font: var(--t-cap); color: var(--ink-2); }
+
+  /* A folder a spring-loaded hover entered takes a drop on its blank area
+     (direction 7): the list is washed as a folder row is under the drag. */
+  .tablewrap.drop-into { background-color: var(--accent-wash); outline: 1px solid var(--accent-line); outline-offset: -1px; }
 </style>

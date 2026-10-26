@@ -4,9 +4,12 @@
   // wrong, gone the moment the value is right, back only after the field
   // is left again — never on a keystroke, and never because the window
   // lost focus (lib/forms.ts). The parent bumps `attempt` on submit and
-  // reads `valid`.
+  // reads `valid`. Its right-click, Shift+F10 and Menu key open the app's
+  // Cut · Copy · Paste · Select all (lib/fieldmenu.ts; direction 7): it is
+  // never a secret's field — those are SecretField's.
   import { untrack } from "svelte";
   import { fade } from "svelte/transition";
+  import { fieldMenu } from "../lib/fieldmenu";
   import { nextMark, onLeave } from "../lib/forms";
   import { motion } from "../lib/motion";
   import { requiredProblem } from "../lib/validate";
@@ -52,6 +55,6 @@
 
 <div class="field">
   <div class="field-top"><label for={id}>{label}</label>{#if hint}<span class="hint">{hint}</span>{/if}</div>
-  <input {id} class="input" class:invalid={show} bind:value {placeholder} aria-invalid={show} aria-describedby={show ? `${id}-said` : undefined} onblur={leave} oninput={typed} />
+  <input {id} class="input" class:invalid={show} bind:value {placeholder} aria-invalid={show} aria-describedby={show ? `${id}-said` : undefined} onblur={leave} oninput={typed} use:fieldMenu />
   {#if show}<div id="{id}-said" class="field-error" transition:fade={motion()}>{problem}</div>{/if}
 </div>

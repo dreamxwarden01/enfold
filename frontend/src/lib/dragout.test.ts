@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DRAG_THRESHOLD, answer, baseName, beginFlight, land, ownDrop, ownNames, pastThreshold, underFolder } from "./dragout";
+import { DRAG_THRESHOLD, answer, baseName, beginFlight, land, noDrag, ownDrop, ownNames, pastThreshold, underFolder } from "./dragout";
 import type { Flight, Landing } from "./dragout";
 import { ROOT_ID } from "./tree";
 
@@ -231,5 +231,38 @@ describe("a path under the staging folder", () => {
   it("is nothing for an empty path or folder", () => {
     expect(underFolder("", STAGING)).toBe(false);
     expect(underFolder(`${STAGING}\\a.jpg`, "")).toBe(false);
+  });
+});
+
+// A preview is never a drag source (APP.md §6): every picture or video the
+// pane and the viewer draw says draggable="false", and the viewer and the
+// pane's box cancel any dragstart inside them — read as source, since a
+// dragged <img> under WebView2 would hand Explorer the decrypted bytes.
+const previewSources = import.meta.glob(["../components/Viewer.svelte", "../components/ArchivePage.svelte"], { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+
+describe("a preview is never a drag source", () => {
+  it("reads both preview components", () => {
+    expect(Object.keys(previewSources)).toHaveLength(2);
+  });
+
+  it("marks every <img> and <video> draggable=\"false\"", () => {
+    for (const [file, src] of Object.entries(previewSources)) {
+      const media = src.match(/<(img|video)\b[^>]*>/g) ?? [];
+      expect(media.length, file).toBeGreaterThan(0);
+      for (const tag of media) expect(tag.includes('draggable="false"'), `${file}: ${tag}`).toBe(true);
+    }
+  });
+
+  it("cancels a dragstart on the viewer and on the pane's box", () => {
+    const viewer = Object.entries(previewSources).find(([f]) => f.endsWith("Viewer.svelte"))![1];
+    const page = Object.entries(previewSources).find(([f]) => f.endsWith("ArchivePage.svelte"))![1];
+    expect(viewer).toMatch(/<div class="viewer"[^>]*ondragstart=\{noDrag\}/);
+    expect(page).toMatch(/<aside class="preview"[^>]*ondragstart=\{noDrag\}/);
+  });
+
+  it("noDrag prevents the drag", () => {
+    let prevented = false;
+    noDrag({ preventDefault: () => (prevented = true) } as unknown as Event);
+    expect(prevented).toBe(true);
   });
 });

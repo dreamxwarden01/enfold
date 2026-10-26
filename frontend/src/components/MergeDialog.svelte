@@ -53,7 +53,7 @@
   const sum = $derived(summarise(rows, ticks));
 
   function fail(e: unknown) {
-    store.toast(codeText(errorOf(e).code), "error");
+    store.notice(codeText(errorOf(e).code), "error");
   }
 
   // What the file says about itself before any credential (R35: dated,

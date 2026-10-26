@@ -204,8 +204,11 @@
   <div class="cells" role="group" aria-label="Recovery key, 8 groups of 6 digits" aria-describedby={said ? `recovery-${promptId}-said` : undefined}>
     {#each groups as g, i (i)}
       <span class="cellbox">
+      <!-- data-secret: a recovery key's digits get no menu of the page's
+           own (lib/fieldmenu.ts; direction 7). -->
       <input
         bind:this={cells[i]}
+        data-secret=""
         class="input cell"
         class:bad={marks[i] === "bad"}
         type="text"

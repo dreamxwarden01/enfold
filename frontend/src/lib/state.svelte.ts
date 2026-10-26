@@ -1,11 +1,11 @@
 // The page's state: what the core reported, applied in sequence order, and
-// the little the page adds (route, selection, toasts). Every event is
+// the little the page adds (route, selection, InfoBars). Every event is
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
 import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code, submitSecret } from "./api";
 import type { ArchiveDetails, ArchiveStat, ArchiveSummary, BackupStatus, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
-import { codeText, moreNotOpened, openElsewhereText, purgedText, warningCopy } from "./strings";
+import { codeText, moreNotOpened, noticeCopy, openElsewhereText, purgedText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
 import { NOT_PASSED, explicitMethod, passedAfter } from "./lockscreen";
 import type { Passed } from "./lockscreen";
@@ -31,6 +31,8 @@ import { droppedArchives } from "./archlist";
 import { toLeave } from "./leave";
 import { tamperedShown, tier } from "./notices";
 import { dialogIsUp } from "./dialogs";
+import { due, lifetime, raise, running, settled, spend } from "./infobar";
+import type { Notice, NoticeKind, Pause } from "./infobar";
 
 // How long a done line holds in the foot (direction 4).
 const DONE_MS = 6000;
@@ -43,11 +45,10 @@ export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
 // all.
 export const SELF_DROP_GRACE = 1000;
 
-export interface Toast {
-  id: number;
-  text: string;
-  kind: "info" | "error";
-}
+// FRESH_HOLD: how long the ids an operation added are kept for the list's
+// accent wash (direction 4, list motion) — long enough for the listing the
+// operation's end asks for to land; the wash itself is WASH (lib/motion.ts).
+export const FRESH_HOLD = 4000;
 
 // The shell's file drop (APP.md §3, Shell): the paths, whether each one is
 // a directory — the page cannot stat a path, and a directory handed to
@@ -299,7 +300,18 @@ class Store {
   // of the archive opened last, so Enter opens it (takeFocusAsked).
   focusArchiveAsked = $state<string | null>(null);
   settings = $state<SettingsView | null>(null);
-  toasts = $state<Toast[]>([]);
+  // The InfoBars (lib/infobar.ts; InfoBars.svelte, in the page's notice
+  // slot): what toasts were. Ordered oldest first; the hosts draw the
+  // newest three.
+  notices = $state<Notice[]>([]);
+  // noticeDialogs: the InfoBars hosts the dialogs have mounted — one in the
+  // topmost dialog while any is up. While it is above zero the page's bars
+  // are under the dim and wait; once it is zero every bar is the page's.
+  noticeDialogs = $state(0);
+  // The ids an operation just added — an add's added and created records,
+  // a folder Create folder made — which the file list washes with the
+  // accent once (direction 4, list motion), for FRESH_HOLD.
+  fresh = $state<ReadonlySet<string>>(new Set());
   // The last ceremony that ended with something to say on the lock screen
   // (an import, a check of a backup, a create): it outlives the ceremony
   // object, which the reveal dismisses.
@@ -362,7 +374,15 @@ class Store {
   // older open's answer is dropped against.
   private lastOpenSeq = 0;
   private archiveSeq: Record<string, number> = {};
-  private toastId = 0;
+  private noticeId = 0;
+  // The InfoBars' clock (lib/infobar.ts): when their time was last spent,
+  // the timer for the next to run out, and what pauses them — the pointer
+  // over the bars, the window without the focus, the viewer over the
+  // page's slot.
+  private noticeMark = Date.now();
+  private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  private noticePause: Omit<Pause, "dialogUp"> = { hovered: false, away: false, viewerUp: false };
+  private freshTimer: ReturnType<typeof setTimeout> | undefined;
   private lastActivity = 0;
 
   // remembered: the archive opened last in this vault, by id; empty when
@@ -500,16 +520,17 @@ class Store {
     Events.On("vault.ceremony", (e) => this.applyCeremony(e.data as CeremonyState));
     Events.On("vault.warning", (e) => {
       const w = e.data as { code: string };
-      // The moment one arrives is still a toast (ruled 2026-10-13); its
-      // kind follows the tier (direction 9): an info notice is never red.
-      this.toast(warningCopy(w.code), tier(w.code) === "info" ? "info" : "error");
+      // The moment one arrives is still said once, as an InfoBar now (ruled
+      // 2026-10-13; direction 4); its kind follows the tier (direction 9):
+      // an info notice is never red.
+      this.notice(warningCopy(w.code), tier(w.code) === "info" ? "info" : "error");
     });
     Events.On("archives.changed", (e) => {
       // The purge names what it dropped at the end of an unlock; every
       // other change carries an empty list (APP.md §13).
       const purged = (e.data as ArchivesChanged | undefined)?.purged ?? [];
       if (purged.length) {
-        this.toast(purgedText(purged));
+        this.notice(purgedText(purged));
       }
       void this.refreshArchives();
       void this.refreshBackup();
@@ -543,7 +564,7 @@ class Store {
         return;
       }
       if (!d.archiveId) {
-        this.toast("Drop files onto an open archive's file list.", "error");
+        this.notice(noticeCopy.dropNoArchive, "error");
         return;
       }
       this.drop = d;
@@ -553,7 +574,7 @@ class Store {
       // The prompt the dialog's password answered still stands: the panel's
       // password step asks it now (APP.md §6, ruled 2026-10-17).
       this.chosenSent = "";
-      this.toast(codeText(r.code), "error");
+      this.notice(codeText(r.code), "error");
     });
     // The close the shell cancelled (APP.md §2.4). No payload: the question
     // is the same one every time. A second one arriving while the question
@@ -604,7 +625,7 @@ class Store {
       // A failed first status is the line with Retry and nothing else —
       // never the lock scene, which would say the vault is locked on no
       // evidence; with a status accepted from an event meanwhile there is
-      // a scene to draw, and the failure is then a toast like any other.
+      // a scene to draw, and the failure is then an InfoBar like any other.
       if (!this.status) {
         const code = errorOf(e).code;
         this.bootFailed = codeText(code);
@@ -612,7 +633,7 @@ class Store {
         this.bootFailedAt = Date.now();
         return;
       }
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
     }
     // The gate opens on the call's completion, never on a payload: the
     // scene drawn is the newest status accepted by then, the reply's or
@@ -645,7 +666,7 @@ class Store {
   }
 
   // openFromShell opens what Explorer handed over: the first path, with
-  // the rest named in a toast, and nothing at all for a request already
+  // the rest named in an InfoBar, and nothing at all for a request already
   // acted on.
   //
   // Accepting a request supersedes the one before it on the screen — the
@@ -662,7 +683,7 @@ class Store {
   // openFiles is an open the page itself was asked for — Open file… on
   // the Archives page, or .efd files dropped there (APP.md §14, ruled
   // 2026-10-14) — and the tail of Explorer's: the same chain, the same
-  // answers, the first path opened and the rest named in a toast.
+  // answers, the first path opened and the rest named in an InfoBar.
   async openFiles(paths: readonly string[]): Promise<void> {
     if (!paths.length) return;
     const seq = ++this.lastOpenSeq;
@@ -670,7 +691,7 @@ class Store {
     this.openWhenUnlocked = "";
     this.importFor = "";
     const rest = paths.slice(1);
-    if (rest.length) this.toast(moreNotOpened(rest.map(baseName)));
+    if (rest.length) this.notice(moreNotOpened(rest.map(baseName)));
     await this.queueOpen(paths[0], seq);
   }
 
@@ -695,7 +716,7 @@ class Store {
   // row's double-click takes; the lock scene with the path kept, to be
   // finished on the unlock, while the vault is locked; the key's own
   // dialog with Import records… when no record here holds the archive_id;
-  // and a toast for everything else — a file that is not an archive, a
+  // and an InfoBar for everything else — a file that is not an archive, a
   // copy of one already open elsewhere, a forgotten record, Enfold's own
   // folder.
   //
@@ -751,7 +772,7 @@ class Store {
       }
       // archive.open_elsewhere names the file the handle is on; every
       // other code says the one thing it says.
-      this.toast(err.path ? openElsewhereText(err.path) : codeText(err.code), "error");
+      this.notice(err.path ? openElsewhereText(err.path) : codeText(err.code), "error");
     }
   }
 
@@ -892,7 +913,7 @@ class Store {
   // phase 4a): the control wears the pending ring while its write is
   // under way (choosing, read by lib/pending.ts) and, refused, the
   // code's line under it (choiceRefused) with the old value back. No
-  // toast on success: a choice that applied is its own confirmation
+  // InfoBar on success: a choice that applied is its own confirmation
   // (DECISIONS 2026-09-07). A refusal is said only for the latest choice
   // of that control, so an older one refused cannot stand under a newer
   // one that applied.
@@ -917,9 +938,9 @@ class Store {
 
   // setPreviewPane is View › Preview pane and Alt+P (direction 3, phase
   // 4a): a choice applied at once through applySettings; the Archive page
-  // has no line under its menu, so a refusal is a toast.
+  // has no line under its menu, so a refusal is an InfoBar.
   setPreviewPane(on: boolean): Promise<void> {
-    return this.applySettings({ previewPane: on }).catch((e) => this.toast(codeText(errorOf(e).code), "error"));
+    return this.applySettings({ previewPane: on }).catch((e) => this.notice(codeText(errorOf(e).code), "error"));
   }
 
   private applyStatus(s: VaultStatus, snapshot = false): void {
@@ -1140,14 +1161,20 @@ class Store {
     if (!done) this.opBegins(o);
     this.ops[o.id] = o;
     if (!done) return;
-    // A failure is still an error toast until InfoBars (phase 4); the
-    // user's own Cancel is not a failure, and says what is left in the
-    // foot's done line instead (direction 4; it was a neutral "Stopped."
-    // toast, ruled 2026-10-14).
+    // A failure is an error InfoBar, which stays until it is dismissed
+    // (direction 4, phase 4b); the user's own Cancel is not a failure, and
+    // says what is left in the foot's done line instead (direction 4; it
+    // was a neutral "Stopped." toast, ruled 2026-10-14).
     if (o.error && o.error !== Code.CodeOpCancelled) {
-      this.toast(opErrorLine(o.kind, o.items, o.error, codeText(o.error)), "error");
+      this.notice(opErrorLine(o.kind, o.items, o.error, codeText(o.error)), "error");
     }
     const here = !!o.archiveId && o.archiveId === this.current;
+    // The rows it added wear the accent wash once the list is read again
+    // (direction 4, list motion): the records the outcomes say were added
+    // or made, on the archive the page shows.
+    if (here && !o.error) {
+      this.markFresh((o.results ?? []).filter((r) => (r.outcome === "added" || r.outcome === "created") && r.id).map((r) => r.id as string));
+    }
     const line = doneLine(o, new Map(this.archives.map((a) => [a.id, a.name])));
     if (line) this.showDone(line);
     // Something was left out — a kind that differs, a name the tree
@@ -1193,7 +1220,7 @@ class Store {
       }
     } catch (e) {
       const code = errorOf(e).code;
-      if (code !== "vault.needs_unlock" && code !== "vault.none") this.toast(codeText(code), "error");
+      if (code !== "vault.needs_unlock" && code !== "vault.none") this.notice(codeText(code), "error");
     }
   }
 
@@ -1256,7 +1283,7 @@ class Store {
         await Vault.Lock();
       } catch (e) {
         this.replaceAsked = false;
-        this.toast(codeText(errorOf(e).code), "error");
+        this.notice(codeText(errorOf(e).code), "error");
         return;
       }
     }
@@ -1286,7 +1313,7 @@ class Store {
         await Vault.Lock();
       } catch (e) {
         this.testAsked = "";
-        this.toast(codeText(errorOf(e).code), "error");
+        this.notice(codeText(errorOf(e).code), "error");
         return;
       }
     }
@@ -1340,10 +1367,10 @@ class Store {
       if (id) await Archives.Close(id);
       else kept = (await Archives.CloseAll()) ?? [];
     } catch (e) {
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
       return;
     }
-    if (kept.length) this.toast(codeText(Code.CodeArchiveCompacting), "error");
+    if (kept.length) this.notice(codeText(Code.CodeArchiveCompacting), "error");
     this.lingering = id ? this.lingering.filter((x) => x !== id) : this.lingering.filter((x) => kept.includes(x));
     if (this.current && (id ? id === this.current : !kept.includes(this.current))) this.leaveArchive(true);
     await this.refreshArchives();
@@ -1368,7 +1395,7 @@ class Store {
       if (t !== this.detailsToken) return;
       this.details = null;
       const code = errorOf(e).code;
-      if (code !== "vault.locked" && code !== "vault.needs_unlock" && code !== "archive.not_found") this.toast(codeText(code), "error");
+      if (code !== "vault.locked" && code !== "vault.needs_unlock" && code !== "archive.not_found") this.notice(codeText(code), "error");
     }
   }
 
@@ -1412,7 +1439,7 @@ class Store {
       this.closeAsked = false;
       if (remember) void this.refreshSettings();
     } catch (e) {
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
     } finally {
       this.closeBusy = false;
     }
@@ -1423,7 +1450,7 @@ class Store {
   // `fresh`, when a caller gives one, is asked once the core has answered
   // and before anything at all is written or said. The Open is a second
   // call of its own, and a shell open the user has overtaken must not
-  // land its stat, its route or its toast over the request that overtook
+  // land its stat, its route or its InfoBar over the request that overtook
   // it (APP.md §14, the second review's finding 3). The mount it was
   // given goes back, since no page is going to show it.
   //
@@ -1453,7 +1480,7 @@ class Store {
       stat = await Archives.Open(id);
     } catch (e) {
       if (fresh && !fresh()) return false;
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
       return false;
     } finally {
       this.opensInFlight--;
@@ -1559,7 +1586,7 @@ class Store {
       if (code === "archive.not_open") {
         this.leaveArchive(true); // it is closed already; there is nothing to leave
       } else {
-        this.toast(codeText(code), "error");
+        this.notice(codeText(code), "error");
       }
     }
   }
@@ -1601,7 +1628,10 @@ class Store {
     const held = this.page?.crumbs ?? [];
     const chain = retryChain(held, this.dirId);
     let target = this.dirId;
-    let went = "";
+    // The name of the folder that went, once one has (null until then):
+    // "" when neither the crumbs nor the folder being entered name it,
+    // and the bar says "That folder" (noticeCopy.folderWent).
+    let went: string | null = null;
     for (;;) {
       try {
         const reply = await Archive.Page(id, target, this.sortBy, 0, PAGE_LIMIT);
@@ -1616,9 +1646,9 @@ class Store {
         }
         this.dirId = target;
         this.entering = "";
-        if (went) {
+        if (went !== null) {
           const now = reply.crumbs?.[reply.crumbs.length - 1]?.name ?? "";
-          this.toast(`${went} is no longer in the archive.${now ? ` Showing ${now}.` : ""}`);
+          this.notice(noticeCopy.folderWent(went, now));
         }
         // The row to focus after going up (focusAfter) is not judged here:
         // it is applied by the page once its row is on screen, which may
@@ -1641,13 +1671,10 @@ class Store {
           this.dirId = shownDir(this.page?.crumbs);
           this.entering = "";
           this.focusAfter = null;
-          this.toast(codeText(code), "error");
+          this.notice(codeText(code), "error");
           return;
         }
-        if (!went) {
-          const name = wentName(held, target) || this.entering;
-          went = name ? `"${name}"` : "That folder";
-        }
+        if (went === null) went = wentName(held, target) || this.entering;
         target = up;
       }
     }
@@ -1679,7 +1706,7 @@ class Store {
       else if (a.kind === "restart") await this.loadPage();
     } catch (e) {
       if (this.current !== id || t !== this.pageToken) return;
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
     } finally {
       // This request's own mark and no later one's: a restart has set it
       // to zero already, and a newer loadMore owns it now.
@@ -1734,6 +1761,7 @@ class Store {
   // is cleared, whether or not its row ever appeared.
   private async navigate(dirId: string, name: string, focusAfter: string | null): Promise<void> {
     this.sel = emptySelection();
+    this.fresh = new Set();
     this.dirId = dirId;
     this.entering = name;
     this.focusAfter = focusAfter;
@@ -1779,7 +1807,7 @@ class Store {
       if (this.current !== id || this.dirId !== dir || this.selGen !== gen) return; // the user moved on
       this.sel = selectAll(this.sel, kids.map((k) => k.id));
     } catch (e) {
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -1806,7 +1834,7 @@ class Store {
       // drag.busy, drag.unsupported, or the plan's own refusal — a name two
       // records would share at the top of the staging folder, an id gone.
       if (this.dragOut && this.current === id) this.dragOut = null;
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
       return;
     }
     this.lastDragFolder = a.folder;
@@ -1947,7 +1975,7 @@ class Store {
     try {
       await Archives.Leave(id);
     } catch (e) {
-      this.toast(codeText(errorOf(e).code), "error");
+      this.notice(codeText(errorOf(e).code), "error");
       return;
     }
     let still = false;
@@ -2023,7 +2051,7 @@ class Store {
       try {
         await Vault.BeginUnlock(method);
       } catch (e) {
-        this.toast(codeText(errorOf(e).code), "error");
+        this.notice(codeText(errorOf(e).code), "error");
       }
     })();
   }
@@ -2101,12 +2129,76 @@ class Store {
     }, DONE_MS);
   }
 
-  toast(text: string, kind: "info" | "error" = "info"): void {
-    const id = ++this.toastId;
-    this.toasts.push({ id, text, kind });
-    setTimeout(() => {
-      this.toasts = this.toasts.filter((t) => t.id !== id);
-    }, kind === "error" ? 9000 : 4500);
+  // notice raises an InfoBar (direction 4; APP.md §6, Notices): info and
+  // success go by themselves after their lifetime, an error stays until it
+  // is dismissed (lib/infobar.ts). One raised while a dialog is up is shown
+  // in the dialog, since the page's slot is under its dim.
+  notice(text: string, kind: NoticeKind = "info"): void {
+    this.changeNotices(() => {
+      this.notices = raise(this.notices, { id: ++this.noticeId, text, kind, inDialog: dialogIsUp(), left: lifetime(text, kind) });
+    });
+  }
+
+  dismissNotice(id: number): void {
+    this.changeNotices(() => {
+      this.notices = this.notices.filter((n) => n.id !== id);
+    });
+  }
+
+  // pauseNotices: the pointer is over the bars, or the window lost the
+  // focus or is hidden (App.svelte) — no bar's time runs meanwhile — or the
+  // viewer stands over the page's slot (Viewer.svelte), and the page's
+  // bars wait until it closes.
+  pauseNotices(p: Partial<Omit<Pause, "dialogUp">>): void {
+    this.changeNotices(() => Object.assign(this.noticePause, p));
+  }
+
+  // noticeHost counts a dialog's InfoBars host in (1) or out (-1). The bars
+  // become the page's only once the count is still zero after the flush
+  // that brought it there: a dialog covered by another (Dialog.svelte
+  // covered) unmounts its host as the covering one mounts its own, in one
+  // flush and the unmount first, so the count touches zero between them —
+  // and settling there would hand the lower dialog's bars to the page,
+  // under the dim, where nobody sees them. dialogIsUp() cannot tell at
+  // that moment either: the covering dialog registers (lib/dialogs.ts) in
+  // an effect that runs later in the same flush.
+  noticeHost(delta: 1 | -1): void {
+    this.changeNotices(() => {
+      this.noticeDialogs = Math.max(0, this.noticeDialogs + delta);
+    });
+    if (this.noticeDialogs > 0) return;
+    queueMicrotask(() => {
+      if (this.noticeDialogs > 0) return;
+      this.changeNotices(() => {
+        this.notices = settled(this.notices);
+      });
+    });
+  }
+
+  private noticesRunning(): Set<number> {
+    return running(this.notices, { ...this.noticePause, dialogUp: this.noticeDialogs > 0 });
+  }
+
+  // Every change to the bars or to what pauses them spends the time since
+  // the last one under the rules that held until now, makes the change,
+  // and sets the timer for the next bar to run out under the new ones.
+  private changeNotices(change: () => void): void {
+    const now = Date.now();
+    const run = this.noticesRunning();
+    if (run.size > 0) this.notices = spend(this.notices, now - this.noticeMark, run);
+    this.noticeMark = now;
+    change();
+    clearTimeout(this.noticeTimer);
+    const next = due(this.notices, this.noticesRunning());
+    if (next !== null) this.noticeTimer = setTimeout(() => this.changeNotices(() => {}), next + 1);
+  }
+
+  // markFresh keeps the ids an operation added for the list's wash.
+  markFresh(ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    this.fresh = new Set([...this.fresh, ...ids]);
+    clearTimeout(this.freshTimer);
+    this.freshTimer = setTimeout(() => (this.fresh = new Set()), FRESH_HOLD);
   }
 
   // activity is the heartbeat (APP.md: a request, granted only when the

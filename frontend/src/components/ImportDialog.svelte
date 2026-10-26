@@ -12,6 +12,7 @@
   import { store } from "../lib/state.svelte";
   import { codeText, dialogCopy, firstMethodCopy, importCopy, vaultCopy } from "../lib/strings";
   import { dateTime, leaf, plural } from "../lib/format";
+  import { fieldMenu } from "../lib/fieldmenu";
   import Dialog from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
   import TextField from "./TextField.svelte";
@@ -114,7 +115,7 @@
       await Vault.ImportFile(path, name, method, way.kind, way.label, way.entangle, kept && confirm);
     } catch (e) {
       store.dropChosen();
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -128,7 +129,7 @@
     try {
       await Vault.OpenVaultFile(path, name);
     } catch (e) {
-      store.toast(codeText(errorOf(e).code), "error");
+      store.notice(codeText(errorOf(e).code), "error");
     }
   }
 
@@ -149,7 +150,7 @@
   <div class="field">
     <div class="field-top"><label for="im-path">{vaultCopy.file}</label></div>
     <div class="row">
-      <input id="im-path" class="input grow" readonly value={path} placeholder="A vault.eks, or a backup exported by Enfold" />
+      <input id="im-path" class="input grow" readonly value={path} placeholder="A vault.eks, or a backup exported by Enfold" use:fieldMenu />
       <button type="button" class="btn" onclick={pick}>Choose…</button>
     </div>
   </div>

@@ -59,6 +59,19 @@ export function inPopover(t: EventTarget | null): boolean {
   return t instanceof Element && t.closest(`[${POPOVER_ATTR}]`) !== null;
 }
 
+// Escape has one order (APP.md §6, InfoBars): a dialog, then a menu, then
+// a popover the page draws (the compact rail's flyout, the foot's
+// flyouts), then the viewer, then the newest error InfoBar, then the
+// list. A popover's toggle carries ESC_OWNER_ATTR beside its
+// aria-expanded, so App.svelte's escNotice can see one is open and leave
+// that Escape to the popover — the review's finding: one Escape closed
+// the rail's flyout and threw away an error nobody had read. The toggle,
+// not the popover, is read: its aria-expanded drops the moment the
+// popover is told to close, while the popover itself lingers through its
+// leave.
+export const ESC_OWNER_ATTR = "data-owns-esc";
+export const ESC_OWNERS = `[role="menu"], [${POPOVER_ATTR}], [${ESC_OWNER_ATTR}][aria-expanded="true"], .viewer`;
+
 // DialogHost is what a dialog lends the component in its body that runs
 // a ceremony (CeremonyPanel; APP.md §6, ruled 2026-10-17). The foot band
 // is the dialog's, drawn by the Dialog, but what it holds changes with the

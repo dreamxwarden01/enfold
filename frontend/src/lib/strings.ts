@@ -308,7 +308,7 @@ export const codeCopy: Record<CodeKey, string> = {
   // at all.
   [Code.CodeKeyNotInVault]: "This archive is not in your vault.",
   [Code.CodeNotAnArchive]: "That file is not an Enfold archive, or it could not be read.",
-  // The line without the path, for a list. What the toast says names the
+  // The line without the path, for a list. What the InfoBar says names the
   // file the handle is on (openElsewhereText).
   [Code.CodeOpenElsewhere]: "This archive is already open from another file. Close it there first.",
   [Code.CodeDescriptionLong]: "The description is too long: at most 1 024 bytes.",
@@ -374,9 +374,9 @@ export function unknownCodeText(code: string): string {
 
 // unknownCodeParts splits a line that carries the fallback around its
 // code — before, the code, after — so the place that renders it can set
-// the code in muted mono (Toasts.svelte); null for every other line. The
+// the code in muted mono (InfoBars.svelte); null for every other line. The
 // fallback may stand after a prefix, as an operation's name does in its
-// toast (ops.ts opErrorLine).
+// InfoBar (ops.ts opErrorLine).
 export function unknownCodeParts(text: string): [string, string, string] | null {
   const lead = "Something went wrong (";
   const m = /Something went wrong \(([^()\s]+)\)\. The log in the data folder has the details\./.exec(text);
@@ -443,6 +443,11 @@ export const archivePageCopy = {
   renameNeedsOne: "Select one item to rename",
   deleteNeedsSome: "Select what to delete",
   extractNeedsSome: "Select what to extract",
+  moveNeedsSome: "Select what to move",
+  // A row menu's greyed item while the archive drains after its *Close*
+  // (direction 7): the toolbar's closing title in a few words, since the
+  // menu says it under every item it stops.
+  menuClosing: "This archive is closing",
   // The foot's note (direction 3, phase 4a): the folder shown and its count;
   // the archive's figures moved to the pane at rest.
   foot: (folder: string, n: number): string => `${folder} · ${plural(n, "item")}`,
@@ -451,7 +456,7 @@ export const archivePageCopy = {
   crumbsLabel: "Location",
   folded: (n: number): string => `${plural(n, "folder")} in between`,
   // The toolbar's two menus at its right: More, which holds *Delete
-  // archive…* until the row menus of phase 4b take it too, and View.
+  // archive…* (the Archives list's row menu offers it too), and View.
   more: "More",
   view: "View",
   previewPane: "Preview pane",
@@ -494,7 +499,44 @@ export const paneCopy = {
   },
   folderInside: (size: string): string => `Folder · ${size} inside`,
   previewFailed: "The preview could not be loaded",
+  // A file selected while the archive drains after its Close, which the
+  // pane does not ask for (every read would answer archive.not_open): the
+  // row menu's words for it.
+  closing: archivePageCopy.menuClosing,
   extractSome: (n: number): string => `Extract ${plural(n, "item")}…`,
+};
+
+// The viewer (direction 7, Explorer's habits; lib/viewer.ts): a file
+// looked at large inside the window — its name, its place among the
+// folder's files the viewer can show ("4 of 13"), the facts in one
+// caption line, *Extract…* and the close. A kind the WebView cannot show
+// says so as a fact of its type, in the pane's own words (paneCopy.noPreview).
+export const viewerCopy = {
+  label: (name: string): string => `Viewing ${name}`,
+  counter: (at: number, of: number): string => `${at} of ${of}`,
+  close: "Close (Esc)",
+  previous: "Previous (←)",
+  next: "Next (→)",
+  // Under a text cut at the pane's cap (lib/viewer.ts PREVIEW_TEXT_CAP).
+  truncated: "Only the first 64 KB are shown here.",
+};
+
+// Move to… (direction 7; lib/movetree.ts): the title counts what moves or
+// names the one item, the tree says why a folder cannot take the move,
+// and the line under it says where the move goes.
+export const moveToCopy = {
+  title: (n: number, name = ""): string => (n === 1 && name ? `Move ${name} to…` : `Move ${plural(n, "item")} to…`),
+  tree: "Folders",
+  alreadyHere: "Already here",
+  intoItself: "A folder cannot move into itself",
+  reading: "Reading the folder",
+  cut: (limit: number): string => `More than ${limit} items: some folders are not shown`,
+  open: (name: string): string => `Open ${name}`,
+  to: (path: string): string => `To ${path}`,
+  pathSep: " › ",
+  newFolderIn: (folder: string): string => `New folder in ${folder}`,
+  create: "Create",
+  move: "Move",
 };
 
 // ---- The rail (APP.md §6, Rail; directions 3, 6 and 10, ruled 2026-10-18) --
@@ -536,7 +578,7 @@ export function reclaimedText(returned: number): string {
 // *Cancel* greyed and no words of its own — from then on Explorer's own window
 // is in front and the only control there is — until DoDragDrop returns and
 // the foot moves on. A finished drag out that failed is named by the verb its
-// toast counts with (ops.ts opLabel).
+// InfoBar counts with (ops.ts opLabel).
 export const dragOutCopy = {
   dragging: "Dragging",
   extracting: "Extracting",
@@ -546,7 +588,7 @@ export const dragOutCopy = {
 // The foot's words for a running operation (ops.ts opLabel),
 // here so the glossary's walk sees them. A re-key is named by the verb
 // its button says, *Re-key archive…* (commandCopy.rekeyArchive): one act,
-// one name, in the foot and in its toast (ruled 2026-10-17). The bare
+// one name, in the foot and in its InfoBar (ruled 2026-10-17). The bare
 // form stands when the archive's name is not known.
 export const opCopy = {
   rekeying: "Re-keying",
@@ -917,7 +959,7 @@ export const closeCopy = {
 // Opening an archive from Explorer (APP.md §14, decision 4): a
 // double-click, an *Open with*, a path on the command line. Two of the
 // three answers are said in place — the archive opens, or a file that is
-// not one is a toast — and the third is this dialog: the file *is* an
+// not one is an InfoBar — and the third is this dialog: the file *is* an
 // Enfold archive and no record here holds its keys, so the one way on is
 // *Import archives from a backup…*, and the file was not touched.
 export const openCopy = {
@@ -929,11 +971,6 @@ export const openCopy = {
   close: "Close",
 };
 
-// What a launch that named more than one file says about the rest: the
-// first is opened and the others are named, the way the purge names the
-// keys it dropped (APP.md §14, "the rest are named in a toast"). The
-// names are leaves: the folder they came from is the one the user was
-// standing in, and says nothing.
 // archive.open_elsewhere names the file the archive is already open from
 // (APP.md §14): two copies of one archive, and the handle is on the other
 // one. The whole path, not the leaf: the point is which of two files that
@@ -942,7 +979,7 @@ export function openElsewhereText(path: string): string {
   return `This archive is already open from ${path}. Close it there first.`;
 }
 
-// purgedText is the toast the purge raises at the end of an unlock (APP.md
+// purgedText is the InfoBar the purge raises at the end of an unlock (APP.md
 // §13, ruled 2026-10-17): the consequence first, and in the user's words —
 // it said "The key of … was dropped", the format's act on a main surface.
 export function purgedText(names: string[]): string {
@@ -951,9 +988,36 @@ export function purgedText(names: string[]): string {
     : `${names.length} forgotten archives can no longer be opened: ${names.join(", ")}. Each was forgotten more than 30 days ago.`;
 }
 
+// What a launch that named more than one file says about the rest: the
+// first is opened and the others are named, the way the purge names the
+// keys it dropped (APP.md §14, "the rest are named in a toast"). The
+// names are leaves: the folder they came from is the one the user was
+// standing in, and says nothing.
 export function moreNotOpened(names: string[]): string {
   return `${plural(names.length, "more archive")} ${names.length === 1 ? "was" : "were"} not opened: ${names.join(", ")}. Enfold opens one at a time.`;
 }
+
+// The InfoBars (direction 4, phase 4b; InfoBars.svelte; APP.md §6,
+// Notices): the region's name for a screen reader, the bar's close, whose
+// title names Esc on the newest error, which the key closes, and the bars
+// the page raises in words of its own.
+export const noticeCopy = {
+  label: "Notifications",
+  close: "Close",
+  closeEsc: "Close (Esc)",
+  // A drop from outside the window that the page cannot place (APP.md
+  // §3): on a page with no archive's list, at an archive other than the
+  // one shown, or beside the list. It is refused with where to drop,
+  // never retargeted at a folder the user did not aim at.
+  dropNoArchive: "Drop files onto an open archive's file list.",
+  dropOtherArchive: "Drop files onto the archive they belong in.",
+  dropOffList: "Drop files onto the file list.",
+  // The folder the page stood in went — a Discard dropped it, a Delete
+  // took an ancestor — and the page walked its crumbs upwards (APP.md §6):
+  // its name as the page last had it, "That folder" when it had none, and
+  // where the page stands now.
+  folderWent: (name: string, now: string): string => `${name ? `"${name}"` : "That folder"} is no longer in the archive.${now ? ` Showing ${now}.` : ""}`,
+};
 
 // The Archives list (APP.md §6, §13; direction 6, phase 4a): one archive
 // selected at a time — no checkboxes, every action here takes one — the
@@ -1022,13 +1086,19 @@ export const archivesCopy = {
   // Why a menu item is greyed, said under it (direction 6, lib/menu.ts
   // secondLine): the reason in a few words, since a menu says it of
   // every item it stops — the codes' own sentences stay the buttons'
-  // titles.
+  // titles. A phrase without a full stop, in the house form of every
+  // greyed item's second line ("Select one item to rename", "This archive
+  // is closing"; the final shoot of phase 4b found these alone ending in
+  // one).
   why: {
-    locked: "Unlock the vault first.",
-    tampered: "Changes to this vault are off.",
-    forgotten: "Forgotten. Restore it first.",
-    alreadyForgotten: "Already forgotten.",
-    compacting: "Wait until its compaction ends.",
+    locked: "Unlock the vault first",
+    tampered: "Changes to this vault are off",
+    forgotten: "Restore it first",
+    alreadyForgotten: "Already forgotten",
+    compacting: "Wait until its compaction ends",
+    // *Show in Explorer* on a record whose last path is another system's
+    // (lib/paths.ts foreignPath): this machine has no such place to show.
+    foreign: "Last seen on another system",
   },
   nameAndDescription: "Name and description",
   editNameDescription: "Edit name and description",
@@ -1138,6 +1208,45 @@ export const commandCopy = {
   // ellipsis; *Create folder…* stands apart under the separator.
   addFiles: "Add files…",
   addFolder: "Add a folder…",
+  // The row menus (direction 7): the selection into a folder chosen in a
+  // tree, and a row's name to the clipboard.
+  moveTo: "Move to…",
+  copyName: "Copy name",
+};
+
+// keyNames: the key that runs a command, as a menu shows it at an item's
+// right (direction 7, Explorer's habits) — the words keyTitles puts in
+// parentheses, so a menu and a title never name one key two ways.
+export const keyNames = {
+  open: "Enter",
+  extract: "Ctrl+E",
+  delete: "Del",
+  rename: "F2",
+  moveTo: "Ctrl+Shift+M",
+  createFolder: "Ctrl+Shift+N",
+  newArchive: "Ctrl+N",
+  openFile: "Ctrl+O",
+  technicalDetails: "Alt+Enter",
+  filter: "Ctrl+F",
+  lockNow: "Ctrl+L",
+  previewPane: "Alt+P",
+  cut: "Ctrl+X",
+  copy: "Ctrl+C",
+  paste: "Ctrl+V",
+  selectAll: "Ctrl+A",
+};
+
+// fieldCopy: a text field's menu (direction 7), the app's own since the
+// shell turned WebView2's off (2026-09-06). Paste reads the clipboard
+// through the WebView; where the WebView refuses the read, the item is
+// greyed with the key that still pastes. A secret field has no menu at all.
+export const fieldCopy = {
+  menuLabel: "Edit",
+  cut: "Cut",
+  copy: "Copy",
+  paste: "Paste",
+  selectAll: "Select all",
+  pasteRefused: "Use Ctrl+V",
 };
 
 // keyHint is a command's title where a key runs it (direction 7; APP.md
@@ -1150,16 +1259,17 @@ export function keyHint(label: string, key: string): string {
 // keyTitles: every command whose key exists, titled once here so the
 // glossary walk reads each title as the button shows it.
 export const keyTitles = {
-  extract: keyHint(commandCopy.extract, "Ctrl+E"),
-  delete: keyHint(commandCopy.delete, "Del"),
-  rename: keyHint(commandCopy.rename, "F2"),
-  createFolder: keyHint(commandCopy.createFolder, "Ctrl+Shift+N"),
-  newArchive: keyHint(commandCopy.newArchive, "Ctrl+N"),
-  openFile: keyHint(archivesCopy.openFile, "Ctrl+O"),
-  deleteArchive: keyHint(commandCopy.deleteArchive, "Del"),
-  technicalDetails: keyHint(archivesCopy.technicalDetails, "Alt+Enter"),
-  filter: keyHint(archivesCopy.filter, "Ctrl+F"),
-  lockNow: keyHint(commandCopy.lockNow, "Ctrl+L"),
+  extract: keyHint(commandCopy.extract, keyNames.extract),
+  delete: keyHint(commandCopy.delete, keyNames.delete),
+  rename: keyHint(commandCopy.rename, keyNames.rename),
+  moveTo: keyHint(commandCopy.moveTo, keyNames.moveTo),
+  createFolder: keyHint(commandCopy.createFolder, keyNames.createFolder),
+  newArchive: keyHint(commandCopy.newArchive, keyNames.newArchive),
+  openFile: keyHint(archivesCopy.openFile, keyNames.openFile),
+  deleteArchive: keyHint(commandCopy.deleteArchive, keyNames.delete),
+  technicalDetails: keyHint(archivesCopy.technicalDetails, keyNames.technicalDetails),
+  filter: keyHint(archivesCopy.filter, keyNames.filter),
+  lockNow: keyHint(commandCopy.lockNow, keyNames.lockNow),
 };
 
 // chipCopy is every chip's word, in sentence case (ruled 2026-10-17: they
@@ -1482,8 +1592,10 @@ export const vaultCopy = {
   setupLine: "This vault has only its recovery key. Add a YubiKey or a password to finish setting it up; the recovery key is asked for first.",
   foot: (name: string): string => name,
   // A change's greyed title while Tampered (APP.md §13): the remedy is the
-  // banner's button, on this page too (direction 9).
-  changesOff: "Changes are off until this vault is replaced with a copy you trust; the banner above has the button.",
+  // banner's button, on this page too (direction 9). It names no side: the
+  // banner stands under the commands on the Archives and Archive pages and
+  // over them on the Vault page (the notice slot, ruled 2026-10-26).
+  changesOff: "Changes are off until this vault is replaced with a copy you trust; the banner on this page has the button.",
   // Section 3 (direction 10, phase 4a): every backup action in one row,
   // the two that need a lock among them — they lock and hand the lock
   // screen its ask.
@@ -1857,7 +1969,7 @@ export const importCopy = {
 //
 // Settings is this PC only (direction 10, phase 4a): the lock times and
 // the vault's name went to the Vault page, and every choice here applies
-// the moment it is made — no save bar, no toast on success.
+// the moment it is made — no save bar, no InfoBar on success.
 export const settingsCopy = {
   title: "Settings",
   window: "Window",
@@ -1947,6 +2059,10 @@ export const technicalCopy = {
   fingerprintNote: "A fingerprint tells this file from another copy of it, such as a restored backup. It is not a check of the file's contents.",
   receipt: "Receipt",
   receiptPending: "Pending",
+  // A value's menu (APP.md §13): the value, or every row as
+  // "Label: value" lines for a report (direction 7).
+  copy: "Copy",
+  copyAll: "Copy all as text",
   keyVersions: "Key versions",
   columns: { kid: "KID", created: "Created", retired: "Retired", state: "State" },
   deriving: "Deriving the session keys.",

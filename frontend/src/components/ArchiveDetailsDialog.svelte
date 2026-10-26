@@ -11,15 +11,18 @@
   // offset: there is no raw archive-key reveal anywhere (APP.md §1, §13).
   //
   // Since 2026-09-09 there is no column of *Copy* buttons: every value is
-  // selectable and a right-click on one opens a menu of a single item,
-  // *Copy*. The shell disables WebView2's own context menu, so that is the
-  // only one on the page. The ciphertext hash wraps onto a second line
-  // rather than being cut, and reads N/A while it is all zeros — no commit
-  // yet. The modal scrolls as a whole, and the versions table shows three
-  // rows before it scrolls on its own.
+  // selectable and a right-click on one opens the app's menu (ContextMenu)
+  // of two items: *Copy*, the value, and *Copy all as text*, every row as
+  // "Label: value" lines for a bug report (direction 7). 2026-09-06 turned
+  // WebView2's own context menu off; this one is the page's.
+  //
+  // The ciphertext hash wraps onto a second line rather than being cut,
+  // and reads N/A while it is all zeros — no commit yet. The modal scrolls
+  // as a whole, and the versions table shows three rows before it scrolls
+  // on its own.
   import { Clipboard } from "@wailsio/runtime";
   import type { ArchiveDetails } from "../lib/api";
-  import { bytes, date, dateTime, hashText } from "../lib/format";
+  import { bytes, date, dateTime, hashText, labelledText } from "../lib/format";
   import { methodWord } from "../lib/method";
   import { purgeAfter } from "../lib/retention";
   import { archivesCopy, chipCopy, dialogCopy, technicalCopy } from "../lib/strings";
@@ -52,11 +55,11 @@
   // The click's own selection is left alone: a right-click on a value the
   // user has already selected part of copies the whole value, which is
   // what the row's menu offers — the selection itself is theirs to copy
-  // with the keyboard.
+  // with the keyboard. A value with nothing in it ("—") has no Copy, but
+  // the menu still offers the whole dialog as text.
   function askCopy(e: MouseEvent, text: string) {
     e.preventDefault();
-    if (!text || text === "—") return;
-    menu = { x: e.clientX, y: e.clientY, text };
+    menu = { x: e.clientX, y: e.clientY, text: text === "—" ? "" : text };
   }
 
   // The policy bits by their words, the line in sentence case like every
@@ -102,6 +105,8 @@
     { key: "path", label: technicalCopy.lastPath, value: d.lastPath || "—" },
     { key: "hash", label: technicalCopy.fingerprint, value: hashText(d.lastCiphertextHash), mono: true },
   ]);
+  // *Copy all as text*: every row of both lists, in the dialog's order.
+  const allText = $derived(labelledText([...inline, ...stacked]));
 </script>
 
 <!-- Close is its one action, so the backdrop closes it too (APP.md §7). -->
@@ -162,7 +167,14 @@
 
 {#if menu}
   {@const m = menu}
-  <ContextMenu x={m.x} y={m.y} items={[{ label: "Copy", icon: "i-copy", run: () => copy(m.text) }]} onclose={() => (menu = null)} />
+  <ContextMenu
+    x={m.x} y={m.y} label={technicalCopy.titleOf(d.name)}
+    items={[
+      { label: technicalCopy.copy, icon: "i-copy", disabled: !m.text, run: () => copy(m.text) },
+      { label: technicalCopy.copyAll, run: () => copy(allText) },
+    ]}
+    onclose={() => (menu = null)}
+  />
 {/if}
 
 <style>

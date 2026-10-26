@@ -93,6 +93,7 @@ func TestBoundSurface(t *testing.T) {
 			"Set(app.Settings) error",
 		},
 		"Shell": {
+			"ClipboardFiles() (app.Clipboard, error)",
 			"CloseDecided(string, bool) error",
 			"CloseWindow()",
 			"DragOut(string, []string) (app.DragOutResult, error)",
@@ -188,5 +189,30 @@ func TestOpenDataFolder(t *testing.T) {
 		if string(MarshalError(NewShell(h).OpenDataFolder())) != `{"code":"internal"}` {
 			t.Fatalf("no folder lent: %+v", h)
 		}
+	}
+}
+
+// TestClipboardFiles: Paste's source is the shell's reader, called once per
+// ask; its error is io, a reader the shell did not lend is internal, and an
+// empty clipboard answers an empty list — never null — so the page greys
+// the item rather than reading a missing field (APP.md §3, §6).
+func TestClipboardFiles(t *testing.T) {
+	calls := 0
+	want := app.Clipboard{Files: []app.ClipFile{{Path: `D:\Pictures\a.jpg`}, {Path: `D:\Pictures\2024`, IsDir: true}}, Move: true}
+	s := NewShell(Hooks{ClipboardFiles: func() (app.Clipboard, error) { calls++; return want, nil }})
+	got, err := s.ClipboardFiles()
+	if err != nil || calls != 1 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, %v after %d calls", got, err, calls)
+	}
+	s = NewShell(Hooks{ClipboardFiles: func() (app.Clipboard, error) { return app.Clipboard{}, nil }})
+	if got, err := s.ClipboardFiles(); err != nil || got.Files == nil || len(got.Files) != 0 || got.Move {
+		t.Fatalf("an empty clipboard: %+v, %v", got, err)
+	}
+	s = NewShell(Hooks{ClipboardFiles: func() (app.Clipboard, error) { return app.Clipboard{}, errString("held") }})
+	if got, err := s.ClipboardFiles(); string(MarshalError(err)) != `{"code":"io"}` || got.Files == nil {
+		t.Fatalf("a clipboard that would not open: %+v, %s", got, MarshalError(err))
+	}
+	if _, err := NewShell(Hooks{}).ClipboardFiles(); string(MarshalError(err)) != `{"code":"internal"}` {
+		t.Fatalf("no reader lent: %s", MarshalError(err))
 	}
 }

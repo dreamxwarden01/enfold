@@ -70,6 +70,19 @@
     });
   });
 
+  // Placed again when its items change while it stands: the blank area's
+  // *Paste* learns what the clipboard holds after the menu is up (ruled
+  // 2026-10-26; lib/paste.ts), and its caption line for a cut makes the
+  // box taller — a menu opened near the window's foot is kept whole.
+  $effect(() => {
+    void items;
+    const el = box;
+    if (!el) return;
+    untrack(() => {
+      at = contextPlacement({ x, y }, { width: el.offsetWidth, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight });
+    });
+  });
+
   // One close per menu, whatever closes it first.
   let closed = false;
   function close(how: MenuClose): void {

@@ -72,6 +72,7 @@ export type Intent =
   | { kind: "previewPane" }
   | { kind: "menu" }
   | { kind: "moveTo" }
+  | { kind: "paste" }
   | { kind: "typeahead"; char: string }
   | { kind: "none" };
 
@@ -168,6 +169,12 @@ export function intent(k: KeyIn, ctx: KeyCtx): Intent {
         return files ? NONE : { kind: "openFile" };
       case "f":
         return files ? NONE : { kind: "filter" };
+      // Paste (ruled 2026-10-26; APP.md §6): the files Explorer left on the
+      // clipboard, added to the folder shown. A page command, as Create
+      // folder… is: it acts on the folder, not on a row. A field keeps its
+      // own Ctrl+V (above), and a dialog, a menu or the viewer theirs.
+      case "v":
+        return files ? { kind: "paste" } : NONE;
     }
     return NONE;
   }

@@ -5147,3 +5147,27 @@ Left as work: the merge list does not pin the file the user opened; the viewer c
 kind opened by Enter into its sequence; the bars' sizes are literals where no control-size token
 exists; a few older rulings still say "toast" and stand under the InfoBars paragraph's blanket
 sentence. Nothing of phase 4b has been seen in a real window.
+
+**The user's first look at the whole: Paste, the Add button, Details…** (2026-10-26). With the
+ten directions built, the user opened the real window and found three things on the first pass.
+**Paste.** Files copied in Explorer could not be pasted into an open archive: the right-click
+menu had no *Paste* and Ctrl+V did nothing. Ruled and built: Paste means "add the files the
+clipboard names to the folder shown" — the clipboard's own file list (CF_HDROP), read by the
+core through a new `Shell.ClipboardFiles` (never the WebView's clipboard, which holds no files),
+then the same path a drop from Explorer takes: the name check, the collisions question, AddFiles
+and AddFolder, the operation on the foot and its done line; Ctrl+V in the file list (not in a
+field, where it pastes text as before) and *Paste Ctrl+V* first in the blank-area menu, greyed
+with "Nothing to paste" when the clipboard holds no files, with an info notice on an empty
+Ctrl+V; a list *cut* in Explorer is treated as copied — a paste never deletes anything from the
+user's disk, and the item's caption says the originals stay where they are; a path that is gone
+by then is left out; a clipboard another program holds answers `io` after a short retry. There
+is no *Copy* of archive files to the clipboard: that would be an extraction by another name, and
+the drag out stays the one staged way out. **The Add button.** After *New archive…* the Archive
+page opened its Add menu by itself — phase 0's small fix 24 "open it instead, with the Add menu
+ready" read as a popup. The user did not want it to pop open without a click: the Add button
+takes the focus instead, so Enter or Space opens it. **Details….** *Technical details…* in the
+archive list's row menu and the bottom panel is too long a name for what Alt+Enter opens; the
+user offered *Details* or *Properties*. Ruled *Details…* — the research's own word for the
+archive row; *Properties* would promise Explorer's whole sheet while the pane holds the facts —
+wherever the archive row's dialog is named, the dialog titled *Details*; the Tampered banner's
+*Why?* and the second-register table keep their names.

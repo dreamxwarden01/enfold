@@ -16,9 +16,13 @@
 //   of this vault, and a backup counts as one.
 // - *archive key*, KID, key versions, the slot region, superblock,
 //   registry, generation, seq, VMK and session keys are format words:
-//   they appear only in technicalCopy below — the Technical details
+//   they appear only in technicalCopy below — an archive's *Details*
 //   dialog, a "Why?" or a "How this works" disclosure — never on a main
 //   surface (the two registers).
+// - *Details…* opens an archive's second-register dialog (the row menu,
+//   the pane's and the bottom panel's action, Alt+Enter). Never
+//   "Technical details" (ruled 2026-10-26) and never "Properties", which
+//   promises Explorer's whole sheet.
 // - The vault's password with every YubiKey is *Password with every
 //   YubiKey*, never "entangled".
 // - *fingerprint* is the archive file's SHA-256 the registry keeps (APP.md
@@ -207,7 +211,7 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeVaultBroken]: "A save could not be confirmed. Reopen the vault to see which version was kept.",
   [Code.CodeVaultBusy]: "The vault file is open in another Enfold. Close it first.",
   // The three tampered codes say the same thing on a main surface: the
-  // remedy is one, and which check failed is the Technical details' and
+  // remedy is one, and which check failed is the Details dialog's and
   // the log's (technicalCopy.tamperedWhy, ruled 2026-10-17).
   [Code.CodeVaultTampered]: "This vault file does not match itself, so changes to it are off. Replace it with a copy you trust.",
   [Code.CodeTamperedHash]: "This vault file does not match itself, so changes to it are off. Replace it with a copy you trust.",
@@ -448,6 +452,12 @@ export const archivePageCopy = {
   // (direction 7): the toolbar's closing title in a few words, since the
   // menu says it under every item it stops.
   menuClosing: "This archive is closing",
+  // The blank area's *Paste* (ruled 2026-10-26; lib/paste.ts): greyed with
+  // this when the clipboard names no files, and — files cut in Explorer —
+  // saying under it that a paste never deletes the originals: a cut is
+  // added as copied.
+  nothingToPaste: "Nothing to paste",
+  pasteKeepsOriginals: "The originals stay where they are",
   // The foot's note (direction 3, phase 4a): the folder shown and its count;
   // the archive's figures moved to the pane at rest.
   foot: (folder: string, n: number): string => `${folder} · ${plural(n, "item")}`,
@@ -1012,6 +1022,9 @@ export const noticeCopy = {
   dropNoArchive: "Drop files onto an open archive's file list.",
   dropOtherArchive: "Drop files onto the archive they belong in.",
   dropOffList: "Drop files onto the file list.",
+  // Ctrl+V on the file list with no files on the clipboard (ruled
+  // 2026-10-26): what a paste takes, and where it comes from.
+  nothingToPaste: "Nothing to paste. Copy files in Explorer first.",
   // The folder the page stood in went — a Discard dropped it, a Delete
   // took an ancestor — and the page walked its crumbs upwards (APP.md §6):
   // its name as the page last had it, "That folder" when it had none, and
@@ -1105,7 +1118,7 @@ export const archivesCopy = {
   noDescription: "No description",
   descriptionHint: "Shown under the name in the list",
   // The details pane's facts (ruled 2026-10-17): user words only. The key
-  // version and the KID went to Technical details, where the KID was
+  // version and the KID went to the Details dialog, where the KID was
   // already shown once; "free" reads as the disk's, so the space inside
   // the file is *Unused space*.
   facts: {
@@ -1136,7 +1149,9 @@ export const archivesCopy = {
         : f.kind === "behind" && f.behind > 0
           ? `From ${plural(f.behind, "save")} ago`
           : "Matches the last save",
-  technicalDetails: "Technical details…",
+  // The archive row's second-register dialog (APP.md §13): *Details…*
+  // since 2026-10-26, the user's ruling; it was *Technical details…*.
+  details: "Details…",
   // The Missing chip is a button that runs Locate… for its row (direction
   // 7): the chip names the trouble, the button is its cure.
   missingChip: (why: string): string => `${why} ${commandCopy.locate} asks where it is now.`,
@@ -1212,6 +1227,11 @@ export const commandCopy = {
   // tree, and a row's name to the clipboard.
   moveTo: "Move to…",
   copyName: "Copy name",
+  // The blank area's first item and Ctrl+V (ruled 2026-10-26): the files
+  // copied in Explorer added to the folder shown, as a drop adds them. No
+  // ellipsis: nothing is asked first, as with a drop — the collisions
+  // dialog stands only when a name is taken.
+  paste: "Paste",
 };
 
 // keyNames: the key that runs a command, as a menu shows it at an item's
@@ -1226,7 +1246,7 @@ export const keyNames = {
   createFolder: "Ctrl+Shift+N",
   newArchive: "Ctrl+N",
   openFile: "Ctrl+O",
-  technicalDetails: "Alt+Enter",
+  details: "Alt+Enter",
   filter: "Ctrl+F",
   lockNow: "Ctrl+L",
   previewPane: "Alt+P",
@@ -1267,7 +1287,7 @@ export const keyTitles = {
   newArchive: keyHint(commandCopy.newArchive, keyNames.newArchive),
   openFile: keyHint(archivesCopy.openFile, keyNames.openFile),
   deleteArchive: keyHint(commandCopy.deleteArchive, keyNames.delete),
-  technicalDetails: keyHint(archivesCopy.technicalDetails, keyNames.technicalDetails),
+  details: keyHint(archivesCopy.details, keyNames.details),
   filter: keyHint(archivesCopy.filter, keyNames.filter),
   lockNow: keyHint(commandCopy.lockNow, keyNames.lockNow),
 };
@@ -2002,7 +2022,7 @@ export const settingsCopy = {
 
 // compressedText is the preview's *Compressed* fact (ruled 2026-10-17:
 // "Stored as zstd + dictionary, 71% smaller" said the method, which is
-// Technical details'): how much smaller, or that it is stored as is.
+// the Details dialog's): how much smaller, or that it is stored as is.
 export const compressedLabel = "Compressed";
 export function compressedText(storage: string, savedPercent: number): string {
   if (storage === "raw") return "No, stored as is";
@@ -2026,15 +2046,17 @@ export function sinceText(unix: number, nowMs: number = Date.now()): string {
   return days < 60 ? `${days} days ago` : dateTime(unix);
 }
 
-// ---- Technical details (the second register, ruled 2026-10-17) ---------
+// ---- The second register (ruled 2026-10-17) -----------------------------
 //
-// The one table where the format's words stand: the Technical details
-// dialog (an archive's, the vault's), a warning's "Why?" and a "How this
-// works". strings.test.ts exempts it from the banned terms, and nothing
-// else.
+// The one table where the format's words stand: an archive's *Details*
+// dialog, a warning's "Why?" and a "How this works". strings.test.ts
+// exempts it from the banned terms, and nothing else. The dialog was
+// *Technical details* until 2026-10-26, when the user ruled it *Details*
+// (APP.md §13): *Properties* would promise Explorer's whole sheet, and the
+// table is still the second register under the plainer name.
 export const technicalCopy = {
-  title: "Technical details",
-  titleOf: (name: string): string => `Technical details: ${name}`,
+  title: "Details",
+  titleOf: (name: string): string => `Details: ${name}`,
   why: "Why?",
   archiveId: "Archive ID",
   currentKid: "Current KID",

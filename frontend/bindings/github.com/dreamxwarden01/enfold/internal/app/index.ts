@@ -16,6 +16,8 @@ export type {
     CeremonyState,
     CheckReport,
     ChildRef,
+    ClipFile,
+    Clipboard,
     Collision,
     Crumb,
     Difference,

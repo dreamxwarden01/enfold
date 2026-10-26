@@ -154,6 +154,15 @@ describe("a greyed item's second line", () => {
     expect(secondLine({ disabled: true })).toBe("");
     expect(secondLine({ disabled: true, title: "  " })).toBe("");
   });
+
+  // An item that can run says a fact under its label when it carries a
+  // note (the blank area's Paste of a cut, ruled 2026-10-26); greyed, its
+  // reason wins.
+  it("is the note, for an item that can run and carries one", () => {
+    expect(secondLine({ note: "The originals stay where they are", title: "x" })).toBe("The originals stay where they are");
+    expect(secondLine({ disabled: true, title: "Nothing to paste", note: "The originals stay where they are" })).toBe("Nothing to paste");
+    expect(secondLine({ note: " " })).toBe("");
+  });
 });
 
 // A menu drawn over the window from a box that clips it (direction 6):

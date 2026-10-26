@@ -2,7 +2,7 @@
 // how big its file is, when it was last saved, and — when it is worth
 // knowing — how much of the file is unused space inside it. The key
 // version is not on it (ruled 2026-10-17): it is a format word, and
-// Technical details carries it (APP.md §7). Nothing here reads the
+// the Details dialog carries it (APP.md §7). Nothing here reads the
 // store, so the whole line can be tested.
 import type { ArchiveStat } from "./api";
 import { bytes, dateTime, plural } from "./format";

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fileBlankItems, fileRowItems } from "./filemenu";
+import { secondLine } from "./menu";
 import type { CmdItem } from "./menu";
+import type { Clip } from "./paste";
 import { archivePageCopy, commandCopy } from "./strings";
 
 // The file list's menus (direction 7): a file, a folder, the blank area.
@@ -49,8 +51,38 @@ describe("a row's menu", () => {
 });
 
 describe("the blank area's menu", () => {
-  it("is Create folder… · Add files…, Add a folder…", () => {
-    expect(read(fileBlankItems(false))).toEqual([`${commandCopy.createFolder} [Ctrl+Shift+N]`, "──", commandCopy.addFiles, commandCopy.addFolder]);
-    expect(fileBlankItems(true).every((i) => i.disabled && i.title === archivePageCopy.menuClosing)).toBe(true);
+  it("is Paste · Create folder… · Add files…, Add a folder…", () => {
+    expect(read(fileBlankItems(false))).toEqual([`${commandCopy.paste} [Ctrl+V]`, "──", `${commandCopy.createFolder} [Ctrl+Shift+N]`, "──", commandCopy.addFiles, commandCopy.addFolder]);
+    for (const clip of ["pending", "unknown", "empty", "copy", "move"] as const) {
+      expect(fileBlankItems(true, clip).every((i) => i.disabled && i.title === archivePageCopy.menuClosing && !i.note)).toBe(true);
+    }
+  });
+});
+
+// Paste (ruled 2026-10-26; lib/paste.ts): the files copied in Explorer.
+describe("the blank area's Paste", () => {
+  const paste = (clip: Clip) => fileBlankItems(false, clip).find((i) => i.cmd === "paste");
+
+  it("is enabled with nothing under it while the read is on its way, after a failed read, and for a copy", () => {
+    for (const clip of ["pending", "unknown", "copy"] as const) {
+      const p = paste(clip);
+      expect(p?.disabled, clip).toBeFalsy();
+      expect(secondLine(p ?? {}), clip).toBe("");
+    }
+  });
+
+  it("is greyed with why when the clipboard names no files", () => {
+    expect(paste("empty")).toMatchObject({ disabled: true, title: archivePageCopy.nothingToPaste });
+    expect(secondLine(paste("empty") ?? {})).toBe("Nothing to paste");
+  });
+
+  it("says the originals stay for files cut in Explorer, and stays enabled", () => {
+    const p = paste("move");
+    expect(p?.disabled).toBeFalsy();
+    expect(secondLine(p ?? {})).toBe("The originals stay where they are");
+  });
+
+  it("greys nothing else with the clipboard", () => {
+    expect(fileBlankItems(false, "empty").filter((i) => i.disabled).map((i) => i.cmd)).toEqual(["paste"]);
   });
 });

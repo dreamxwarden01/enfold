@@ -15,6 +15,22 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as app$0 from "../models.js";
 
 /**
+ * ClipboardFiles is *Paste*'s source (APP.md §3, §6; ruled 2026-10-26): the
+ * files a copy or a cut in Explorer left on the clipboard, read by the
+ * shell from CF_HDROP — never the WebView's clipboard, which holds no files
+ * — each with its kind, so that the page adds them to the folder it shows
+ * as it adds a drop's. Move says the clipboard's drop effect was a cut; the
+ * page words its caption with it and adds all the same, since a paste never
+ * deletes anything from the user's disk. Files is empty when the clipboard
+ * holds no files (the item is greyed "Nothing to paste"); io when the
+ * clipboard could not be opened — another process holding it past the
+ * shell's few retries — and internal when the shell lent no reader.
+ */
+export function ClipboardFiles(): $CancellablePromise<app$0.Clipboard> {
+    return $Call.ByID(1712651084);
+}
+
+/**
  * CloseDecided answers the close question the page asked when the window's
  * close was cancelled (APP.md §2.4, ruled 2026-09-13). action is "tray" or
  * "quit" — never "ask", which is what was being asked — and remember

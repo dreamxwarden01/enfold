@@ -36,7 +36,7 @@ describe("the status strip", () => {
     expect(statusNote(stat({ lastSavedAt: 1_757_000_000 }))).toMatch(/· last saved \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
   });
 
-  // The key version is a format word: Technical details carries it
+  // The key version is a format word: the Details dialog carries it
   // (APP.md §7, ruled 2026-10-17).
   it("never names the key version", () => {
     expect(statusNote(stat({ keyVersion: 3, lastSavedAt: 1_757_000_000 }))).not.toMatch(/key|v3/);

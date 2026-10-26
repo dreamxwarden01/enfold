@@ -381,7 +381,7 @@
         openRow(atRow.id);
         break;
       case "details":
-        // Technical details… for the selected row, as its button.
+        // Details… for the selected row, as its button.
         if (det && one) showDetails = true;
         break;
       case "newArchive":
@@ -1006,8 +1006,8 @@
   // reads store.unlocked before its first await, so an unguarded call
   // would make every vault.state event re-issue Archives.Details.
   // The record is read again when the row's hashBehind moves — a save, a
-  // Refresh fingerprint, a Compact — so the Fingerprint fact and Technical
-  // details never stand on a record older than the summary for longer
+  // Refresh fingerprint, a Compact — so the Fingerprint fact and the
+  // Details dialog never stand on a record older than the summary for longer
   // than one Details call, and again on an unlock, which brings the
   // record back after a lock dropped it. A primitive key, so a list refresh that leaves
   // the row as it was reads nothing.
@@ -1885,8 +1885,8 @@
                 <!-- The facts first (direction 6): the one label · value
                      list (APP.md §6, Type and spacing), each value beside
                      its label. User words only (ruled 2026-10-17): the key
-                     version, the KID and the receipt are Technical
-                     details'. -->
+                     version, the KID and the receipt are the
+                     Details dialog's. -->
                 <dl class="kv pfacts">
                   <div><dt>{archivesCopy.facts.size}</dt><dd class="num">{pane.storedSize ? bytes(pane.storedSize) : "—"}</dd></div>
                   <div><dt>{archivesCopy.facts.lastSaved}</dt><dd class="num">{dateTime(pane.lastWrittenAt)}</dd></div>
@@ -1952,8 +1952,8 @@
               </div>
 
               {#if !narrow}
-                <!-- The actions at the pane's foot (direction 6): Technical
-                     details… and the row's verbs in More — and no second
+                <!-- The actions at the pane's foot (direction 6):
+                     Details… and the row's verbs in More — and no second
                      Open, which is the bar's accent and the row's
                      double-click and Enter. -->
                 <div class="details-actions">
@@ -2019,7 +2019,7 @@
 <!-- The selected archive's two actions (direction 6): the pane's foot,
      or the panel's header row, never both. -->
 {#snippet actions(where: string, small: boolean)}
-  <button type="button" class="btn" class:sm={small} disabled={!det || !one} title={det && one ? keyTitles.technicalDetails : undefined} onclick={() => (showDetails = true)}>{archivesCopy.technicalDetails}</button>
+  <button type="button" class="btn" class:sm={small} disabled={!det || !one} title={det && one ? keyTitles.details : undefined} onclick={() => (showDetails = true)}>{archivesCopy.details}</button>
   <MenuButton id="{where}-more" label={archivesCopy.more} standard {small} end float items={paneMore} />
 {/snippet}
 

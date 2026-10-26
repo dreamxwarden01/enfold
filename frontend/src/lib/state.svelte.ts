@@ -254,8 +254,9 @@ class Store {
   // own slot-region hash, until MergeRecords consumes it, the dialog
   // discards it, or a lock trigger drops it.
   merge = $state<{ handle: string; records: IncomingRecord[]; tampered: boolean } | null>(null);
-  // New archive… ends on the new archive's empty root with the Add menu
-  // open (APP.md §13, ruled 2026-10-14): openNew names the archive just
+  // New archive… ends on the new archive's empty root with the Add button
+  // focused (APP.md §13; ruled 2026-10-14, and 2026-10-26 that the menu
+  // stays shut until asked): openNew names the archive just
   // before the open, and that archive's page takes it once as it mounts
   // (takeAddAsked). A refused open asks for nothing.
   addAsked: string | null = null;
@@ -1540,8 +1541,8 @@ class Store {
   }
 
   // openNew opens an archive New archive… has just made (APP.md §13, ruled
-  // 2026-10-14): on its empty root, as any archive opens, with the Add menu
-  // asked for — filling it is the next thing to do. A refused open (the
+  // 2026-10-14): on its empty root, as any archive opens, with the Add
+  // button asked for — filling it is the next thing to do. A refused open (the
   // vault locked meanwhile) asks for nothing.
   async openNew(id: string): Promise<boolean> {
     this.addAsked = id;
@@ -1551,8 +1552,9 @@ class Store {
   }
 
   // takeAddAsked is the Archive page's one read of addAsked as it mounts:
-  // whether the Add menu was asked for this archive. Asked or not, the ask
-  // is spent, so the menu opens once and never on a later visit.
+  // whether the Add button was asked for this archive. Asked or not, the
+  // ask is spent, so the button takes the focus once and never on a later
+  // visit.
   takeAddAsked(id: string): boolean {
     const asked = id !== "" && this.addAsked === id;
     this.addAsked = null;

@@ -256,6 +256,31 @@ export interface ChildRef {
 }
 
 /**
+ * ClipFile is one path the clipboard names (APP.md §3, Shell.ClipboardFiles;
+ * §6, Paste): the path as Explorer put it there and whether it is a folder,
+ * so that the page sends files to AddFiles and each folder to AddFolder as
+ * it does a drop's (dropPayload's IsDir, for the same reason: the page
+ * cannot stat a path itself).
+ */
+export interface ClipFile {
+    "path": string;
+    "isDir": boolean;
+}
+
+/**
+ * Clipboard is what Shell.ClipboardFiles answers: the files a copy or a cut
+ * in Explorer left on the clipboard (CF_HDROP), and whether it was a cut
+ * ("Preferred DropEffect" carrying DROPEFFECT_MOVE). Move only words the
+ * Paste item's caption: a paste adds, and nothing is ever deleted from the
+ * user's disk by one (ruled 2026-10-26). Files is empty, never null, when
+ * the clipboard holds no files.
+ */
+export interface Clipboard {
+    "files": ClipFile[] | null;
+    "move": boolean;
+}
+
+/**
  * Code is what the frontend sees of an error: a stable identifier it maps
  * to copy, and nothing else. The original error — with its offsets,
  * generations and file names — goes to the core's log only (APP.md §3).

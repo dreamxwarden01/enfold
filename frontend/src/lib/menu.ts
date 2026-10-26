@@ -84,14 +84,18 @@ export function groups<T extends Groupable>(...gs: readonly (readonly T[])[]): T
 // secondLine: what a menu item says under its label. A command that
 // cannot run now keeps its reason there, in the caption (direction 6),
 // where the keyboard and the eye both read it without a hover; an item
-// that can run says nothing more, its title staying the native tooltip.
+// that can run says nothing more, its title staying the native tooltip —
+// unless it carries a note, a fact the user needs before choosing it (the
+// blank area's *Paste* of files cut in Explorer: "The originals stay where
+// they are", ruled 2026-10-26).
 export interface Explained {
   disabled?: boolean;
   title?: string;
+  note?: string;
 }
 
 export function secondLine(item: Explained): string {
-  return item.disabled ? (item.title ?? "").trim() : "";
+  return ((item.disabled ? item.title : item.note) ?? "").trim();
 }
 
 // ---- a menu that floats free of its box (direction 6) -------------------

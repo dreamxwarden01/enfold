@@ -39,6 +39,11 @@ type Hooks struct {
 	// shell, if one is waiting (APP.md §14). It is a take: the request is
 	// cleared, so the one that starts a window is opened once.
 	PendingOpen func() app.OpenRequest
+	// ClipboardFiles reads the files a copy or a cut in Explorer left on
+	// the Windows clipboard (CF_HDROP and "Preferred DropEffect"), each
+	// stat'ed for its kind; an empty list when it holds none, and an error
+	// when the clipboard could not be opened (APP.md §3, §6 Paste).
+	ClipboardFiles func() (app.Clipboard, error)
 }
 
 // Shell is the window and the native dialogs.
@@ -156,4 +161,28 @@ func (s *Shell) DragOut(archiveID string, recordIDs []string) (app.DragOutResult
 	}
 	r, e := s.h.DragOut(archiveID, recordIDs)
 	return r, asErr(e)
+}
+
+// ClipboardFiles is *Paste*'s source (APP.md §3, §6; ruled 2026-10-26): the
+// files a copy or a cut in Explorer left on the clipboard, read by the
+// shell from CF_HDROP — never the WebView's clipboard, which holds no files
+// — each with its kind, so that the page adds them to the folder it shows
+// as it adds a drop's. Move says the clipboard's drop effect was a cut; the
+// page words its caption with it and adds all the same, since a paste never
+// deletes anything from the user's disk. Files is empty when the clipboard
+// holds no files (the item is greyed "Nothing to paste"); io when the
+// clipboard could not be opened — another process holding it past the
+// shell's few retries — and internal when the shell lent no reader.
+func (s *Shell) ClipboardFiles() (app.Clipboard, error) {
+	if s.h.ClipboardFiles == nil {
+		return app.Clipboard{Files: []app.ClipFile{}}, &app.Error{Code: app.CodeInternal}
+	}
+	c, err := s.h.ClipboardFiles()
+	if err != nil {
+		return app.Clipboard{Files: []app.ClipFile{}}, &app.Error{Code: app.CodeIO}
+	}
+	if c.Files == nil {
+		c.Files = []app.ClipFile{}
+	}
+	return c, nil
 }

@@ -672,7 +672,7 @@ which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the sh
   `HashAtSeq`, `LastSeq` and `LastStoredSize` — since it authenticates no chunk and checks nothing
   inside the file, and "verified" promised a check that never ran. The hash is the archive's
   *fingerprint*: it tells this file from another copy of it, such as a restored backup; it is
-  shown in *Technical details…* (§13) and used nowhere else. Verify also clears the open
+  shown in *Details…* (§13) and used nowhere else. Verify also clears the open
   archive's `CopyMismatch`, since the registry then names this copy, as the next commit does; the
   `archive.copy_mismatch` note says so in its second sentence — "This is not the copy the vault
   saved last; maybe an older backup. Your next save, or Refresh fingerprint, makes it the current
@@ -1433,7 +1433,22 @@ to the tray without asking again, or quits), `PickFiles`, `PickFolder`, `SaveFil
 shell's own data folder — the settings, the WebView profile and the log — as a folder in
 Explorer, not selected in its parent as `Reveal` shows a path; it takes no path from the page,
 answers `io` when Explorer cannot be started and `internal` when the shell lent no folder, and
-the page says either as the code's toast), `Quit`
+the page says either as the code's toast), `ClipboardFiles()` (ruled 2026-10-26, the user's,
+for the Archive page's *Paste*, §6: files copied in Explorer could not be pasted, since the
+WebView's clipboard holds text and never files — answers `{files: [{path, isDir}], move}`, the
+list Explorer leaves on the clipboard as `CF_HDROP`, read by the shell on a pinned thread under
+`OpenClipboard`, tried 3 times 50 ms apart and answering `io` when another process still holds
+the clipboard (`internal` when the shell lent no reader, never on Windows); the block is parsed
+by `app.ParseHDrop`, bounded by the block's own size so a malformed list is refused rather than
+read past, a narrow (ANSI) list read through `DragQueryFileW` instead; `move` is the
+*Preferred DropEffect* format's `DROPEFFECT_MOVE` bit, a cut in Explorer, and only words the
+menu's caption: **a cut is added as copied, and nothing is ever deleted from the user's disk by
+a paste**; the paths are stat'ed after the clipboard is closed, a path that is gone left out and
+one whose stat fails otherwise offered as a file, so the add reports it as a drop's does; `files`
+is `[]`, never null, when the clipboard holds no files — text, an image, nothing, or only paths
+that are gone — and `move` is then false; it takes nothing from the page and reads only on the
+page's ask, a menu opened or a key pressed; nothing of the archive is ever written to the
+clipboard as files, the drag out staying the one way out, *A drag out of the window* above), `Quit`
 (names the running operations, if any, in a native Yes/No question — the only buttons a Windows
 message box has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
 dialog is "nothing chosen", never an error; a submitted secret that found no prompt is reported
@@ -1451,6 +1466,9 @@ directory live in the merged view (a folder staged by *Create folder* counts, on
 deletion does not), answering `file.not_found` otherwise, and refuses loudly. The target carries
 an id and never a name for that reason: a stale id is refused, where a stale path would resolve
 to whatever folder now happens to carry that name (FORMAT R39, DESIGN trap 31). Dropped paths carry no authority beyond what a file dialog would.
+A paste (§6, *Paste*; ruled 2026-10-26) is the same add by another gesture: the paths come from
+`ClipboardFiles` instead of the drop event and go to the id of the folder shown at the press,
+validated as a drop's target is, and they carry no more authority than a drop's.
 
 ## 4. The preview server
 
@@ -1786,7 +1804,7 @@ anywhere on the expanded header collapses, Enter and Space on it do the same, Es
 and a different row clicked while expanded keeps the panel up and brings that row to the
 first slot; nothing is selected → the line is the vault's summary, the chevron dim, and a
 click does nothing: the panel opens only on a selected row, its motion being built around one.
-The panel's header row carries the row's two actions, [Technical details…] [More ▾], and its
+The panel's header row carries the row's two actions, [Details…] [More ▾], and its
 body is two columns — the facts; the file with the name and description — and one column under
 520 px of body. The body is `inert` from the first frame of a collapse, and a focus inside it goes to
 the header. The list is reconciled, not left behind: a sort, a filter or a refresh that moves
@@ -1836,7 +1854,11 @@ object; the name field has no invented placeholder) opens the native Save dialog
 used (`settings.json`, `lastArchiveFolder`); a chosen path where a file already exists is refused
 in place — "A file is already there. Enfold never overwrites; choose another name." — whatever
 the dialog's own replace prompt said; a cancelled dialog creates nothing, and a created archive
-is opened at once, on its empty root with the Add menu open, rather than left as a ticked row (ruled 2026-10-14);
+is opened at once, on its empty root with the Add button focused, rather than left as a ticked row (ruled 2026-10-14):
+Enter, Space or the Down arrow opens its menu on its first item, and nothing opens by itself —
+the 2026-10-14 ruling's "with the Add menu ready" is read as the focused button (ruled
+2026-10-26, the user's: the menu popped open at the top left without a click); the ask is spent
+once, so a later visit to the archive focuses nothing (`store.addAsked`, `takeAddAsked`);
 *Open file…* (Ctrl+O) picks a file from anywhere — the picker is §3's `PickFiles`, unfiltered, and
 a file that is not an archive is the core's `archive.not_an_archive` — and opens it by §14's path, and an `.efd`
 dropped on the page opens the same way — the first of several, the rest named in an InfoBar — while
@@ -2031,12 +2053,40 @@ name* on the row the menu was opened on, so *Rename…* is offered on a multi-se
 the toolbar's stays greyed with "Select one item to rename"; *Copy name* writes the name through
 the runtime's clipboard (`Clipboard.SetText`, as the dialogs' *Copy* and *Copy details* do). The list's blank area — a
 right-click there clears the selection, as a click does; a header cell is not blank — offers what
-makes something here: *Create folder…* Ctrl+Shift+N · ─ · *Add files…* · *Add a folder…*. While
+brings or makes something here: *Paste* Ctrl+V first, as Explorer has it (ruled 2026-10-26,
+below) · ─ · *Create folder…* Ctrl+Shift+N · ─ · *Add files…* · *Add a folder…*. While
 the archive drains after its *Close* every item but *Copy name* is greyed with "This archive is
-closing". Two commands are not offered: "Extract here" — Enfold has no "here" on disk, and
-*Extract…* with its prefilled destination is the one command — and *Properties*, the pane being
-the facts. Each item carries its icon; *Open* is the open glyph on every menu, the eye being
-*Hide*'s and *Unhide*'s alone.
+closing", *Paste* included. Three commands are not offered: "Extract here" — Enfold has no "here" on disk, and
+*Extract…* with its prefilled destination is the one command — *Properties*, the pane being
+the facts, and a *Copy* of archive files to the clipboard, which would be an extraction by
+another name, the drag out staying the one way out (§3). Each item carries its icon (*Paste*'s
+a clipboard); *Open* is the open glyph on every menu, the eye being *Hide*'s and *Unhide*'s alone.
+
+**Paste** (ruled 2026-10-26, the user's: files copied in Explorer could not be pasted, the menu
+having no *Paste* and Ctrl+V doing nothing; `lib/paste.ts`, `lib/filemenu.ts`) adds the files
+the clipboard names to the folder shown — Explorer's `CF_HDROP` list, read by the core
+(`Shell.ClipboardFiles`, §3), never the WebView's clipboard, which holds no files. It is a
+drop's add by another gesture: the files and folders it names go through the add a drop takes
+(§3's file drop) — `CheckNames`, the collisions dialog when a name is taken, `AddFiles` for the
+files and `AddFolder` for each folder, the operation on the foot and its done line — aimed at the
+folder shown at the press, not one navigated to while the read was on its way. *Paste* is first
+in the blank area's menu, with Ctrl+V at its right and no ellipsis, nothing being asked first as
+with a drop; Ctrl+V is the same command from anywhere on the page but a text field, which keeps
+its own Ctrl+V, a dialog, a menu or the viewer (*The lists' keys*, below) — a page command like
+*Create folder…*, acting on the folder and not on a row. Each open of the blank area's menu, by
+a right-click or by Shift+F10 or the Menu key with no row, reads the clipboard once, and so does
+each Ctrl+V; only the newest answer paints the menu. The item: enabled while the read is on its
+way, a press waiting for the answer; greyed with "Nothing to paste" when the clipboard names no
+files; enabled when it names files copied; **enabled with "The originals stay where they are"
+under it when they were cut** (`move`): a cut is added exactly as a copy is, the collisions
+dialog and the done line unchanged, and **nothing is ever deleted from the user's disk by a
+paste**; enabled after a read that failed (a clipboard another program held for a moment), a
+press then reading again and saying the code's own line if it fails again. A Ctrl+V with no
+files on the clipboard says so in an info InfoBar, "Nothing to paste. Copy files in Explorer
+first."; while the archive drains it does nothing. A paste runs while the vault is locked, as a
+drop does — an add commits the archive and owes its receipt (§2.3). The menu is placed again
+when its items change, so the caption that arrives after it stands never leaves it hanging off
+the window (§6, *Menus*).
 
 **The viewer** (ruled 2026-10-26, phase 4b of direction 7; `Viewer.svelte`, `lib/viewer.ts`) is
 a file looked at large inside the window — the long look, where the pane is the quick one —
@@ -2246,7 +2296,9 @@ The file list:
   *Extract…* (on the selection, or on *Everything* when nothing is selected, §3); Del opens
   *Delete…* for the selection; F2 opens *Rename…* for one selected row; Ctrl+Shift+M opens *Move
   to…* for the selection, and does nothing with none (ruled 2026-10-26); Ctrl+Shift+N opens
-  *Create folder…*; F5 reads the archive again; Alt+P shows or hides the preview pane, as in
+  *Create folder…*; Ctrl+V pastes the files the clipboard names into the folder shown (*Paste*,
+  above; ruled 2026-10-26), Ctrl alone — Ctrl+Shift+V and Alt+V do nothing, and a plain v stays
+  type-ahead; F5 reads the archive again; Alt+P shows or hides the preview pane, as in
   Explorer (plain Alt, not AltGr; *View › Preview pane*, ruled 2026-10-18). Alt+Enter does
   nothing here: there is no *Properties*, the pane being the facts (ruled 2026-10-26; it waited
   for phase 4).
@@ -2259,7 +2311,7 @@ included (2026-10-14, a named exception to "a field keeps its keys"); Del opens 
 for the selected row, greyed by the command bar's rule; F2 opens the pane's *Name and
 description* behind its pencil and puts the focus in the Name field with the name selected,
 raising the narrow panel first when it is down; Ctrl+F focuses the
-Filter; Alt+Enter opens *Technical details…* for the selected row; F5 reads the list again; Esc
+Filter; Alt+Enter opens *Details…* for the selected row; F5 reads the list again; Esc
 collapses the panel when it is up (ruled 2026-09-11) and is otherwise left alone, so the Filter's
 own Esc still clears it. On either list an error InfoBar takes Esc first while one stands and the
 focus is not in a field (*InfoBars*, below).
@@ -2276,10 +2328,10 @@ so Space there selects as on the row. While a dialog or the viewer is up, or fro
 popover, no list key acts. The focus ring is `:focus-visible`'s (*The focus ring on a selectable row*,
 Motion). **A command whose key exists says it in its title** as "Label (Key)" (`strings.ts`
 `keyHint`, `keyTitles`): *Extract… (Ctrl+E)*, *Delete… (Del)*, *Rename… (F2)*, *New archive…
-(Ctrl+N)*, *Open file… (Ctrl+O)*, *Delete archive… (Del)*, *Technical details… (Alt+Enter)*,
+(Ctrl+N)*, *Open file… (Ctrl+O)*, *Delete archive… (Del)*, *Details… (Alt+Enter)*,
 *Filter (Ctrl+F)*, *Lock now (Ctrl+L)* and the pane's pencil, *Edit name and description (F2)*;
 a greyed command keeps its reason as its title instead. A menu item says its key at its right
-instead, in the same words without the parentheses (§6, *Menus*): *Create folder…*
+instead, in the same words without the parentheses (§6, *Menus*): *Paste* Ctrl+V, *Create folder…*
 Ctrl+Shift+N, *Preview pane* Alt+P, *Move to…* Ctrl+Shift+M, the Archives page's *Delete
 archive…* Del, and every row menu's keys.
 
@@ -2991,13 +3043,18 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   on *Move to…* and *Delete archive…*) and on *Delete archive…* while locked or Tampered
   (`archivePageCopy.deleteNeedsUnlock`, `deleteTampered`), and the Archives page's *View* on
   *Forgotten* with none forgotten ("No archive is forgotten.", `archivesCopy.noneForgotten`). An
-  enabled item says nothing more, its title staying the native tooltip; a menu over a
+  enabled item says nothing more, its title staying the native tooltip — unless it carries a
+  note, a fact needed before choosing it, drawn in the same caption line (`MenuItem.note`,
+  `secondLine`; a greyed item's reason wins over it): today only the file list's *Paste* of files
+  cut in Explorer, "The originals stay where they are" (ruled 2026-10-26, §6, *Paste*); a menu
+  whose items change while it stands is placed again, so a late caption keeps it whole inside
+  the window; a menu over a
   box that clips (the Archives pane, the bottom panel) is drawn over the window against its
   button, above it when there is no room below; a long menu is capped in height and scrolls; an
   item whose name is cut takes the app's tooltip. **The context menu is the app's own** (ruled
   2026-10-26, phase 4b of the design review's direction 7, Explorer's habits): a right-click opens
   `ContextMenu` on a row of either list, on a list's blank area, in a text field that is not a
-  secret, and on a value in the *Technical details* dialog (§13). 2026-09-06 turned WebView2's own
+  secret, and on a value in an archive's *Details* dialog (§13). 2026-09-06 turned WebView2's own
   context menu off — its *Save image as* wrote a decrypted preview to Downloads — and that ruling
   stands and is untouched: this menu is drawn by the page, offers only the app's commands, and is
   not WebView2's. It is drawn as a button's menu is (above) and adds two marks: **the default
@@ -3005,8 +3062,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   at its right** in the caption's second ink, in the words a title puts in parentheses
   (`strings.ts` `keyNames`, which `keyTitles` reads, so a menu and a title never name a key two
   ways: *Open* Enter, *Extract…* Ctrl+E, *Rename…* F2, *Move to…* Ctrl+Shift+M, *Delete…* Del,
-  *Create folder…* Ctrl+Shift+N, *New archive…* Ctrl+N, *Open file…* Ctrl+O, *Technical
-  details…* Alt+Enter, *Cut* Ctrl+X, *Copy* Ctrl+C, *Paste* Ctrl+V, *Select all* Ctrl+A). It stands
+  *Create folder…* Ctrl+Shift+N, *New archive…* Ctrl+N, *Open file…* Ctrl+O, *Details…*
+  Alt+Enter, *Cut* Ctrl+X, *Copy* Ctrl+C, *Paste* Ctrl+V — the field's and the file list's, one
+  key name — *Select all* Ctrl+A). It stands
   at the pointer, or — opened by Shift+F10 or the Menu key — 8 px in from the focused row's left
   edge and under it, where Explorer puts it (`lib/menu.ts` `keyAnchor`), a row scrolled out of
   sight first brought into view the nearest way, clear of the header; either way it is pulled
@@ -3235,7 +3293,7 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   the lock screen's further commands too (*Backups and copies…*, *Rebuild the vault…*, "Use
   recovery key instead": 28 px; the panel's *Cancel* is a standard button beside its primary) and the replaced copy's *Restore
   it…*, a small button on its bar's 40 px line (ruled 2026-10-17; each was a link) —
-  and a hyperlink button (*Show in Explorer*, *Locate…*, *Technical details…*) is kept for going somewhere
+  and a hyperlink button (*Show in Explorer*, *Locate…*, *Details…*) is kept for going somewhere
   or revealing something, and for the create dialog's *Keep it elsewhere…* and *Use the usual
   place*, which go to another place for the vault and stand in its one caption line, in the
   line's caption (ruled 2026-10-17; it was a 24 px subtle button, which with the path wrapped to
@@ -3321,7 +3379,11 @@ name); and, since phase 4b (ruled 2026-10-26), an *InfoBar* is what the page can
 a bar in the page's notice slot (§6, *InfoBars*; the word *toast* is retired with them), *the
 viewer* is a file looked at large inside the window from the Archive page (§6, *The viewer*),
 and *Move to…* is the selection moved into a folder chosen in the archive's folder tree (§6,
-*Move to…*) — and a verb table
+*Move to…*); and, since 2026-10-26 (the user's rulings), *Paste* is the files copied — or cut —
+in Explorer added to the folder shown, a drop's add by another gesture, never a deletion of the
+originals (§6, *Paste*), and *Details…* opens an archive's second-register dialog (§13) — never
+"Technical details", its name from 2026-10-17, and never "Properties", which would promise
+Explorer's whole sheet — and a verb table
 (`commandCopy`: *Forget archive…* / *Restore*, *Re-key archive…* / *Re-key vault…*, *Refresh
 fingerprint*, *Close* — the graceful leave, wherever it stands: the Archive page's head and its
 locked line, the rail row's × ("Close Photos 2024"), the Archives page's *More* — and *Force
@@ -3333,13 +3395,15 @@ still held after it (ruled 2026-10-19; they were the kill switch), *Add files…
 missing files*, and four backup verbs only:
 *Inspect a backup…*, *Test that a backup opens…*, *Import archives from a backup…*, *Replace this
 vault with a copy…* — *Replace with a copy…* on a banner's button — with *Restore from a vault or
-backup…* at first run; and, since phase 4b, *Move to…* and *Copy name*); a command ends with "…" exactly when a dialog or a picker follows, and
+backup…* at first run; and, since phase 4b, *Move to…* and *Copy name*; and, since 2026-10-26,
+*Paste*, with no ellipsis, since nothing is asked first unless a name is taken, as with a drop,
+and *Details…* in `archivesCopy`, the dialog titled *Details*, "Details: Photos 2024"); a command ends with "…" exactly when a dialog or a picker follows, and
 the dialog's primary repeats its verb and object. A consequence dialog's title is a question
 naming the object and its body at most two sentences, the consequence for the user's files and
 then the safety net (`dialogCopy`), the mechanism behind a "How this works" disclosure. Two
 registers: the format's words — keystore, slot, superblock, registry, KID, key version, seq,
 generation, VMK, session keys, envelope, zstd, entangled — stand only in `technicalCopy`, which
-the *Technical details* dialog, a warning's "Why?" and a "How this works" read; a vitest over
+an archive's *Details* dialog, a warning's "Why?" and a "How this works" read; a vitest over
 every value of `strings.ts` and `validate.ts` fails on one anywhere else, with the YubiKey's own
 PIV "slot" in two token codes as its listed exceptions. This spec keeps its own terms in prose;
 a label quoted from a screen is the screen's word. Chips are in sentence case; a date is the
@@ -3449,8 +3513,8 @@ opens its menu, the app's own (§6, *Menus*); Shift+F10 and the Menu key open th
 (§6, *The lists' keys*). On the list: *Open* (the default, bold and first, Enter) with *Close* —
 or *Force close*, once a *Close* has left the archive held (§2.3) — while the archive is open, and
 *Show in Explorer*, greyed "Last seen on another system" on a path of another platform's syntax ·
-─ · *Refresh fingerprint* · *Compact…* · *Re-key archive…* · *Hide* or *Unhide* · ─ · *Technical
-details…* (Alt+Enter), and *Locate…* only while the row is *Missing* · ─ · *Forget archive…* ·
+─ · *Refresh fingerprint* · *Compact…* · *Re-key archive…* · *Hide* or *Unhide* · ─ ·
+*Details…* (Alt+Enter), and *Locate…* only while the row is *Missing* · ─ · *Forget archive…* ·
 *Delete archive…* (Del), both in the danger ink. In the Forgotten view a record can only come back
 or go: *Restore* · ─ · *Delete archive…*. The list's blank area — the whole list column under the
 header — clears the selection as a click there does and offers what makes or brings an archive:
@@ -3465,13 +3529,13 @@ titles. With the narrow panel up, a menu asked for on another row waits for the 
 that row to its line (§6, the bottom panel) and opens under the row where it came to rest — at
 the pointer's x for a right-click, at the key's anchor for a key — since a menu put up at once
 would stand where the row was. *Properties* is not offered: the pane is the facts, and Alt+Enter
-opens *Technical details…*.
+opens *Details…*.
 
 **The rows**: columns *Name*, *Size* (`last_stored_size`, the registry's last observation of the
 file; right-aligned) and *Last saved* — no *Files* and no *Key vN* column (ruled 2026-10-14,
 reversing the 2026-09-07 column set: the core counts files only for an open archive, and an
 archive was open on this page only while it drained, so the column read "—" on every row; the
-key version matters only around a rotation and moves to *Technical details…*), and no *Status*
+key version matters only around a rotation and moves to *Details…*), and no *Status*
 column (ruled 2026-10-18; its chips moved onto the name's line). Each row is two lines in 52 px:
 the name, then its chips in sentence case — *Missing* (a button, below), *Hidden*, *Forgotten*,
 then one of *Compacting*, *Refreshing fingerprint*, *Re-keying* or *Open* — and under it, in the
@@ -3486,7 +3550,7 @@ seen on another system at …" when the path's syntax is not this platform's; *N
 description*, the description read at rest ("No description" in the third ink), behind a
 28 px pencil (F2) that opens the two fields — *Name*, the registry's trusted name (FORMAT §7.4),
 and *Description*, at most 460 px wide — with the save bar under them, its one job (§6),
-*Discard* or a save that lands folding them back; and at its foot [Technical details…] and
+*Discard* or a save that lands folding them back; and at its foot [Details…] and
 [More ▾], the bar's *More* with every verb, folded or not — and no second Open. **With nothing
 selected** the pane is the vault's summary: its head line, "**Personal vault** · 4 archives,
 1 hidden · 260 GB" — over every record but the forgotten, the hidden counted apart while *Show
@@ -3509,8 +3573,14 @@ leaves the view. *Show hidden* lists the hidden records beside the rest and neve
 one: a forgotten record shows in the Forgotten view alone, the Recycle Bin's logic (ruled
 2026-10-19).
 
-*Technical details…* (ruled 2026-10-17: the pane's *KID* and *Key version* moved into it, where
-the KID was already shown once) opens a modal titled *Technical details* with the versions table
+*Details…* (ruled 2026-10-17: the pane's *KID* and *Key version* moved into it, where
+the KID was already shown once; ruled 2026-10-26, the user's: it was *Technical details…*, and
+*Details…* is the plainer word for the archive row's facts — *Properties* would promise
+Explorer's whole sheet, while the pane holds the facts; the dialog is still the second register,
+the format's words standing only there, under that name; the Tampered banner's *Why?* and its
+"Why changes are off" dialog keep their own names) — the row menu's item, the pane's foot and
+the bottom panel's header action, *Details… (Alt+Enter)* in their titles — opens a modal titled
+*Details*, "Details: Photos 2024", with the versions table
 (KID · created · retired · state), `archive_id`, the key version (vN, beside the current KID),
 revision, last writer, `last_seq` and
 `hash_at_seq` as two rows, *Last seq* and *Fingerprint at seq* (*N/A* while no fingerprint was

@@ -234,8 +234,8 @@
 <style>
   /* 640, past WinUI ContentDialog's 548 cap, on purpose (checked
      2026-10-17). The compare list's two columns and the import checklist
-     would keep at 548 (500 of content, 244 a column), but Technical
-     details' versions table would not: its KID, 32 hex digits in mono
+     would keep at 548 (500 of content, 244 a column), but the
+     Details dialog's versions table would not: its KID, 32 hex digits in mono
      beside two dates and a state, needs 231 px and gets 164 at 548, so a
      key version could no longer be read off its row (APP.md §6, §13). At
      640 it fits whole, and at the 880 px minimum window 640 still stands

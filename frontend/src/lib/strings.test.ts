@@ -7,7 +7,7 @@ import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremo
 // ---- One word per thing (APP.md §7, ruled 2026-10-17) -------------------
 //
 // The format's words never reach a main surface: they stand in
-// technicalCopy (Technical details, "Why?", "How this works") and nowhere
+// technicalCopy (an archive's Details, "Why?", "How this works") and nowhere
 // else. Each banned term carries the word the screen uses instead.
 const banned: [RegExp, string][] = [
   [/\bkeystores?\b/i, "the file is the vault"],
@@ -15,15 +15,15 @@ const banned: [RegExp, string][] = [
   [/\bslots?\b/i, "an unlock method"],
   [/\bways? (in|into|to unlock)\b/i, "an unlock method"],
   [/\bentangle(d|ment)?\b/i, "Password with every YubiKey"],
-  [/\bsuperblocks?\b/i, "Technical details only"],
-  [/\bregistry\b/i, "Technical details only"],
-  [/\bKIDs?\b/, "Technical details only"],
-  [/\bVMKs?\b/, "Technical details only"],
+  [/\bsuperblocks?\b/i, "the Details dialog only"],
+  [/\bregistry\b/i, "the Details dialog only"],
+  [/\bKIDs?\b/, "the Details dialog only"],
+  [/\bVMKs?\b/, "the Details dialog only"],
   [/\bsession keys?\b/i, "Opening the vault…"],
-  [/\bgenerations?\b/i, "Technical details only"],
-  [/\bseq\b/, "Technical details only"],
+  [/\bgenerations?\b/i, "the Details dialog only"],
+  [/\bseq\b/, "the Details dialog only"],
   [/\bzstd\b/i, "Compressed"],
-  [/\benvelopes?\b/i, "Technical details only"],
+  [/\benvelopes?\b/i, "the Details dialog only"],
   [/\brotat(e|es|ed|ing|ion)\b/i, "Re-key"],
   [/\benrol(l|ls|led|ling|ment)?\b/i, "add an unlock method"],
   [/\bImport records\b/i, "Import archives from a backup…"],
@@ -33,6 +33,8 @@ const banned: [RegExp, string][] = [
   [/\bCheck (a|that a) backup\b/i, "Inspect a backup… / Test that a backup opens…"],
   // The archive's hash checks nothing inside the file (direction 9).
   [/\b(Verify|Verifying|Last verified)\b/, "Refresh fingerprint / Fingerprint"],
+  // The archive row's dialog is *Details…* (ruled 2026-10-26, the user's).
+  [/\bTechnical details\b/i, "Details…"],
 ];
 
 // A word that must stay where it is, with the line it stays in and why.
@@ -116,7 +118,7 @@ describe("one word per thing", () => {
   it("walks enough of the table to mean something", () => {
     expect(everyLine().length).toBeGreaterThan(400);
   });
-  it("lets the technical-details table, and only it, keep them", () => {
+  it("lets the second register's table, and only it, keep them", () => {
     const tech: [string, string][] = [];
     lines("technicalCopy", technicalCopy, tech);
     expect(tech.some(([, t]) => banned.some(([term]) => term.test(t)))).toBe(true);
@@ -132,7 +134,7 @@ describe("one word per thing", () => {
 // The verb table and the dialog template (strings.ts head).
 describe("the verb table", () => {
   it("ends a command with an ellipsis exactly when a dialog or a picker follows", () => {
-    const opensNothing = ["open", "close", "closeArchive", "closeAll", "hide", "unhide", "restore", "refreshFingerprint", "showInExplorer", "findMissing", "reopen", "lockNow", "unlock", "forceClose", "forceCloseAll", "copyName"];
+    const opensNothing = ["open", "close", "closeArchive", "closeAll", "hide", "unhide", "restore", "refreshFingerprint", "showInExplorer", "findMissing", "reopen", "lockNow", "unlock", "forceClose", "forceCloseAll", "copyName", "paste"];
     for (const [k, v] of Object.entries(commandCopy)) {
       expect(v.endsWith("…"), k).toBe(!opensNothing.includes(k));
     }
@@ -271,6 +273,14 @@ describe("the receipts' words", () => {
     expect([technicalCopy.seq, technicalCopy.fingerprintSeq]).toEqual(["Last seq", "Fingerprint at seq"]);
     expect(codeText(Code.CodeArchiveCopyMismatch)).toContain("Your next save, or Refresh fingerprint, makes it the current one.");
     expect(technicalCopy.envelopeStaleWhy).not.toMatch(/\bVerify\b/);
+  });
+  it("names the archive row's dialog Details, its title too (ruled 2026-10-26)", () => {
+    expect(archivesCopy.details).toBe("Details…");
+    expect(strings.keyTitles.details).toBe("Details… (Alt+Enter)");
+    expect(technicalCopy.title).toBe("Details");
+    expect(technicalCopy.titleOf("Photos 2024")).toBe("Details: Photos 2024");
+    // The Tampered banner's Why? keeps its own name.
+    expect(technicalCopy.why).toBe("Why?");
   });
   it("says turning the password off in two sentences, on a standard button", () => {
     expect(dialogCopy.passwordOff.body).toBe("After this, a YubiKey opens the vault with its PIN and touch alone. One of the vault's unlock methods is asked for first.");

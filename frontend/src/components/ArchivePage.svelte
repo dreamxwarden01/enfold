@@ -2,7 +2,7 @@
   import { tick, untrack } from "svelte";
   import { Clipboard } from "@wailsio/runtime";
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
-  import type { Collision, Crumb, FileRow } from "../lib/api";
+  import type { Clipboard as ClipboardView, Collision, Crumb, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { archivePageCopy, archivesCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyNames, keyTitles, listCopy, noticeCopy, paneCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
@@ -37,6 +37,8 @@
   import type { MenuClose } from "../lib/menu";
   import { fileBlankItems, fileRowItems } from "../lib/filemenu";
   import type { FileBlankCmd, FileCmd } from "../lib/filemenu";
+  import { clipOf, pastePlan, planOf } from "../lib/paste";
+  import type { AddPlan, Clip } from "../lib/paste";
   import { PREVIEW_TEXT_CAP } from "../lib/viewer";
   import { spring, springKey, springs } from "../lib/springload";
   import ContextMenu from "./ContextMenu.svelte";
@@ -433,6 +435,11 @@
       case "previewPane":
         void store.setPreviewPane(!store.previewPane);
         break;
+      case "paste":
+        // Not while the archive drains after its Close: every add would
+        // answer archive.not_open, and the page already says it is closing.
+        if (!draining) void paste(readClip());
+        break;
       case "typeahead": {
         typed = typeahead(typed, i.char, now, typedAt);
         typedAt = now;
@@ -614,7 +621,8 @@
   // the keymap's click rule, store.selectClick). Extract…, Move to… and
   // Delete… act on the whole selection; Rename… and Copy name on the row
   // the menu is about. The list's blank area has a menu of its own —
-  // Create folder…, Add files…, Add a folder… — and the `..` row none.
+  // Paste, Create folder…, Add files…, Add a folder… — and the `..` row
+  // none.
   // Shift+F10 and the Menu key open the focused row's menu under it
   // (lib/menu.ts keyAnchor), or the blank area's with no row to act on;
   // Escape closes it and the focus goes back to the row. The menu is the
@@ -630,7 +638,7 @@
     if (!c) return [];
     const r = c.row;
     if (r) return fileRowItems(r.isDir, draining).map((i) => ({ ...i, run: () => runRowCmd(i.cmd, r) }));
-    return fileBlankItems(draining).map((i) => ({ ...i, run: () => runBlankCmd(i.cmd) }));
+    return fileBlankItems(draining, clip).map((i) => ({ ...i, run: () => runBlankCmd(i.cmd) }));
   });
 
   function runRowCmd(cmd: FileCmd, r: FileRow) {
@@ -660,6 +668,12 @@
 
   function runBlankCmd(cmd: FileBlankCmd) {
     switch (cmd) {
+      case "paste":
+        // The answer the menu asked for as it opened, awaited if still on
+        // its way; a read that failed is asked again, the press being the
+        // user's own ask.
+        void paste(clip === "unknown" || !clipRead ? readClip() : clipRead);
+        break;
       case "createFolder":
         askFolder();
         break;
@@ -694,6 +708,7 @@
     if (echo() || t.closest("thead") || t.closest("tbody tr")) return;
     store.clearSelection();
     moveError = null;
+    void readClip();
     ctx = { x: e.clientX, y: e.clientY, row: null, key: false };
   }
 
@@ -708,6 +723,7 @@
       const box = listEl?.getBoundingClientRect();
       if (!box) return;
       const head = listEl?.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+      void readClip();
       ctx = { ...keyAnchor({ left: box.left, bottom: box.top + head }), row: null, key: true };
       return;
     }
@@ -834,10 +850,7 @@
   // directory to AddFolder, both under the id of the folder shown. The
   // page asks CheckNames once for the whole batch, offering a directory
   // by a trailing "/" so the collision carries the kind on both sides.
-  interface AddPlan {
-    files: string[];
-    dirs: string[];
-  }
+  // (AddPlan: lib/paste.ts, which a drop and a paste both fill.)
 
   function base(p: string): string {
     const parts = p.split(/[\\/]/).filter((s) => s !== "");
@@ -930,18 +943,18 @@
   ]);
 
   // New archive… ends here, on the new archive's empty root with the Add
-  // menu open (APP.md §13, ruled 2026-10-14): the store names the archive
-  // it was asked for, and this page takes the ask once as it mounts. The
-  // menu is opened by the press it answers anyway — the button focused
-  // and clicked — so it is the menu the user would have opened: the arrows
-  // walk it, and Escape or a click elsewhere closes it.
+  // button focused (APP.md §13): the store names the archive it was asked
+  // for, and this page takes the ask once as it mounts. Phase 0's "with
+  // the Add menu ready" (ruled 2026-10-14) is read as the focused button,
+  // not an open menu (ruled 2026-10-26, the user's: the menu popped open
+  // without a click). Enter, Space or the Down arrow opens it on its first
+  // item (lib/menu.ts buttonKey), and nothing stands over the page until
+  // the user asks.
   let cmdbar = $state<HTMLDivElement | undefined>();
   $effect(() => {
     const bar = cmdbar;
     if (!bar || !untrack(() => store.takeAddAsked(id))) return;
-    const add = bar.querySelector<HTMLButtonElement>("#add");
-    add?.focus();
-    add?.click();
+    bar.querySelector<HTMLButtonElement>("#add")?.focus();
   });
 
   function askFolder() {
@@ -988,12 +1001,65 @@
       store.notice(noticeCopy.dropOffList, "error");
       return;
     }
-    const kinds = d.isDir ?? [];
-    void addAt(d.dirId, {
-      files: d.paths.filter((_, i) => !kinds[i]),
-      dirs: d.paths.filter((_, i) => !!kinds[i]),
-    });
+    void addAt(d.dirId, planOf(d.paths, d.isDir ?? []));
   });
+
+  // ---- Paste (ruled 2026-10-26, the user's; APP.md §6; lib/paste.ts) ----
+  // Ctrl+V on the file list and *Paste* first in its blank-area menu add
+  // the files Explorer left on the clipboard to the folder shown, through
+  // the add a drop takes (addAt: CheckNames, the collisions dialog,
+  // AddFiles and AddFolder, the operation on the foot, the done line). The
+  // list is read by the core (Shell.ClipboardFiles, APP.md §3): the
+  // WebView's clipboard holds no files. A cut is added as copied — nothing
+  // is deleted from the disk — and the menu says so under the item. While
+  // the vault is locked a paste still runs: an add commits the archive and
+  // owes its receipt (APP.md §2.3), as a drop's does.
+  //
+  // clip is what the blank-area menu shows, refreshed on each menu open
+  // and on each Ctrl+V: one call per ask, the item enabled while it is on
+  // its way and a press waiting for its answer (clipRead). A read that
+  // failed leaves the item enabled; a press asks again and says why it
+  // failed rather than greying the item on a clipboard another program
+  // held for a moment.
+  type ClipRead = { ok: true; c: ClipboardView } | { ok: false; e: unknown };
+  let clip = $state<Clip>("pending");
+  let clipRead: Promise<ClipRead> | null = null;
+  let clipSeq = 0;
+
+  function readClip(): Promise<ClipRead> {
+    const seq = ++clipSeq;
+    clip = "pending";
+    const p = Shell.ClipboardFiles().then(
+      (c): ClipRead => ({ ok: true, c }),
+      (e: unknown): ClipRead => ({ ok: false, e }),
+    );
+    clipRead = p;
+    // Only the latest ask paints the menu: an older answer arriving late
+    // does not overwrite a newer one.
+    void p.then((r) => {
+      if (seq === clipSeq) clip = clipOf(r.ok ? r.c : null);
+    });
+    return p;
+  }
+
+  // paste runs the add the clipboard names, into the folder shown at the
+  // press — not one navigated to while the read was on its way.
+  async function paste(read: Promise<ClipRead>) {
+    const arch = id;
+    const at = dirId;
+    const r = await read;
+    if (arch !== id || draining) return;
+    if (!r.ok) {
+      fail(r.e);
+      return;
+    }
+    const plan = pastePlan(r.c);
+    if (!plan) {
+      store.notice(noticeCopy.nothingToPaste, "info");
+      return;
+    }
+    await addAt(at, plan);
+  }
 
   // A drag of the selection onto a folder row, onto `..` (up one level) or
   // onto an ancestor's crumb in the head (direction 3) is a Move (APP.md §6): the native drag
@@ -1889,7 +1955,7 @@
                spacing; ruled 2026-10-17): each value beside its label,
                wrapping rather than cut — and the path under its label.
                *Compressed* says how much smaller, never the method: "zstd +
-               dictionary" is Technical details' (APP.md §7, ruled 2026-10-17). -->
+               dictionary" is the Details dialog's (APP.md §7, ruled 2026-10-17). -->
           <div class="pfacts">
             <dl class="kv">
               <dt>{one.isDir ? "Size beneath" : "Size"}</dt><dd class="num" title={size}>{size}</dd>

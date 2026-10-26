@@ -45,8 +45,8 @@ export interface ArchFacts {
   missing: boolean;
   // The last path is another system's (lib/paths.ts foreignPath).
   foreign: boolean;
-  // The record has been read whole (Archives.Details), which Technical
-  // details… shows.
+  // The record has been read whole (Archives.Details), which
+  // Details… shows.
   detailsRead: boolean;
 }
 
@@ -105,11 +105,12 @@ export function archCommands(f: ArchFacts | null): ArchGroups {
   const hideWhy = none ?? (!f?.unlocked ? why.locked : f.forgotten ? why.forgotten : undefined);
   const hide: ArchItem[] = [{ cmd: f?.hidden ? "unhide" : "hide", label: f?.hidden ? commandCopy.unhide : commandCopy.hide, icon: "i-eye", ...off(hideWhy) }];
 
-  // Technical details… needs the record read whole, which a locked vault
-  // does not give; Locate… only while the file is missing.
+  // Details… (APP.md §13; *Technical details…* until the user's ruling of
+  // 2026-10-26) needs the record read whole, which a locked vault does not
+  // give; Locate… only while the file is missing.
   const detailsWhy = none ?? (f?.detailsRead ? undefined : !f?.unlocked ? why.locked : "");
   const details: ArchItem[] = [
-    { cmd: "details", label: archivesCopy.technicalDetails, icon: "i-info", keys: keyNames.technicalDetails, ...off(detailsWhy) },
+    { cmd: "details", label: archivesCopy.details, icon: "i-info", keys: keyNames.details, ...off(detailsWhy) },
     ...(f?.missing ? [{ cmd: "locate" as const, label: commandCopy.locate, icon: "i-file", ...off(hideWhy) }] : []),
   ];
 
@@ -127,7 +128,7 @@ export function archCommands(f: ArchFacts | null): ArchGroups {
 
 // rowMenu: a row's own menu (direction 7). On the list: *Open* (bold,
 // Enter) and *Close* while it is open, *Show in Explorer* · ─ · the three
-// verbs and *Hide* · ─ · *Technical details…* and *Locate…* while missing ·
+// verbs and *Hide* · ─ · *Details…* and *Locate…* while missing ·
 // ─ · *Forget archive…*, *Delete archive…*. In the Forgotten view a record
 // can only come back or go: *Restore* · ─ · *Delete archive…*.
 export function rowMenu(g: ArchGroups, forgottenView: boolean): ArchItem[] {

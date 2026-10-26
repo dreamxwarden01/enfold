@@ -133,6 +133,9 @@ func main() {
 		Quit:         s.quit,
 		DragOut:      s.dragOut,
 		PendingOpen:  s.open.take,
+		// Paste's source (APP.md §3, §6): Explorer's CF_HDROP, read by the
+		// shell since the WebView's clipboard holds no files.
+		ClipboardFiles: s.clipboardFiles,
 	})
 
 	profile := filepath.Join(dataDir, "WebView2")

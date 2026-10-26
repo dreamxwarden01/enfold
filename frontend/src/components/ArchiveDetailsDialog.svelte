@@ -1,7 +1,9 @@
 <script lang="ts">
-  // *Technical details* (ruled 2026-10-17; it was *Details*): the second
-  // register, the one dialog where the format's words stand, each label
-  // from technicalCopy. The key version, the KID and the receipt live here
+  // *Details* (APP.md §13): the second register, the one dialog where the
+  // format's words stand, each label from technicalCopy. It was *Details*,
+  // then *Technical details* (ruled 2026-10-17), and is *Details* again
+  // since the user's ruling of 2026-10-26: the plainer word for the row's
+  // facts, where *Properties* would promise Explorer's whole sheet. The key version, the KID and the receipt live here
   // and nowhere on the main surfaces.
   //
   // One registry record read whole (APP.md §13): the versions table and

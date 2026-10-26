@@ -196,6 +196,42 @@ answers None and counts the asks in state["dataFolderOpened"]; POST
 /mock/state {"failNext": {"open_data_folder": "io"}} refuses the next one
 as a file manager that would not start.
 
+Paste (APP.md 3 Shell.ClipboardFiles, 6; ruled 2026-10-26): the shell
+reads the files a copy or a cut in Explorer left on the Windows clipboard,
+which a browser cannot, so the mock answers Shell.ClipboardFiles from
+state["clipboard"] - {"files": [{"path", "isDir"}], "move": false}, empty
+by default, which is the greyed "Nothing to paste". Stage a copy with
+
+    POST /mock/state {"clipboard": {"files": [{"path": "D:/Pictures/IMG_0001.HEIC", "isDir": false},
+                                              {"path": "D:/Pictures/2024", "isDir": true}], "move": false}}
+
+and a cut with "move": true (the item's caption says the originals stay);
+{"clipboard": {"files": []}} empties it again. Nothing is stat'ed here:
+the files are answered as staged, and the add they lead to runs as a
+drop's does. POST /mock/state {"failNext": {"clipboard_files": "io"}}
+refuses the next read as a clipboard another process held past the
+shell's retries.
+
+A paste, staged: open an archive (Photos 2024), stage the clipboard, then
+either right-click the file list's blank area - the menu reads the
+clipboard as it opens, *Paste  Ctrl+V* first - and take *Paste*, or press
+Ctrl+V with the focus on the list (not in a field). Either runs the add a
+drop runs, into the folder shown: CheckNames, AddFiles for the files and
+AddFolder for each folder, a few seconds on the foot, then the done line.
+To reach the collisions dialog, stage a name already in the folder shown
+(Photos 2024's root holds IMG_7201.HEIC and the folder 2024):
+
+    POST /mock/state {"clipboard": {"files": [{"path": "D:/Pictures/IMG_7201.HEIC", "isDir": false},
+                                              {"path": "D:/Pictures/new-notes.txt", "isDir": false}], "move": false}}
+
+With the clipboard empty, the menu's *Paste* is greyed with "Nothing to
+paste" and Ctrl+V raises the info notice "Nothing to paste. Copy files in
+Explorer first." A cut ("move": true) is added as copied, exactly as a
+copy is: nothing here or in the core deletes the originals, and only the
+menu item's caption tells the two apart. While the archive drains after
+its Close the item is greyed with the closing reason and Ctrl+V does
+nothing; with the vault locked a paste runs as a drop does.
+
 Status's home and its ending (direction 4, phase 3). A Compact ends with
 its OpView.returned set to what it gave back - the staged archive's unused
 space, so Compact of Photos 2024 ends "Compacted Photos 2024: 2.9 GB given
@@ -467,6 +503,10 @@ state = {
     # openSeq numbers the requests the previews queue.
     "pendingOpen": {"seq": 0, "path": "", "rest": []},
     "openSeq": 0,
+    # What Explorer left on the clipboard, for Shell.ClipboardFiles (APP.md
+    # 3, 6 Paste): the files a copy or a cut named, each with its kind, and
+    # whether it was a cut. Empty by default - nothing to paste.
+    "clipboard": {"files": [], "move": False},
 }
 
 # Scenes the lock screen cannot reach on its own here (the mock dispatches
@@ -2084,6 +2124,17 @@ def open_data_folder(args=None):
     return None
 
 
+def clipboard_files(args=None):
+    """Shell.ClipboardFiles(): Paste's source (APP.md 3, 6; ruled
+    2026-10-26) - the files state["clipboard"] stages, answered as the core
+    answers them: files never null, and move false when there are none.
+    Named, so failNext {"clipboard_files": "io"} can refuse it."""
+    c = state.get("clipboard") or {}
+    files = [{"path": str(f.get("path", "")), "isDir": bool(f.get("isDir"))}
+             for f in (c.get("files") or []) if f.get("path")]
+    return {"files": files, "move": bool(c.get("move")) and bool(files)}
+
+
 def create_archive(args):
     """Archives.Create(path, name, method) since the ruling of 2026-09-08:
     the compression method is the record's, chosen once and obeyed by every
@@ -2728,6 +2779,7 @@ METHODS = {
     2169987085: close_decided,                                  # shell.CloseDecided (APP.md 2.4)
     1615108156: pending_open,                                   # shell.PendingOpen (APP.md 14)
     664142233: open_data_folder,                                # shell.OpenDataFolder (APP.md 2.4)
+    1712651084: clipboard_files,                                # shell.ClipboardFiles (APP.md 3, 6 Paste)
 }
 # The Vault page's acts and the import's proof open their panel (begin_act,
 # above): they answered None and drew nothing before.

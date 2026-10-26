@@ -38,6 +38,8 @@
     <symbol id="i-move" viewBox="0 0 20 20"><path d="M2.6 9V5.4h5.1l1.5 2h8.2V15a1 1 0 0 1-1 1h-6.2"/><path d="M2.6 13.4h6"/><path d="m6.6 11.2 2.2 2.2-2.2 2.2"/></symbol>
     <!-- Restore (direction 7, the Forgotten view's row menu): back the way it went. -->
     <symbol id="i-undo" viewBox="0 0 20 20"><path d="M5.2 8.4h7.2a3.8 3.8 0 0 1 0 7.6H9.4"/><path d="m8.2 5.2-3 3.2 3 3.2"/></symbol>
+    <!-- Paste (ruled 2026-10-26): a clipboard, its clip at the top. -->
+    <symbol id="i-paste" viewBox="0 0 20 20"><path d="M7.4 4.2H5.2a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h9.6a1 1 0 0 0 1-1v-11a1 1 0 0 0-1-1h-2.2"/><rect x="7.4" y="2.8" width="5.2" height="2.8" rx="0.8"/><path d="M7.4 10h5.2"/><path d="M7.4 13h3.4"/></symbol>
     <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7.4" y="3.4" width="9.2" height="9.2" rx="1.6"/><path d="M12.6 15v1.6a1 1 0 0 1-1 1H4.4a1 1 0 0 1-1-1V7.4a1 1 0 0 1 1-1H6"/></symbol>
     <symbol id="i-rename" viewBox="0 0 20 20"><path d="m4 14.6 8.8-8.8 1.4 1.4-8.8 8.8H4v-1.4Z"/><path d="m11.6 7 1.4 1.4"/></symbol>
     <symbol id="i-eye" viewBox="0 0 20 20"><path d="M2.6 10s2.8-4.6 7.4-4.6S17.4 10 17.4 10s-2.8 4.6-7.4 4.6S2.6 10 2.6 10Z"/><circle cx="10" cy="10" r="2.2"/></symbol>

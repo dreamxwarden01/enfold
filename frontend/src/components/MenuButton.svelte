@@ -36,6 +36,10 @@
     // title: why a greyed item is greyed — drawn as its second line — or,
     // for one that can run, what it does, as the native tooltip.
     title?: string;
+    // note: a second line on an item that can run, a fact to know before
+    // choosing it (lib/menu.ts secondLine) — the blank area's *Paste* of a
+    // cut: "The originals stay where they are".
+    note?: string;
     // cut: the label is cut at a crumb's cap (lib/crumbs.ts) with its whole
     // name in the app's tooltip — the crumbs' ellipsis menu.
     cut?: boolean;

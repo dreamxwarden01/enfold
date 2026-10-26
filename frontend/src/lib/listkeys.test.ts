@@ -189,6 +189,33 @@ describe("the row's menu from the keyboard (direction 7)", () => {
   });
 });
 
+describe("Paste (ruled 2026-10-26)", () => {
+  it("is Ctrl+V on the file list, a page command and not a row's", () => {
+    expect(intent(k("v", { ctrl: true }), files)).toEqual({ kind: "paste" });
+    expect(intent(k("V", { ctrl: true }), files)).toEqual({ kind: "paste" });
+    // On `..` and on a control in the list's region it is still the
+    // folder's: it acts on no row.
+    expect(intent(k("v", { ctrl: true }), { ...files, onUp: true })).toEqual({ kind: "paste" });
+    expect(intent(k("v", { ctrl: true }), { ...files, onControl: true })).toEqual({ kind: "paste" });
+    expect(listScoped({ kind: "paste" })).toBe(false);
+  });
+
+  it("is nothing on the Archives list, nor with another modifier", () => {
+    expect(kind(intent(k("v", { ctrl: true }), archives))).toBe("none");
+    for (const key of [k("v", { ctrl: true, shift: true }), k("v", { alt: true }), k("V", { ctrl: true, shift: true })]) {
+      expect(kind(intent(key, files))).toBe("none");
+    }
+    // A plain v is the type-ahead's.
+    expect(intent(k("v"), files)).toEqual({ kind: "typeahead", char: "v" });
+  });
+
+  it("leaves a text field its own paste, and a dialog and the viewer their keys", () => {
+    expect(kind(intent(k("v", { ctrl: true }), { ...files, inField: true }))).toBe("none");
+    expect(kind(intent(k("v", { ctrl: true }), { ...files, dialogUp: true }))).toBe("none");
+    expect(kind(intent(k("v", { ctrl: true }), { ...files, viewerUp: true }))).toBe("none");
+  });
+});
+
 describe("Move to… (direction 7)", () => {
   it("is Ctrl+Shift+M on the file list alone", () => {
     expect(intent(k("M", { ctrl: true, shift: true }), files)).toEqual({ kind: "moveTo" });

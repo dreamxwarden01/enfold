@@ -36,14 +36,14 @@ describe("a row's menu on the list", () => {
       commandCopy.rekeyArchive,
       commandCopy.hide,
       "──",
-      archivesCopy.technicalDetails,
+      archivesCopy.details,
       "──",
       commandCopy.forgetArchive,
       commandCopy.deleteArchive,
     ]);
   });
 
-  it("has Open as its default, bold, with Enter; Technical details… Alt+Enter; Delete archive… Del", () => {
+  it("has Open as its default, bold, with Enter; Details… Alt+Enter; Delete archive… Del", () => {
     const m = rowMenu(archCommands(facts()), false);
     expect(m.filter((i) => i.isDefault).map((i) => i.cmd)).toEqual(["open"]);
     expect(m[0].keys).toBe("Enter");
@@ -100,7 +100,7 @@ describe("a row's menu on the list", () => {
     expect(archCommands(facts({ foreign: true })).reveal[0]).toMatchObject({ disabled: true, title: why.foreign });
   });
 
-  it("greys Technical details… with no reason while the record is still being read", () => {
+  it("greys Details… with no reason while the record is still being read", () => {
     expect(archCommands(facts({ detailsRead: false })).details[0]).toMatchObject({ disabled: true, title: "" });
   });
 

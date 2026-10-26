@@ -15,10 +15,11 @@
 // the whole selection, Rename… and Copy name the row clicked.
 import { groups } from "./menu";
 import type { CmdItem } from "./menu";
+import type { Clip } from "./paste";
 import { archivePageCopy, commandCopy, keyNames } from "./strings";
 
 export type FileCmd = "open" | "extract" | "rename" | "moveTo" | "delete" | "copyName";
-export type FileBlankCmd = "createFolder" | "addFiles" | "addFolder";
+export type FileBlankCmd = "paste" | "createFolder" | "addFiles" | "addFolder";
 
 // closing: the archive drains after its *Close* (APP.md §2.3), when every
 // page-facing call answers archive.not_open — every command is greyed with
@@ -37,12 +38,21 @@ export function fileRowItems(isDir: boolean, closing: boolean): CmdItem<FileCmd>
   );
 }
 
-// The blank area (Explorer's own habit): a folder made here, then the two
-// pickers — the Add menu's three ways, the one that makes something here
-// first.
-export function fileBlankItems(closing: boolean): CmdItem<FileBlankCmd>[] {
+// The blank area (Explorer's own habit): *Paste* first, as Explorer has
+// it (ruled 2026-10-26; lib/paste.ts) — the files copied in Explorer added
+// here — then a folder made here, then the two pickers — the Add menu's
+// three ways, the one that makes something here first.
+//
+// clip is what the clipboard was last read to hold: greyed with "Nothing
+// to paste" when it names no files; enabled while the read is on its way
+// (a press waits for the answer) or after it failed (a press reads again);
+// and, for files cut in Explorer, enabled with the caption that the
+// originals stay where they are — a paste never deletes them.
+export function fileBlankItems(closing: boolean, clip: Clip = "pending"): CmdItem<FileBlankCmd>[] {
   const off = closing ? { disabled: true, title: archivePageCopy.menuClosing } : {};
+  const pasteNow = closing ? off : clip === "empty" ? { disabled: true, title: archivePageCopy.nothingToPaste } : clip === "move" ? { note: archivePageCopy.pasteKeepsOriginals } : {};
   return groups<CmdItem<FileBlankCmd>>(
+    [{ cmd: "paste", label: commandCopy.paste, icon: "i-paste", keys: keyNames.paste, ...pasteNow }],
     [{ cmd: "createFolder", label: commandCopy.createFolder, icon: "i-folder-add", keys: keyNames.createFolder, ...off }],
     [
       { cmd: "addFiles", label: commandCopy.addFiles, icon: "i-file", ...off },

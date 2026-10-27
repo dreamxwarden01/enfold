@@ -5220,3 +5220,38 @@ forgotten archive). `archivePageCopy.moveNeedsSome` is gone; the toolbar's own g
 keep their reasons as tooltips, which cost no room. Seen in passing and not ruled here: a reason
 wraps at its label's width rather than at the menu's measure, against the rule's own words in
 app.css — the wrap, not the words, made three lines of "Select what to move".
+
+**FORMAT §17: the archive superblock stays 4 KiB** (2026-10-27). The last open layout question
+in FORMAT §17 asked whether an archive holding one small file needs the full 4 KiB superblock,
+of which about 150 bytes carry fields and the rest is zero fill before the checksum. Closed: no
+change. The size is the atomic-write and alignment unit, not the content's: the A/B flip (§11,
+under §4's rules) rests on a power loss tearing at most one copy, which holds while each copy
+owns one physical 4 KiB sector; two 512-byte copies in one sector would be torn together by a
+512e disk's read-modify-write, and padding each back to its own sector is the current layout.
+The saving would be 8 KiB per archive — nothing against archives of photos and course videos —
+and a second superblock size would be a second layout every reader carries for ever, while the
+envelope's 4 KiB stayed. The format passed its pre-freeze reviews with this layout. The user
+asked whether it had better not be full, read the reasons, and ruled it closed; §17 strikes the
+item.
+
+**No anti-virus false-positive submissions at 1.0** (2026-10-27). SCOPE's release list carried
+submitting each shipped build to the vendors' false-positive desks (Microsoft, Kaspersky,
+whichever flags it) until a signing certificate's reputation makes it unnecessary; the
+2026-10-13 audit listed it as a question for the user. Ruled: not for now — 1.0 ships without
+submissions; the release notes carry SmartScreen's two clicks and the SHA-256, as ruled
+2026-09-13 with the deferral of code signing; the step is revisited if users report blocks.
+SCOPE's bullet says so.
+
+**VMK rotation at a slot's removal and a password change: build it** (2026-10-27). SCOPE:44
+promises "VMK rotation, pre-selected on removals and password changes" and DESIGN §5 rules the
+shape — the factual question at a removal ("Why are you removing this key?": still held and
+never out of my control, or lost, stolen or not sure, the second the default and the one that
+re-keys), the default to re-key on any password change, and the plain sentence that re-keying
+protects the future and not the past — but only the pieces exist: the keystore's Rotate and the
+Vault page's *Re-key vault…*, a removal and a password change each its own ceremony, no question
+and no default. The 2026-10-13 audit listed it as blocking 1.0 with the choice "code or doc must
+change". Ruled: the code changes. A lost YubiKey is the case the product exists for, and FORMAT
+§6.2 says why an un-rotated removal is weaker than it looks: an old copy of the keystore revives
+the removed slot. The design — one ceremony for the removal or the password change and the
+rotation together, the question's words, the defaults, how the Re-key dialog's backup-first rule
+applies — is being written against the code and lands with its own entry.

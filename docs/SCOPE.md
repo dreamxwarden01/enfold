@@ -222,7 +222,9 @@ binaries are unsigned and what SmartScreen will show; the rest of the list stand
   for an update channel, which this release does not have.
 - **False-positive submission** to the major vendors (Microsoft, Kaspersky, and whichever else
   flags a release) for each shipped build, until the signing certificate's reputation makes it
-  unnecessary.
+  unnecessary — *not at 1.0* (ruled 2026-10-27): the first release ships without submissions,
+  the release notes carry SmartScreen's two clicks and the SHA-256, and the step is revisited
+  if users report blocks.
 - Release builds are stripped and reproducible, so that a submitted sample matches what users
   actually receive.
 

@@ -1725,8 +1725,12 @@ number of archives, their sizes and their filenames disappear along with everyth
 - ~~Whether to reserve space for a post-quantum KEM in the slot record.~~ **Closed: no** — slot
   records are variable-length and carry an algorithm ID, so a new `slot_type` and `curve_id` value
   is all a future KEM would need.
-- Whether the archive superblock needs the full 4 KiB or can be smaller for archives holding one
-  small file.
+- ~~Whether the archive superblock needs the full 4 KiB or can be smaller for archives holding
+  one small file.~~ **Closed: no** (ruled 2026-10-27) — 4 KiB is the atomic-write and alignment
+  unit, not the content's size: the A/B flip of §11 rests on a power loss tearing at most one
+  copy, which holds while each copy owns one physical sector; two smaller copies in one sector
+  would be torn together by a 512e disk's read-modify-write. The saving would be 8 KiB per
+  archive, and a second superblock size would be a second layout every reader carries for ever.
 - ~~**Compression parameters**: whether to record the zstd window per file.~~ **Closed by R27**
   (`SCOPE.md`, `DECISIONS.md` 2026-09-05). The pure-Go zstd (`klauspost/compress`) exposes four
   speed presets rather than zstd's 22 levels, a match window of 1 KiB–512 MiB (default 4–8 MiB by

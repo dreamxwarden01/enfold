@@ -5207,3 +5207,16 @@ check column, the pill at the row's left edge and the 4 px rounded ends; the pre
 line, the viewer and the conflict dialog keep their own icons. Not taken: *a* (the icon
 permanent but 32 px of blank left and the pill crowding the box at 5 px), *c* (no icon: a narrow
 list would show no kind at all).
+
+**Move to… greyed with no reason while nothing is selected** (2026-10-27). The user's third
+finding in the real window: the toolbar's *More*, opened on an archive with nothing selected,
+showed *Move to…* greyed with "Select what to move" under it, and the line read as clutter — a
+reason the screen already gives, since the list shows nothing picked, and three lines of it, the
+menu being only as wide as its first line. Ruled: *Move to…* is greyed with no second line while
+nothing is selected; while the archive drains it keeps the closing title, which the list does
+not show. The 2026-10-26 rule — a greyed item says its reason under its label — stands for
+reasons the screen does not already give (*Paste* with nothing to paste, a closing archive, a
+forgotten archive). `archivePageCopy.moveNeedsSome` is gone; the toolbar's own greyed buttons
+keep their reasons as tooltips, which cost no room. Seen in passing and not ruled here: a reason
+wraps at its label's width rather than at the menu's measure, against the rule's own words in
+app.css — the wrap, not the words, made three lines of "Select what to move".

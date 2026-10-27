@@ -913,14 +913,17 @@
   // while the archive drains after its *Close*, with the toolbar's closing
   // title (ruled 2026-10-19), since the head's *Force close* is the way.
   // *Move to…* stands first in it (direction 7), the selection's, with its
-  // key; greyed while nothing is selected or while the archive drains.
+  // key; greyed while nothing is selected — with no reason under it, since
+  // the list itself shows nothing picked and the line read as clutter in
+  // the real window (ruled 2026-10-27) — and while the archive drains,
+  // with the closing title, which the list does not show.
   const moreItems: MenuItem[] = $derived([
     {
       label: commandCopy.moveTo,
       icon: "i-move",
       keys: keyNames.moveTo,
       disabled: draining || selected.size === 0,
-      title: closingWhy ?? (selected.size === 0 ? archivePageCopy.moveNeedsSome : undefined),
+      title: closingWhy,
       run: () => askMoveTo(chosenIds),
     },
     {

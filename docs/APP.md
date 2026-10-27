@@ -1994,8 +1994,10 @@ the right an icon-only [⋯ More] and [View ▾] — while the archive drains, A
 and Delete… are greyed (§2.3). *Add* is one menu: *Add files…* and *Add a folder…* (it read *Add
 folder…*), each with its icon, then a separator and *Create folder…* with Ctrl+Shift+N at its
 right (a directory record, made at once whether or not a file is added into it — FORMAT R39).
-*More* holds *Move to…* with Ctrl+Shift+M at its right, greyed with "Select what to move" while
-nothing is selected (ruled 2026-10-26, phase 4b of direction 7), then a separator and *Delete
+*More* holds *Move to…* with Ctrl+Shift+M at its right, greyed while nothing is selected, with
+no reason under its label — the list itself shows nothing picked, and the line read as clutter
+in the real window (ruled 2026-10-27; 2026-10-26 had it say "Select what to move") — then a
+separator and *Delete
 archive…*, in the danger ink, greyed with its reason while the vault is locked or Tampered — it
 stood at the toolbar's right beside the file-level *Delete…*; the Archives list's row menu offers
 it too (§13). *View* holds *Preview pane*, a setting
@@ -3047,9 +3049,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   command that destroys is in the danger ink; a greyed item stays reachable by the arrows, does
   nothing when chosen, and says its reason in a few words as a second caption line under its
   label — on the row menus of both lists, the blank areas' menus and every menu the Archives
-  page's one table feeds (§13, `archivesCopy.why`), a phrase with no closing full stop ("Select
-  what to move", "This archive is closing", "Restore it first" — ruled 2026-10-26: the Archives
+  page's one table feeds (§13, `archivesCopy.why`), a phrase with no closing full stop ("Nothing
+  to paste", "This archive is closing", "Restore it first" — ruled 2026-10-26: the Archives
   page's table alone ended in one, and "Forgotten. Restore it first." became "Restore it first").
+  A reason the screen already gives is not said: the toolbar *More*'s *Move to…* with nothing
+  selected is greyed with no second line (ruled 2026-10-27, §6).
   Two menus still say a reason in the full sentence of a button's title and keep its full stop
   until their own short phrases are written: an archive's page's toolbar *More* while the archive
   drains ("This archive is closing. Nothing more can be done in it.", `archivePageCopy.closing`,

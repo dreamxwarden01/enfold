@@ -447,7 +447,6 @@ export const archivePageCopy = {
   renameNeedsOne: "Select one item to rename",
   deleteNeedsSome: "Select what to delete",
   extractNeedsSome: "Select what to extract",
-  moveNeedsSome: "Select what to move",
   // A row menu's greyed item while the archive drains after its *Close*
   // (direction 7): the toolbar's closing title in a few words, since the
   // menu says it under every item it stops.

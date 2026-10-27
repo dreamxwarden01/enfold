@@ -5255,3 +5255,24 @@ change". Ruled: the code changes. A lost YubiKey is the case the product exists 
 the removed slot. The design — one ceremony for the removal or the password change and the
 rotation together, the question's words, the defaults, how the Re-key dialog's backup-first rule
 applies — is being written against the code and lands with its own entry.
+
+**A greyed item's reason wraps at the menu's measure** (2026-10-27). Seen beside the *Move to…*
+finding: the second caption line a greyed item carries (ruled 2026-10-18 and 10-26) did not wrap
+at the menu's own width, as app.css's comment claimed, but in the label's column beside the key.
+In the toolbar's *More*, drawn at its narrowest, the closing sentence under *Move to…* broke
+into seven lines of 57 px; in the context menus, drawn at their content's width, a reason sat
+beside the key and widened the menu by 30–56 px, which the ruling forbids. Fixed in CSS alone: a
+two-line item is a grid of four columns (tick, icon, label, key) with the reason as its second
+row, from the label's left edge under the key to where the key ends, contributing nothing to the
+menu's intrinsic width (width 0, then min-width 100 %), so the menu is as wide as its first
+lines and its minimum make it whatever the reason says; the label's column is 1fr, whose floor
+is the label's text (minmax(0, 1fr) measured collapsing labels to nothing in the narrowest
+menus); the 248 px cap on the reason is gone, the measure being the cap; text-wrap: pretty
+spares a lone last word. Markup, aria and the keyboard are untouched. Measured in headless Edge
+at 125 % in both themes over 14 menus and about 120 two-line items: every reason starts at the
+label's first letter and ends inside the key's edge; the closing sentence under *Move to…* is
+three lines at 159 px in a menu still 207 px wide; the context menus a reason had widened are
+their first lines' width again (263 → 207, 288 → 232, 239 → 188 px); hover and the focus ring
+cover both lines, screen-reader names are unchanged. APP.md §13's menu clause says so. Seen and
+left: "This archive is closing" on a file row's menu is 156 px of text in a 159 px measure, so
+the real window's metrics may give it two lines, which the rule allows.

@@ -528,12 +528,32 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
    secondLine): the caption in the second ink, which is still read, under
    the greyed label, wrapping at the menu's own measure rather than
    widening it. The item grows to the two lines and its marks stay on the
-   first. */
-.menu button.two { align-items: flex-start; padding-top: var(--s1); padding-bottom: var(--s1); }
-.menu button.two > .i { margin-top: 3px; }
-.menu button.two .mlabel { display: flex; flex-direction: column; min-width: 0; }
-.menu button .mwhy { font: var(--t-cap); color: var(--ink-2); white-space: normal; max-width: 248px; }
-.menu button.two .acc { margin-top: 2px; }
+   first. Such an item is a grid of four columns (the tick, the icon, the
+   label, the key) and the reason is its second row, from the label's left
+   edge under the key to the item's right edge. Beside the key, in the
+   label's own column, the reason had only what the key left it: a menu
+   drawn at its narrowest (the toolbar's More, whose box hangs from a
+   32 px button) broke it word by word, and a menu drawn at its content's
+   width let the reason widen it instead. The label's wrapper steps aside
+   (display: contents) so the label and the reason are the grid's own
+   items. The reason has no width of its own (width 0, then all of its two
+   columns by min-width), so the menu is as wide as its first lines and
+   its min-width make it, whatever the reason says, and the menu's measure
+   is the only cap the reason needs; the label's column (1fr, whose floor
+   is the label's text) keeps every label whole, the narrowest menu's too.
+   The gaps are margins, since a column left empty (no tick, no icon) must
+   not leave a gap behind. */
+.menu button.two {
+  display: grid; grid-template-columns: auto auto 1fr auto; align-items: start; gap: 0;
+  padding-top: var(--s1); padding-bottom: var(--s1);
+}
+.menu button.two > .i { grid-row: 1; margin-top: 3px; margin-right: var(--s2); }
+.menu button.two > .tick { grid-column: 1; }
+.menu button.two > .i:not(.tick) { grid-column: 2; }
+.menu button.two .mlabel { display: contents; }
+.menu button.two .mlabel > :first-child { grid-column: 3; grid-row: 1; }
+.menu button.two .acc { grid-column: 4; grid-row: 1; margin-top: 2px; margin-left: var(--s2); }
+.menu button .mwhy { grid-column: 3 / -1; grid-row: 2; width: 0; min-width: 100%; font: var(--t-cap); color: var(--ink-2); white-space: normal; text-wrap: pretty; }
 /* An icon alone on a button (the toolbar's More, the crumbs' ellipsis):
    square, the icon in the middle. */
 .btn.icon-only { width: 32px; padding: 0; justify-content: center; }

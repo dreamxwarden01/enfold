@@ -3052,6 +3052,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   page's one table feeds (§13, `archivesCopy.why`), a phrase with no closing full stop ("Nothing
   to paste", "This archive is closing", "Restore it first" — ruled 2026-10-26: the Archives
   page's table alone ended in one, and "Forgotten. Restore it first." became "Restore it first").
+  The caption starts under the label's first letter and runs under the key to where the key
+  ends, wrapping there: it never widens the menu, whose width its first lines and its minimum
+  set (ruled 2026-10-27; it had wrapped in the label's own column beside the key).
   A reason the screen already gives is not said: the toolbar *More*'s *Move to…* with nothing
   selected is greyed with no second line (ruled 2026-10-27, §6).
   Two menus still say a reason in the full sentence of a button's title and keep its full stop

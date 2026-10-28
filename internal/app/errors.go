@@ -52,6 +52,18 @@ const (
 	CodeEscrowMismatch     Code = "vault.escrow_mismatch" // the kept recovery key does not open its slot: never shown
 	CodeRecoveryPlace      Code = "vault.recovery_place"  // a recovery key is not saved into the data folder, the vault's folder or under a staging name
 	CodeVaultKept          Code = "vault.kept"            // a vault is kept: a second one is never made; only a damaged one is rebuilt
+	// CodeRetireOwed: a change's retirement failed and the vault file still
+	// holds its earlier state (FORMAT.md R41). A standing warning; the
+	// refusal of a mutation that writes a record or a secret, or a backup,
+	// while it stands (the barrier, retireBarrierLocked); and the act's
+	// BackupError when its backup was not taken for that reason. Each of
+	// those mutations, and the next unlock, tries to finish it first.
+	CodeRetireOwed Code = "vault.retire_owed"
+	// CodeSetupPasswordOn: Finish setting up refused before its ceremony on
+	// a vault whose password is on, whose first way in AddFirstWayIn cannot
+	// write; the vault is unlocked with a recovery key and given a YubiKey
+	// on the Vault page instead.
+	CodeSetupPasswordOn Code = "vault.setup_password_on"
 	// CodeNotThisVault: no VMK of this vault and no key given opened the
 	// incoming registry — another vault, or a backup from a generation this
 	// vault no longer keeps. Never corruption (FORMAT.md §18.2, APP.md §13).

@@ -9,6 +9,8 @@ import { codeText, moreNotOpened, noticeCopy, openElsewhereText, purgedText, war
 import { methodAfter, outcomeAfter } from "./outcome";
 import { NOT_PASSED, explicitMethod, passedAfter } from "./lockscreen";
 import type { Passed } from "./lockscreen";
+import { actEnd, chainAfter, chainFor, followUp, replaceNotice } from "./rekey";
+import type { Chain, FollowUp, LastAct, ReplaceNotice } from "./rekey";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
 import { hasTrouble } from "./results";
@@ -36,6 +38,14 @@ import type { Notice, NoticeKind, Pause } from "./infobar";
 
 // How long a done line holds in the foot (direction 4).
 const DONE_MS = 6000;
+
+// The acts whose Done moves the backups card: an export's date, a re-key's
+// VaultRekeyed, a replacement's KeysReplaced, and the backup an act takes
+// after its change (ruled 2026-10-27).
+const BACKUP_KINDS = new Set(["export", "remove", "password", "entangle", "rotate", "replace"]);
+// The acts whose end changes the unlock methods or the switch: Done, or a
+// recovery key's enrolment's final StepRecovery (lib/rekey.ts actEnd).
+const ACT_KINDS = new Set(["remove", "password", "entangle", "rotate", "enroll", "replace"]);
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
 
@@ -232,6 +242,27 @@ class Store {
   // create, a re-key or a forget moves its counts. The Vault page's
   // status line is lib/backup.ts's; like lastExportAt it gates nothing.
   backup = $state<BackupStatus | null>(null);
+  // The acts that may re-key the vault (APP.md §13, ruled 2026-10-27;
+  // lib/rekey.ts). lastAct is what the Vault page began, kept here and not
+  // on the page so that the end's next step survives the ceremony dialog's
+  // close and reopen; chain is the acts begun from one another's ends, with
+  // chainSeq for the next chain's id, set as an act begins (noteAct) and at
+  // its Done (chainAfter). Both go when the vault leaves Unlocked: a lock
+  // closes every dialog, so no end's button can continue a chain past it.
+  lastAct = $state<LastAct | null>(null);
+  chain = $state<Chain | null>(null);
+  private chainSeq = 0;
+  // replaceNotice: the recovery keys a replacement showed and did not
+  // replace with, for the Vault page's notice slot until it is closed or the
+  // next replacement begins. Kept when the vault leaves Unlocked, since an
+  // ID is not secret (it is plaintext in the vault file): a replacement
+  // ended by a lock or by Broken is still named at the next unlock. One
+  // whose outcome is not known is settled by the first slot read after the
+  // reopen and an unlock (settleFrom). replaceSeen: the IDs the running
+  // replacement has shown, in case its final state does not repeat them.
+  replaceNotice = $state<ReplaceNotice | null>(null);
+  private replaceSeen: string[] = [];
+  private settleFrom = Infinity;
   // The Tampered banner's *Replace with a copy…* on a page (direction 9):
   // the import runs from the lock screen, so the page locks and goes
   // there, and the lock screen at rest takes this once and opens its
@@ -997,8 +1028,12 @@ class Store {
       this.sendChosen(s.ceremony);
       this.ceremony = s.ceremony;
       this.noteOutcome(s.ceremony);
-      this.exportEnded(s.ceremony);
+      this.actEvent(s.ceremony);
     }
+    // Another vault file opened: a notice about the keys a replacement of
+    // the vault before showed says nothing true of this one, and a slot
+    // read of this one would settle it wrongly.
+    if (prior && prior.path !== s.path) this.replaceNotice = null;
     // The first status accepted is a scene drawn, not a transition: a
     // window opened from the tray on an unlocked vault showed the lock
     // scene for the settle before this guard (APP.md §2.4, ruled
@@ -1016,6 +1051,12 @@ class Store {
       // backups card).
       this.backup = null;
       this.backupRead++; // and a read still in flight is not believed
+      // The chain and the act it began end with the dialogs a lock closes;
+      // the replacement's notice stays (replaceNotice).
+      if (s.state !== VaultState.StateUnlocked) {
+        this.lastAct = null;
+        this.chain = null;
+      }
       // So with the last Find missing files' answer: the presence it
       // measured was this session's (filesCheck).
       this.filesCheck = null;
@@ -1033,6 +1074,10 @@ class Store {
       if (s.state === VaultState.StateUnlocked) {
         this.outcome = null;
         void this.refreshArchives();
+        // A replacement whose outcome was not known is settled by what this
+        // unlock lists (the reopen came first, as Broken requires): the
+        // read about to be asked, and any after it.
+        if (this.replaceNotice && !this.replaceNotice.known) this.settleFrom = this.slotsRead + 1;
         void this.refreshSlots();
         void this.refreshEntangled();
         void this.refreshLastExport();
@@ -1085,7 +1130,7 @@ class Store {
     // read, nothing to close.
     this.ceremony = c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled ? null : c;
     this.noteOutcome(c);
-    this.exportEnded(c);
+    this.actEvent(c);
     if (c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || (c.step === CeremonyStep.StepRecovery && !c.promptId)) {
       this.recoveryDraft = null;
     }
@@ -1097,8 +1142,104 @@ class Store {
   // again at the Done, or it keeps the old date (APP.md §6, The backups
   // card). Both ways a ceremony step arrives — the status and its own
   // event — come through here, each step once (the seq).
+  //
+  // An act that can re-key or take a backup after its change moves the card
+  // too (ruled 2026-10-27): a re-key moves VaultRekeyed, a replacement
+  // KeysReplaced, and a backup the date.
   private exportEnded(c: CeremonyState): void {
-    if (c.kind === "export" && c.step === CeremonyStep.StepDone) void this.refreshLastExport();
+    if (c.step === CeremonyStep.StepDone && BACKUP_KINDS.has(c.kind)) void this.refreshLastExport();
+  }
+
+  // actEvent is every ceremony step accepted, from either way it arrives,
+  // each once (the seq): the backups card, the act's end, and what a
+  // replacement showed.
+  private actEvent(c: CeremonyState): void {
+    this.exportEnded(c);
+    this.noteReplace(c);
+    this.actEnded(c);
+  }
+
+  // actEnded: an act that changed the unlock methods or the switch reads
+  // both again at its end (lib/rekey.ts actEnd: Done, or the final
+  // StepRecovery a recovery key's enrolment ends at), and its chain moves
+  // (lib/rekey.ts chainAfter). The read is believed only if no later one
+  // was asked (slotsRead): the end's next step is decided from the act's
+  // committed facts (CeremonyState.after), never from these, which may
+  // still be the old.
+  private actEnded(c: CeremonyState): void {
+    if (!actEnd(c) || !ACT_KINDS.has(c.kind)) return;
+    void this.refreshSlots();
+    void this.refreshEntangled();
+    const chain = chainAfter(this.chain, c);
+    if (chain !== this.chain) {
+      this.chain = chain;
+      if (this.lastAct) this.lastAct = { ...this.lastAct, chain };
+    }
+  }
+
+  // noteReplace keeps what a replacement showed and raises, keeps or clears
+  // the Vault page's notice (lib/rekey.ts replaceNotice). A new vault in
+  // this place drops it with the vault it was about: an import at its Done,
+  // and a create at its end, which is the new recovery key's showing
+  // (StepRecovery, no prompt), Done only when a lock landed before the key
+  // could be shown. A create at the same path (a rebuild over a missing or
+  // damaged vault) keeps the path, so the status's path check cannot drop
+  // it, and an unknown notice would otherwise be settled against the new
+  // vault's unlock methods as never added.
+  private noteReplace(c: CeremonyState): void {
+    const createEnded = c.kind === "create" && (c.step === CeremonyStep.StepDone || (c.step === CeremonyStep.StepRecovery && !c.promptId));
+    if (createEnded || (c.kind === "import" && c.step === CeremonyStep.StepDone)) {
+      this.replaceNotice = null;
+      return;
+    }
+    if (c.kind !== "replace") return;
+    const ended = c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed;
+    if (c.newIds?.length) this.replaceSeen = [...c.newIds];
+    else if (!ended) this.replaceSeen = [];
+    const seen = c.newIds?.length ? c.newIds : this.replaceSeen;
+    const prev = this.replaceNotice;
+    this.replaceNotice = replaceNotice(prev, { kind: c.kind, step: c.step, error: c.error, newIds: seen });
+    // A notice not known yet waits for the reopen and the unlock after it.
+    if (this.replaceNotice !== prev) this.settleFrom = Infinity;
+    if (ended) this.replaceSeen = [];
+  }
+
+  // dismissReplaceNotice is the notice's close button.
+  dismissReplaceNotice(): void {
+    this.replaceNotice = null;
+  }
+
+  // noteAct records an act the Vault page begins, for its end's next step:
+  // in the chain it belongs to (lib/rekey.ts chainFor), the follow-up's
+  // press continuing the chain of the end it stands in and every other
+  // start beginning one when it re-keys. null is an act with no next step
+  // begun from the page (an export, a reveal, turning the password off),
+  // which ends the chain. Start again and the switch record no new start:
+  // they keep the act's own (noteRecoverySwitch).
+  noteAct(a: Omit<LastAct, "chain"> | null): void {
+    if (!a) {
+      this.lastAct = null;
+      this.chain = null;
+      return;
+    }
+    const next = this.chainSeq + 1;
+    const chain = chainFor(this.chain, a.fromFollow, a.act, !!a.rekey || a.act === "rotate" || a.act === "replace", next);
+    if (chain && chain.id === next) this.chainSeq = next;
+    this.chain = chain;
+    this.lastAct = { ...a, chain };
+  }
+
+  // noteRecoverySwitch: the enrolment is begun again with a recovery key
+  // (Use recovery key instead), in the chain and from the start it had.
+  noteRecoverySwitch(): void {
+    if (this.lastAct) this.lastAct = { ...this.lastAct, withRecoveryKey: true };
+  }
+
+  // followUp is the end's next step for the ceremony on the screen, read
+  // from its committed facts and the chain (lib/rekey.ts followUp).
+  get followUp(): FollowUp | null {
+    const c = this.ceremony;
+    return c ? followUp(this.lastAct && { ...this.lastAct, chain: this.chain }, c) : null;
   }
 
   private noteOutcome(c: CeremonyState): void {
@@ -1225,11 +1366,27 @@ class Store {
     }
   }
 
+  // refreshSlots reads the unlock methods. A reply is believed only if no
+  // later read was asked meanwhile (slotsRead), so that an act's end, the
+  // dialog's close and a state change, each reading them, never leave the
+  // older answer standing. A read asked after the reopen and an unlock
+  // settles a replacement whose outcome was not known (settleFrom).
+  private slotsRead = 0;
   async refreshSlots(): Promise<void> {
+    const read = ++this.slotsRead;
+    let slots: SlotView[] = [];
+    let listed = false;
     try {
-      this.slots = (await Keys.Slots()) ?? [];
+      slots = (await Keys.Slots()) ?? [];
+      listed = true;
     } catch {
-      this.slots = [];
+      // A refused read lists nothing, and says nothing of the keys either.
+    }
+    if (read !== this.slotsRead) return;
+    this.slots = slots;
+    if (listed && read >= this.settleFrom && this.unlocked && this.replaceNotice && !this.replaceNotice.known) {
+      this.replaceNotice = replaceNotice(this.replaceNotice, null, slots.map((s) => s.recoveryId ?? "").filter(Boolean));
+      if (!this.replaceNotice || this.replaceNotice.known) this.settleFrom = Infinity;
     }
   }
 

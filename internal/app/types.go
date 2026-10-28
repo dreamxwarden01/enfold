@@ -77,6 +77,12 @@ type VaultStatus struct {
 	RetiredPath     string `json:"retiredPath"`     // the newest of them
 	Damaged         bool   `json:"damaged"`         // MissingPath is there and not a keystore: the rebuild of APP.md §2.1 applies
 	DamagedCopyPath string `json:"damagedCopyPath"` // the newest vault-damaged-*.eks kept for salvage
+	// RetireOwed: the vault file still holds a state, or a piece of one,
+	// that a reader of the live state does not need (FORMAT.md R41), read
+	// from the file's own bytes and cached, so it is known while Locked. The
+	// import's confirmation reads it: the dated copy an import keeps of the
+	// vault it replaces then still opens with what the owed change withdrew.
+	RetireOwed bool `json:"retireOwed"`
 }
 
 // ArchiveRef is an open archive as the lock screen and the banners name
@@ -104,6 +110,15 @@ type BackupStatus struct {
 	Archives int   `json:"archives"`
 	Missing  int   `json:"missing"`
 	Rekeyed  int   `json:"rekeyed"`
+	// VaultRekeyed: the vault was re-keyed after the last backup recorded
+	// here (its stamp's generation, when it has one, is below the vault's),
+	// so adopting that backup would continue at a key a re-key retired.
+	// KeysReplaced: none of the recovery keys that backup holds is still one
+	// of this vault's, so it opens only with keys the user was told to
+	// destroy. Both read only while Unlocked and not Tampered, as the counts
+	// are; a stamp written before the two facts existed claims neither.
+	VaultRekeyed bool `json:"vaultRekeyed"`
+	KeysReplaced bool `json:"keysReplaced"`
 }
 
 // CheckReport is what one presence pass found, which the Archives page's
@@ -140,12 +155,19 @@ const (
 	StepReleasing     CeremonyStep = "releasing"
 	StepDone          CeremonyStep = "done"
 	StepFailed        CeremonyStep = "failed"
+	// StepKeepKey: a replacement shows a new recovery key, its one-time URL
+	// in SlotLabel and its ID in RecoveryID, and the prompt of kind kept
+	// waits for the user to have kept it (APP.md §13, ruled 2026-10-27).
+	StepKeepKey CeremonyStep = "keep_key"
+	// StepConfirm: the prompt of kind confirm waits for the replacement's
+	// one confirmation before its commit (ruled 2026-10-27, R-B).
+	StepConfirm CeremonyStep = "confirm"
 )
 
 // CeremonyState is the ceremony as the panel shows it.
 type CeremonyState struct {
 	Seq  uint64 `json:"seq"`
-	Kind string `json:"kind"` // unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal | entangle
+	Kind string `json:"kind"` // unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal | records | entangle | password | replace
 	// Method is the way in this ceremony took: token | password | recovery.
 	// The lock screen's wording follows the way in chosen, not whether a
 	// secret was asked — with the vault's password on, a token unlock asks
@@ -170,6 +192,63 @@ type CeremonyState struct {
 	InsertLabel string `json:"insertLabel,omitempty"`
 	// Verify, at Done: how many archives the backup's registry names.
 	Archives int `json:"archives"`
+	// Rekey: the act re-keys the vault in the same commit as its own change
+	// (a removal, a password change, turning the password on, a replacement),
+	// from its first event on, so that the panel's end says both. False for
+	// kind rotate, which is the re-key itself.
+	Rekey bool `json:"rekey"`
+	// Phase, once the proof has passed: "commit" while the act's change and
+	// the commit that retires the losing copy are written, "backup" while
+	// the backup it was asked for is (APP.md §13). Empty during the proof.
+	Phase string `json:"phase,omitempty"`
+	// Without: the hex recipient ID of the YubiKey a re-keying removal takes
+	// away, which its proof does not ask for: the wait's line leaves it out,
+	// and it does not count as a YubiKey to prove with. Empty for every other
+	// act, a password's removal included (the password removed proves it).
+	Without string `json:"without,omitempty"`
+	// BackedUp: the backup the act was asked for is written, after its
+	// change; the page shows the export's done line when the dialog closes.
+	BackedUp bool `json:"backedUp"`
+	// BackupError: why that backup was not written, the change standing;
+	// vault.retire_owed when it was not taken because the act's retirement
+	// did not land; the act still ends Done, and its end says so.
+	BackupError Code `json:"backupError,omitempty"`
+	// RetireError: why the retirement of the file's earlier state did not
+	// land, the change standing (FORMAT R41); the act still ends Done, its
+	// end says so, vault.retire_owed stands, and nothing that writes a
+	// record or a secret, and no backup, lands until it does (the barrier),
+	// each such mutation and the next unlock trying to finish it first.
+	RetireError Code `json:"retireError,omitempty"`
+	// RetireRemnant, with RetireError: what the retirement left is earlier
+	// registry ciphertext alone, in space no superblock names (FORMAT R41's
+	// fourth clause): no copy of the file opens with the method the act
+	// withdrew, and the end's bar says so in its own words.
+	RetireRemnant bool `json:"retireRemnant,omitempty"`
+	// KeepIndex and KeepCount, at StepKeepKey: which of the new recovery
+	// keys a replacement shows (from 1) and how many it makes.
+	KeepIndex int `json:"keepIndex"`
+	KeepCount int `json:"keepCount"`
+	// OldIDs, from a replacement's first StepKeepKey on: the IDs of the
+	// recovery keys it replaces, in the order the new ones are shown (the
+	// new key at KeepIndex replaces OldIDs[KeepIndex-1]). NewIDs: the new
+	// keys' IDs, each from the step that shows it; both stand in the final
+	// state, the receipt of the end (FORMAT.md §18.4).
+	OldIDs []string `json:"oldIds,omitempty"`
+	NewIDs []string `json:"newIds,omitempty"`
+	// After, from Done on: what the act left committed, read from the
+	// handle's plaintext slots and header once its commits have landed
+	// (landChange), so that the end's next step is decided by the vault as
+	// it now is and never by a slot list the page read before (the outside
+	// review's second reading, finding 7). Nil for the acts that write no
+	// slot (the reveal, the inspection, an export).
+	After *AfterFacts `json:"after,omitempty"`
+}
+
+// AfterFacts is what an act left committed, for its end's next step.
+type AfterFacts struct {
+	RecoveryIDs []string `json:"recoveryIds"` // the active recovery slots' IDs, as the cards show them (recoveryID)
+	Entangled   bool     `json:"entangled"`   // the slot region header's switch
+	SetupNeeded bool     `json:"setupNeeded"` // every active method a recovery key (setupNeededLocked)
 }
 
 // Reader is a PC/SC reader that looks like a YubiKey.
@@ -562,6 +641,10 @@ type FileInfo struct {
 	// decide nothing (APP.md §13, FORMAT.md §18.2).
 	RecoverySlots []SlotBrief `json:"recoverySlots"`
 	Generation    uint64      `json:"generation"`
+	// Rekeyed: a file of this vault (VaultMatches) at a generation below the
+	// vault's own, so the vault was re-keyed after it was made. Plaintext,
+	// like Newer: it informs the import dialog and decides nothing.
+	Rekeyed bool `json:"rekeyed"`
 }
 
 const (

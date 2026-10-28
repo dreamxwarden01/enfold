@@ -114,13 +114,15 @@ func copyFile(src, dst string, limit int64) error {
 
 // InspectFile reads a keystore file's plaintext facts without a
 // credential and says what it is: a backup (recovery slots only, R28's
-// export) or a vault, and whether it is the vault kept here and newer —
-// plaintext claims, proven only by the unlock an import runs. The file
-// is read through a staged copy, so read-only media and a file another
-// process holds work too.
+// export) or a vault, whether it is the vault kept here, and whether it is
+// newer or the vault was re-keyed after it was made — plaintext claims,
+// proven only by the unlock an import runs. The file is read through a
+// staged copy, so read-only media and a file another process holds work
+// too.
 func (c *Core) InspectFile(path string) (FileInfo, *Error) {
 	c.mu.Lock()
 	vid, mod, own, slots := c.vault.vaultID, c.vault.modifiedAt, c.vault.path, c.vault.slots
+	gen := c.vault.generation
 	configured := c.vault.state != StateNone
 	busy := c.cer != nil
 	c.mu.Unlock()
@@ -148,6 +150,9 @@ func (c *Core) InspectFile(path string) (FileInfo, *Error) {
 	info := inspect(ks, path)
 	info.VaultMatches = configured && ks.VaultID() == vid
 	info.Newer = info.VaultMatches && ks.ModifiedAt() > mod
+	// A backup at a retired key continues at that key when adopted
+	// (FORMAT §15): the import dialog says so, and nothing is decided by it.
+	info.Rekeyed = info.VaultMatches && ks.Generation() < gen
 	return info, nil
 }
 
@@ -198,10 +203,19 @@ func (c *Core) fileError(what string, err error) *Error {
 // setupNeededLocked reports a vault with only recovery slots: an adopted
 // backup whose setup did not finish. Caller holds the state mutex.
 func (c *Core) setupNeededLocked() bool {
-	if c.vault.state == StateNone || len(c.vault.slots) == 0 {
+	return c.vault.state != StateNone && setupNeeded(c.vault.slots)
+}
+
+// setupNeeded reports a set of active slots that are every one a recovery
+// key: no unlock method is left but a recovery key, the vault's setup is to
+// finish. An empty set needs nothing, since no vault is there. The one rule
+// for the cached facts (setupNeededLocked) and for what an act left committed
+// (afterFactsOf).
+func setupNeeded(slots []keystore.SlotInfo) bool {
+	if len(slots) == 0 {
 		return false
 	}
-	for _, s := range c.vault.slots {
+	for _, s := range slots {
 		if s.Type != format.SlotRecovery {
 			return false
 		}
@@ -371,10 +385,13 @@ func (c *Core) dropFactsLocked(path, displayName string) {
 	v.vaultID, v.modifiedAt, v.slots, v.stale = [16]byte{}, 0, nil, nil
 	v.entangled, v.canEnable, v.vaultFileSize = false, false, 0
 	v.tampered, v.tamperedReason = nil, ""
+	v.generation, v.retireOwed, v.retireFailed = 0, false, false
+	v.busyID = [16]byte{}
 	v.broken = nil
 	c.dropMeasurementsLocked()
 	delete(v.warnings, CodeVaultStale)
 	delete(v.warnings, CodeVaultTampered)
+	c.syncRetireWarningLocked()
 	c.bump()
 }
 
@@ -516,11 +533,16 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 		cer.cleanup = func() { os.Remove(staged) }
 		var unl *keystore.Unlocked
 		if info.Kind == FileKindBackup {
-			unl, err = cer.adoptBackup(ks, first)
+			unl, err = cer.adoptBackup(ks, first, nil)
 		} else {
 			unl, err = cer.prove(ks, method)
 		}
 		if err != nil {
+			if unl != nil {
+				// A failed first way in: the staged copy it wrote to is
+				// removed below, with whatever the commit left in it.
+				unl.Close()
+			}
 			if errors.Is(err, errDisowned) {
 				// An unlock's attempt holds the handle and removes the copy
 				// at its end; a proof's holds only the card, so the handle
@@ -591,8 +613,14 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 // carries entangle 0 (R28), so its recovery key is never asked for a
 // password and the vault's entanglement is chosen afresh here — slot and
 // header landing in one commit, so the adopted vault is never a key without
-// its password for a moment (FORMAT.md §15).
-func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions) (*keystore.Unlocked, error) {
+// its password for a moment (FORMAT.md §15). before, when set, runs once the
+// recovery key has given an Unlocked and before anything else is asked or
+// written: FinishSetup's retirement of what the file owes. A failed
+// AddFirstWayIn returns its Unlocked still open beside the error, since a
+// commit that failed after writing left the file owed and FinishSetup, whose
+// file is the vault kept here, retires it through that Unlocked at once
+// (FORMAT R41); a caller handed an Unlocked with an error closes it.
+func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions, before func(unl *keystore.Unlocked) error) (*keystore.Unlocked, error) {
 	cred, _, _, err := cer.credential(MethodRecovery, nil, false)
 	if err != nil {
 		return nil, err
@@ -600,6 +628,12 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions) (*k
 	unl, err := cer.unlockFile(ks, cred, nil)
 	if err != nil {
 		return nil, err
+	}
+	if before != nil {
+		if err := before(unl); err != nil {
+			unl.Close()
+			return nil, err
+		}
 	}
 	spec, ent, err := cer.firstWayIn(first)
 	if err != nil {
@@ -612,8 +646,7 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions) (*k
 	}
 	cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 	if err := unl.AddFirstWayIn(spec, ent); err != nil {
-		unl.Close()
-		return nil, err
+		return unl, err
 	}
 	return unl, nil
 }
@@ -651,7 +684,19 @@ func (cer *ceremony) firstWayIn(first EnrollOptions) (keystore.SlotSpec, *keysto
 
 // FinishSetup gives a vault that has only its recovery slot — an adopted
 // backup whose setup did not finish — its first way in: the recovery key,
-// then the same ceremony as at creation, ending Unlocked.
+// then the same ceremony as at creation, ending Unlocked. Refused before any
+// ceremony while the vault's password is on, a header AddFirstWayIn would
+// refuse only after the whole ceremony: such a vault is unlocked with a
+// recovery key and given an unlock method on the Vault page instead. It runs
+// while Locked, with no Session for the barrier, so what the file owes is
+// retired inside its ceremony, once the recovery key has given an Unlocked
+// and before its first way in is written (FORMAT R41). Every write it makes
+// is retired inside it too, and the lock screen's facts follow the file
+// after each: a first way in that failed after writing is retired at once,
+// as a failed change is (retireFailedCommit), and one that landed is retired
+// whether the act then unlocks or a cancel or a lock trigger came after
+// the commit, which changes nothing of it: the act then ends Done over the
+// Locked state, the facts read again from the file.
 func (c *Core) FinishSetup(first EnrollOptions) *Error {
 	if first.Kind != EnrollToken && first.Kind != EnrollPassword {
 		return coded(CodeParams)
@@ -672,6 +717,10 @@ func (c *Core) FinishSetup(first EnrollOptions) *Error {
 		}
 		return coded(CodeParams)
 	}
+	if c.vault.entangled {
+		c.mu.Unlock()
+		return coded(CodeSetupPasswordOn)
+	}
 	path, name := c.vault.path, c.vault.displayName
 	cer := c.newCeremonyLocked("setup")
 	cer.mutation = true // AddSlot commits to the vault kept here: shutdown waits, an unknown outcome is Broken
@@ -683,28 +732,90 @@ func (c *Core) FinishSetup(first EnrollOptions) *Error {
 		if err != nil {
 			return err
 		}
-		unl, err := cer.adoptBackup(ks, first)
+		unl, err := cer.adoptBackup(ks, first, c.retireBeforeSetup)
 		if err != nil {
+			if unl != nil {
+				// The first way in failed: what its commit wrote before
+				// failing, a record wrapping the VMK for a key or a password
+				// the vault never enrolled, is not left in the file.
+				err = c.retireFailedCommit(cer, unl, err)
+				unl.Close()
+			}
 			ks.Close()
 			return err
 		}
 		// The file is a vault from here on, whatever happens next.
 		c.mu.Lock()
 		if cer.latch || cer.ctx.Err() != nil {
+			// The first way in has landed: a cancel or a lock trigger after
+			// the commit changes nothing of it (landChange's rule), so the
+			// act is not reported Cancelled, which the page reads as nothing
+			// written. Its retirement runs as the unlock's would, and the
+			// act ends Done over the Locked state, the facts read again.
+			if err := c.finishRetireLocked(unl); err != nil {
+				// An unknown outcome is Broken, the handle kept so that
+				// Reopen closes it, as publishUnlockedLocked keeps it.
+				unl.Close()
+				if c.vault.ks != nil && c.vault.ks != ks {
+					c.vault.ks.Close()
+				}
+				c.vault.ks = ks
+				c.brokenLocked(err)
+				c.mu.Unlock()
+				return err
+			}
 			c.mu.Unlock()
 			unl.Close()
 			ks.Close()
 			if err := c.openVaultFile(path, name); err != nil { // the facts, refreshed
 				c.log("setup: refresh: %v", err)
 			}
-			return ErrTokenCancelled
+			cer.set(func(s *CeremonyState) { s.Step = StepDone })
+			return nil
 		}
-		c.publishUnlockedLocked(ks, unl) // finish() pays the owed receipts of a mutation
+		if err := c.publishUnlockedLocked(ks, unl); err != nil { // finish() pays the owed receipts of a mutation
+			c.mu.Unlock()
+			return err // Broken: the retirement of the setup's own change could not be confirmed
+		}
 		c.mu.Unlock()
 		cer.set(func(s *CeremonyState) { s.Step = StepDone })
 		return nil
 	})
 	return nil
+}
+
+// retireBeforeSetup is FinishSetup's barrier: the retirement the file owes,
+// finished in full before the first way in is written, as every mutation
+// that writes a secret waits for (FORMAT R41, ruled 2026-10-27). An unknown
+// outcome is returned as it is, so that the act enters Broken; a tampered
+// region's is vault.tampered, as at the barrier, the warning cleared; any
+// other failure ends the act with vault.retire_owed, nothing of it written.
+// The cached facts follow what the retirement wrote, whatever the act does
+// next: the lock screen shows the file's date and size.
+func (c *Core) retireBeforeSetup(unl *keystore.Unlocked) error {
+	ks := unl.Keystore()
+	if !ks.RetireOwed() {
+		return nil
+	}
+	err := c.seams.fail("retire")
+	if err == nil {
+		err = unl.Retire()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	o, err := c.settleRetireLocked(ks, err)
+	switch o {
+	case retireLanded:
+		c.log("setup: finished a retirement left owed")
+		return nil
+	case retireUnknown:
+		return err
+	case retireTampered:
+		c.log("setup: retirement on a tampered region: %v", err)
+		return coded(CodeVaultTampered)
+	}
+	c.log("setup: the retirement left owed could not be finished: %v", err)
+	return coded(CodeRetireOwed)
 }
 
 // VerifyBackup proves a backup opens — the recovery key unlocks a staged

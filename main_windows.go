@@ -28,6 +28,7 @@ import (
 	"github.com/dreamxwarden01/enfold/internal/app/pivcards"
 	"github.com/dreamxwarden01/enfold/internal/brand"
 	"github.com/dreamxwarden01/enfold/internal/dragout"
+	"github.com/dreamxwarden01/enfold/internal/keystore"
 	"github.com/dreamxwarden01/enfold/internal/secmem"
 )
 
@@ -102,6 +103,7 @@ func main() {
 	defer logger.close()
 	excludeFromWER(logger.printf) // the other half of the SetErrorMode above
 	secmem.Log = logger.printf    // a page the kernel would not lock is worth one line here
+	keystore.Log = logger.printf  // a scrub that failed after its flip, or a predicate read short at Open (R41)
 
 	s := &shell{log: logger.printf}
 	core, err := app.New(app.Deps{
@@ -314,8 +316,11 @@ func (s *shell) Emit(name string, payload any) {
 }
 
 // rawMessage receives the four typed secrets: "secret <kind> <promptID>
-// <value>", from the main frame of the page's own origin only. Nothing here
-// is logged.
+// <value>", from the main frame of the page's own origin only. It carries a
+// replacement's two answers besides, kinds kept and confirm, whose value is
+// empty ("secret kept <promptID> ", the last space kept): a ceremony is
+// answered through one mailbox, and the kind and the id must both match the
+// prompt standing. Nothing here is logged.
 func (s *shell) rawMessage(_ application.Window, message string, origin *application.OriginInfo) {
 	if !strings.HasPrefix(message, "secret ") {
 		return

@@ -43,9 +43,10 @@
     // (lib/forms.ts) — and Escape still cancels. A form dialog opens with
     // the focus in its first field, the caret at the end, or over what
     // `select` picks from the field's value (Rename's stem); one with no
-    // field to type in opens on its submit button, as WinUI's
-    // ContentDialog opens on its default button — the close question's
-    // Quit (APP.md §2.3, ruled 2026-10-17).
+    // field to type in opens on the checked answer of its question, where
+    // it asks one, and else on its submit button, as WinUI's ContentDialog
+    // opens on its default button — the close question's Quit (APP.md
+    // §2.3, ruled 2026-10-17).
     onsubmit?: () => void;
     select?: (value: string) => [number, number];
     // closeButton: a close button in the dialog's top-right corner, on the
@@ -76,15 +77,21 @@
   // Focus moves into a dialog as it opens, so that a keyboard user is in
   // it and not still on the button that opened it: into the first field
   // of a form, onto the submit button of a form with no field, else onto
-  // the box.
+  // the box. A form whose first thing is a question — a fieldset of
+  // radios, the remove dialog's and the password's (ruled 2026-10-27) —
+  // opens on its checked answer, so that a screen reader reads the
+  // question and the answer chosen before anything else, and Enter there
+  // still presses the submit. Scoped to a fieldset, so the cards of
+  // Finish setting up, radios outside any, still open on Continue.
   let box: HTMLDivElement | undefined = $state();
   $effect(() => {
     if (!box) return;
     const form = untrack(() => onsubmit) !== undefined;
     const field = form ? firstField(box) : null;
     if (!field) {
+      const answer = form ? box.querySelector<HTMLInputElement>('fieldset input[type="radio"]:checked:not([disabled])') : null;
       const act = form ? box.querySelector<HTMLButtonElement>('button[type="submit"]:not([disabled])') : null;
-      (act ?? box).focus();
+      (answer ?? act ?? box).focus();
       return;
     }
     field.focus();

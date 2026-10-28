@@ -22,7 +22,9 @@
   // The slot takes back the container's gap it would add when empty
   // (app.css .nslot): --slot-gap is that gap, the layer body's 12 px by
   // default and the Vault page column's 24.
+  import { tick } from "svelte";
   import type { Snippet } from "svelte";
+  import { prefersReducedMotion } from "svelte/motion";
   import InfoBars from "./InfoBars.svelte";
 
   // flow: the bars stand in the slot's flow instead of over the list —
@@ -35,9 +37,24 @@
   // stop at the list's column rather than run over the pane (app.css
   // .nslot.beside-*). Undefined when the list has the whole width.
   let { children, flow = false, beside }: { children?: Snippet; flow?: boolean; beside?: "archives" | "files" } = $props();
+
+  // reveal brings the slot into view where the page scrolls under it. The
+  // Vault page's column puts the slot above the backups card, which a
+  // short window reaches only by scrolling, so the barrier's refusal of
+  // Export backup… opened its bar above the window and the press seemed
+  // to do nothing (the re-key feature's final shoot, F1). The page calls
+  // it for a bar its own press raised, never for one that arrives by
+  // itself, so nothing scrolls under a user who did not act. The bars
+  // stand in flow at the slot's foot, so bringing the slot into view
+  // brings them; a slot already in view moves nothing. It runs once the
+  // bar is in the page, smoothly, except under reduced motion.
+  let slot: HTMLDivElement | undefined = $state();
+  export function reveal(): void {
+    void tick().then(() => slot?.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion.current ? "auto" : "smooth" }));
+  }
 </script>
 
-<div class="nslot {beside ? `beside-${beside}` : ''}" class:flow>
+<div class="nslot {beside ? `beside-${beside}` : ''}" class:flow bind:this={slot}>
   {@render children?.()}
   <div class="nslot-bars"><InfoBars {flow} /></div>
 </div>

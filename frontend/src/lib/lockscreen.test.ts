@@ -6,11 +6,12 @@ import { samePath } from "./paths";
 import { firstRunCard, retiredAt } from "./firstrun";
 import type { VaultStatus } from "./api";
 import { VaultState } from "./api";
-import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, explicitMethod, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
+import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, choosesVaultPassword, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, nothingChanged, offersRecoverySwitch, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
+import { codeText } from "./strings";
 import type { Way } from "./lockscreen";
 
 function ev(kind: string, step: CeremonyStep, promptId = "", archives = 0, method = ""): CeremonyState {
-  return { seq: 1, kind, method, step, promptId, choose: false, slotLabel: "", recoveryId: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives };
+  return { seq: 1, kind, method, step, promptId, choose: false, slotLabel: "", recoveryId: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives, rekey: false, backedUp: false, keepIndex: 0, keepCount: 0 };
 }
 
 describe("samePath", () => {
@@ -543,6 +544,159 @@ describe("the ceremony in a dialog", () => {
     expect(dialogViewOf({ c: at(S.StepSwapKey), way: "token" })).toBe("insert");
     // After a password's proof the new YubiKey's wait is a real one.
     expect(dialogViewOf({ c: at(S.StepWaitingForKey), way: "password", passed: true })).toBe("insert");
+  });
+});
+
+// The acts that may re-key the vault in a dialog (APP.md §13, ruled
+// 2026-10-27): the password change's views, the replacement's confirmation,
+// the end that has more to say, the recovery-key switch, and which acts
+// prove first, choose the vault's password, and changed nothing by failing.
+describe("the re-keying acts in a dialog", () => {
+  const S = CeremonyStep;
+  const at = (step: CeremonyStep, o: Partial<{ kind: string; error: string; promptId: string; removeLabel: string }> = {}) => ({ kind: "password", step, error: "", promptId: "", removeLabel: "", ...o });
+  type Ev = { kind?: string; step: CeremonyStep; method?: string; promptId?: string };
+  function dialogViews(evs: Ev[], hasHardware = true, more = false): string[] {
+    let passed = NOT_PASSED;
+    let shown: ReturnType<typeof shownAfter> | null = null;
+    return evs.map((e) => {
+      const c = at(e.step, { kind: e.kind ?? "password", promptId: e.promptId ?? "" });
+      passed = passedAfter(passed, c);
+      const way = dialogWay(e.method ?? "", hasHardware, c);
+      shown = shownAfter(shown, dialogViewOf({ c, way, passed: passed.passed, afterTouch: passed.afterTouch, endsWithMore: more }));
+      return shown;
+    });
+  }
+  it("draws a password change proved with a YubiKey as a re-key's, the new password on the neutral panel", () => {
+    expect(
+      dialogViews([
+        { step: S.StepWaitingForKey },
+        { step: S.StepPIN, promptId: "p" },
+        { step: S.StepTouch },
+        { step: S.StepDeriving },
+        { step: S.StepPassword, promptId: "c" },
+        { step: S.StepDeriving }, // Phase commit: the change and its re-key
+        { step: S.StepDone },
+      ]),
+    ).toEqual(["insert", "secret", "touch", "touch", "secret", "opening", "done"]);
+  });
+  it("draws a password change proved with a typed password on the neutral panel throughout", () => {
+    expect(
+      dialogViews(
+        [
+          { step: S.StepWaitingForKey, method: "password" },
+          { step: S.StepPassword, method: "password", promptId: "p" },
+          { step: S.StepDeriving, method: "password" },
+          { step: S.StepPassword, method: "password", promptId: "c" },
+          { step: S.StepDeriving, method: "password" },
+          { step: S.StepDone, method: "password" },
+        ],
+        false,
+      ),
+    ).toEqual(["wait", "secret", "opening", "secret", "opening", "done"]);
+  });
+  it("asks the replacement's confirmation in its own view, with Continue and Cancel", () => {
+    const c = at(S.StepConfirm, { kind: "replace", promptId: "k3" });
+    expect(viewOf({ running: true, firstRun: false, way: "token", c })).toBe("confirm");
+    expect(dialogViewOf({ c, way: "token", passed: true })).toBe("confirm");
+    expect(dialogFoot({ over: false, view: "confirm", asks: true, again: true })).toEqual(["continue", "cancel"]);
+    // The new keys are the recovery key's dialog's to show; the panel waits.
+    expect(dialogViewOf({ c: at(S.StepKeepKey, { kind: "replace", promptId: "k1" }), way: "token", passed: true })).toBe("wait");
+  });
+  it("carries the green from the proof's touch to the confirmation's end only on the neutral panel", () => {
+    expect(
+      dialogViews([
+        { kind: "replace", step: S.StepWaitingForKey },
+        { kind: "replace", step: S.StepPIN, promptId: "p" },
+        { kind: "replace", step: S.StepTouch },
+        { kind: "replace", step: S.StepDeriving },
+        { kind: "replace", step: S.StepKeepKey, promptId: "k1" },
+        { kind: "replace", step: S.StepConfirm, promptId: "k2" },
+        { kind: "replace", step: S.StepDeriving },
+        { kind: "replace", step: S.StepDone },
+      ]),
+    ).toEqual(["insert", "secret", "touch", "touch", "wait", "confirm", "opening", "done"]);
+  });
+  it("ends on the neutral done view after a touch when the end has more, and on the green without", () => {
+    const evs: Ev[] = [
+      { kind: "remove", step: S.StepWaitingForKey },
+      { kind: "remove", step: S.StepPIN, promptId: "p" },
+      { kind: "remove", step: S.StepTouch },
+      { kind: "remove", step: S.StepDeriving },
+      { kind: "remove", step: S.StepDone },
+    ];
+    expect(dialogViews(evs)).toEqual(["insert", "secret", "touch", "touch", "touch"]);
+    expect(dialogViews(evs, true, true)).toEqual(["insert", "secret", "touch", "touch", "done"]);
+  });
+  it("says an end has more for a bar, a receipt, a follow-up or the switch's next line, and only at Done", () => {
+    const d = { kind: "remove", step: S.StepDone };
+    expect(endsWithMore(d)).toBe(false);
+    expect(endsWithMore({ ...d, retireError: "io" })).toBe(true);
+    expect(endsWithMore({ ...d, backupError: "file.exists" })).toBe(true);
+    expect(endsWithMore({ kind: "replace", step: S.StepDone, newIds: ["3F7A-9C21"] })).toBe(true);
+    expect(endsWithMore({ kind: "replace", step: S.StepDone, newIds: null })).toBe(false);
+    expect(endsWithMore(d, { follow: true })).toBe(true);
+    expect(endsWithMore({ kind: "enroll", step: S.StepDone }, { nextLine: true })).toBe(true);
+    expect(endsWithMore({ kind: "remove", step: S.StepFailed, retireError: "io" })).toBe(false);
+  });
+  it("offers Use recovery key at No match only with the switch, and Cancel alone without it", () => {
+    expect(dialogFoot({ over: false, view: "edge", asks: false, again: true, recovery: true, step: S.StepNoMatch })).toEqual(["recovery", "cancel"]);
+    expect(dialogFoot({ over: false, view: "edge", asks: false, again: true, step: S.StepNoMatch })).toEqual(["cancel"]);
+    // The YubiKey in use is not a No match; the wait keeps its own foot.
+    expect(dialogFoot({ over: false, view: "edge", asks: false, again: true, recovery: true, step: S.StepBusy })).toEqual(["cancel"]);
+    expect(dialogFoot({ over: false, view: "insert", asks: false, again: true, recovery: true, step: S.StepWaitingForKey })).toEqual(["cancel"]);
+  });
+  it("lists the acts that prove first, choose the vault's password, and changed nothing by failing", () => {
+    for (const k of ["enroll", "remove", "rotate", "export", "reveal", "entangle", "password", "records", "replace"]) expect(provesFirst(k), k).toBe(true);
+    for (const k of ["unlock", "create", "import", "setup", "verify", ""]) expect(provesFirst(k), k).toBe(false);
+    for (const k of ["entangle", "password"]) expect(choosesVaultPassword(k), k).toBe(true);
+    for (const k of ["enroll", "remove", "rotate", "replace", "create", "setup"]) expect(choosesVaultPassword(k), k).toBe(false);
+    for (const k of ["remove", "password", "entangle", "rotate", "replace"]) {
+      expect(nothingChanged({ kind: k, error: "token.touch" }), k).toBe(true);
+      expect(nothingChanged({ kind: k, error: "ceremony.cancelled" }), k).toBe(true);
+      expect(nothingChanged({ kind: k, error: "vault.indeterminate" }), k).toBe(false);
+      expect(nothingChanged({ kind: k, error: "vault.conflict" }), k).toBe(false);
+    }
+    for (const k of ["enroll", "export", "reveal", "records", "unlock", "verify"]) expect(nothingChanged({ kind: k, error: "token.touch" }), k).toBe(false);
+  });
+});
+
+// The recovery-key switch at an enrolment (ruled 2026-10-27): one rule for
+// the insert view's button and No match's foot, APP.md §6's one exception.
+describe("offersRecoverySwitch", () => {
+  const vault = [{ type: "hardware" }, { type: "recovery" }];
+  const enrol = { kind: "enroll" };
+  it("offers it at the enrolment of a YubiKey or a recovery key on a vault with both", () => {
+    expect(offersRecoverySwitch(enrol, { act: "enroll", type: "token" }, vault, false)).toBe(true);
+    expect(offersRecoverySwitch(enrol, { act: "enroll", type: "recovery" }, vault, false)).toBe(true);
+  });
+  it("never in the second half, once taken, or for a password", () => {
+    expect(offersRecoverySwitch(enrol, { act: "enroll", type: "token" }, vault, true)).toBe(false);
+    expect(offersRecoverySwitch(enrol, { act: "enroll", type: "token", withRecoveryKey: true }, vault, false)).toBe(false);
+    expect(offersRecoverySwitch(enrol, { act: "enroll", type: "password" }, vault, false)).toBe(false);
+  });
+  it("never for another act", () => {
+    expect(offersRecoverySwitch({ kind: "remove" }, { act: "remove", type: "hardware" }, vault, false)).toBe(false);
+    expect(offersRecoverySwitch({ kind: "rotate" }, { act: "rotate" }, vault, false)).toBe(false);
+    expect(offersRecoverySwitch({ kind: "replace" }, { act: "replace" }, vault, false)).toBe(false);
+    expect(offersRecoverySwitch({ kind: "reveal" }, { act: "enroll", type: "token" }, vault, false)).toBe(false);
+  });
+  it("never on a vault without a YubiKey or without a recovery key, nor with no act recorded", () => {
+    expect(offersRecoverySwitch(enrol, { act: "enroll", type: "token" }, [{ type: "password" }, { type: "recovery" }], false)).toBe(false);
+    expect(offersRecoverySwitch(enrol, { act: "enroll", type: "token" }, [{ type: "hardware" }, { type: "hardware" }], false)).toBe(false);
+    expect(offersRecoverySwitch(enrol, null, vault, false)).toBe(false);
+  });
+});
+
+// The lock screen's Finish setting up… while the vault's password is on
+// (ruled 2026-10-27): greyed, with the core's refusal as its reason.
+describe("finishGreyed", () => {
+  it("greys it while setup is needed and the password is on", () => {
+    expect(finishGreyed({ setupNeeded: true, entangled: true })).toBe(codeText("vault.setup_password_on"));
+  });
+  it("leaves it as it was otherwise", () => {
+    expect(finishGreyed({ setupNeeded: true, entangled: false })).toBeUndefined();
+    expect(finishGreyed({ setupNeeded: false, entangled: true })).toBeUndefined();
+    expect(finishGreyed(null)).toBeUndefined();
   });
 });
 

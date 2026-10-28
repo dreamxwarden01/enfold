@@ -34,6 +34,26 @@ type vaultState struct {
 	vaultFileSize uint64
 	slots         []keystore.SlotInfo
 	stale         error
+	// generation is the vault's VMK generation, a plaintext fact cached like
+	// the others: the backups card and the import dialog compare a backup's
+	// generation with it (APP.md §13).
+	generation uint64
+	// retireOwed is the file's own answer to FORMAT R41's predicate
+	// (keystore.RetireOwed), no secret in it, cached wherever the facts are
+	// and refreshed after every keystore write the core makes, so that it
+	// survives Locked and Broken: the barrier reads it while no handle is
+	// open, or while a ceremony holds the one there is, and the import's
+	// confirmation reads it while Locked. retireFailed is that an attempt to
+	// finish the retirement failed; neither a lock nor Broken clears it, and
+	// a retirement that lands does, whoever lands it. The warning
+	// vault.retire_owed stands while both hold (ruled 2026-10-27, R-A).
+	retireOwed   bool
+	retireFailed bool
+	// busyID is the vault ID a Busy open forgot with the rest of the facts.
+	// The next open that reads the same ID is not another vault's, so the
+	// failed retirement it carries, which neither a lock nor Broken clears,
+	// is not cleared by a file another process held for a moment either.
+	busyID [16]byte
 
 	// Unlocked only.
 	ks   *keystore.Keystore
@@ -119,14 +139,23 @@ func (c *Core) openVaultFile(path, displayName string) error {
 	if err != nil {
 		if errors.Is(err, keystore.ErrBusy) {
 			// Busy needs the path, so that "try again" can retry it; the
-			// facts are the file's, of which nothing is known yet.
+			// facts are the file's, of which nothing is known yet. The
+			// vault ID is kept aside, so that the next open can tell the
+			// same vault from another one (busyID).
+			if c.vault.vaultID != ([16]byte{}) {
+				c.vault.busyID = c.vault.vaultID
+			}
 			c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
 			c.vault.vaultID, c.vault.modifiedAt, c.vault.slots, c.vault.stale = [16]byte{}, 0, nil, nil
 			c.vault.entangled, c.vault.canEnable, c.vault.vaultFileSize = false, false, 0
 			c.vault.tampered, c.vault.tamperedReason = nil, ""
+			// Nothing is known of what the file owes either: the next
+			// open reads it from the bytes.
+			c.vault.generation, c.vault.retireOwed = 0, false
 			c.dropMeasurementsLocked()
 			delete(c.vault.warnings, CodeVaultStale)
 			delete(c.vault.warnings, CodeVaultTampered)
+			c.syncRetireWarningLocked()
 			c.vault.state = StateBusy
 			c.bump()
 			return err
@@ -143,6 +172,17 @@ func (c *Core) openVaultFile(path, displayName string) error {
 		c.closeCleanArchivesLocked()
 		c.dropMeasurementsLocked()
 	}
+	known := c.vault.vaultID
+	if known == ([16]byte{}) {
+		known = c.vault.busyID
+	}
+	if ks.VaultID() != known {
+		// A failed retirement was the previous vault's: this file's bytes
+		// say for themselves what it owes. A Busy open in between does not
+		// make the same vault another one.
+		c.vault.retireFailed = false
+	}
+	c.vault.busyID = [16]byte{}
 	c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
 	c.cacheFactsLocked(ks)
 	// Tampering is known only after an unlock, and a generation mismatch is
@@ -179,10 +219,8 @@ func (c *Core) closeCleanArchivesLocked() {
 // cacheFactsLocked copies the lock screen's facts from an open handle.
 func (c *Core) cacheFactsLocked(ks *keystore.Keystore) {
 	c.vault.vaultID = ks.VaultID()
-	c.vault.modifiedAt = ks.ModifiedAt()
 	c.vault.entangled = ks.Entangled()
 	c.vault.canEnable = ks.CanEnableEntangled() == nil
-	c.vault.vaultFileSize = ks.FileSize()
 	c.vault.slots = ks.Slots()
 	c.vault.removable = make(map[[16]byte]bool, len(c.vault.slots))
 	for _, s := range c.vault.slots {
@@ -194,6 +232,102 @@ func (c *Core) cacheFactsLocked(ks *keystore.Keystore) {
 	} else {
 		delete(c.vault.warnings, CodeVaultStale)
 	}
+	c.vault.generation = ks.Generation()
+	c.noteFileLocked(ks, false) // modified_at, the size and what is owed
+}
+
+// syncRetireWarningLocked sets the warning vault.retire_owed from the two
+// cached facts: a retirement that was attempted and failed, and is still
+// owed. One merely owed — a legacy file, or between a change and its
+// retirement — warns nothing, since the next unlock or the next held
+// mutation finishes it; one that failed warns until it is finished, on the
+// lock screen too. Caller holds the state mutex.
+func (c *Core) syncRetireWarningLocked() {
+	if c.vault.retireFailed && c.vault.retireOwed {
+		c.vault.warnings[CodeRetireOwed] = true
+	} else {
+		delete(c.vault.warnings, CodeRetireOwed)
+	}
+}
+
+// noteFileLocked brings the cached facts that a keystore write changes onto
+// the handle's answers, after every keystore write the core makes, landed or
+// not: modified_at and the size, so that the date and the size the Vault page
+// shows are the file's (FORMAT R41, rule 8), and what is owed, so that the
+// barrier sees it at once. A retirement that landed in full clears a failed
+// one (whoever landed it), and failed marks one that was attempted and did
+// not land. Caller holds the state mutex, and ks is a handle the caller may
+// read: the vault's own while no ceremony holds it, or the one the calling
+// ceremony holds.
+func (c *Core) noteFileLocked(ks *keystore.Keystore, failed bool) {
+	c.vault.modifiedAt = ks.ModifiedAt()
+	c.vault.vaultFileSize = ks.FileSize()
+	c.vault.retireOwed = ks.RetireOwed()
+	switch {
+	case !c.vault.retireOwed:
+		c.vault.retireFailed = false
+	case failed:
+		c.vault.retireFailed = true
+	}
+	c.syncRetireWarningLocked()
+}
+
+// retireOutcome is what a call to Retire left, sorted one way for every
+// caller: the barrier, an act's own retirement, the unlock's and the setup's.
+type retireOutcome int
+
+const (
+	// retireLanded: nothing is owed. An error that came with it, such as a
+	// scrub's after the reread found nothing left to zero, is logged and
+	// never reported, since the file holds nothing the act withdrew.
+	retireLanded retireOutcome = iota
+	// retireUnknown: ErrIndeterminate or ErrConflict, whatever the handle
+	// says, since it no longer knows the file: the vault enters Broken and
+	// the reopen settles it.
+	retireUnknown
+	// retireTampered: a tampered region retired as far as R25 lets it be, a
+	// live copy's own tail left. The Tampered banner says what is true and
+	// what to do, so no warning promises a retry beside it (R-C, N8).
+	retireTampered
+	// retireStillOwed: anything else with the file still owed. The warning
+	// stands, and what the barrier holds waits for a retry that lands.
+	retireStillOwed
+)
+
+// errStillOwed stands in for a nil error from a Retire that left the file
+// owed, which Retire never returns: a pass that committed is not success
+// while anything is still owed.
+var errStillOwed = errors.New("the retirement returned with the file still owed")
+
+// settleRetireLocked sorts what a call to Retire on ks left, err being its
+// error, and brings the cached facts onto the file (noteFileLocked); on the
+// Tampered outcome a failed retirement and its warning are cleared. The error
+// returned is the one to log or report: err, or errStillOwed for a nil one
+// with the file still owed. Caller holds the state mutex, with the handle
+// readable as noteFileLocked requires.
+func (c *Core) settleRetireLocked(ks *keystore.Keystore, err error) (retireOutcome, error) {
+	var o retireOutcome
+	switch {
+	case unknownOutcome(err):
+		o = retireUnknown
+	case !ks.RetireOwed():
+		o = retireLanded
+	case errors.Is(err, keystore.ErrTampered):
+		o = retireTampered
+	default:
+		o = retireStillOwed
+	}
+	c.noteFileLocked(ks, o == retireStillOwed)
+	switch {
+	case o == retireTampered:
+		c.vault.retireFailed = false
+		c.syncRetireWarningLocked()
+	case o == retireStillOwed && err == nil:
+		err = errStillOwed
+	case o == retireLanded && err != nil:
+		c.log("a retirement landed in full, nothing owed; it also reported: %v", err)
+	}
+	return o, err
 }
 
 // OpenVaultFile configures path as the vault — where it is, copying
@@ -270,6 +404,7 @@ func (c *Core) statusLocked() VaultStatus {
 		ModifiedAt: v.modifiedAt, Entangled: v.entangled, VaultFileSize: v.vaultFileSize,
 		Tampered: v.tampered != nil, TamperedReason: v.tamperedReason,
 		Warnings: []Code{}, Ops: []OpView{}, Opened: []ArchiveRef{},
+		RetireOwed: v.retireOwed,
 	}
 	if !v.lastUnlockedAt.IsZero() {
 		st.LastUnlockedAt = v.lastUnlockedAt.Unix()
@@ -366,9 +501,28 @@ func (c *Core) sessionLocked() (*keystore.Session, *Error) {
 			go c.LockNow(ReasonStale)
 			return nil, coded(CodeNeedsUnlock)
 		}
+		if unknownOutcome(err) {
+			// The handle went Broken by a path that did not say so to the
+			// core: the state follows it, so that the page offers the
+			// reopen that settles it, which is refused while Unlocked.
+			c.log("the vault's handle is broken: %v", err)
+			c.brokenLocked(err)
+			go c.emitState()
+		}
 		return nil, classify(err)
 	}
 	return v.sess, nil
+}
+
+// handleHeldLocked reports that the vault's one handle is not the core's to
+// read: a mutation ceremony commits through it from its own goroutine,
+// outside the state mutex, and a pending touch of a cancelled slot change or
+// reveal is inside keystore.Unlock on it (APP.md §2.2). The Keystore is not
+// safe for concurrent use, so a caller that would write the file, or read
+// the Session for a write, is refused before it touches the handle. Caller
+// holds the state mutex.
+func (c *Core) handleHeldLocked() bool {
+	return (c.cer != nil && c.cer.mutation) || (c.pending != nil && c.pending.vaultHandle)
 }
 
 // updateRegistry runs fn against the registry under the session, holding
@@ -396,16 +550,19 @@ func (c *Core) updateRegistryLocked(fn func(g *registry) error) *Error {
 // behind the per-call refusals, not a substitute for them. Caller holds the
 // state mutex.
 func (c *Core) updateRegistryAtLocked(allowForgotten bool, fn func(g *registry, modifiedAt int64) error) *Error {
-	sess, e := c.sessionLocked()
-	if e != nil {
-		return e
-	}
 	// A slot change commits to the same handle from its own goroutine; the
 	// Keystore is not safe for concurrent use, so registry writes wait
 	// until the ceremony is over (an operation's commit owes its receipt
-	// meanwhile).
-	if (c.cer != nil && c.cer.mutation) || (c.pending != nil && c.pending.vaultHandle) {
+	// meanwhile). This comes before the Session is asked for, since
+	// sessionLocked reads the handle (Session.Live) and the ceremony may be
+	// writing it; only while Unlocked, the one state in which sessionLocked
+	// reads it, so that every other state keeps its own answer.
+	if c.vault.state == StateUnlocked && c.handleHeldLocked() {
 		return coded(CodeCeremonyRunning)
+	}
+	sess, e := c.sessionLocked()
+	if e != nil {
+		return e
 	}
 	err := sess.UpdateRegistryAt(func(g *registry, at int64) error {
 		var before map[[16]byte]format.ArchiveRecord
@@ -429,15 +586,138 @@ func (c *Core) updateRegistryAtLocked(allowForgotten bool, fn func(g *registry, 
 		// screen shows and InspectFile compares.
 		return nil
 	}
+	// The commit carries one retiring pass while a retirement is owed, and
+	// one that failed after writing leaves the file owed (FORMAT R41): what
+	// the handle now owes is cached at once, failed or not, so that the
+	// barrier sees it, and a pass that finished the retirement clears a
+	// failed one with its warning. modified_at and the size follow the file
+	// with it; a commit that failed left both as they were.
+	c.noteFileLocked(c.vault.ks, false)
 	if err != nil {
-		if errors.Is(err, keystore.ErrIndeterminate) || errors.Is(err, keystore.ErrConflict) {
+		if unknownOutcome(err) {
 			c.brokenLocked(err)
+			go c.emitState()
 		}
 		return classify(err)
 	}
-	c.vault.modifiedAt = c.vault.ks.ModifiedAt()
-	c.vault.vaultFileSize = c.vault.ks.FileSize()
+	if b := c.vault.ks.Broken(); b != nil {
+		// The commit landed and the handle is Broken after it: the scrub
+		// after its flip found another writer's commit on disk (FORMAT
+		// R41), which the keystore reports as the commit's success and an
+		// ErrConflict on the handle. The write stands, so the caller is told
+		// it landed (a create whose record is published keeps its file), and
+		// the state says Broken, for the reopen to settle.
+		c.log("a registry write landed and left the handle broken: %v", b)
+		c.brokenLocked(b)
+		go c.emitState()
+	}
 	return nil
+}
+
+// retireBarrierLocked holds every mutation that writes a record or a secret
+// into the vault file, or a backup of it, behind an owed retirement (FORMAT
+// R41; ruled 2026-10-27, R-A): it first finishes the retirement in full —
+// every retiring commit the file needs and their scrubs — and refuses while it
+// cannot. It never reads a handle a ceremony or a pending touch holds, and
+// refuses while one does; otherwise it reads the handle under the state
+// mutex, so it is valid in every state. Caller holds the state mutex.
+//
+// What it holds is a record added to the registry, removed from it or moved
+// between current and forgotten, a secret written into the vault file, and a
+// backup; never a field of an existing record, a vault setting or a receipt.
+// A write into an existing archive is therefore not held: it changes no key,
+// and its receipt is neither a record nor a secret.
+func (c *Core) retireBarrierLocked() *Error {
+	v := &c.vault
+	// The handle is the ceremony's while one holds it: the Keystore is not
+	// safe for concurrent use, and a ceremony writes its commits and its
+	// retirement state from its own goroutine outside the mutex. The write
+	// the barrier holds is refused then, whatever the cached fact says: a
+	// caller let through would read the Session, and with it the handle,
+	// before its registry write met updateRegistryAtLocked's refusal of the
+	// same state (CreateArchive's DeviceID, DeleteArchive's record), and a
+	// create would make its archive file only to remove it. This is also what
+	// keeps Session.Retire from racing a ceremony's own commits.
+	if c.handleHeldLocked() {
+		return coded(CodeCeremonyRunning)
+	}
+	owed := v.retireOwed
+	if v.ks != nil {
+		owed = v.ks.RetireOwed() // the handle is the truth while there is one
+	}
+	if !owed {
+		return nil
+	}
+	sess, e := c.sessionLocked()
+	if e != nil {
+		return e
+	}
+	err := c.seams.fail("retire")
+	if err == nil {
+		err = sess.Retire()
+	}
+	o, err := c.settleRetireLocked(v.ks, err)
+	switch o {
+	case retireLanded:
+		// Nothing is owed, whatever came with it: the write it holds goes on.
+		c.log("finished a retirement left owed")
+		return nil
+	case retireUnknown:
+		c.brokenLocked(err)
+		return classify(err)
+	case retireTampered:
+		// The mutation is refused until an import establishes a clean
+		// state (R-C, finding 4).
+		c.log("retirement on a tampered region: %v", err)
+		return coded(CodeVaultTampered)
+	}
+	// A pass that committed is not the barrier's success while anything is
+	// still owed: the write it holds waits for the whole retirement.
+	c.log("a retirement is owed and could not be finished: %v", err)
+	return coded(CodeRetireOwed)
+}
+
+// actBarrierLocked is the barrier at the begin of a ceremony that writes the
+// file or a backup (beginAs), which no other ceremony can be running beside.
+// A pending touch on the vault's handle is the one holder it begins over:
+// its own ceremony adopts the touch or waits for it to end (APP.md §2.2)
+// before it uses the handle, so the act is refused only while the cached
+// fact says owed, the handle not being read until then. Otherwise it is
+// retireBarrierLocked. Caller holds the state mutex.
+func (c *Core) actBarrierLocked() *Error {
+	if c.pending != nil && c.pending.vaultHandle {
+		if c.vault.retireOwed {
+			return coded(CodeCeremonyRunning)
+		}
+		return nil
+	}
+	return c.retireBarrierLocked()
+}
+
+// publishRegistryAtLocked is updateRegistryAtLocked for a write the barrier
+// holds (a record added, removed or moved between current and forgotten, or a
+// secret written): the barrier, then the write, under one hold of the state
+// mutex, so that the retirement lands before this write's modified_at is
+// computed (the outside review's finding 3). Caller holds the state mutex.
+func (c *Core) publishRegistryAtLocked(allowForgotten bool, fn func(g *registry, modifiedAt int64) error) *Error {
+	if e := c.retireBarrierLocked(); e != nil {
+		return e
+	}
+	return c.updateRegistryAtLocked(allowForgotten, fn)
+}
+
+// publishRegistryLocked is publishRegistryAtLocked for a write that needs
+// no modified_at and touches no forgotten record. Caller holds the state
+// mutex.
+func (c *Core) publishRegistryLocked(fn func(g *registry) error) *Error {
+	return c.publishRegistryAtLocked(false, func(g *registry, _ int64) error { return fn(g) })
+}
+
+// publishRegistry takes the state mutex itself, as updateRegistry does.
+func (c *Core) publishRegistry(fn func(g *registry) error) *Error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.publishRegistryLocked(fn)
 }
 
 // forgottenRecords copies the forgotten records of g, versions included, so
@@ -801,10 +1081,58 @@ func (c *Core) Readers() ([]Reader, *Error) {
 	return out, nil
 }
 
+// finishRetireLocked finishes the retirement a change left owed — its own
+// retirement failed, the process stopped between the two commits or during a
+// scrub, or the file was written before R41 — before the vault is used
+// (FORMAT R41, ruled 2026-10-27). On a tampered region it retires what
+// copies nothing forward and leaves only a live copy's own tail owed (R25):
+// the vault then opens Tampered and owed, and the barrier refuses what it
+// holds. An unknown outcome is returned, for the caller to enter Broken; any
+// other failure leaves the vault readable with the warning standing (R-A).
+// Caller holds the state mutex.
+func (c *Core) finishRetireLocked(unl *keystore.Unlocked) error {
+	ks := unl.Keystore()
+	if !ks.RetireOwed() {
+		return nil
+	}
+	err := c.seams.fail("retire")
+	if err == nil {
+		err = unl.Retire()
+	}
+	o, err := c.settleRetireLocked(ks, err)
+	switch o {
+	case retireLanded:
+		c.log("finished a retirement left owed")
+	case retireUnknown:
+		return err
+	case retireTampered:
+		// The Tampered banner is what the user reads, and every held act is
+		// refused with vault.tampered.
+		c.log("retirement on a tampered region: %v", err)
+	default:
+		c.log("the retirement left owed could not be finished: %v", err)
+	}
+	return nil
+}
+
 // publishUnlocked installs a freshly derived session. Caller holds the
-// state mutex; the ceremony's latch has been checked by the caller.
-func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlocked) {
+// state mutex; the ceremony's latch has been checked by the caller. First it
+// finishes the retirement the file owes, before the Session is installed and
+// before any receipt or purge is written (finishRetireLocked): an unknown
+// outcome there enters Broken, the handle kept so that Reopen closes it, and
+// is returned, so that the unlock ends Failed over the Broken state.
+func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlocked) error {
 	v := &c.vault
+	if err := c.finishRetireLocked(unl); err != nil {
+		c.log("unlock: the retirement could not be confirmed: %v", err)
+		unl.Close()
+		if v.ks != nil && v.ks != ks {
+			v.ks.Close()
+		}
+		v.ks = ks
+		c.brokenLocked(err)
+		return err
+	}
 	sess, err := unl.Session()
 	if err != nil {
 		// Cannot happen right after an Unlock; treat as broken.
@@ -813,7 +1141,7 @@ func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlock
 		ks.Close()
 		v.state = StateLocked
 		c.bump()
-		return
+		return nil
 	}
 	v.tampered = unl.Tampered()
 	if v.tampered != nil {
@@ -844,6 +1172,7 @@ func (c *Core) publishUnlockedLocked(ks *keystore.Keystore, unl *keystore.Unlock
 	c.armTimersLocked()
 	c.settleAfterUnlockLocked()
 	c.bump()
+	return nil
 }
 
 // settleAfterUnlockLocked is everything a successful unlock of the vault
@@ -865,11 +1194,18 @@ func (c *Core) settleAfterUnlockLocked() {
 // purgeForgottenLocked drops the forgotten records whose retention has run
 // out, in one registry write whose own modified_at decides (FORMAT.md §18.2),
 // and announces what went. It is skipped entirely while the vault is
-// Tampered — every record is left to the next unlock — and a write refused
-// because a mutation ceremony holds the handle loses nothing: the records
-// stand and the next unlock purges them. Caller holds the state mutex.
+// Tampered — every record is left to the next unlock — and while a
+// retirement is owed, since removing records waits behind it (FORMAT R41):
+// the unlock's own finishRetireLocked has just tried, so the purge is
+// deferred rather than attempted. A write refused because a mutation
+// ceremony holds the handle loses nothing either: the records stand and the
+// next unlock purges them. Caller holds the state mutex.
 func (c *Core) purgeForgottenLocked() {
 	if c.vault.tampered != nil {
+		return
+	}
+	if c.vault.ks != nil && c.vault.ks.RetireOwed() {
+		c.log("purge deferred: a retirement is owed")
 		return
 	}
 	sess, e := c.sessionLocked()

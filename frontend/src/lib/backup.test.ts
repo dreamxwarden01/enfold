@@ -3,7 +3,15 @@ import { backupKind, backupLine } from "./backup";
 
 // The backups card's status (direction 9, ruled 2026-10-18; APP.md §13).
 const at = 1_760_000_000;
-const b = (over: Partial<{ at: number; archives: number; missing: number; rekeyed: number }> = {}) => ({ at, archives: 3, missing: 0, rekeyed: 0, ...over });
+const b = (over: Partial<{ at: number; archives: number; missing: number; rekeyed: number; vaultRekeyed: boolean; keysReplaced: boolean }> = {}) => ({
+  at,
+  archives: 3,
+  missing: 0,
+  rekeyed: 0,
+  vaultRekeyed: false,
+  keysReplaced: false,
+  ...over,
+});
 
 describe("which status the card opens with", () => {
   it("is none with no archives and no backup", () => {
@@ -84,6 +92,43 @@ describe("what the status says", () => {
     for (const [m, k] of [[0, 0], [2, 0], [0, 1], [2, 1]]) {
       const l = backupLine(b({ missing: m, rekeyed: k }), true, when);
       expect(`${l.head} ${l.rest} ${l.caveat}`).not.toMatch(/n't|'re|'ll|'ve|it's/i);
+    }
+  });
+});
+
+// A backup behind for a reason no count says (Vault.BackupStatus, ruled
+// 2026-10-27): made before the vault was re-keyed, or opening only with
+// recovery keys a replacement removed. Either stands for the counts and
+// makes Export backup… the accent.
+describe("a backup the vault's re-key or a replacement left behind", () => {
+  const when = "22 days ago";
+  it("is behind when the vault was re-keyed after it, with no count to say", () => {
+    expect(backupKind(b({ vaultRekeyed: true }), true)).toBe("behind");
+    const l = backupLine(b({ vaultRekeyed: true }), true, when);
+    expect(l).toMatchObject({ kind: "behind", tone: "attention", suggestExport: true, checked: false });
+    expect(`${l.head} ${l.rest}`).toBe("Backed up 22 days ago. It was made before the vault was re-keyed.");
+  });
+  it("is behind when it opens only with replaced recovery keys, which wins over the re-key", () => {
+    expect(backupKind(b({ keysReplaced: true }), true)).toBe("behind");
+    expect(backupLine(b({ keysReplaced: true }), true, when).rest).toBe("It opens only with recovery keys this vault no longer has.");
+    // A replacement also re-keyed the vault; the more pressing fact is said.
+    const l = backupLine(b({ keysReplaced: true, vaultRekeyed: true }), true, when);
+    expect(l.rest).toBe("It opens only with recovery keys this vault no longer has.");
+    expect(l.suggestExport).toBe(true);
+  });
+  it("says the same in place of the counts", () => {
+    expect(backupLine(b({ missing: 2, rekeyed: 1, vaultRekeyed: true }), true, when).rest).toBe("It was made before the vault was re-keyed.");
+    expect(backupLine(b({ missing: 2, keysReplaced: true }), true, when).rest).toBe("It opens only with recovery keys this vault no longer has.");
+  });
+  it("claims neither while the facts cannot be believed", () => {
+    // Locked or Tampered: the core answers both false, and the card says the date alone.
+    expect(backupKind(b({ archives: 0, vaultRekeyed: true }), false)).toBe("current");
+    expect(backupLine(b({ archives: 0, keysReplaced: true }), false, when)).toMatchObject({ tone: "plain", rest: "", suggestExport: false });
+  });
+  it("keeps the house voice", () => {
+    for (const over of [{ vaultRekeyed: true }, { keysReplaced: true }]) {
+      const l = backupLine(b(over), true, when);
+      expect(`${l.head} ${l.rest}`).not.toMatch(/n't|'re|'ll|'ve|it's/i);
     }
   });
 });

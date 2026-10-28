@@ -1,5 +1,6 @@
 // The bound services and their models, re-exported from the generated
-// bindings, plus the raw channel for the four typed secrets (APP.md §1).
+// bindings, plus the raw channel for the four typed secrets and the
+// replacement's two answers (APP.md §1).
 import { System } from "@wailsio/runtime";
 import { Vault, Archives, Archive, Keys, Settings, Shell } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app/api";
 import type { CeremonyStep, Code } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
@@ -41,7 +42,11 @@ export function errorOf(e: unknown): AppError {
 
 // submitSecret hands a PIN, password, recovery digits or management key to
 // the waiting prompt over the raw message channel, which Wails does not
-// log. The value is never an argument of a bound call.
-export function submitSecret(kind: "pin" | "password" | "recovery" | "mgmtkey", promptId: string, value: string): void {
+// log. The value is never an argument of a bound call. A replacement's
+// "kept" (a new recovery key is kept) and "confirm" (its one confirmation)
+// go the same way with an empty value: the answer is that the prompt with
+// this id may go on, which is what the mailbox is, and its id and kind
+// must match, so neither can answer a PIN's prompt (ruled 2026-10-27).
+export function submitSecret(kind: "pin" | "password" | "recovery" | "mgmtkey" | "kept" | "confirm", promptId: string, value: string): void {
   System.invoke(`secret ${kind} ${promptId} ${value}`);
 }

@@ -68,8 +68,10 @@ var (
 	ErrConflict = errors.New("keystore: file changed on disk since it was opened")
 	// ErrClosed: the Keystore, Unlocked or Session has been closed or locked.
 	ErrClosed = errors.New("keystore: closed")
-	// ErrDuplicate: the token's key is already enrolled, or the new slot's
-	// random recipient ID collides with an existing one.
+	// ErrDuplicate: the token's key is already enrolled, or a new slot's
+	// recipient ID collides with an existing one: drawn at random, or a slot
+	// prepared for a replacement that the set already holds or that is
+	// passed twice.
 	ErrDuplicate = errors.New("keystore: slot already exists")
 	// ErrIndeterminate: a commit failed at or after its commit point, so the
 	// file may hold either state. Reopen it (Keystore.Broken).

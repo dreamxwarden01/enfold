@@ -355,9 +355,12 @@ func (k *Keys) Slots() []app.SlotView { return k.c.Slots() }
 
 // BeginEnroll adds a way in: "token", "password" or "recovery". An
 // enrolled key inherits the vault's entangled password and is wrapped from
-// the kept K_P, so no password is chosen here (APP.md §13).
-func (k *Keys) BeginEnroll(kind, label string) error {
-	return asErr(k.c.BeginEnroll(app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label}))
+// the kept K_P, so no password is chosen here (APP.md §13). withRecoveryKey
+// proves with a recovery key instead of a YubiKey: the user has none of the
+// vault's at hand; for a YubiKey or a recovery key added to a vault with a
+// YubiKey and a recovery key (ruled 2026-10-27).
+func (k *Keys) BeginEnroll(kind, label string, withRecoveryKey bool) error {
+	return asErr(k.c.BeginEnroll(app.EnrollOptions{Kind: app.EnrollKind(kind), Label: label, WithRecoveryKey: withRecoveryKey}))
 }
 
 // EntangledState is the Keys page's row for the vault's password: whether
@@ -365,17 +368,38 @@ func (k *Keys) BeginEnroll(kind, label string) error {
 func (k *Keys) EntangledState() app.EntangledState { return k.c.EntangledState() }
 
 // SetEntangled turns the vault's password on or off; turning it on asks
-// for the new password, turning it off asks for nothing. Both are
-// ceremonies, and neither ever asks the old password.
-func (k *Keys) SetEntangled(on bool) error { return asErr(k.c.SetEntangled(on)) }
+// for the new password in the ceremony, and rekey re-keys the vault in the
+// same commit. Turning it off takes neither rekey nor a backup.
+func (k *Keys) SetEntangled(on, rekey bool, backupPath string) error {
+	return asErr(k.c.SetEntangled(on, rekey, backupPath))
+}
 
-// ChangeEntangledPassword replaces the vault's password; a ceremony, and
-// the old password is never a field.
-func (k *Keys) ChangeEntangledPassword() error { return asErr(k.c.ChangeEntangledPassword()) }
+// ChangeEntangledPassword replaces the vault's password; a ceremony, and the
+// old password is never a field. rekey re-keys the vault in the same commit;
+// a backupPath that is not empty exports a backup inside the ceremony, after
+// the change.
+func (k *Keys) ChangeEntangledPassword(rekey bool, backupPath string) error {
+	return asErr(k.c.ChangeEntangledPassword(rekey, backupPath))
+}
 
-func (k *Keys) RemoveSlot(recipientID string) error { return asErr(k.c.RemoveSlot(recipientID)) }
-func (k *Keys) RotateNow() error                    { return asErr(k.c.RotateNow()) }
-func (k *Keys) ExportBackup(path string) error      { return asErr(k.c.ExportBackup(path)) }
+// RemoveSlot removes an unlock method; rekey re-keys the vault in the same
+// commit; backupPath as above.
+func (k *Keys) RemoveSlot(recipientID string, rekey bool, backupPath string) error {
+	return asErr(k.c.RemoveSlot(recipientID, rekey, backupPath))
+}
+
+// RotateNow re-keys the vault; backupPath as above.
+func (k *Keys) RotateNow(backupPath string) error { return asErr(k.c.RotateNow(backupPath)) }
+
+// ReplaceRecoveryKeys makes as many new recovery keys as the vault has,
+// shows each to be kept, and on the user's confirmation replaces every old
+// one and re-keys the vault in one commit; backupPath as above. The digits
+// arrive over the one-time URL, never here.
+func (k *Keys) ReplaceRecoveryKeys(backupPath string) error {
+	return asErr(k.c.ReplaceRecoveryKeys(backupPath))
+}
+
+func (k *Keys) ExportBackup(path string) error { return asErr(k.c.ExportBackup(path)) }
 
 // RevealRecoveryKey shows a recovery slot's key again, after a protector
 // unlock; the digits arrive over the one-time URL, never here.

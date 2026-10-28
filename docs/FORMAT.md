@@ -460,20 +460,23 @@ hard way: a review agent demonstrating the attack took the development machine d
 authenticated (§5), and each record's AAD is checked only when *that* slot is used to unlock. That
 left one attack unanalysed: an attacker with write access to the keystore replaces a software
 slot's `slot_pubkey` and `mlkem_ek` — or a hardware slot's `slot_pubkey` — with keys of their own,
-and waits. The next VMK rotation (§8 step 4, pre-selected on every slot change) re-wraps the new
-VMK to the stored public keys *without any credential present*, which is the design's own
-feature, and the attacker's key receives it. Splicing (§6.2) and Argon2 downgrade were analysed;
-this was not.
+and waits. The next VMK rotation (§8 step 4, pre-selected on every slot removal and credential
+change) re-wraps the new VMK to the stored public keys *without any credential present*, which
+is the design's own feature, and the attacker's key receives it. Splicing (§6.2) and Argon2
+downgrade were analysed; this was not.
 
 Hence `slot_region_hash` in the registry plaintext: SHA-256 over the encoded slot region exactly
 as written, authenticated by the registry's AEAD under the Metadata key. Rules:
 
 - Every write of the slot region also rewrites the registry with the new hash, in the order §8
   step 5 already fixes: slot region, then registry, then the superblock flip. The two are never
-  out of step, because they land in one flip. The converse is a rule too: a registry write that
-  does not accompany a slot-region write carries the existing hash forward unchanged and never
-  recomputes it over the region on disk — otherwise the first routine registry update after a
-  detected mismatch would authenticate the tampered region and destroy the evidence.
+  out of step, because they land in one flip. R41's retiring commit is the one write of the slot
+  region that carries the hash forward rather than recomputing it: it writes the live region
+  byte for byte into the other copy, so the hash already vouches for those bytes, and it is made
+  only while the live region verifies against it. The converse is a rule too: a registry write
+  that does not accompany a slot-region write carries the existing hash forward unchanged and
+  never recomputes it over the region on disk — otherwise the first routine registry update
+  after a detected mismatch would authenticate the tampered region and destroy the evidence.
 - After decrypting the registry, the reader verifies the live slot region against the hash. A
   mismatch is reported as **tampering of the slot region**, never as corruption and never
   silently repaired; the vault stays usable through the slot that just opened it, and no
@@ -541,8 +544,9 @@ good. An export's slot region header is therefore written with `entangle` 0, a z
 its first way in (§15). The escrow records mean that whoever opens an export with one of its
 recovery keys can read every recovery key the vault had when the export was made. With one
 recovery slot that is nothing new; with more than one, all recovery keys share a fate: an export
-or a copy that may have leaked is answered by replacing every recovery slot of its date, then
-rotating (§15, `DESIGN.md` §5). Nothing else travels.
+or a copy that may have leaked is answered by replacing every recovery slot of its date and
+rotating, in one commit, and by changing the entangled password, with a rotation of its own, if
+the vault has one (§8, §15, `DESIGN.md` §5). Nothing else travels.
 
 **R29, R30 — Retired (Revision 2).** `rewrap_stale` and the completion of a deferred rotation are
 gone with the per-slot entangled password (§18.1): no rotation lacks a slot's secret any more, so
@@ -724,7 +728,8 @@ means off.
 once, when it is made, and humans lose paper. So the registry keeps, for every active recovery
 slot, a `recovery_escrow` record in the secrets section (§7.6): the 16-byte `R` under
 AES-256-GCM with `KWK_secrets` (R3) and the AAD of R22, keyed by the slot's `recipient_id`. The
-record's life is the slot's: written by the commit that creates the slot (creation, `AddSlot`),
+record's life is the slot's: written by the commit that creates the slot (creation, `AddSlot`,
+or a replacement of the recovery slots, which seals it under `KWK_secrets'`, §8),
 removed by the commit that removes it, re-encrypted under `KWK_secrets'` by a rotation (§8 step
 3), which also drops it if its slot is gone. Only a key derived from the VMK opens it; the
 cached keys of a session (`DESIGN.md` §10: KWK, Metadata, DB) cannot, so showing a recovery key
@@ -732,20 +737,22 @@ again is a ceremony that recovers the VMK through a protector first (`APP.md` §
 adds no new principal — whoever can open a record already holds the VMK — but it makes a VMK
 exposure a recovery-key exposure: the digits a VMK holder reads outlive every rotation, since
 rotation re-wraps the recovery slot from its public keys, and the answer to a suspected VMK
-exposure is replacing every recovery slot, changing the entangled password if the vault has one
-— `K_P` sits under the same `KWK_secrets` (§7.6) and, like the digits, survives every rotation —
-and then rotating (`DESIGN.md` §5). Before a showing, the reader derives the slot's X25519 key
-from `R` (§3.1) and checks it against `slot_pubkey` (§6.3); a record that does not match its
-slot is refused, never shown. Every recovery slot has its record from the commit that creates
-it: registry version 3 is the only version read or written (§7), so there is no slot without
-one. Orphans are the keystore layer's concern, since the format layer never sees the slot
-region: every write of the slot region — creation, `AddSlot`, `RemoveSlot`, `Rotate`, an export
-— writes the registry with the `recovery_escrow` records of exactly the recovery slots active in
-the region it writes. That rule is kind 1's alone: the `entangled_key` and `vmk_history`
-records belong to the vault, not to a slot, and no slot-region write ever drops one — the one
-exception is an export, which by R28 leaves the `entangled_key` behind and takes the history. A
-record that does not unwrap fails the rotation (§1, fail closed), and two records of the same
-kind with the same `id` are invalid.
+exposure is replacing every recovery slot and rotating in one commit — the new slots'
+`recovery_escrow` records sealed under the new `KWK_secrets` only, so no new recovery key is
+ever readable with an exposed VMK (§8) — and changing the entangled password if the vault has
+one, with a rotation of its own: `K_P` sits under the same `KWK_secrets` (§7.6) and, like
+the digits, survives every rotation (`DESIGN.md` §5). Before a showing, the reader derives the
+slot's X25519 key from `R` (§3.1) and checks it against `slot_pubkey` (§6.3); a record that does
+not match its slot is refused, never shown. Every recovery slot has its record from the commit
+that creates it: registry version 3 is the only version read or written (§7), so there is no
+slot without one. Orphans are the keystore layer's concern, since the format layer never sees
+the slot region: every write of the slot region — creation, `AddSlot`, `RemoveSlot`, `Rotate`
+and a rotation that carries a change (§8), an export — writes the registry with the
+`recovery_escrow` records of exactly the recovery slots active in the region it writes. That
+rule is kind 1's alone: the `entangled_key` and `vmk_history` records belong to the vault, not
+to a slot, and no slot-region write ever drops one — the one exception is an export, which by
+R28 leaves the `entangled_key` behind and takes the history. A record that does not unwrap fails
+the rotation (§1, fail closed), and two records of the same kind with the same `id` are invalid.
 
 **R39 — The tree.** The root is implicit: id zero, never a record, the parent of every top-level
 record. A live file's or directory's `parent_id` is the root or a **live** directory record of the
@@ -828,6 +835,82 @@ back without a second file and without ever needing twice its size on disk. Whol
 compaction (R33) remains, on request, for what a move cannot do: a file whose extent is larger
 than every hole before it.
 
+**R41 — A writer retires the state before a slot region write, and leaves no registry no
+superblock names.** The keystore's two superblock copies alternate (§4), so after any commit the
+copy that lost still names the previous state: its slot region copy and its registry, intact and
+kept addressable on purpose. After a commit that wrote the slot region — a slot added or
+removed, the header changed, a rotation — that state can hold a way in the commit withdrew: a
+removed slot's record, the hardware slots under the old `K_P` or under none, a replaced recovery
+slot, and through that state's registry every archive key and every escrowed recovery key of its
+moment (R38); after a rotation it is also the one state the retiring VMK still opens. A
+registry-only commit does not end it: it names the live region and leaves the other copy's bytes
+as they were. Nor is a registry gone when no superblock copy names it: its ciphertext stays
+where it was written until a later write lands on it, and the registry is AES-256-GCM, a counter
+mode, so whoever holds the Metadata key it was sealed under and knows one block of its plaintext
+— every registry of a vault begins with the same 16 bytes, its format version and the start of
+`device_id` — recovers the counter, and with it the nonce, and reads the rest. Nothing need be
+damaged to use any of this: whoever holds the file can read it. So **every slot region write
+fills the rest of its 128 KiB copy with zeros; every registry write fills the rest of its last 4
+KiB unit with zeros**, never past the file's physical end before the commit nor into the live
+registry's extent; **after every commit's flip and trim, the writer writes zeros over every 4
+KiB unit of `[0x42000, the file's physical end)` that holds no byte of the registry either
+superblock copy names** and holds a nonzero byte. The physical end is the end as far as the
+writer has written, which a commit that failed before its flip after writing its registry past
+the last flip's end has moved, so the writer keeps it rather than that last end: the trim cuts
+to the later named registry's end, and the zero-fill covers what a failed trim leaves. The
+zero-fill never writes a unit that holds such a byte, so never a sector a reader of either state
+reads (the 4 KiB unit is the atomic-write unit, §17), and never a superblock, so that it has no
+commit point; it is not made when the superblock copies, read again first, show that another
+writer has committed since the flip. The trim and the zero-fill are made durable by an fsync
+after them, made whenever either changed the file: until it succeeds a power loss can bring back
+what they removed, so the writer counts the retirement owed however the bytes read back through a
+cache, and a retry that finds nothing left to zero makes that fsync all the same. And the writer
+follows a commit that wrote the slot region
+at once with a **retiring commit**: the live slot region, byte for byte, written into the copy
+the live superblock does not name, the rest of that copy zeroed, and the registry re-sealed at
+the same generation with only its `modified_at` advanced (R35) and its `slot_region_hash`
+carried, which the writer does only while the live region verifies against that hash (R25); its
+superblock goes to the losing copy, as every commit's does, and its zero-fill follows. The live
+copy is never written in place (§4): a live copy that holds bytes past `slot_region_len`, or a
+live registry whose last 4 KiB unit holds bytes past its tag, as a writer before this rule could
+leave, is settled by a second retiring commit once the first has left it no longer live, and a
+file still owed after two is treated as corrupt. **A retirement is owed** exactly while the live
+slot region copy holds anything past `slot_region_len` but zeros; or the other copy holds
+anything but the live region followed by zeros, or zeros alone; or the losing superblock copy
+fails its checksum, carries a `vault_id` or a `vmk_generation` other than the live one's, names
+a registry extent that does not lie inside the file, or names a slot region copy whose bytes
+`[0, its slot_region_len)` are not exactly the live region; or a 4 KiB unit of `[0x42000, the
+file's physical end)` holds a nonzero byte outside both named registries. A byte the writer
+cannot read counts as owed, and the file still opens, since no reader of either state needs it;
+so, for the writer that made them, does a trim or zeros whose fsync has not succeeded, which no
+reading of the bytes can show.
+The predicate is over the file's own bytes, so it survives a failed retiring commit — one that
+wrote its bodies and lost its superblock write included — a crash between the two commits, a
+zero-fill cut short, a reopen and a copy of the file, and it trusts no field anyone could clear:
+`rotation_pending` stays reserved (§5). While a slot region copy or the losing superblock copy
+is owed, every registry-only commit the writer makes carries one retiring pass in its own flip,
+when the live region verifies (R25), or, when that pass cannot be written, is made as the plain
+commit it is; registry bytes alone are met by every commit's own zero-fill. While anything is
+owed the application writes no slot, no new, removed or forgotten archive record and no secret,
+and exports no backup, before the retirement has landed in full (`APP.md` §2.1); the writer
+finishes it after unlocking, before the vault is used. A slot region that fails R25 is never
+written forward: in place of each retiring commit the writer then makes a registry-only commit,
+which carries the hash it was given as every registry-only commit does, and, once both
+superblock copies name the live slot region copy, reads them again and writes zeros over the
+other copy, which neither names, and makes the zero-fill; what can then remain is a live copy's
+own tail, and while it does the application refuses what it holds until a copy is imported
+(`APP.md` §2.1). The retiring commit decides nothing the first did not; its failure does not
+undo the first. What it does not change: a reader still chooses a superblock copy by its
+checksum and `seq` alone (§4) and reads the region and the registry that copy names, with no
+fallback on a damaged body; with the live superblock copy damaged, the other opens the same
+state after a retirement, and the state one commit behind otherwise. What it does not establish:
+physical erasure of the old bytes, which an SSD may keep, as it may keep the space a trim gave
+back (`DESIGN.md` §5), or anything about copies of the file taken before it landed, the dated
+copy included that an import keeps of a vault that still owes one, which the import's
+confirmation names (`APP.md` §2.1). A rotation's own atomicity is §8's and is not changed by it.
+The word is this rule's own: a retiring commit is a full commit, neither R31's retired copy, a
+superblock copy carried at `seq` − 1 onto the live state, nor a slot whose `slot_state` is 2.
+
 
 ---
 
@@ -881,6 +964,23 @@ are. Once the flip is durable the file is trimmed to the end of the later of the
 the losing superblock's extent stays addressable, so a reader that finds the live copy damaged
 still has a registry to open, which is R31's guarantee one level up.
 
+**Nor does a registry the two superblock copies no longer name stay in the file** (R41). Every
+registry write fills the rest of its last 4 KiB unit with zeros, never past the file's physical
+end before the commit nor into the live registry's extent; and once the flip is durable and the
+file trimmed to the later named registry's end, the writer reads both superblock copies again
+and, if no other writer has committed since, writes zeros over every 4 KiB unit from `0x42000`
+to the file's physical end that holds no byte of either named registry and holds a nonzero byte,
+then fsyncs whenever the trim or the zeros changed the file: a cut or zeros the disk does not
+yet hold come back with a power loss, so until that fsync succeeds the writer still counts the
+retirement owed, and a retry that finds nothing left to zero makes it all the same.
+A unit that holds any byte of a named registry is never written, so the zero-fill never rewrites
+a sector a reader of either state reads (the 4 KiB unit is the atomic-write unit, §17), and it
+writes no superblock, so it has no commit point: cut short, it leaves only bytes no superblock
+names, which the next commit's zero-fill or the next unlock's retirement clears. Such bytes are
+not harmless: the registry is AES-256-GCM, a counter mode, so whoever holds the Metadata key a
+registry was sealed under and one block of its plaintext — every registry of a vault begins with
+the same sixteen bytes — reads the rest.
+
 ### Why the slot region is doubled too
 
 Slot mutations must be crash-atomic, and a VMK rotation rewrites **every** slot record with a
@@ -892,7 +992,7 @@ the Metadata key, while slot writes happen around unlock and rotation. Doubling 
 reuses the superblock argument one level down and needs no new correctness reasoning:
 
 ```
-1. write the new slot region into the inactive copy, fsync
+1. write the new slot region into the inactive copy, the rest of the copy zeroed (R41), fsync
 2. write the inactive superblock with seq+1 pointing at it, fsync
 ```
 
@@ -924,7 +1024,7 @@ Fixed 4096 bytes. Everything before `checksum` is covered by it.
 | `seq` | `u64` | Monotonic; higher valid superblock wins |
 | `vault_id` | `u8[16]` | Random at creation, **immutable**. In HKDF info strings and AADs |
 | `slot_region_off` | `u64` | Which slot region copy is live |
-| `slot_region_len` | `u64` | The encoded region's own length: the 32-byte header plus the records packed after it (§6), never the 128 KiB the copy is sized for. The rest of the copy is not part of the region, is not read, and is not covered by `slot_region_hash` (R25) |
+| `slot_region_len` | `u64` | The encoded region's own length: the 32-byte header plus the records packed after it (§6), never the 128 KiB the copy is sized for. The rest of the copy is not part of the region, is not read, and is not covered by `slot_region_hash` (R25); a writer reads it only to decide whether a retirement is owed (R41) |
 | `registry_off` | `u64` | |
 | `registry_len` | `u64` | Ciphertext length, excluding tag. The tag follows the ciphertext, so the extent occupies `registry_len + 16` bytes on disk |
 | `registry_nonce` | `u8[12]` | 96 bits drawn fresh from the OS CSPRNG at every **sealing** of the registry — a verbatim copy of sealed bytes is not one; never derived from `seq` and never reused (R22) |
@@ -1273,7 +1373,9 @@ is §8 step 3; what an export carries is R28.
 ## 8. VMK rotation
 
 **Offered on every slot removal and credential change, with rotation pre-selected.** `DESIGN.md`
-§5 covers why the default sits there rather than on "skip". The mechanics:
+§5 covers why the default sits there rather than on "skip". Turning the vault's password on is a
+credential change in this sense; turning it off is not: the file then opens without the
+password, so a rotation would revoke nothing (`DESIGN.md` §5). The mechanics:
 
 1. Generate `VMK'`, increment `vmk_generation`, derive the five subordinate keys.
 2. Unwrap every archive key with `KWK`, re-wrap with `KWK'`. **No archive file is touched** — the
@@ -1303,6 +1405,13 @@ and old registry fully intact. There is never a moment when some archive keys ar
 `KWK` and others under the old, which is why no per-record generation tag is needed on archive
 records.
 
+After the flip the writer retires the state before (R41) with a second commit at the new
+generation: until it lands, the losing superblock copy and the other slot region copy still hold
+the state step 5 replaced, which the retiring VMK opens and whose slot region still holds every
+slot of before, a removed one included, and its zero-fill clears every earlier registry no
+superblock names. It is a commit of its own and changes nothing above: a crash between the two
+leaves the new state live and the retirement owed.
+
 Cost is roughly 60 bytes per **archive**, not per file, because only archive keys are re-wrapped.
 A vault with a thousand archives rotates in well under a second.
 
@@ -1311,14 +1420,35 @@ A vault with a thousand archives rotates in well under a second.
 Step 4 needs each slot's key material, and every v1 slot type is asymmetric: hardware slots use
 the stored `slot_pubkey` and — while the header's `entangle` is 1 — the `K_P` step 3 held,
 software slots the stored `slot_pubkey` plus `mlkem_ek`. So **no credential need be present and
-no password typed**, and a rotation that commits is complete: there is no stale slot, no
-`rewrap_stale`, no partial rotation and no VMK retained inside any slot. The one VMK history is
+no password typed**, and a rotation that commits re-wraps every slot at once: there is no stale
+slot, no `rewrap_stale`, no partial rotation and no VMK retained inside any slot; what the file
+still holds of the state before is retired by the commit after it (R41). The one VMK history is
 the secrets section's (§7.6), reachable only through the current VMK. A future symmetric
 hardware slot (§16) would be the exception, and would need its own rule.
 
 Revocation is not weakened: the removed slot's record is deleted, and the retired VMK it could
 have yielded is kept only under the new `KWK_secrets`, which the removed credential does not
-reach.
+reach; the state before, whose slot region copy and superblock copy still hold the removed
+record until then, is retired by the commit that follows the rotation (R41).
+
+**A rotation may carry a removal, a new password or new recovery slots** (ruled 2026-10-27). The
+slots of step 4 are the records this commit writes: a removal that rotates deletes its record
+from that set before step 3 prunes against it, so the removed slot's `recovery_escrow` record is
+dropped rather than re-encrypted, and the slot is never wrapped the new VMK. A replacement of
+the recovery slots deletes every recovery record, whatever its `slot_state`, and adds the new
+ones, whose public keys were derived from their recovery keys before the commit; step 3 drops
+the old records' escrow and seals the new ones' under `KWK_secrets'` alone, and step 4 wraps the
+new VMK into them as into every surviving slot, so no new recovery key is ever escrowed under a
+VMK an old one opens. A password change that rotates, and turning the password on with a
+rotation, write their new slot region header, `entangle_salt` included, in step 5. In step 3 the
+`entangled_key` record, where there is one, still opens under the retiring `KWK_secrets` — a
+record that does not open fails the rotation — and its plaintext is discarded; the record
+written holds the new password's `K_P` sealed under `KWK_secrets'`, created when the switch was
+off, and step 4 wraps every hardware slot from it. The old `K_P` is in no record of the new
+state. Each is still one superblock flip: a crash leaves the old state whole or the new one,
+never a removal, a password change or a replacement without its rotation; R41's retiring commit
+then retires the state before, after which no copy in the file still holds a state the removed
+credential, the old password or an old recovery key opens.
 
 ---
 
@@ -1626,9 +1756,9 @@ the secrets section (§7.6) do change is what a copy carries: every export, ever
 damaged copy holds, under its own VMK, every recovery key of its date and every VMK the vault
 had retired by then — and a copy of the keystore itself, rather than an export, the entangled
 password's key `K_P` as well. A copy that may have leaked is therefore answered by replacing
-every recovery slot that was active when it was made — not only the one it was opened with —
-changing the entangled password, which is the only one of the three steps that replaces `K_P`,
-and then rotating.
+every recovery slot that was active when it was made — not only the one it was opened with — in
+one commit with a rotation, and by changing the entangled password, which is the only step that
+replaces `K_P`, with a rotation of its own (§8).
 
 **Keystore backup is a separate concern from the recovery key**, and its design is **deferred**.
 An earlier draft called automatic backup a mandatory feature; that was premature. Automatic backup
@@ -1844,10 +1974,15 @@ export carries the history (R28), so a vault rebuilt from one keeps it.
 ### 18.3 Rotation is one flip, and nothing is kept beside it
 
 §8 stands: slot region, registry, then the superblock flip, atomic. It is not a new file renamed
-over the old, and no pre-rotation copy is kept: a rotation usually follows a removal, and the
-copy would still open with the slot just removed. The safety net is the backup the app asks
-for before rotating (`APP.md` §13): a backup holds the recovery slots only, so keeping it revokes
-nothing.
+over the old, and no pre-rotation copy is kept, in the file or beside it: a rotation usually
+follows a removal, and the copy would still open with the slot just removed, so the state the
+losing superblock copy and the other slot region copy hold is retired at once (§8, R41). The
+safety net is the backup the app offers to take right after the rotation (`APP.md` §13): at the
+new generation, holding the recovery slots only. Until 2026-10-27 the app asked for it before
+rotating; it was moved after, since a backup made before a rotation is at the retiring VMK — it
+still opens with the recovery slots it holds and is read through `vmk_history` (§18.2), but
+adopting it continues at that VMK, which a removed credential may have reached through an
+earlier copy — so the app says when the last backup predates a re-key and asks for a new one.
 
 ### 18.4 The recovery key has an ID
 
@@ -1855,4 +1990,7 @@ The recovery slot's `recipient_id`, its first eight hex digits grouped as `3F7A-
 key's ID: printed on the sheet, written into the text file, shown at the reveal, and shown by
 the unlock prompt beside each recovery slot's label and date. The digits' checksum catches a
 mistyped group; the ID catches the wrong sheet. Nothing new is stored, and nothing is revealed:
-`recipient_id` is plaintext in the slot region already.
+`recipient_id` is plaintext in the slot region already. A replacement of the recovery slots (§8,
+ruled 2026-10-27) draws each new slot's `recipient_id` again while its first four bytes, the ID,
+are an active slot's or another new slot's, and refuses after sixteen draws, so that no sheet it
+hands over shares an ID with a slot the vault keeps.

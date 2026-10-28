@@ -18,7 +18,10 @@
   // Since Revision 2 the tick is the vault's one switch, not this
   // YubiKey's (APP.md §13, FORMAT.md §3.1): every YubiKey added later
   // inherits it, so the words say the vault's fact.
-  import { onDestroy, untrack } from "svelte";
+  // Svelte's tick is named drawn here: tick, below, is the YubiKey card's
+  // password tick.
+  import { onDestroy, tick as drawn, untrack } from "svelte";
+  import { prefersReducedMotion } from "svelte/motion";
   import { fade } from "svelte/transition";
   import { nextMark, onLeave } from "../lib/forms";
   import { begin, fixedLine, keepsPassword, nextLine, problems } from "../lib/firstwayin";
@@ -135,6 +138,16 @@
     return b;
   }
 
+  // reveal brings the cards into view in a body that scrolls, once the
+  // press's marks are drawn: the import dialog's confirmation stands above
+  // them, so its press can be made with them below the fold, and a mark no
+  // one sees reads as a press that did nothing. Cards already in view move
+  // nothing; it scrolls smoothly, except under reduced motion.
+  let root: HTMLDivElement | undefined = $state();
+  export function reveal(): void {
+    void drawn().then(() => root?.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion.current ? "auto" : "smooth" }));
+  }
+
   // The dialog closed without Continue: nothing was taken, and the fields
   // are emptied with the component.
   onDestroy(() => {
@@ -181,7 +194,7 @@
   {/if}
 {/snippet}
 
-<div class="methods">
+<div class="methods" bind:this={root}>
   <div class="field-top"><span id="{idPrefix}-head" class="head">{heading}</span></div>
   <div class="group">
   <div class="cards" role="radiogroup" aria-labelledby="{idPrefix}-head" aria-describedby={methodShow ? `${idPrefix}-said` : undefined}>

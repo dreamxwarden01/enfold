@@ -108,18 +108,22 @@ page on the lock screen.
 
 The ceremony in a dialog (APP.md 6, 13; ruled 2026-10-17) is played on an
 unlocked vault. The Vault page's acts - Keys.BeginEnroll, RemoveSlot,
-RotateNow, ExportBackup, RevealRecoveryKey, ChangeEntangledPassword - and
-the import's proof, Vault.InspectRecords, park their ceremony at the
-proof's opening wait (begin_act), so the page's own buttons open the
+RotateNow, ExportBackup, RevealRecoveryKey, SetEntangled,
+ChangeEntangledPassword, ReplaceRecoveryKeys - and the import's proof,
+Vault.InspectRecords, park their ceremony at the proof's opening wait
+(begin_act) with what the page asked of them (the re-key, the backup's
+path, the recovery-key switch), so the page's own buttons open the
 dialog's panel; Vault.CancelUnlock, the panel's Cancel, ends it cancelled
-with the vault still unlocked. Each moment after that is a scene, queued
-as the core's events a step apart, with the page on the Vault page:
-POST /mock/preview {"name": "dialog", "scene": "pin"} - or "touch",
-"swap", "new_key", "last_try", "blocked", "done", "timeout"... (the list
-is DIALOG_SCENES; an unknown scene answers with the names) - and "kind"
-for another act than the enrolment ("remove", "rotate", "export",
-"reveal", "entangle", or "records" with the import dialog open on its
-proof and Continue pressed). {"scene": "end"} ends what a scene left.
+with the vault still unlocked. A second act is refused while the first
+has not ended (ceremony.in_progress), as the core refuses it. Each moment
+after that is a scene, queued as the core's events a step apart, with the
+page on the Vault page: POST /mock/preview {"name": "dialog", "scene":
+"pin"} - or "touch", "swap", "new_key", "last_try", "blocked", "done",
+"timeout"... (the list is DIALOG_SCENES; an unknown scene answers with
+the names) - and "kind" for another act than the one parked ("enroll",
+"remove", "rotate", "export", "reveal", "entangle", "password",
+"replace", or "records" with the import dialog open on its proof and
+Continue pressed). {"scene": "end"} ends what a scene left.
 
 The dialog's Start again (ruled 2026-10-17) calls again the act the page
 began, which parks again at the opening wait (begin_act): it is offered
@@ -127,6 +131,54 @@ only for an act the page itself began, so stage it by opening the act
 from the page's own button first (Add an unlock method... then Add), then
 the "timeout" or "failed" scene, then press Start again. A scene played
 with no act begun shows Close alone, as an act the page cannot repeat.
+
+The acts that re-key the vault (ruled 2026-10-27; the design is
+docs/research/vmk-rotation.md, 2.5 and 3.10). A scene played over a
+parked act carries what the act was begun with - its re-key, the YubiKey
+a re-keying removal does not ask for ("without"), its backup - and its
+Done ends the act as the core's does: the commit's phase, and the
+backup's when one was asked for, before it; the act given to the staged
+vault (the way in added or removed, the password's switch moved, the
+recovery keys replaced) and the cards' Remove... read again; "after" read
+from the vault so left, so the end's follow-up is the one the core would
+lead to; the backups card's facts moved. Turning the password on or off
+is such an act: the switch moves only at its Done. Knobs on the scene
+override what the act gave: "rekey", "without" and "keepCount" ride every
+event, "phase" the last, and "backedUp", "backupError", "retireError" and
+"retireRemnant" the end:
+
+    POST /mock/preview {"name": "dialog", "scene": "proof_done", "kind": "remove", "rekey": true}
+    POST /mock/preview {"name": "dialog", "scene": "proof_done", "backupError": "file.exists"}
+    POST /mock/preview {"name": "dialog", "scene": "deriving", "phase": "commit"}
+
+"choose_on" plays turning the password on (the proof, the chosen
+password, the commit, Done) and "replaced" a replacement's end with its
+receipt. The replacement itself is played, not staged: {"name":
+"dialog", "scene": "replace", "keys": 2} plays the proof's touch, then
+shows each new recovery key at keep_key and waits for the page's Next
+recovery key, then waits at confirm for its Replace recovery keys, then
+commits and ends ("cancel_at": 1, or "confirm", cancels there; "fail":
+"conflict" or "indeterminate" ends it Failed after the confirm with the
+vault Broken, and "landed": true gives the vault the new keys first). A
+proof by recovery key - Add an unlock method...'s Use recovery key
+instead, the removal of the vault's only YubiKey with a re-key, any act
+of a vault of recovery keys alone - parks at the recovery prompt and
+plays on once the page answers it, through the act's Done.
+
+The retirement's barrier (2.4): POST /mock/state {"retire_owed": true}, or
+"retire_owed" beside any preview, a lock screen's or a dialog's, stages a
+vault file that still holds a change's earlier state after its clearing
+failed: the status carries retireOwed and the warning vault.retire_owed,
+and the held calls - Archives.Create, RotateKey, Forget, Restore and
+Delete, Vault.MergeRecords and InspectRecords, Keys.ExportBackup and every
+Keys act but the reveal - answer vault.retire_owed while the content
+calls go on. "owed" is a file that owes with no failed attempt (no
+warning) and "lands" one whose next attempt succeeds: either is cleared
+by the next held call, which goes on. A played end with "retireError"
+leaves the vault owed, as the core's does. POST /mock/preview {"name":
+"setup_needed_on"} is a vault left with recovery keys alone and its
+password on, whose Finish setting up the core refuses at once
+(vault.setup_password_on).
 
 The backup line (APP.md 13, direction 9) is Vault.BackupStatus, answered
 from state["backup"] as the core answers it: "at" is the last backup's
@@ -144,6 +196,17 @@ from its own clock (the mock's NOW is its start, close enough):
     behind:  POST /mock/state {"backup": {"at": <now - 1900000>, "archives": 4, "missing": 2, "rekeyed": 0}}
     re-key:  POST /mock/state {"backup": {"at": <now - 1900000>, "archives": 4, "missing": 0, "rekeyed": 1}}
     current: POST /mock/state {"backup": {"at": <now - 432000>, "archives": 4, "missing": 0, "rekeyed": 0}}
+
+"vaultRekeyed" and "keysReplaced" (false by default) say the vault was
+re-keyed, or its recovery keys all replaced, after that backup; they too
+read false while the vault is not unlocked, or with no backup recorded:
+
+    re-keyed:  POST /mock/state {"backup": {"at": <now - 432000>, "missing": 0, "vaultRekeyed": true}}
+    replaced:  POST /mock/state {"backup": {"at": <now - 432000>, "missing": 0, "vaultRekeyed": true, "keysReplaced": true}}
+
+Vault.InspectFile answers "rekeyed" from POST /mock/state {"fileRekeyed":
+true} (false by default): the file is this vault's at a key it has since
+replaced.
 
 The Archive page's copy_mismatch note (the fingerprint names this copy):
 POST /mock/state {"stat": {"copyMismatch": true}} before the archive is
@@ -449,7 +512,11 @@ state = {
     # "at" is also Vault.LastExportAt's answer. Staged behind - 22 days
     # old, 2 of 5 archives created since - so the Vault page's line has
     # its attention form to draw (see the module docstring for the rest).
-    "backup": {"at": NOW - 1_900_000, "archives": 4, "missing": 2, "rekeyed": 0},
+    "backup": {"at": NOW - 1_900_000, "archives": 4, "missing": 2, "rekeyed": 0,
+               # Whether the vault was re-keyed, or its recovery keys all
+               # replaced, after that backup (BackupStatus.vaultRekeyed and
+               # keysReplaced): moved by a played act's Done (note_backup).
+               "vaultRekeyed": False, "keysReplaced": False},
     # How many times Shell.OpenDataFolder was asked (the boot failure's
     # Open data folder): there is no Explorer here to open.
     "dataFolderOpened": 0,
@@ -507,6 +574,17 @@ state = {
     # 3, 6 Paste): the files a copy or a cut named, each with its kind, and
     # whether it was a cut. Empty by default - nothing to paste.
     "clipboard": {"files": [], "move": False},
+    # The retirement's barrier (2.4, ruled 2026-10-27): False, or the vault
+    # file still holds a change's earlier state - True (a failed attempt,
+    # the warning standing), "owed" (none yet, no warning) or "lands" (the
+    # next attempt succeeds). See barrier.
+    "retire_owed": False,
+    # The act a bound Keys call parked (act_of), until its ceremony ends:
+    # its arguments say what its scenes carry and what its Done applies.
+    "act": None,
+    # Vault.InspectFile's rekeyed (FileInfo.Rekeyed): the file is this
+    # vault's, made before the vault was last re-keyed.
+    "fileRekeyed": False,
 }
 
 # Scenes the lock screen cannot reach on its own here (the mock dispatches
@@ -651,6 +729,9 @@ PREVIEWS.update({
 #   broken    a save's outcome unknown: *Reopen the vault*
 #   busy      the vault held by another Enfold
 #   setup_needed  an adopted backup with its recovery key alone
+#   setup_needed_on  recovery keys alone with the password on, as the
+#             removal of the only YubiKey leaves such a vault: Finish
+#             setting up is greyed, and refused (vault.setup_password_on)
 #   first_run  no vault configured yet
 #   absent    the configured vault is not at its path
 #   damaged / damaged_no_copy  the file is there and is not a vault, with
@@ -672,6 +753,7 @@ PREVIEWS.update({
     "broken": dict(_AT_REST, state="broken"),
     "busy": dict(_AT_REST, state="busy"),
     "setup_needed": dict(_AT_REST, setupNeeded=True, hasHardwareSlot=False, entangled=False),
+    "setup_needed_on": dict(_AT_REST, setupNeeded=True, hasHardwareSlot=False, entangled=True),
     "first_run": _FIRST_RUN,
     "absent": dict(_FIRST_RUN, missingPath="D:/Vaults/personal.eks"),
     "damaged": dict(_FIRST_RUN, missingPath="D:/Vaults/personal.eks", damaged=True,
@@ -1872,6 +1954,9 @@ def lock_vault(args=None):
     vault for no lock)."""
     v = state["vault"]
     if v.get("state") == "unlocked":
+        # A lock cancels the ceremony a dialog's act runs, as the core's
+        # LockNow does, so no act outlives the session it began in.
+        end_act()
         v.update({"state": "locked", "locksAt": 0, "absoluteAt": 0, "idleEffectiveMinutes": 0, "absoluteEffectiveMinutes": 0,
                   "tampered": False, "tamperedReason": ""})
         emit_status()
@@ -2087,6 +2172,14 @@ def vault_status(args=None):
     v["ops"] = [op_view(o) for o in state["ops"].values() if not o["finished"]]
     v["openArchives"] = state["vault"]["openArchives"]
     v["opened"] = opened()
+    # The retirement's barrier (2.4): retireOwed is the core's cached fact,
+    # known while Locked too, and the warning stands only once an attempt
+    # failed - a file merely owed, as after a crash, carries none.
+    owed = state.get("retire_owed")
+    v["retireOwed"] = bool(owed)
+    v["warnings"] = [w for w in v.get("warnings") or [] if w != "vault.retire_owed"]
+    if owed and owed != "owed":
+        v["warnings"].append("vault.retire_owed")
     return v
 
 
@@ -2101,13 +2194,19 @@ def backup_status(args=None):
     """Vault.BackupStatus(): the last backup's time and what it lacks
     (APP.md 13). The counts are 0 unless the vault is unlocked and not
     tampered - only an unlocked registry is read, as in the core - and
-    "at" stands either way. Named, so failNext can refuse it."""
+    "at" stands either way. Named, so failNext can refuse it. vaultRekeyed
+    and keysReplaced follow the counts, and are said only of a backup
+    recorded here (keys.go BackupStatus: no stamp, nothing to be behind)."""
     b = state.get("backup") or {}
     v = state["vault"]
-    out = {"at": int(b.get("at", 0)), "archives": 0, "missing": 0, "rekeyed": 0}
+    out = {"at": int(b.get("at", 0)), "archives": 0, "missing": 0, "rekeyed": 0,
+           "vaultRekeyed": False, "keysReplaced": False}
     if v.get("state") == "unlocked" and not v.get("tampered"):
         for k in ("archives", "missing", "rekeyed"):
             out[k] = int(b.get(k, 0))
+        if out["at"]:
+            for k in ("vaultRekeyed", "keysReplaced"):
+                out[k] = bool(b.get(k, False))
     return out
 
 
@@ -2192,7 +2291,7 @@ def close_decided(args):
 # 8 characters, which the dialog never sends. The YubiKey's own steps are
 # timed, never asked: there is no key here.
 
-CEREMONY = {"kind": "", "prompt": None, "answer": None, "cancelled": False, "before": None}
+CEREMONY = {"kind": "", "prompt": None, "answer": None, "cancelled": False, "before": None, "quiet": False, "run": None}
 CEREMONY_LOCK = threading.Lock()
 
 
@@ -2209,12 +2308,28 @@ def emit_status():
     emit("vault.state", vault_status())
 
 
+# The re-keying acts' fields the core leaves out of its JSON while they are
+# empty (types.go CeremonyState, omitempty): left out here too, so the page
+# meets the shape the app sends it.
+OMIT_EMPTY = ("phase", "without", "backupError", "retireError", "retireRemnant", "oldIds", "newIds", "after")
+
+
 def ceremony_event(kind, step, **extra):
     c = {"seq": next_seq(), "kind": kind, "method": "", "step": step, "promptId": "", "choose": False,
          "slotLabel": "", "recoveryId": "", "retries": 0, "retriesKnown": False, "verified": False,
          "readerCount": 1, "n": 0, "pinAsked": False, "error": "", "removeLabel": "", "insertLabel": "",
-         "archives": 0}
+         "archives": 0,
+         # The acts that re-key (ruled 2026-10-27): whether the act re-keys
+         # in its own commit, its phase once proved (commit, backup), the
+         # YubiKey a re-keying removal does not ask for, the backup's and
+         # the retirement's outcomes, a replacement's keys and the vault
+         # the act left (After).
+         "rekey": False, "phase": "", "without": "", "backedUp": False, "backupError": "", "retireError": "",
+         "retireRemnant": False, "keepIndex": 0, "keepCount": 0, "oldIds": [], "newIds": [], "after": None}
     c.update(extra)
+    for k in OMIT_EMPTY:
+        if not c[k]:
+            del c[k]
     return c
 
 
@@ -2259,11 +2374,12 @@ def pause(seconds):
         time.sleep(0.05)
 
 
-def ask(kind, secret, step, choose=False, **extra):
+def ask(kind, secret, step, choose=False, prompt_id=None, **extra):
     """A prompt: the ceremony stands at it until the page answers it on
     /mock/secret, or the ceremony is cancelled. extra goes on the event
-    (the method the core has named by then)."""
-    prompt_id = secrets.token_hex(8)
+    (the method the core has named by then); prompt_id, when given, is the
+    id the event carries (the core draws one per prompt)."""
+    prompt_id = prompt_id or secrets.token_hex(8)
     with CEREMONY_LOCK:
         CEREMONY["prompt"] = {"id": prompt_id, "secret": secret, "choose": choose}
         CEREMONY["answer"] = None
@@ -2401,6 +2517,13 @@ def finish_setup(args):
     """Vault.FinishSetup(kind, label, entangle): the recovery key, then the
     first way in, ending Unlocked."""
     first, label, entangle = (list(args) + ["token", "", False])[:3]
+    v = state["vault"]
+    # Refused before its ceremony on a vault whose password is on, whose
+    # first way in AddFirstWayIn cannot write: the core answers at once,
+    # after its own setup-needed check (vaultfile.go FinishSetup), rather
+    # than after the recovery key, the choice and the YubiKey.
+    if not CEREMONY["kind"] and v.get("setupNeeded") and v.get("entangled"):
+        return Err("vault.setup_password_on")
 
     def after():
         landed(first, entangle)
@@ -2436,12 +2559,17 @@ def begin_unlock(args):
     the core leaves it until a YubiKey answers - WaitingForKey under the
     method named (APP.md 2.2); a pending touch is picked up instead, at the
     touch (the rest panel's *Continue unlocking*). Refused, as the core
-    refuses it, for a vault that is not at rest or needs setting up."""
+    refuses it, for a vault that is not at rest, and with a YubiKey or a
+    password for one that needs setting up."""
     v = state["vault"]
     method = args[0] if args else "token"
     if CEREMONY["kind"] or v["state"] != "locked":
         return Err("vault.busy") if v["state"] == "busy" else None
-    if v.get("setupNeeded"):
+    # The core refuses the token and the password only (ceremony.go
+    # BeginUnlock): a vault that needs setting up has no such way in, and
+    # its recovery key still opens it - the lock screen's one way in where
+    # Finish setting up is greyed (setup_needed_on).
+    if v.get("setupNeeded") and method in ("token", "password"):
         return Err("vault.setup_needed")
     v["state"] = "unlocking"
     v["note"] = ""
@@ -2464,9 +2592,10 @@ def begin_unlock(args):
 # core's events on an unlocked vault, so the dialog moves through them as
 # it would. With the page on the Vault page (the rail's second item):
 #     POST /mock/preview {"name": "dialog", "scene": "pin"}
-# and "kind" names another act than the enrolment ("remove", "rotate",
-# "export", "reveal", "entangle", "records" - the last with the import
-# dialog open on its proof, Continue pressed). A scene replays its whole
+# and "kind" names another act than the one parked, or the enrolment
+# ("remove", "rotate", "export", "reveal", "entangle", "password",
+# "replace", "records" - the last with the import dialog open on its
+# proof, Continue pressed). A scene replays its whole
 # run up to its moment, a step apart, so the panel's held views and the
 # enrolment's two-part line see the order the core emits. The scenes:
 #   insert     the proof's wait for a YubiKey the vault has (key art)
@@ -2489,6 +2618,14 @@ def begin_unlock(args):
 #   choose     an enrolment of a password: the chosen one, typed twice
 #   mgmt_key   the new YubiKey's management key, in hex
 #   recovery   the recovery key's cells (kind "records": the import's)
+#   choose_on  turning the password on: the proof, the vault's chosen
+#              password, then the commit's phase and Done (kind entangle)
+#   replaced   a replacement's end: the proof's touch, the commit's and
+#              the backup's phases, Done with its receipt (kind replace)
+#   replace    the replacement played through the page's own answers
+#              (replace_scene): each new key kept, the one confirmation
+# Played over the parked act, a scene's Done ends that act as the core
+# ends it (end_events).
 # POST /mock/preview {"name": "dialog", "scene": "end"} ends whatever a
 # scene left as Vault.CancelUnlock does, the dialog's Cancel included.
 _PROVE = [("waiting_for_key", {"readerCount": 0}),
@@ -2534,12 +2671,36 @@ DIALOG_SCENES = {
     "mgmt_key": _NEW + [("management_key", {"promptId": "dmk-1", "slotLabel": "YubiKey 5 NFC \u2014 travel"})],
     "recovery": [("waiting_for_key", {"readerCount": 0, "method": "recovery"}),
                  ("recovery", {"promptId": "drk-1", "method": "recovery"})],
+    # Turning the password on (keys.go SetEntangled): the proof, then the
+    # vault's chosen password under its one prompt, then Done, which the
+    # commit's phase precedes as the scene is played (end_events).
+    "choose_on": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
+                             ("password", {"promptId": "dpw-c", "choose": True}),
+                             ("done", {})],
+    # A replacement's end (keys.go replaceWith): the proof's touch, then the
+    # commit's and the backup's phases and Done with its receipt - oldIds,
+    # newIds - and the backup written (dialog_scene, end_events).
+    "replaced": _TOUCHED + [("done", {})],
 }
 
 
 # The kinds a dialog runs (the lock screen runs unlock, create, setup,
-# import and verify).
-DIALOG_KINDS = ("enroll", "remove", "rotate", "export", "reveal", "entangle", "records")
+# import and verify). "password" is the password's change, an act of its
+# own since it can re-key the vault (keys.go ChangeEntangledPassword), and
+# "replace" the recovery keys' replacement (ruled 2026-10-27).
+DIALOG_KINDS = ("enroll", "remove", "rotate", "export", "reveal", "entangle", "password", "replace", "records")
+
+# The acts whose commit writes the slot region, through the core's
+# landChange: each passes Phase "commit" once its proof has passed and
+# ends with After, the vault as it left it (types.go CeremonyState).
+COMMITS = ("enroll", "remove", "password", "entangle", "rotate", "replace")
+
+# A scene's own act, for a scene played without a "kind" (dialog_scene).
+SCENE_KINDS = {"choose_on": "entangle", "replaced": "replace"}
+
+# The knobs a dialog scene carries on its end's event, beside what the
+# act itself gives it (dialog_scene, end_events).
+END_KNOBS = ("backedUp", "backupError", "retireError", "retireRemnant")
 
 
 def _unlocked_for_dialogs():
@@ -2557,31 +2718,150 @@ def dialog_scene(body):
     """POST /mock/preview {"name": "dialog", "scene": ..., "kind": ...}:
     one of DIALOG_SCENES, played as the core's events a step apart on a
     thread of its own, so the page sees each as it would. "end" ends what
-    a scene or begin_act left, as a cancel does."""
+    a scene or begin_act left, as a cancel does; "replace" plays the
+    replacement through the page's own answers (replace_scene).
+
+    The act is "kind", else the scene's own (SCENE_KINDS), else the one a
+    bound call parked (state["act"]), else the enrolment. A scene of the
+    parked act carries what the act was begun with - its re-key and the
+    YubiKey a re-keying removal does not ask for - and plays its Done as
+    the core ends it (end_events): the commit's phase, the backup's when
+    one was asked for, the act given to the staged vault (apply_act) and
+    After read from the vault so left, so the page's follow-ups are
+    decided as the core's are. Knobs override what the act gave: "rekey",
+    "without" and "keepCount" ride every event, "phase" the last, and
+    END_KNOBS the end's; a "retireError" there leaves the vault owed and
+    an asked-for backup not taken, as the core's backUpAfter leaves it."""
     scene = body.get("scene", "")
     if scene == "end":
         return end_act()
+    if scene == "replace":
+        return replace_scene(body)
     steps = DIALOG_SCENES.get(scene)
     if steps is None:
-        return {"scenes": sorted(DIALOG_SCENES) + ["end"]}
-    kind = body.get("kind", "enroll")
+        return {"scenes": sorted(list(DIALOG_SCENES) + ["end", "replace"])}
+    supersede()
+    parked = state.get("act") or {}
+    kind = body.get("kind") or SCENE_KINDS.get(scene) or parked.get("kind") or "enroll"
     gap = float(body.get("gap", 0.3))
     method = "password" if scene == "password" else "recovery" if scene == "recovery" else "token"
     _unlocked_for_dialogs()
+    if parked.get("kind") == kind:
+        act, applies = dict(parked), True
+    elif scene == "choose_on" and kind == "entangle":
+        # Turning the password on, played with no act parked: the switch
+        # still moves at its Done, as the scene says it does.
+        act, applies = act_of(kind, [True, bool(body.get("rekey")), ""]), True
+    else:
+        # Nothing parked of this kind: nothing to give the staged vault but
+        # a replacement's keys, which need no argument (apply_act).
+        act, applies = act_of(kind, []), kind == "replace"
+    if "rekey" in body:
+        act["rekey"] = bool(body["rekey"])
+    carry = {"rekey": act["rekey"], "without": act["without"]}
+    carry.update({k: body[k] for k in ("rekey", "without", "keepCount") if k in body})
+    end = {k: body[k] for k in END_KNOBS if k in body}
+    tail = {}
+    if scene == "replaced" and kind == "replace":
+        tail = receipt(act, int(body.get("keepCount") or body.get("keys") or 0))
+        end.setdefault("backedUp", True)
+    events = []
+    for step, extra in steps:
+        ev = dict({"method": method}, **carry)
+        ev.update(extra)
+        if step == "done" and kind in COMMITS + ("export",):
+            ev.update(tail)
+            events += end_events(act, ev, end, applies)
+            break
+        if step in ("done", "failed"):
+            ev.update(end)
+        events.append((step, ev))
+    if "phase" in body:
+        events[-1] = (events[-1][0], with_fields(events[-1][1], {"phase": body["phase"]}))
+    threading.Thread(target=play_events, args=(kind, events, time.sleep, gap), daemon=True).start()
+    return {"scene": scene, "kind": kind, "steps": [s for s, _ in events]}
 
-    def run():
-        for step, extra in steps:
-            ev = dict({"method": method}, **extra)
-            if kind == "export" and step == "done":
-                # The core records the export's date as the ceremony ends
-                # (keys.go ExportBackup), and the backup then holds every
-                # key: BackupStatus says so from now on.
-                state["backup"] = dict(state.get("backup") or {}, at=int(time.time()), missing=0, rekeyed=0)
-            emit_ceremony(kind, step, **ev)
-            time.sleep(gap)
 
-    threading.Thread(target=run, daemon=True).start()
-    return {"scene": scene, "kind": kind, "steps": [s for s, _ in steps]}
+def replace_scene(body):
+    """POST /mock/preview {"name": "dialog", "scene": "replace", "keys": n}:
+    the replacement played, not staged, as the core runs it (keys.go
+    replaceWith; ruled 2026-10-27), so that the page's own keep mode and
+    confirmation answer it: the proof's touch (the typed password on a
+    vault without a YubiKey); the IDs of the recovery keys it replaces, in
+    the order the Vault page lists them; then for each new key its
+    one-time URL (served at /s/), its ID, keepIndex, keepCount and the new
+    IDs so far at keep_key, waiting for the page's kept answer before the
+    next key is shown; then the confirm prompt; then the commit, the
+    backup when the parked act asked for one ("backup" here, a path or
+    true, for a scene with none parked), and Done with the receipt and
+    After, the new keys given to the staged vault. "cancel_at": n (or
+    "confirm") cancels there; "fail": "conflict" or "indeterminate" ends it
+    Failed after the confirm with that code and the vault Broken, as an
+    unknown outcome leaves it ("landed": true gives the staged vault the
+    new keys first, the case in which the commit did land); "keys" is how
+    many (the staged recovery keys by default)."""
+    supersede()
+    _unlocked_for_dialogs()
+    parked = state.get("act") or {}
+    if parked.get("kind") == "replace":
+        act = dict(parked)
+    else:
+        b = body.get("backup")
+        act = act_of("replace", [b if isinstance(b, str) else "E:/backup-2026-10-27.eks" if b else ""])
+    tail = receipt(act, int(body.get("keys") or body.get("keepCount") or 0))
+    n, old_ids, new_ids = tail["keepCount"], tail["oldIds"], tail["newIds"]
+    gap = float(body.get("gap", 0.3))
+    cancel_at = str(body.get("cancel_at", ""))
+    fail = str(body.get("fail") or "")
+    method = proof_of(act)
+    proof = _TOUCHED if method == "token" else [("password", {"promptId": "dpw-r"}), ("deriving", {})]
+    base = {"method": method, "rekey": True, "keepCount": n}
+    end = {k: body[k] for k in END_KNOBS if k in body}
+
+    def stop_at(step, ev):
+        # The knob's cancel: the step drawn with a prompt of its own, then
+        # ended as the page's Cancel ends it (run_act).
+        emit_ceremony("replace", step, promptId=secrets.token_hex(8), **ev)
+        pause(gap * 3)
+        raise Cancelled()
+
+    def run(release):
+        for step, extra in proof:
+            emit_ceremony("replace", step, **dict(base, **extra))
+            pause(gap)
+        # The replaced keys' IDs and their count are set once the proof
+        # has passed, before the first key is drawn (keys.go replaceWith).
+        ev = dict(base, oldIds=old_ids)
+        emit_ceremony("replace", "deriving", **ev)
+        pause(gap)
+        for i in range(1, n + 1):
+            ev = dict(ev, slotLabel="/s/" + secrets.token_hex(8), recoveryId=new_ids[i - 1],
+                      keepIndex=i, newIds=new_ids[:i])
+            if cancel_at == str(i):
+                stop_at("keep_key", ev)
+            ask("replace", "kept", "keep_key", **ev)
+        # Every key is kept by the confirmation: the last one's URL is not
+        # carried into it (keys.go confirm).
+        ev = dict(ev, slotLabel="", recoveryId="")
+        if cancel_at == "confirm":
+            stop_at("confirm", ev)
+        ask("replace", "confirm", "confirm", **ev)
+        if fail:
+            ev = dict(ev, phase="commit")
+            emit_ceremony("replace", "deriving", **ev)
+            pause(gap)
+            if body.get("landed"):
+                apply_act(act)
+            # An outcome the handle cannot know, or another writer's
+            # commit, leaves the vault Broken (ceremony.run).
+            state["vault"]["state"] = "broken"
+            code = fail if fail.startswith("vault.") else "vault." + fail
+            play_events("replace", [("failed", dict(ev, error=code))], pause, 0, release)
+            return
+        play_events("replace", end_events(act, ev, end, True), pause, gap, release)
+
+    run_act("replace", run)
+    return {"scene": "replace", "kind": "replace", "keys": n, "oldIds": old_ids, "newIds": new_ids}
 
 
 # Lock-screen scenes (POST /mock/preview {"name": "lock", "scene": ...}):
@@ -2649,28 +2929,504 @@ def lock_scene(body):
 
 def begin_act(kind):
     """The Vault page's acts (Keys.BeginEnroll, RemoveSlot, RotateNow,
-    ExportBackup, RevealRecoveryKey, ChangeEntangledPassword;
-    Vault.InspectRecords): parked at the proof's opening wait, under the
-    way the core proves with - the YubiKey where the vault has one
-    (keys.go acquireUnlocked) - so the page's own button opens its panel.
-    The moments after are DIALOG_SCENES; Vault.CancelUnlock ends it."""
+    ExportBackup, RevealRecoveryKey, SetEntangled, ChangeEntangledPassword,
+    ReplaceRecoveryKeys; Vault.InspectRecords), refused as the core refuses
+    them: the act's own pre-checks first (refusal_of), then beginAs's - not
+    unlocked; tampered, but for the reveal and the inspection; a ceremony
+    that has not ended, so that a second act waits for the first, as the
+    page's "Back up, then re-key" must; and the retirement's barrier for
+    every act but the reveal, which only reads (barrier). Admitted, the act
+    is kept as state["act"] and parked at the proof's opening wait under
+    the way the core proves with (proof_of), its re-key and "without" on
+    the event from the first, as the core sets them before its first emit,
+    so that the page's own button opens its panel. A proof by recovery key
+    parks at the recovery prompt and plays on once the page answers it
+    (play_on); the moments after a YubiKey's wait are DIALOG_SCENES.
+    Vault.CancelUnlock ends it."""
     def begin(args):
         v = state["vault"]
-        if CEREMONY["kind"] or v["state"] != "unlocked":
-            return Err("vault.needs_unlock") if v["state"] != "unlocked" else Err("ceremony.in_progress")
-        emit_ceremony(kind, "waiting_for_key", method="token" if v.get("hasHardwareSlot") else "password", readerCount=0)
+        act = act_of(kind, args or [])
+        e = refusal_of(act)
+        if e is not None:
+            return e
+        if v["state"] != "unlocked":
+            return Err("vault.needs_unlock")
+        if v.get("tampered") and kind not in ("reveal", "records"):
+            return Err("vault.tampered")
+        if CEREMONY["kind"] or _dialog_running():
+            return Err("ceremony.in_progress")
+        if kind != "reveal":
+            e = barrier()
+            if e is not None:
+                return e
+        state["act"] = act
+        base = {"rekey": act["rekey"], "without": act["without"]}
+        method = proof_of(act)
+        if method == "recovery":
+            play_on(act, base)
+        else:
+            emit_ceremony(kind, "waiting_for_key", method=method, readerCount=0, **base)
         return None
     return begin
 
 
 def end_act():
     """A cancel of a dialog's ceremony, as the core ends one: a Failed
-    event with ceremony.cancelled; the vault stays unlocked."""
+    event with ceremony.cancelled and the fields the state had (finish
+    keeps them); the vault stays unlocked. An act whose thread waits on a
+    prompt here ends through that thread, which says so itself
+    (run_act)."""
+    if CEREMONY["kind"] in DIALOG_KINDS:
+        CEREMONY["cancelled"] = True
+        return None
     c = state["vault"].get("ceremony") or {}
     if c.get("kind") in DIALOG_KINDS and c.get("step") not in ("done", "failed"):
-        emit_ceremony(c["kind"], "failed", method=c.get("method", ""), error="ceremony.cancelled")
+        emit_ceremony(c["kind"], "failed", **dict(carried(c), error="ceremony.cancelled"))
         state["vault"]["ceremony"] = None
+    state["act"] = None
     return None
+
+
+# ---- The re-keying acts (ruled 2026-10-27; docs/research/vmk-rotation.md)
+#
+# The six Keys methods take what the dialogs asked (2.1): whether the act
+# re-keys the vault in the same commit, the backup's path ("" for none),
+# and at Add an unlock method... whether a recovery key proves it. The
+# helpers below keep the parked act, refuse what the core refuses before a
+# ceremony, choose the proof as the core does, hold the calls the
+# retirement's barrier holds, and end an act as landChange, backUpAfter
+# and finish end it, so that the page meets here the events, the fields
+# and the refusals it meets in the app.
+
+def barrier():
+    """retireBarrierLocked as a call meets it (2.4), from the staged
+    state["retire_owed"]: nothing owed admits. "owed" (owed with no failed
+    attempt, as after a crash between a change and its retirement) and
+    "lands" (a failed attempt, its warning standing, whose next try
+    succeeds) are finished here - the fact and the warning cleared, the
+    status emitted - and the call goes on. True or "failed" (the try fails
+    again) refuses with vault.retire_owed before anything is written."""
+    owed = state.get("retire_owed")
+    if not owed:
+        return None
+    if owed in ("owed", "lands"):
+        state["retire_owed"] = False
+        emit_status()
+        return None
+    return Err("vault.retire_owed")
+
+
+def held(fn):
+    """A registry mutation the barrier holds (2.4's table): Archives.Create,
+    RotateKey, Forget, Restore and Delete, and Vault.MergeRecords. Not the
+    content calls - the files inside an archive, its own operations - nor
+    the registry writes the barrier leaves alone (rename, description,
+    hide, locate), which go on while a retirement is owed."""
+    def call(args):
+        e = barrier()
+        return e if e is not None else fn(args)
+    call.__name__ = getattr(fn, "__name__", "held")
+    return call
+
+
+def _slot(recipient_id):
+    return next((s for s in state["slots"] if s["recipientId"] == recipient_id), None)
+
+
+def recovery_id(recipient_id):
+    """A recovery key's ID, as the cards and the sheets show it: the first
+    four bytes of its recipient ID in upper-case hex (core.go recoveryID)."""
+    s = recipient_id[:8].upper()
+    return s[:4] + "-" + s[4:]
+
+
+def act_of(kind, args):
+    """The act a bound call begins, read from its arguments in the order the
+    bindings send them (2.1): what it re-keys, the YubiKey a re-keying
+    removal does not ask for ("without", the core's Without, from the
+    first event), the backup's path, the recovery-key switch. Kept as
+    state["act"] while its ceremony runs, so that its scenes and its Done
+    carry what the page asked for."""
+    a = list(args) + ["", "", ""]
+    act = {"kind": kind, "rekey": False, "rekeyAsked": False, "without": "", "backup": "", "recovery": False}
+    if kind == "enroll":
+        act.update(type=str(a[0] or "token"), label=str(a[1] or ""), recovery=bool(a[2]))
+    elif kind == "remove":
+        rid = str(a[0] or "")
+        act.update(recipientId=rid, rekey=bool(a[1]), backup=str(a[2] or ""))
+        slot = _slot(rid)
+        if act["rekey"] and slot is not None and slot["type"] == "hardware":
+            act["without"] = rid
+    elif kind == "password":
+        act.update(rekey=bool(a[0]), backup=str(a[1] or ""))
+    elif kind == "entangle":
+        # Only turning the password on re-keys (keys.go SetEntangled:
+        # rekeys := on && rekey); turning it off with a re-key or a backup
+        # asked is refused (refusal_of).
+        act.update(on=bool(a[0]), rekeyAsked=bool(a[1]), rekey=bool(a[0]) and bool(a[1]), backup=str(a[2] or ""))
+    elif kind in ("rotate", "replace"):
+        # A re-key is the act itself, not a choice beside it: Rekey stays
+        # false for kind rotate and is always true for a replacement.
+        act.update(backup=str(a[0] or ""), rekey=kind == "replace")
+    elif kind == "export":
+        act["backup"] = str(a[0] or "")
+    elif kind == "reveal":
+        act["recipientId"] = str(a[0] or "")
+    return act
+
+
+def proof_of(act):
+    """The way the core proves an act with (keys.go acquireUnlocked): a
+    YubiKey where the vault has one other than the YubiKey a re-keying
+    removal takes away, else its password, else - and whenever the user
+    said no YubiKey of the vault is at hand - a recovery key."""
+    v = state["vault"]
+    token = bool(v.get("hasHardwareSlot")) and (not act.get("without") or any(
+        s["type"] == "hardware" and s["recipientId"] != act["without"] for s in state["slots"]))
+    if act.get("recovery") or not (token or v.get("hasPasswordSlot")):
+        return "recovery"
+    return "token" if token else "password"
+
+
+def refusal_of(act):
+    """What the core refuses before an act's ceremony (keys.go): the
+    arguments that never go together first, whatever the state; then,
+    while Unlocked and from the cached facts, the tampered reason before
+    the act's own, so that the reason given is the one to act on; then the
+    backup's, a vault left with no recovery key having nothing a backup
+    could hold. None lets the act begin."""
+    kind, v, slots = act["kind"], state["vault"], state["slots"]
+    types = [s["type"] for s in slots]
+    if kind == "entangle" and not act["on"] and (act["rekeyAsked"] or act["backup"]):
+        return Err("params")
+    if kind == "enroll" and (act["type"] == "recovery" and not act["label"]
+                             or act["recovery"] and act["type"] == "password"):
+        return Err("params")
+    if v.get("state") != "unlocked":
+        return None
+    tampered = "vault.tampered" if v.get("tampered") else None
+    code = None
+    if kind == "remove":
+        slot = _slot(act["recipientId"])
+        code = tampered or ("vault.slot_not_found" if slot is None
+                            else None if slot.get("removable") else "vault.invariant")
+    elif kind == "entangle" and act["on"]:
+        code = tampered or (None if state["entangled"].get("canEnable") else "vault.invariant")
+    elif kind == "password":
+        code = tampered or (None if state["entangled"].get("on") else "params")
+    elif kind == "enroll" and act["recovery"]:
+        code = tampered or ("params" if "hardware" not in types
+                            else None if "recovery" in types else "vault.no_recovery_slot")
+    elif kind == "replace":
+        code = tampered or ("vault.setup_needed" if types and set(types) == {"recovery"}
+                            else None if "recovery" in types else "vault.no_recovery_slot")
+    elif kind in ("rotate", "export"):
+        code = tampered
+    elif kind == "reveal":
+        slot = _slot(act["recipientId"])
+        code = ("vault.slot_not_found" if slot is None or slot["type"] != "recovery"
+                else None if set(types) - {"recovery"} else "vault.setup_needed")
+    if code is None and act["backup"] and not any(
+            s["type"] == "recovery" and s["recipientId"] != act.get("recipientId") for s in slots):
+        code = "vault.no_recovery_slot"
+    return Err(code) if code else None
+
+
+def _dialog_running():
+    """A dialog's ceremony that has not ended, which the core holds as its
+    one ceremony until finish clears it: anything but its final state.
+    That is done or failed, or, with no prompt standing, the recovery key
+    shown (an enrolment's or a reveal's) or the import's record list,
+    which finish leaves as they are (ceremony.go)."""
+    c = state["vault"].get("ceremony") or {}
+    if c.get("kind") not in DIALOG_KINDS:
+        return False
+    step = c.get("step")
+    if step in ("done", "failed"):
+        return False
+    return not (step in ("recovery", "records") and not c.get("promptId"))
+
+
+def carried(c):
+    """A ceremony state's own fields, for the next event of the same act:
+    the core's state keeps them from one event to the next."""
+    return {k: v for k, v in c.items() if k not in ("seq", "kind", "step", "promptId", "choose", "error")}
+
+
+def with_fields(f, extra):
+    """An event's fields with extra on them, made now or when it is played."""
+    if callable(f):
+        return lambda: dict(f(), **extra)
+    return dict(f, **extra)
+
+
+def run_act(kind, run):
+    """A dialog's act that waits on the page's answers here - a proof by
+    recovery key, a replacement - on a thread of its own, as the first way
+    in's ceremonies run (play): CEREMONY says one runs, so a second act is
+    refused, and Vault.CancelUnlock - the dialog's Cancel, a lock - ends it
+    with ceremony.cancelled and the fields it had, the vault left unlocked.
+    A scene played over it ends it without a word (supersede). run is
+    handed release, which gives the mark up before the act's final event,
+    as the core's finish clears its ceremony before it emits the last
+    state, so that an act begun at once on that event is admitted; the
+    mark is this run's own (a token), so a late release never clears a
+    newer act's."""
+    token = object()
+    with CEREMONY_LOCK:
+        CEREMONY.update({"kind": kind, "prompt": None, "answer": None, "cancelled": False, "quiet": False,
+                         "before": None, "run": token})
+
+    def release():
+        with CEREMONY_LOCK:
+            if CEREMONY.get("run") is token:
+                CEREMONY.update({"kind": "", "prompt": None, "answer": None, "cancelled": False, "quiet": False,
+                                 "run": None})
+
+    def go():
+        try:
+            run(release)
+        except Cancelled:
+            if CEREMONY.get("run") is token and not CEREMONY.get("quiet"):
+                last = state["vault"].get("ceremony") or {}
+                release()
+                emit_ceremony(kind, "failed", **dict(carried(last), error="ceremony.cancelled"))
+                state["vault"]["ceremony"] = None
+                state["act"] = None
+                emit_status()
+        finally:
+            release()
+
+    threading.Thread(target=go, daemon=True).start()
+
+
+def supersede():
+    """A scene played over a dialog's act that waits on a prompt here ends
+    that act's thread first, quietly: the scene's events take its place in
+    the panel, and the parked act stays for the scene to carry."""
+    if CEREMONY["kind"] not in DIALOG_KINDS:
+        return
+    CEREMONY["quiet"] = True
+    CEREMONY["cancelled"] = True
+    for _ in range(40):
+        if not CEREMONY["kind"]:
+            return
+        time.sleep(0.05)
+
+
+def play_on(act, base):
+    """A proof by recovery key, as the core's acquireUnlocked takes it - the
+    switch at Add an unlock method... (Use recovery key instead), the
+    removal of the vault's only YubiKey with a re-key, an act of a vault of
+    recovery keys alone - parked at the recovery prompt (drk-1) as every
+    act parks at its proof, but one the page can answer, since no YubiKey
+    is needed from there on. Answered, the act plays on as the core runs
+    it: an enrolment's second half - no YubiKey proved, so none is asked
+    out first, and the new one's PIN timed as the first way in's is - or
+    the chosen password, then the commit, the backup and the end
+    (end_events)."""
+    kind = act["kind"]
+
+    def run(release):
+        ev = dict(base, method="recovery")
+        ask(kind, "recovery", "recovery", prompt_id="drk-1", **ev)
+        emit_ceremony(kind, "deriving", **ev)
+        pause(0.8)
+        if kind == "enroll" and act["type"] == "token":
+            emit_ceremony(kind, "swap_key", insertLabel="the key to enroll", **ev)
+            emit_ceremony(kind, "waiting_for_key", readerCount=0, **ev)
+            pause(float(state.get("enrolWait", 1.5)))
+            ev = dict(ev, slotLabel=act["label"] or "YubiKey 21043355")
+            emit_ceremony(kind, "touch", pinAsked=True, n=1, **ev)
+            pause(1.5)
+        elif kind == "password" or kind == "entangle" and act["on"] or kind == "enroll" and act["type"] == "password":
+            ask(kind, "password", "password", choose=True, **ev)
+        play_events(kind, end_events(act, ev, {}, True), pause, 0.5, release)
+
+    run_act(kind, run)
+
+
+def play_events(kind, events, wait, gap, ended=None):
+    """Emits an act's events a step apart - wait is pause for an act a
+    cancel may end, time.sleep for a scene. An end (Done, Failed, or a
+    final state made as it is played) ends the act: ended (a live act's
+    release) runs first, then the parked act is forgotten and the status
+    emitted after the event, as the core's finish emits vault.state after
+    its last vault.ceremony; nothing is played after an end."""
+    for step, f in events:
+        if callable(f) or step in ("done", "failed"):
+            fields = f() if callable(f) else f
+            if ended is not None:
+                ended()
+            emit_ceremony(kind, step, **fields)
+            state["act"] = None
+            emit_status()
+            return
+        emit_ceremony(kind, step, **f)
+        wait(gap)
+
+
+def end_events(act, ev, end, applies):
+    """An act's end once its proof has passed, as the core's landChange,
+    backUpAfter and finish make it (keys.go): Phase "commit" for an act
+    that writes the slot region; Phase "backup" when a backup was asked
+    for and the retirement landed - with a "retireError" the backup is not
+    taken and the act's backupError is vault.retire_owed, and the backup
+    asked for is otherwise written (backedUp) unless a knob says why not;
+    then the final state. That one is made as it is played (finish_act),
+    since that is when the act lands on the staged vault and After is read
+    from the vault so left. The phase stays on the final state, as the
+    core's state keeps it."""
+    kind = act["kind"]
+    end = dict(end)
+    out = []
+    if kind in COMMITS:
+        ev = dict(ev, phase="commit")
+        out.append(("deriving", ev))
+    if end.get("retireError"):
+        if act.get("backup") and "backupError" not in end:
+            end["backupError"] = "vault.retire_owed"
+    elif kind == "export" or act.get("backup") or end.get("backedUp") or end.get("backupError"):
+        if end.get("backupError") != "vault.retire_owed":
+            ev = dict(ev, phase="backup")
+            out.append(("deriving", ev))
+        if kind != "export" and not end.get("backupError"):
+            end["backedUp"] = True
+    step = "done"
+    if kind == "enroll" and applies and act.get("type") == "recovery":
+        # A recovery key's enrolment ends showing the new key, which the
+        # page draws in the recovery key's dialog (keys.go BeginEnroll).
+        step = "recovery"
+    elif kind == "records":
+        step = "records"
+    out.append((step, lambda: finish_act(act, ev, end, applies)))
+    return out
+
+
+def finish_act(act, ev, end, applies):
+    """The final state of an act that landed: the act given to the staged
+    vault when its arguments say what that is (apply_act); the vault left
+    owed by a retirement that did not land (the warning then stands, as
+    the core's retireFailed leaves it); the backups card's facts moved
+    (note_backup); and After, for an act that wrote the slot region."""
+    kind = act["kind"]
+    out = dict(ev)
+    out.update(end)
+    if applies:
+        out.update(apply_act(act))
+    if kind == "records":
+        out["slotLabel"] = "mock-incoming"  # the merge's handle (merge.go): IncomingRecords reads no handle here
+    if end.get("retireError") and not state.get("retire_owed"):
+        state["retire_owed"] = True
+    note_backup(act, bool(end.get("backedUp")) or kind == "export")
+    if kind in COMMITS:
+        out["after"] = after_facts()
+    return out
+
+
+def apply_act(act):
+    """What an act committed, on the staged vault (keys.go): the way in an
+    enrolment added - a recovery key's shown at once, its one-time URL and
+    ID on the final state - the one a removal took away, the switch moved,
+    every recovery key a replacement made in place of the one it replaces
+    with that one's label; then the facts the core reads again from the
+    slots (slot_facts). What it returns rides the final state."""
+    kind, slots, now, out = act["kind"], state["slots"], int(time.time()), {}
+    if kind == "enroll":
+        rid = secrets.token_hex(16)
+        typ = {"token": "hardware", "password": "password", "recovery": "recovery"}.get(act.get("type"), "hardware")
+        label = act.get("label") or ("Password" if typ == "password" else "YubiKey 21043355")
+        s = {"recipientId": rid, "type": typ, "label": label, "createdAt": now, "removable": True}
+        if typ == "recovery":
+            s["recoveryId"] = recovery_id(rid)
+            out = {"slotLabel": "/s/" + secrets.token_hex(8), "recoveryId": s["recoveryId"]}
+        slots.append(s)
+    elif kind == "remove":
+        slots[:] = [s for s in slots if s["recipientId"] != act.get("recipientId")]
+    elif kind == "entangle":
+        state["entangled"]["on"] = state["vault"]["entangled"] = bool(act.get("on"))
+    elif kind == "replace":
+        for s, rid in zip([s for s in slots if s["type"] == "recovery"], act.get("newRids") or []):
+            s.update(recipientId=rid, recoveryId=recovery_id(rid), createdAt=now)
+    slot_facts()
+    return out
+
+
+def slot_facts():
+    """The facts the core derives from the slot set after a change
+    (session.go statusLocked; keystore Removable and CanEnableEntangled):
+    which ways in the vault has, whether it is left with recovery keys
+    alone, and FORMAT 6.4's invariant for each card's Remove... and for
+    turning the password on, as keystore checkInvariant applies it - no
+    standalone password beside a YubiKey, and two ways in whose required
+    secrets are disjoint. A count of ways in is not that rule: every
+    standalone password needs the one secret "password", whichever it is,
+    and every YubiKey needs the vault's password while it is on, so two
+    standalone passwords and one recovery key let go of a password but
+    never of the recovery key."""
+    slots, v = state["slots"], state["vault"]
+
+    def secrets_of(s, entangled):
+        # keystore secrets(): a YubiKey's own key, and "pwd" while the
+        # vault's password is on; one name for every standalone password;
+        # each recovery key its own.
+        if s["type"] == "hardware":
+            return {"token:" + s["recipientId"]} | ({"pwd"} if entangled else set())
+        if s["type"] == "password":
+            return {"password"}
+        return {"recovery:" + s["recipientId"]}
+
+    def holds(rest, entangled):
+        types = {s["type"] for s in rest}
+        if "hardware" in types and "password" in types:
+            return False
+        sets = [secrets_of(s, entangled) for s in rest]
+        return any(sets[i].isdisjoint(sets[j]) for i in range(len(sets)) for j in range(i + 1, len(sets)))
+
+    on = bool(state["entangled"].get("on"))
+    for s in slots:
+        s["removable"] = holds([o for o in slots if o is not s], on)
+    state["entangled"]["canEnable"] = holds(slots, True)
+    v["hasHardwareSlot"] = any(s["type"] == "hardware" for s in slots)
+    v["hasPasswordSlot"] = any(s["type"] == "password" for s in slots)
+    v["setupNeeded"] = bool(slots) and not v["hasHardwareSlot"] and not v["hasPasswordSlot"]
+
+
+def after_facts():
+    """CeremonyState.After (keys.go afterFactsOf): the recovery keys' IDs
+    as the cards show them, the switch, and whether every way in is a
+    recovery key - read from the staged vault as the act left it."""
+    slots = state["slots"]
+    return {"recoveryIds": [s.get("recoveryId", "") for s in slots if s["type"] == "recovery"],
+            "entangled": bool(state["entangled"].get("on")),
+            "setupNeeded": bool(slots) and all(s["type"] == "recovery" for s in slots)}
+
+
+def note_backup(act, backed_up):
+    """The backups card's facts after an act (keys.go BackupStatus, read
+    from the stamp a backup writes): a backup taken records its date and
+    holds every archive, the vault's key and its recovery keys as they now
+    are; a re-key without one leaves the last backup at a retired key, and
+    a replacement without one leaves it opening only with keys replaced."""
+    b = state.setdefault("backup", {})
+    if backed_up:
+        b.update(at=int(time.time()), missing=0, rekeyed=0, vaultRekeyed=False, keysReplaced=False)
+    elif b.get("at") and (act.get("rekey") or act["kind"] in ("rotate", "replace")):
+        b["vaultRekeyed"] = True
+        if act["kind"] == "replace":
+            b["keysReplaced"] = True
+
+
+def receipt(act, n):
+    """A replacement's IDs (keys.go replaceWith): the recovery keys it
+    replaces, in the order the Vault page lists them, and as many new
+    ones, n of each (the staged count when n is 0), the new recipient IDs
+    kept on the act so that its Done gives the staged vault those keys."""
+    olds = [s["recoveryId"] for s in state["slots"] if s["type"] == "recovery"]
+    n = n or len(olds) or 1
+    olds = (olds + [recovery_id(secrets.token_hex(16)) for _ in range(n)])[:n]
+    act["newRids"] = [secrets.token_hex(16) for _ in range(n)]
+    return {"oldIds": olds, "newIds": [recovery_id(r) for r in act["newRids"]], "keepIndex": n, "keepCount": n}
 
 
 def tray_unlock(body):
@@ -2722,11 +3478,11 @@ METHODS = {
     660127987: leave_archive,                                   # archives.Leave (the page left)
     1388822288: close_archive,                                  # archives.Close (the kill switch)
     2300343171: close_all, 2169725132: lambda a: None, 474530495: lambda a: None,     # archives.CloseAll
-    422512670: lambda a: None, 1162996984: create_archive,
+    422512670: lambda a: None, 1162996984: held(create_archive),  # archives.Create, held by the barrier (2.4)
     # Verify, Compact and Rotate key run on a closed archive: the core
     # opens it for the operation and closes it again (APP.md 2.3).
     2111968017: lambda a: record_op("compact", a, 8_000_000_000, seconds=6.0, phase="compacting"),
-    3689812034: lambda a: record_op("rotate", a, 1_000_000),
+    3689812034: held(lambda a: record_op("rotate", a, 1_000_000)),  # archives.RotateKey, held
     3359801409: lambda a: record_op("verify", a, 4_000_000_000, seconds=5.0),
     # The archive's tree, and its operations. Save, Discard and KeepOpen
     # went on 2026-09-09: each operation is its own transaction, committed
@@ -2750,26 +3506,29 @@ METHODS = {
     332274822: lambda a: None,
     # The vault's entangled password and the last backup (APP.md §13). Each
     # id is FNV-1a/32 over "github.com/dreamxwarden01/enfold/internal/app/
-    # api.<Struct>.<Method>" — the name only, so BeginEnroll keeps its id
-    # after losing an argument and a rename moves one in silence.
+    # api.<Struct>.<Method>" — the name only, so a method keeps its id
+    # whatever its arguments become (BeginEnroll lost one and later gained
+    # one; the acts that re-key gained theirs) and a rename moves one in
+    # silence.
     898464716: lambda a: state["entangled"],                    # keys.EntangledState
-    2247223905: lambda a: state["entangled"].update({"on": bool(a[0])}) if a else None,  # keys.SetEntangled
-    3747209322: lambda a: None,                                 # keys.ChangeEntangledPassword
+    2247223905: lambda a: None,                                 # keys.SetEntangled (a ceremony: begin_act, below)
+    3747209322: lambda a: None,                                 # keys.ChangeEntangledPassword (the same)
     3774546620: last_export_at,                                 # vault.LastExportAt (backup.at)
     2057616059: backup_status,                                  # vault.BackupStatus (APP.md 13)
     3319062579: lambda a: {"path": a[0], "kind": "backup", "modifiedAt": NOW - 90000, "vaultMatches": True, "slotCount": 1, "hardware": 0, "password": 0, "recovery": 1, "newer": False,
-                           "recoverySlots": [{"recipientId": "03" * 16, "label": "Recovery key - printed, in the safe", "createdAt": NOW - 600000}], "generation": 4},  # vault.InspectFile
+                           "recoverySlots": [{"recipientId": "03" * 16, "label": "Recovery key - printed, in the safe", "createdAt": NOW - 600000}], "generation": 4,
+                           "rekeyed": bool(state.get("fileRekeyed"))},  # vault.InspectFile
     # The Archives page as the inspector, and the merge (APP.md 13).
     2187678638: lambda a: set_field(a, "name"),                 # archives.Rename
     48311342: lambda a: set_field(a, "description"),            # archives.SetDescription
     2517846314: lambda a: details(a[0]) if a else None,         # archives.Details
-    2605071885: lambda a: forget(a, NOW),                       # archives.Forget
-    2523843286: lambda a: forget(a, 0),                         # archives.Restore
-    2185012391: lambda a: forget(a, NOW),                       # archives.Delete
+    2605071885: held(lambda a: forget(a, NOW)),                 # archives.Forget, held by the barrier (2.4)
+    2523843286: held(lambda a: forget(a, 0)),                   # archives.Restore, held
+    2185012391: held(lambda a: forget(a, NOW)),                 # archives.Delete, held
     118112595: check_files,                                     # archives.CheckFiles (a CheckReport)
     1148297629: lambda a: None,                                 # vault.InspectRecords (a ceremony)
     2398325755: lambda a: {"records": state["incoming"], "tampered": state["incomingTampered"]},  # vault.IncomingRecords
-    1344102321: lambda a: None,                                 # vault.MergeRecords
+    1344102321: held(lambda a: None),                           # vault.MergeRecords, held
     3468826983: lambda a: None,                                 # vault.DiscardRecords
     18027300: lambda a: None, 1994498129: lambda a: None, 3093488550: verify_backup,  # ImportFile, FinishSetup, VerifyBackup
     2652127606: settings_get, 740356410: settings_set,
@@ -2782,14 +3541,19 @@ METHODS = {
     1712651084: clipboard_files,                                # shell.ClipboardFiles (APP.md 3, 6 Paste)
 }
 # The Vault page's acts and the import's proof open their panel (begin_act,
-# above): they answered None and drew nothing before.
+# above): they answered None and drew nothing before. Turning the password
+# on or off is one of them since the re-key was built: it no longer flips
+# the switch at once, but at its played Done, as the core commits only
+# then; and ReplaceRecoveryKeys is new.
 METHODS.update({
     309727738: begin_act("enroll"),                             # keys.BeginEnroll
     1280438677: begin_act("remove"),                            # keys.RemoveSlot
     332274822: begin_act("rotate"),                             # keys.RotateNow
     3159373965: begin_act("export"),                            # keys.ExportBackup
     207819850: begin_act("reveal"),                             # keys.RevealRecoveryKey
-    3747209322: begin_act("entangle"),                          # keys.ChangeEntangledPassword
+    2247223905: begin_act("entangle"),                          # keys.SetEntangled
+    3747209322: begin_act("password"),                          # keys.ChangeEntangledPassword
+    3877776464: begin_act("replace"),                           # keys.ReplaceRecoveryKeys (new)
     1148297629: begin_act("records"),                           # vault.InspectRecords
 })
 # The first way in's ceremonies, played (see above): they answered None and
@@ -2867,6 +3631,11 @@ class H(SimpleHTTPRequestHandler):
         body = json.loads(self.rfile.read(n) or b"{}")
         if self.path.startswith("/mock/preview"):
             name = body.get("name", "")
+            if "retire_owed" in body:
+                # The retirement's barrier, staged beside any preview - a
+                # lock screen's or a dialog's - and said on the status.
+                state["retire_owed"] = body["retire_owed"]
+                emit_status()
             if name in PREVIEW_OPS:
                 return self.reply({"ok": True, "op": PREVIEW_OPS[name](body)})
             over = PREVIEWS.get(name)

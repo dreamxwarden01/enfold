@@ -85,15 +85,60 @@ call: that call outlives the ceremony as a *pending touch* (§2.2), and the stat
 (`pendingTouch`) until the card answers.
 
 **Unlocked.** Holds `*keystore.Unlocked` only for the duration of a mutation that needs the VMK
-(enroll, remove, rotate, the entangled password's switch and change, export, backup restore,
-inspecting records) and otherwise only `*keystore.Session`;
+(enroll, remove, rotate, the entangled password's switch and change, replacing the recovery
+keys, export, backup restore, inspecting records) and otherwise only `*keystore.Session`;
 the `Unlocked` is closed — VMK destroyed — the moment the Session exists (DESIGN §10). Slot
 mutations therefore re-run the ceremony; the one exception is vault creation, whose `Unlocked`
-enrolls the first slots. **Rotation re-derives the Session:** `Rotate` is the one call that
-advances the generation, so after it the core derives the next Session from the rotating
-`Unlocked`, installs it, locks the old one, then closes the `Unlocked`; the core's Session
-accessor returns an error rather than a Session whose `Live()` fails, and an `ErrStale`
-reaching a service is an internal invariant violation that forces Locked.
+enrolls the first slots. **Rotation re-derives the Session:** `Rotate`, and the calls that
+rotate in the same commit as a removal, a password change, turning the password on or replacing
+the recovery keys (`RemoveSlotAndRotate`, `ChangeEntangledPasswordAndRotate`,
+`SetEntangledAndRotate`, `ReplaceRecoveryAndRotate`, §13), are the only ones that advance the
+generation, so after any of them, and after the commit that retires the file's earlier state
+(FORMAT R41), the core derives the next Session from the rotating `Unlocked`, installs it, locks
+the old one, then closes the `Unlocked`; a lock that lands after the commit and before the
+install leaves the act done, the change being on disk, and zeroes the new Session instead of
+installing it behind a Locked state. The core's Session accessor returns an error rather than a
+Session whose `Live()` fails, and an `ErrStale` reaching a service is an internal invariant
+violation that forces Locked; a next Session that cannot be derived after a landed commit locks
+the vault the same way, the act still done. **A retirement left owed is finished at the next
+unlock** (ruled 2026-10-27): when a change's retiring commit failed, or the process stopped
+between the two commits, the vault file still holds the state before the change (FORMAT R41);
+the unlock finishes it from the `Unlocked` before the Session is derived and before any receipt
+or purge is written, and *Finish setting up* finishes it before it writes its first unlock
+method. A failure there whose outcome is unknown is Broken. Any other that leaves the file owed,
+there or in the act itself, leaves the vault open and readable under the warning
+`vault.retire_owed`, and until the retirement has landed in full — every commit and every
+zero-fill of FORMAT R41 it needs and the fsync after the trim and the zero-fill, two retiring
+commits where a writer before that rule left a tail in the live slot region copy — every change
+that writes a slot, an archive record or a secret into the vault file, and every backup, waits: a
+change to the unlock methods or the password, a re-key, replacing the recovery keys, creating,
+re-keying, forgetting, restoring, deleting or importing an archive (the import's inspection
+included, so that it is refused before its proof), the purge of forgotten records, an export.
+Each first tries to finish the retirement and is refused with `vault.retire_owed` while it
+cannot; the purge waits for the next unlock. A retirement that reports an error and leaves
+nothing owed has landed: the error is logged and refuses nothing. A trim or a zero-fill whose
+fsync failed leaves it owed, however the file's bytes read back, until a retry makes that fsync.
+The files inside an existing archive are not held: adding, replacing, renaming, moving or
+deleting them writes only the archive's receipt, no record and no secret, and the archive's key,
+which no re-key of the vault changes, already reaches whatever is written there.
+A registry write that is not held — a receipt, a verify's hash, an archive's name, description,
+hidden flag or path, the vault's lock times — carries a retiring pass in its own flip while a
+slot region copy or the losing superblock copy still holds the earlier state and the live region
+verifies (FORMAT R25), is made without one where that pass cannot be written, and zero-fills, as
+every commit does, the registry ciphertext no superblock names. Whether a retirement is owed is
+read from the vault file's own bytes, and from the fsync the keystore still owes after a trim
+or a zero-fill of its own, and kept with the facts the lock screen shows, `RetireOwed` among
+them, so it holds across a lock and a Broken state; a failed attempt is remembered until a
+retirement lands or another vault is opened, and an open refused as busy knows nothing and so
+says nothing is owed. On a Tampered vault the retirement is finished as far as it can be without
+copying the slot region forward (FORMAT R25, R41); only a live copy's own tail, which a writer
+before 2026-10-27 could leave, is beyond it, and while that remains those changes are refused
+with `vault.tampered` until a good copy is imported, the Tampered banner standing in place of
+the warning (ruled 2026-10-27). A Tampered vault that owes nothing behaves as it always has: the
+changes to the unlock methods and the password, the re-key, the replacement of the recovery keys
+and the export are refused with `vault.tampered` before any ceremony, as on any Tampered vault,
+while the archive changes the barrier holds are admitted by the core and greyed by the page (§6,
+*The Tampered banner*), and the purge leaves every record to the next unlock (§13).
 
 **Timers.** Idle (default 10 min) and absolute (default 60 min from unlock). **The idle timer
 is reset only by corroborated user input:** `Activity()` from the frontend is a *request*,
@@ -127,8 +172,11 @@ trigger runs `resolveForShutdown` (§5) instead of a bare lock.
 **Broken.** Any `ErrIndeterminate` from the keystore — a slot mutation, or the registry write
 that is the second half of every Save — locks the keys, stops the timers, leaves open archives
 open, and shows no vault facts; the one action is `Reopen`, which closes and reopens the file
-(the A/B superblocks make that succeed almost always) and lands in Locked. `Stale` on a reopened
-file is a transient warning — the next commit repairs the damaged copy — not a verdict.
+(the A/B superblocks make that succeed almost always) and lands in Locked. An `ErrConflict` —
+another writer's commit met on disk — is Broken the same way, the one the zero-fill after a
+landed registry write finds included: that write stands and is reported as made, and the state
+says Broken. `Stale` on a reopened file is a transient warning — the next commit repairs the
+damaged copy — not a verdict.
 
 **Two processes.** The shell uses Wails' single-instance guard (`UniqueID`, second launch shows
 the window and exits; the callback only enqueues "show window", acts on no path, unlocks
@@ -166,7 +214,9 @@ incoming file has proved itself.** `Vault.InspectFile` reads a file's plaintext 
 staged copy in the data folder (so read-only media and a file another process holds work, and the
 vault's own path answers from the cached facts) — `FileInfo{Kind, ModifiedAt, VaultMatches, Newer,
 SlotCount, Hardware, Password, Recovery, RecoverySlots []SlotBrief{RecipientID, Label, CreatedAt},
-Generation}` (the last two since §13, so the merge dialog can name which sheet it will want),
+Generation, Rekeyed}` (`RecoverySlots` and `Generation` since §13, so the merge dialog can name
+which sheet it will want; `Rekeyed` since 2026-10-27, a file of this vault from a generation
+before the vault's own, so the confirmation can say it predates a re-key),
 where a *backup* has only recovery slots active (R28's
 export) and a *vault* has at least one other — and every one of those is a plaintext claim (R25,
 R35): they inform the dialog, they decide nothing. `Vault.ImportFile` stages the file as
@@ -181,18 +231,25 @@ pending lock's close waited for, as `openVaultFile` does. The ceremony ends **Lo
 install needs the handle closed; the credential spent on proving is not reused to publish a
 session. The status counts the retired copies (`RetiredCopies`, `RetiredPath`), the Vault page shows
 them, and the first-run screen offers the newest one when no vault is kept — a crash between the two
-steps leaves a vault under a name the app knows. Retired copies are never read by Enfold again and
-are the user's to delete; their ways in stay valid for them, which the confirmation says.
+steps leaves a vault under a name the app knows. Retired copies are never read by Enfold again
+and are the user's to delete; their ways in stay valid for them, which the confirmation says. A
+vault that still owes a retirement (FORMAT R41; `RetireOwed` on the status, read from its bytes
+and kept while Locked) is copied whole, so its dated copy also opens with any unlock method its
+last change removed, and with the vault's key a re-key retired: the confirmation then says that
+too, and that the copy is best deleted once the new vault opens, as it says of the file *Use the
+file where it is* leaves where it lies (ruled 2026-10-27).
 
 With a vault kept here, *every* replacement needs `replace` — "same vault, newer" included, since
 both are attacker-writable plaintext — and the page sets it only after a confirmation that names
-the vault being replaced, its date and, for a backup, that archives registered after the backup's
-date are not in it; without `replace` the call is `vault.exists`. An import is refused while any
-archive is open (`vault.archives_open`), whose saves would land in the wrong registry, and from any
-state but None and Locked (Broken needs `Reopen` first; Busy is another process). **Every create
-is built as the incoming file** beside its destination and installed only after the ceremony's
-latch and cancel are checked — a create cut short (Cancel, a lock trigger, a crash) leaves nothing
-at the vault's place, so nothing is ever adopted whose recovery key was not shown. Installed, the
+the vault being replaced, its date and, for a backup, that archives registered after the
+backup's date are not in it, and, for a file that predates a re-key (`Rekeyed`), that unlock
+methods removed since may still open it and whatever is added to it later; without `replace` the
+call is `vault.exists`. An import is refused while any archive is open (`vault.archives_open`),
+whose saves would land in the wrong registry, and from any state but None and Locked (Broken
+needs `Reopen` first; Busy is another process). **Every create is built as the incoming file**
+beside its destination and installed only after the ceremony's latch and cancel are checked — a
+create cut short (Cancel, a lock trigger, a crash) leaves nothing at the vault's place, so
+nothing is ever adopted whose recovery key was not shown. Installed, the
 vault **opens at once** with the recovery key just made (the user chose the way in a minute ago
 and proved it; a second unlock would be ceremony for its own sake): the create ends Unlocked with
 the key shown over the vault, and only a lock trigger that landed meanwhile, or a file that will
@@ -233,12 +290,22 @@ enrol new slots). A backup placed by hand, or an import interrupted after the co
 only its recovery slot: `SetupNeeded` on the status, `BeginUnlock` with a token or a password
 refused with `vault.setup_needed` (the recovery key still unlocks it — the archives stay
 reachable), and the lock screen's one action is *Finish setting up* (`Vault.FinishSetup`, `kind:
-setup`): the recovery key, then the first way in, ending Unlocked; a cancel after the slot committed
-still leaves a vault, and the facts are refreshed. The recovery key that opened the backup stays
+setup`): the recovery key, then the first way in, ending Unlocked; a cancel or a lock trigger after
+the slot committed changes nothing of it, and the act ends done over the Locked state, the file
+retired (FORMAT R41) and the facts refreshed; a first way in whose commit failed after writing is
+retired at once, as a failed change is (§13). The recovery key that opened the backup stays
 valid; no new one is shown. The display name is machine-local (settings), so an import asks for
 one, defaulting to the current name for the same vault and to the file's name otherwise. Setup
 is a mutation ceremony (`AddSlot` commits to the vault kept here): shutdown waits for it and an
 unknown outcome is Broken, as for any slot change.
+
+While the vault's password is on, *Finish setting up* is refused before its ceremony
+(`vault.setup_password_on`, ruled 2026-10-27): `AddFirstWayIn` writes a first header and cannot
+take one whose switch is on, which a vault left with its recovery keys alone by a removal has;
+such a vault is unlocked with a recovery key and given a YubiKey with *Add an unlock method…* on
+the Vault page, which proves with that recovery key. Once its recovery key has opened the file,
+*Finish setting up* first finishes a retirement the file owes (FORMAT R41), and is refused with
+`vault.retire_owed`, nothing of it written, while it cannot.
 
 **A backup is verifiable without touching anything** (FORMAT §15: an untested backup is a belief):
 `Keys.VerifyBackup` stages a copy, opens it with the recovery key (`kind: verify`), reports how many
@@ -803,7 +870,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - `Status() VaultStatus{Seq, State, Path, DisplayName, LastUnlockedAt, LocksAt, AbsoluteAt,
   Entangled, VaultFileSize, Tampered, TamperedReason Code, Note Code, Warnings []Code, Ceremony *CeremonyState, Ops []OpView,
   OpenArchives int, Opened []ArchiveRef{ID, Name}}` plus the one-vault facts of §2.1 (`SetupNeeded`, `DefaultPath`,
-  `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`)
+  `MissingPath`, `Damaged`, `DamagedCopyPath`, `KeptElsewhere`, `RetiredCopies`, `RetiredPath`,
+  and since 2026-10-27 `RetireOwed`, the vault file still owing a retirement, FORMAT R41, §2.1)
   and, while unlocked, `IdleEffectiveMinutes` and `AbsoluteEffectiveMinutes` — the timeouts the
   timers were armed with, the registry's minutes after the clamp of §2.1, zero while not
   unlocked — so that the foot and the tray say the core's number and keep no copy of its rule
@@ -815,7 +883,8 @@ sentinel of every package with a catch-all `internal` — and services are regis
   and their tiers*); `OpenArchives` stays the count the foot and the tray read;
   `Readers() []Reader{Name}`.
 - `BeginUnlock()`, `CancelUnlock()`, `Lock()`, `Reopen()`, `Activity()`. Secret submissions
-  arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`.
+  arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`,
+  and a replacement's two answers, `kept` and `confirm`, with no value (since 2026-10-27, §13).
 - `CreateVault(path, displayName, kind, label, entangle, replace)` (`path` empty = the one place,
   §2.1; the first way in's ceremony, then the keystore built as the incoming file and installed,
   the recovery key shown, ending Unlocked — the installed file opened with that key — with a
@@ -833,28 +902,50 @@ sentinel of every package with a catch-all `internal` — and services are regis
   page says "choose a password", never the same words as an existing one); a password typed to
   prove a current way in never does. The first way in's is typed in the dialog that starts the
   ceremony and sent by the page at that prompt (§6, ruled 2026-10-17); the core is unchanged.
-- `LastExportAt() int64` (§13: the delete dialog's backup sentence and the rotate dialog's tick
-  read it, and keep reading it) and `BackupStatus() BackupStatus{At, Archives, Missing, Rekeyed}`
-  (ruled 2026-10-18, for the Vault page's backups card, §6). `At` is `LastExportAt`'s answer, zero
-  for *never*. The counts are read from the registry only while Unlocked and not Tampered, and
-  are 0 otherwise, `At` still given: `Archives` counts the records not forgotten, hidden ones
-  included, since a backup holds their keys too; `Missing` those created after `At` — every one
-  when `At` is 0; `Rekeyed`, over the records the backup does hold, those with a key version
-  created after `At`, each archive counted once however many times it was re-keyed. The
-  predicate is `created_at`, of a record and of its versions, never `modified_at`: every save
-  moves that, and a line keyed to it would never read current. Like `lastExportAt` it is local
-  and unauthenticated — it words the line and suggests the export, and gates nothing — and it is
-  not exact at its edges, so nothing calls it exact: the export snapshots the registry before
-  `At` is stamped, both in whole seconds, so a record created in that moment reads as in the
-  backup; and a merge keeps the incoming record's and versions' `created_at` (§13, Merge
-  records), so a record older than the last backup and merged in after it reads as in it.
+- `LastExportAt() int64` (§13: the delete dialog's backup sentence and the backup block of every
+  dialog that re-keys read it, and keep reading it) and `BackupStatus() BackupStatus{At,
+  Archives, Missing, Rekeyed, VaultRekeyed, KeysReplaced}` (ruled 2026-10-18, for the Vault
+  page's backups card, §6). `At` is `LastExportAt`'s answer, zero for *never*. The counts are
+  read from the registry only while Unlocked and not Tampered, and are 0 otherwise, `At` still
+  given: `Archives` counts the records not forgotten, hidden ones included, since a backup holds
+  their keys too; `Missing` those created after `At` — every one when `At` is 0; `Rekeyed`, over
+  the records the backup does hold, those with a key version created after `At`, each archive
+  counted once however many times it was re-keyed. The predicate is `created_at`, of a record
+  and of its versions, never `modified_at`: every save moves that, and a line keyed to it would
+  never read current. Like `lastExportAt` it is local and unauthenticated — it words the line
+  and suggests the export, and gates nothing — and it is not exact at its edges, so nothing
+  calls it exact: the export snapshots the registry before `At` is stamped, both in whole
+  seconds, so a record created in that moment reads as in the backup; and a merge keeps the
+  incoming record's and versions' `created_at` (§13, Merge records), so a record older than the
+  last backup and merged in after it reads as in it. `VaultRekeyed` (since 2026-10-27) says the
+  vault was re-keyed after the last backup recorded here — the generation `lastExportAt`
+  recorded (§13) is below the vault's own — and `KeysReplaced` that none of the recovery keys
+  that backup holds is still one of this vault's. Such a backup is at the vault's key the re-key
+  retired, which an unlock method removed since may have reached through an earlier copy, or it
+  opens only with recovery keys the user was told to destroy; adopting it would continue at that
+  key, so the card asks for a new one (§6). A stamp written before the generation and the
+  recovery keys were recorded makes no such claim.
 - Events: `vault.state` (the whole status), `vault.ceremony {Seq, Step, PromptID, SlotLabel,
-  Retries, RetriesKnown, ReaderCount, N, Error, Method, RecoveryID}` (`Method` — token · password ·
-  recovery — is what the lock screen's wording follows, since an adopted pending touch carries no
-  argument on the page; `RecoveryID` rides `StepRecovery` beside the one-time URL in `SlotLabel`,
-  §13), `vault.warning`, and from the shell
-  `secret.refused {Code}`. A ceremony whose last step is the recovery key's reveal ends with that
-  step in its final event, so the page shows the one-time URL above whatever view it is on.
+  Retries, RetriesKnown, ReaderCount, N, Error, Method, RecoveryID, Rekey, Phase, Without,
+  BackedUp, BackupError, RetireError, RetireRemnant, KeepIndex, KeepCount, OldIDs, NewIDs,
+  After}` (`Method` — token · password · recovery — is what the lock screen's wording follows,
+  since an adopted pending touch carries no argument on the page; `RecoveryID` rides
+  `StepRecovery` and `StepKeepKey` beside the one-time URL in `SlotLabel`, §13; `Rekey` says
+  from the first event that the act re-keys the vault in the same commit as its own change, and
+  is false for the re-key itself, `Phase` what is being written once the proof has passed —
+  `commit` or `backup` — `Without` the YubiKey a re-keying removal does not ask for, `BackedUp`
+  or `BackupError` how the backup the act was asked to take after its change went, `RetireError`
+  why the retirement of the file's earlier state did not land and `RetireRemnant` whether only
+  earlier registry ciphertext was left; `KeepIndex` and `KeepCount` which new recovery key a
+  replacement shows, `OldIDs`, from its proof on, the IDs it replaces and `NewIDs` those it
+  adds; `After`, at the end of an act of the Vault page that writes the slot region,
+  what it left committed — its recovery keys' IDs, the switch, whether the vault
+  now needs setting up — which the end's next step reads (§13); `StepKeepKey` and
+  `StepConfirm` are a replacement's steps, each with a prompt of kind `kept` or
+  `confirm`, answered with no value on the raw channel, §13), `vault.warning`,
+  and from the shell `secret.refused {Code}`. A ceremony whose last step is the
+  recovery key's reveal ends with that step in its final event, so the page shows the one-time
+  URL above whatever view it is on.
 
 **Archives**
 - `List(showHidden) []ArchiveSummary{ID, Name, Description, Path, StoredSize, LastWrittenAt,
@@ -1281,7 +1372,11 @@ sentinel of every package with a catch-all `internal` — and services are regis
   entangled switch as well as the records, FORMAT §6.4), so the page greys *Remove* before any
   ceremony is run for it. The entangled password is the vault's, not a slot's: its row is
   `EntangledState()` (§13).
-- `BeginEnroll(kind, label)` runs the ceremony for the VMK and releases the key that unlocked —
+- `BeginEnroll(kind, label, withRecoveryKey)` runs the ceremony for the VMK — proved with a
+  recovery key instead of a YubiKey when `withRecoveryKey` says no YubiKey of the vault is at
+  hand, for a YubiKey or a recovery key added to a vault that has a YubiKey and a recovery key
+  (§13, *The recovery-key proof*; `params` for a password or on a vault with no YubiKey,
+  `vault.no_recovery_slot` on one with no recovery key) — and releases the key that unlocked —
   an enrolled hardware key inherits the vault's entangled password and is wrapped from the kept
   `K_P` offline, so no password is asked (§13); a `kind = password` slot asks for its own
   (`Choose`) — and then, for a YubiKey, the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
@@ -1299,11 +1394,13 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Sub-states mirror §2.2 plus `ManagementKey`. `BeginEnroll(recovery, label)` adds a recovery
   slot and shows its digits: the reveal, below.
 - **The reveal.** Every showing of a recovery key — after a create, after enrolling one, and
-  `RevealRecoveryKey(recipientID)` from the Vault page — ends its ceremony at `StepRecovery` with
-  the one-time URL in `SlotLabel` (§4) and the same dialog on the page, whichever view it is on.
-  `RevealRecoveryKey` is a ceremony (`kind: reveal`; the dialog's title "Show the recovery key")
-  that recovers the VMK through a protector exactly as a slot change does — the YubiKey's PIN
-  and touch, or the password; never the recovery key (the ruling: a protector authorises the
+  `RevealRecoveryKey(recipientID)` from the Vault page — ends its ceremony at
+  `StepRecovery` (a replacement's new recovery keys, shown before its commit, stand
+  at `StepKeepKey` instead, §13) with the one-time URL in `SlotLabel` (§4) and the
+  same dialog on the page, whichever view it is on. `RevealRecoveryKey` is a ceremony
+  (`kind: reveal`; the dialog's title "Show the recovery key") that recovers the VMK
+  through a protector exactly as a slot change does — the YubiKey's PIN and touch,
+  or the password; never the recovery key (the ruling: a protector authorises the
   showing) — then unwraps the slot's escrow record (FORMAT R38), checks it against the slot's
   own public key, and mints the URL. What can be refused before any prompt is:
   `vault.slot_not_found` (not an active recovery slot), `vault.setup_needed` (a vault with
@@ -1341,17 +1438,30 @@ sentinel of every package with a catch-all `internal` — and services are regis
   a save after the digits were shown does not need the ceremony again; a token in a bound call
   is a capability to a value the page already fetched, not the value. Every recovery slot has
   its record from the commit that made it (FORMAT R38, registry version 3 only).
-- `RemoveSlot(recipientID)` (refused with the invariant's reason), `RotateNow()`,
-  `ExportBackup(path)` (which records `lastExportAt`, §13; the "Export" of earlier drafts),
-  `VerifyBackup(path)` (§2.1: a staged copy opened with the
-  recovery key, nothing kept). What a backup is and whether it is this vault is
+- `RemoveSlot(recipientID, rekey, backupPath)` (refused before any ceremony, from the cached
+  facts that grey *Remove*, with `vault.tampered`, `vault.slot_not_found` or the invariant's
+  reason; `rekey` re-keys the vault in the same commit, §13), `RotateNow(backupPath)`,
+  `ReplaceRecoveryKeys(backupPath)` (every recovery slot replaced and the vault re-keyed in one
+  ceremony and one commit, §13), `ExportBackup(path)` (which records `lastExportAt`, §13; the
+  "Export" of earlier drafts) — a `backupPath` that is not empty exports a backup inside the
+  act's own ceremony after its change and its retiring commit, skipped while that retirement is
+  still owed (§2.1), and the act still ends done when that export fails or is skipped; every
+  backup, the export's own included, is refused before any ceremony with `params` for a place in
+  the data folder or under a staging name, and with `vault.no_recovery_slot` where the vault
+  would keep no recovery key after the act — and `VerifyBackup(path)` (§2.1: a staged copy
+  opened with the recovery key, nothing kept). What a backup is and whether it is this vault is
   `Vault.InspectFile`; restoring archive records from a backup — the `RestoreArchiveRecord` of
   earlier drafts, re-wrap under the current KWK — is *Import archives from a backup…*:
   `Vault.InspectRecords`, `MergeRecords` and `DiscardRecords` (§13, "Merge records").
 - **Slot changes and registry writes never share the handle.** While a slot-change ceremony
   runs, a registry write is refused with `ceremony.in_progress` — a Save still commits its
-  archive and owes the receipt, paid when the ceremony ends — and a slot change does not start
-  while a save, verify, compact or rotation is running (`op.in_progress`). A pending touch left
+  archive and owes the receipt, paid when the ceremony ends; a change §2.1's barrier holds is
+  refused before it reads anything of the vault, so a create makes no archive file, a forget
+  closes nothing and an archive re-key opens nothing — and a slot change does not start while a
+  save, verify, compact or rotation is running (`op.in_progress`); nor, since 2026-10-27, does
+  any act of the Vault page, the reveal included, while *Delete archive…* is between removing an
+  archive's file and forgetting its record (`op.in_progress` too), so that no change and failed
+  retirement land between the two. A pending touch left
   by a cancelled slot change or reveal (§2.2) is that ceremony still running, to this rule and
   to every other guard, until the card answers. A lock trigger in any state latches and cancels
   the ceremony, and the lock's close of the handle waits for it — and for the pending touch.
@@ -1641,9 +1751,14 @@ another Enfold" and "Close it there, then try again." over *Try again* (accent);
 (§2.1) keeps the padlock and the name with the caption naming the header's state, "Needs attention ·
 last unlocked yesterday, 17:10" — never the rest's *Locked* — then the code's sentence on an
 attention line (the icon and the words in the attention ink, no box) over *Reopen the vault*
-(accent) (ruled 2026-10-17); a vault that needs setting up — an adopted backup's first way in — takes
-first run's shape, with no padlock: "Finish setting up <vault>" and its line over *Finish setting
-up…* (accent) and *Unlock with recovery key* (ruled 2026-10-17).
+(accent) (ruled 2026-10-17); a vault that needs setting up — an adopted backup's first way in,
+or a vault a removal left with its recovery keys alone — takes first run's shape, with no
+padlock: "Finish setting up <vault>" and its line over *Finish setting up…* (accent) and *Unlock
+with recovery key* (ruled 2026-10-17); while the vault's password is on, its line is the reason
+instead, "This vault's password is on, so its setup cannot be finished here. Unlock with a
+recovery key, then add a YubiKey on the Vault page.", *Finish setting up…* is greyed with the
+same sentence as its title, and the accent and the focus pass to *Unlock with recovery key*
+(ruled 2026-10-27).
 
 **The YubiKey's step**: the key art — a port, the plug, the YubiKey and its LED in a ring — with
 the LED breathing while the app listens, "Insert your YubiKey" and "Waiting for a YubiKey that
@@ -1659,9 +1774,13 @@ being read, its LED solid once it answered. Two YubiKeys in draw two, the second
 core carries on by itself once one is out. On a YubiKey that is not one of the vault's unlock
 methods the LED goes dark and the dashes between port and plug go, so the screen shows which
 object is wrong; the lead names the vault ("This YubiKey is not one of <vault>'s unlock
-methods"), and an unlock offers *Use recovery key* beside *Cancel* (ruled 2026-10-17) (only an unlock can turn to the recovery key: an import's proof or a create says *Try
-another YubiKey.*, and a ceremony in a dialog says the same, its foot band holding *Cancel*
-alone).
+methods"), and an unlock offers *Use recovery key* beside *Cancel* (ruled 2026-10-17) (only an
+unlock can turn to the recovery key: an import's proof or a create says *Try another YubiKey.*,
+and a ceremony in a dialog says the same, its foot band holding *Cancel* alone — save one, since
+2026-10-27: the proof of *Add an unlock method…* adding a YubiKey or a recovery key, begun
+without the recovery key on a vault that has a YubiKey and a recovery key, draws the step's own
+line and *Use recovery key* (accent) before *Cancel*, as an unlock does, §13 *The recovery-key
+proof*).
 
 **The PIN's step**: the YubiKey's name as a chip, then, on a vault whose entangled password is
 on, the PIN and the password as two fields under one *Continue* (the ruling of 2026-09-08). The
@@ -1688,12 +1807,14 @@ No match's and Blocked's accent stood at its own width, and the quiet steps' *Ca
 subtle); the recovery key's cells alone keep *Unlock* at its width, the count at the row's end.
 The same two-field form serves every token ceremony on the Vault page, where the last try's bar
 says its consequence alone — "Last try. A wrong PIN now blocks this YubiKey's PIN until it is
-reset." — since a dialog offers no recovery key. Blocked stands on this step, under the YubiKey's
-chip, with its own lead that says whose PIN, "This YubiKey's PIN is blocked", then one sentence on
-a danger bar, what it means and, in an unlock, the way out — "It will not accept a PIN until it is
-reset; your recovery key still opens the vault." — and *Use recovery key* (accent, an unlock's
-alone) beside *Cancel* (ruled 2026-10-17; it was a title over a grey line, then a bar alone, then
-a lead that named no YubiKey over a caption and a bar that split one sentence).
+reset." — since a dialog offers no recovery key there (two cases offer one, neither of them a
+PIN's: §13, *The recovery-key proof*, ruled 2026-10-27). Blocked stands on this step, under the
+YubiKey's chip, with its own lead that says whose PIN, "This YubiKey's PIN is blocked", then one
+sentence on a danger bar, what it means and, in an unlock, the way out — "It will not accept a
+PIN until it is reset; your recovery key still opens the vault." — and *Use recovery key*
+(accent, an unlock's alone) beside *Cancel* (ruled 2026-10-17; it was a title over a grey line,
+then a bar alone, then a lead that named no YubiKey over a caption and a bar that split one
+sentence).
 
 **The recovery key's step** (ruled 2026-10-17): the vault's name and "Type or paste the 48 digits
 from the sheet. The key ID at its top says which sheet it is.", the vault's recovery keys as a
@@ -2186,20 +2307,28 @@ flight's.
 "Keys page", in older rulings, is this page, and the spec now calls it the Vault page throughout)
 — is everything about the one vault in one column, at most 760 px, its banners (Tampered,
 setup, locked) and its InfoBars in the notice slot first in the column (*Notices and their
-tiers*, below; ruled 2026-10-26), and no save bar (ruled 2026-10-18, phase 4a of the design
+tiers*, below; ruled 2026-10-26; since 2026-10-28 a refusal of the page's own press brings the
+slot into view, *InfoBars*), and no save bar (ruled 2026-10-18, phase 4a of the design
 review's direction 10: the vault's name and its lock times stood on Settings under the save bar,
 the name shown here read-only). One accent per surface: *Add an unlock method…* while the vault
 is unlocked, not Tampered and no backup is owed; *Export backup…* while one is owed; the locked
 line's *Unlock* while locked. Three sections, in the order they are read:
 - **Unlock methods**, with their count, "4 unlock methods" — the spec's slots and ways in. The
   section's head holds the vault-wide acts, apart from the cards so that none reads as a card's:
-  *Add an unlock method…* and *Re-key vault…* (was *Rotate now…*; its dialog, *Re-key the
-  vault?*, says every unlock method gets the new key now with no YubiKey needed, and asks for a
-  backup first, §13). The cards are not a selection (they were: *Show recovery key…* showed only
-  while a recovery card was selected); each carries its own small buttons at its right —
-  *Show recovery key…* on a recovery key's card, *Remove…* on every card, greyed with its reason
-  as its title (the vault locked, changes off while Tampered, or the invariant, "At least 2
-  unlock methods are always kept, one of them a recovery key.") — shown on hover and focus,
+  *Add an unlock method…*, *Re-key vault…* (was *Rotate now…*; its dialog, *Re-key the vault?*,
+  says every unlock method gets the new key now, one of them proving it is you first, and offers
+  a backup taken afterwards, §13) and *Replace recovery keys…* (§13; greyed with its reason as
+  its title, the vault locked or Tampered as for the others, "This vault has no recovery key to
+  replace." where it has none, and "Add a YubiKey or a password first: a new recovery key can be
+  shown again only through one." where its unlock methods are all recovery keys), the three
+  wrapping under the title where the column is narrow. The cards are not a selection (they were:
+  *Show recovery key…* showed only while a recovery card was selected); each carries its own
+  small buttons at its right — *Show recovery key…* on a recovery key's card, *Remove…* on every
+  card (its dialog asks why the method is removed and re-keys the vault on its first,
+  pre-selected answer, §13), greyed with its reason as its title (the vault locked, changes off
+  while Tampered, or the invariant, "At least 2 unlock methods are always kept, one of them a
+  recovery key.", or on a YubiKey's card "To remove this YubiKey, add a new one or a recovery
+  key first: the vault always keeps at least 2 unlock methods.") — shown on hover and focus,
   staying while that card's dialog is up, and always shown where nothing hovers. A method cannot
   be renamed: no call does it. Then the rule line, then the *Password with every YubiKey* row
   (§13; it read *Entangled password*).
@@ -2416,10 +2545,15 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   InfoBar and gets no line (*InfoBars*, below; ruled 2026-10-26). An extract under *Ask* that wrote nothing and
   comes back with a question — a conflict, a refused name or path — says nothing, the question
   being its news; one that wrote some says "Extracted 9 of 13 files to …" [*Show in Explorer*]
-  under its question, and each re-issue its answer makes has a line of its own. Two endings of
-  the page's own also take the line: *Find missing files* (§13) and a backup export, "Backup saved
-  to E:\backup-2026-10-18.eks" [*Show in Explorer*], said once the export's dialog is closed on
-  its Done (a backup taken before a re-key says none: the re-key is the act that ends there).
+  under its question, and each re-issue its answer makes has a line of its own. Endings of the
+  page's own also take the line: *Find missing files* (§13); a backup export, "Backup saved to
+  E:\backup-2026-10-18.eks" [*Show in Explorer*], said once the export's dialog is closed on its
+  Done; and, since 2026-10-27, the same line for an act that took a backup after its change —
+  *Re-key vault…*, *Remove…*, the password's *Change…* and *Turn on…*, *Replace recovery keys…*
+  — once its dialog is closed on a Done that wrote it, by its *Close* or by the button of its
+  next step (a backup taken before a re-key, as until then, said none). The line carries no
+  other command: the next step an act's end offers, such as *Replace recovery keys…*, stands in
+  that end, beside its reason (§13).
 - **The results dialog** (`ResultsDialog`; §3, `FileOutcome`) says what a batch left out. It
   stands above every route: it opens at once on the archive's page where the batch ran, and from
   the done line's *Details* on any page. Its title is the outcome, counted — "2 files were not
@@ -2487,14 +2621,28 @@ since a backup keeps its own and no new one is made, and its line under the card
 backup's recovery key first) — the password, standalone or with every YubiKey, chosen afresh
 (FORMAT R28) and typed there, answering the Choose prompt the ceremony asks after the recovery
 key (ruled 2026-10-17); with a vault kept
-here, a confirmation names the vault being replaced and its date, says it is kept as a dated copy
-whose ways in stay valid, and, for a backup, that archives added since its date are not in it —
-the button stays disabled until it is ticked. "Use the file where it is" is an advanced link for
-a vault, with the warning that removable media and network shares are outside Enfold's
-protection; choosing it turns the confirmation into "switch to this file — it stays where it is".
-With archives open, both dialogs say so and their buttons stay disabled. The create dialog shows
-where the vault will live on one caption line 4 px under the name — *Kept in*, the path in mono,
-then the button (ruled 2026-10-17) — and offers *Keep it elsewhere…* (once a place is chosen, *Use
+here, a confirmation names the vault being replaced and its date, says it is kept as a dated
+copy whose ways in stay valid, and, while the vault being replaced still owes a retirement
+(`RetireOwed`, §2.1), "It also still holds its state from before its last change, so it opens
+with any unlock method that change removed too. Delete it once the new vault opens." — in the
+confirmation of *Use the file where it is* too, of the file it leaves where it lies (ruled
+2026-10-27) — and, for a backup, that archives added since its date are not in it, and for a
+file that predates a re-key, "It was made before this vault was re-keyed: unlock methods removed
+since may still open it, and whatever is added to it later." — the button stays disabled until
+it is ticked. "Use the file where it is" is an advanced link for a vault, with the warning that
+removable media and network shares are outside Enfold's protection; choosing it turns the
+confirmation into "switch to this file — it stays where it is". With archives open, both dialogs
+say so and their buttons stay disabled. The import dialog is 520 px wide, and its body reads in
+this order (since 2026-10-28): the file, its facts and the name; what the file does to this
+vault, with the line for a copy that predates a re-key; the confirmation and its tick, or the
+bar that archives are open; then a backup's cards, or a vault's "Prove it with" and its advanced
+link. A backup's dialog still scrolls in a 1086 × 694 window (821 px of content in a 654 px box
+for a backup made before a re-key; it was 861), but the bar and the tick that *Replace vault*
+waits for stand in view with the box, where before they stood after the cards, below the fold;
+and a press that the cards refuse brings them and their marks into view (`FirstWayIn`'s
+`reveal`: smoothly, at once under reduced motion). The create dialog shows where the vault will
+live on one caption line 4 px under the name — *Kept in*, the path in mono, then the button
+(ruled 2026-10-17) — and offers *Keep it elsewhere…* (once a place is chosen, *Use
 the usual place*) as a hyperlink button in the line's caption, not a field. The line never wraps
 (ruled 2026-10-17: the full path pushed the button to a row of its own): the path is cut in the
 middle to what the row holds beside the button — the drive and the file name kept whole, the
@@ -2519,10 +2667,12 @@ its tick reads "keep a copy of the damaged file and start a new vault"); when a 
 exists and no vault is kept, it names the copy and offers to restore it (*Restore it…*). With a
 vault kept here the lock screen offers *Replace this vault with a copy…* and *Test that a backup
 opens…* (ruled 2026-10-17; they were *Import a backup or a copy of this vault…* and *Check that a
-backup opens…*), behind its *Backups and copies…* menu (ruled 2026-10-17), never a second vault. A vault with only its
-recovery key shows *Finish setting up* as its one action, with "unlock with the recovery key
-only" beneath. Precedence on the lock screen: Busy, then Broken, then setup needed, then the
-ways in; Tampered is a banner over any (the danger notice, *Notices and their tiers*, below).
+backup opens…*), behind its *Backups and copies…* menu (ruled 2026-10-17), never a second vault.
+A vault with only its recovery keys shows *Finish setting up…* (accent) and *Unlock with
+recovery key*; while the vault's password is on, the first is greyed and the accent and the
+focus pass to the second (*At rest*, above). Precedence on the lock screen: Busy, then Broken,
+then setup needed, then the ways in; Tampered is a banner over any (the danger notice, *Notices
+and their tiers*, below).
 
 **The backups card** (ruled 2026-10-18, direction 9 of the design review; it was a line on what
 a backup is, the buttons, and a *Last backup* fact — "<date>; recorded here, not proof the file is
@@ -2536,9 +2686,14 @@ since recency is the point:
 - *never* — no backup recorded, archives in the vault: the attention bar with the backup icon,
   "**No backup is recorded here.** All <n> archives are only in this vault file." ("Your 1
   archive is only in this vault file." for one);
-- *behind* — a backup that lacks archives: the same bar, "**Backed up <since>.** <n> archives
-  created since are not in it.", or "<k> archives re-keyed since are not in it.", or "<n>
-  archives created since and <k> re-keyed since are not in it.", the verb singular for one;
+- *behind* — a backup that lacks archives, or one the vault has left behind: the same bar,
+  "**Backed up <since>.** <n> archives created since are not in it.", or "<k> archives re-keyed
+  since are not in it.", or "<n> archives created since and <k> re-keyed since are not in it.",
+  the verb singular for one, or, when the vault was re-keyed after the backup (`VaultRekeyed`,
+  §3), "**Backed up <since>.** It was made before the vault was re-keyed.", or, when none of its
+  recovery keys is still the vault's (`KeysReplaced`), "**Backed up <since>.** It opens only
+  with recovery keys this vault no longer has.", which wins over the re-key's; either stands for
+  the counts;
 - *current*: a plain line, no box, the check in the accent's ink before "Backed up <since>. It
   holds every archive key.";
 - *none* — no archives and no backup: no status.
@@ -2551,8 +2706,10 @@ from a read made while Unlocked and not Tampered: while Locked or Tampered, and 
 state until the new state's read lands (the store drops its read on every change of state), the
 status is the plain line with the quiet backup icon and no check — "Backed up <since>." or "No
 backup is recorded here." — claiming nothing about what a backup holds, and the export is not
-suggested. The status is read at boot, on unlock, after an export and on `archives.changed`.
-Like `lastExportAt`, it words and suggests and gates nothing.
+suggested. The status is read at boot, on unlock, after an export, at the Done of every act that
+may take a backup or re-key the vault — a removal, the password's change, turning it on or off,
+a re-key, a replacement — and on `archives.changed`. Like `lastExportAt`, it words and suggests
+and gates nothing.
 
 **The recovery key's dialog** — after a create, after enrolling a recovery key, and after *Show
 recovery key…* on the Vault page — is 520 px wide (ruled 2026-10-18, between the default 460 and
@@ -2600,6 +2757,36 @@ dialog says the key could not be shown here and can be shown again from the Vaul
 *Done* as the one way out. It is not dismissed by Escape or the backdrop, and it closes when a
 lock trigger locks the vault it was shown on.
 
+**In a replacement** (*Replace recovery keys…*, §13; ruled 2026-10-27) the same dialog shows
+each new recovery key before it is the vault's, in keep mode: titled "New recovery key 1 of 2"
+("Your new recovery key" for one), the new recovery key's ID beside the title; first the caption
+"Replaces <label> · <old ID>.", in the second ink, so the new sheet goes where the old one is;
+its lead's first sentence "Once you confirm, this recovery key opens the vault file by itself,
+and backups made from then on. Keep it from others.", its second as above; the digits' caption
+"48 digits. Nothing changes until every new recovery key is kept and you confirm." ("…until this
+recovery key is kept and you confirm." for one); the three ways, the readback and the bars as
+above. Its band holds *I have written it down* and *Cancel* until a way is taken; each way
+counts at once, *I have written it down* included, with no second confirmation, as above (ruled
+2026-09-09, and held for the replacement on 2026-10-27). Once a way is taken the band holds
+*Next recovery key* (accent) — *Continue* for the last — and *Cancel*, and *Print…* gives up the
+accent; the press answers the ceremony's `kept` prompt, clears the readback and drops the
+handle. A new recovery key that cannot be shown (its one-time link failed, or its handle is no
+longer held) keeps its caption and its lead, and says in a danger bar, in the digits' place,
+"This recovery key could not be shown here. Nothing has changed: cancel, and start the
+replacement again." over *Cancel* alone: before the commit it cannot be shown again. In the idle
+deadline's last minute the band carries the subtle *Stay unlocked*, the status bar's own, which
+the dialog covers, between the act and *Cancel*. It is not dismissed by Escape or the backdrop,
+as above: *Cancel* is its one way out, so that an Escape pressed in the readback's fields never
+costs the sheets already written, and *Cancel* cancels the ceremony: nothing has been written,
+and the recovery key on screen never becomes the vault's. After the last one the act's dialog
+returns for its one confirmation, "Ready to replace": one row per recovery key, its label and
+"<new ID> replaces <old ID>", then "The replaced keys stop unlocking this vault, and every new
+one works from now on. Check that you can read each new recovery key before you go on." (in the
+singular for one), over *Replace recovery keys* (*Replace recovery key* for one; accent) and
+*Cancel*, Escape being *Cancel* there as in every ceremony dialog: here the vault is not empty,
+a new recovery key cannot be shown again before the commit, and the old ones stop opening it at
+the commit.
+
 **The create dialog's first way in is a group of cards** (ruled 2026-10-17, the user's, for
 direction 1), headed *How you will unlock this vault*, in this order: *YubiKey* ("PIN and touch.
 Recommended."), *Password* ("At least 8 characters."), and under them, 4 px below as the cards are
@@ -2644,8 +2831,8 @@ window whole (775 px), and so does the import dialog's backup with the Password 
 the import dialog's backup with the YubiKey's card ticked does not — its file row, facts and name
 above the cards make a body of 864 px against the 705 an 820 px window leaves it, so that body
 scrolls — and at 1024 × 768 the create dialog ticked and the import dialog's Password card scroll
-by about 50 px (measured 2026-10-17; fitting those needs shorter import copy or a wider import
-dialog, not yet ruled). *Finish setting up* uses
+by about 50 px (measured 2026-10-17, when the import dialog was 460 px wide; it is 520 px since
+2026-10-28, the order of its body changed with it, above). *Finish setting up* uses
 the same cards, its recovery line and its next line those of an adopted backup (the import
 dialog, above). The enrol dialog names the key, never the secret: a token gets "Name this key" (the label
 shown in the list of unlock methods), and a password is chosen in the ceremony that follows,
@@ -2669,9 +2856,10 @@ closed padlock, and the backups card's bar carries the backup icon. It sets noth
 - *attention* — the attention wash, the warning triangle: a guarantee is weaker than it should
   be. The YubiKey that may still be PIN-verified (`token.reset_failed`), workstation-lock
   detection unavailable (`shell.lock_detection_unavailable`), the settings not written
-  (`settings.unsaved`), a backup missing or behind (*The backups card*, above), archives open while the
-  vault is locked (below), and every code no one has classified — a warning is worth a look until
-  someone has said it is not.
+  (`settings.unsaved`), Enfold not having finished clearing the vault file's earlier state
+  (`vault.retire_owed`, §2.1), a backup missing or behind (*The backups card*, above), archives
+  open while the vault is locked (below), and every code no one has classified — a warning is
+  worth a look until someone has said it is not.
 - *info* — the plain bar (`--surface-alt`, the second ink) and the info circle, never amber: it
   heals itself or only informs. `vault.stale` (the next write repairs the other superblock copy)
   and `vault.timeouts_clamped`.
@@ -2762,7 +2950,12 @@ the body type (the unknown code's fallback with its code in muted mono, §7), an
   notices, at the panel's width; on the boot failure's panel, above it. A bar raised while a
   dialog is up is that dialog's: it stands in flow in the topmost dialog, between its body and its
   foot band, while the page's own bars wait under the dim, their time stopped; once the last
-  dialog closes every bar is the page's, with the time it had left.
+  dialog closes every bar is the page's, with the time it had left. On the Vault page a bar
+  raised by a refusal of the page's own press brings the notice slot into view (since
+  2026-10-28): the press may be made far below it, at the backups card, which a short window
+  reaches only by scrolling, so the page scrolls just enough to show the slot, smoothly, at once
+  under reduced motion, and a slot already in view moves nothing; a bar that arrives without a
+  press never scrolls the page.
 
 **The Tampered banner** (danger) stands first among the lock screen's notices and first in every
 page's notice slot while the vault is Tampered — the Archives page and an archive's page (under
@@ -3198,14 +3391,19 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   *Continue*, until a card opens) and on its box when it is not (the import dialog before a file is
   read). Every other dialog takes the focus on its box, save the close question: a form with no
   field, it opens with the focus on its submit, *Quit*, which Enter presses (§2.3, ruled
-  2026-10-17). A dialog whose height changes with a choice made in it is anchored at the top
-  (ruled 2026-10-17: centred, each card that opened moved the title up, from 123 px to 20): the
-  create, finish-setup and import dialogs stand with their top at a tenth of the window, never
-  lower than where a 780 px box would stand centred (the create dialog's tallest state, 775 px,
-  rounded up) and never nearer the edge than 20 px — 20 at an 820 px window and below, 108 at
-  1080 — and grow downward only, their body scrolling past 20 px from the bottom as every dialog's
-  does (the import dialog's backup with the YubiKey's card ticked is taller and scrolls at 820 px,
-  above). Every other dialog is centred.
+  2026-10-17). A form that asks a question and has no field to type in — *Remove <name>?*, the
+  password's *Change…* and *Turn on…* — opens with the focus on its question's checked answer
+  (the radio checked in its `fieldset`), so that the question and the answer are read before
+  anything else, and Enter there presses the submit (ruled 2026-10-27); the replacement's
+  dialog, a form with no question and no field, opens on its submit, and the Re-key dialog,
+  which is not a form, on its box. A dialog whose height changes with a choice made in it is
+  anchored at the top (ruled 2026-10-17: centred, each card that opened moved the title up, from
+  123 px to 20): the create, finish-setup and import dialogs stand with their top at a tenth of
+  the window, never lower than where a 780 px box would stand centred (the create dialog's
+  tallest state, 775 px, rounded up) and never nearer the edge than 20 px — 20 at an 820 px
+  window and below, 108 at 1080 — and grow downward only, their body scrolling past 20 px from
+  the bottom as every dialog's does (the import dialog's backup with the YubiKey's card ticked
+  is taller and scrolls at 820 px, above). Every other dialog is centred.
 - *Type and spacing* (ruled 2026-10-17; the sizes inherited from the mockup — 12.5 and 11.5
   among fifteen, on a 1.45 line — are gone). Six type tokens and no other size, each on a
   whole-pixel line: caption 12/16, body 13/20, strong (600) 13/20 in Segoe UI Variable Text;
@@ -3251,67 +3449,123 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   over 140 ms and the new arriving over 140 ms a gap later (Motion, *Unlock*). **A ceremony in a
   dialog is the lock screen's stage at a dialog's size** (ruled 2026-10-17: the one panel of
   2026-09-06, for the dialogs too) — the Vault page's acts (*Add an unlock method…*, *Remove…*,
-  *Re-key vault…*, *Show recovery key…*, *Export backup…*, the password with every YubiKey) and
-  the proof of *Import archives from a backup…* (§13). It has no title line of its own: the
-  dialog's title names the act (ruled 2026-10-14, after the title was printed twice). Its views
-  are the lock screen's, chosen by the same rule and turned the same way: the key art while a
-  YubiKey is waited for — "Insert a YubiKey that already unlocks this vault" over the vault's
-  YubiKeys by name, with "The new unlock method comes next." for an enrolment alone (the other
-  acts prove it is you and say nothing of a next step) — two YubiKeys and one that is not the
-  vault's as on the lock screen, the YubiKey's name as a chip, the PIN's fields with their
-  reserved lines and the retries' inks, the last try's bar, a blocked PIN's lead and danger bar,
-  a failure where it happened ("The YubiKey stopped waiting" in neutral ink after a timed-out
-  touch), and the end as what is now true ("Unlock method added", "Vault re-keyed") over the
-  accent check. A typed proof — a vault with no YubiKey proves it is you with its password —
-  heads as the YubiKey's wait does, with what to type and why: "Type a password that already
-  unlocks this vault" over "It proves it is you." ("The new unlock method comes next." for an
-  enrolment, whose line already says the proving) (ruled 2026-10-17; the field stood alone under
-  the dialog's title and said neither). The headings, a failure's among them, are the section
-  size (16/22), since the dialog's title already stands at 20/28 and a 20 px lead under it would
-  rank the step with the act; the touch's lead is the hero, as on the lock screen. An enrolment draws a
-  two-part line under the title, *Prove it is you · Add the new unlock method* — two halves, not
-  three steps — its first half passing at the core's `SwapKey` or at the new secret's prompt;
-  its swap is the key art over "Remove <the YubiKey that proved it>" and "Then insert the new
-  YubiKey. Enfold carries on by itself.", and its second half's wait reads "Now insert the new
-  YubiKey" (the core's own words for the swap, "the key to enroll", are never shown). **The
-  touch takes the box over** as it takes the lock's stage: the touch's gradient fills the body
-  under an opacity that moves (220 ms on the entering curve; 160 ms on the exit's), the box's
-  stroke fades with it, the title, the line and the words take the touch's inks, the rings, the
-  hero, its line and the receipt stand in the middle — and the foot band stays as it is, with its
-  *Cancel*. The green holds through whatever follows a touch with nothing asked since, as on
-  the lock screen: the proof's derivation ("Checking that it is you…", since the vault is open
-  already) and a proof's Done, and the new YubiKey's touch in an enrolment's second half — the
-  core has the new YubiKey prove itself by its PIN and its touch before the vault depends on it —
-  through the Done after it (ruled 2026-10-17; the green used to leave as that Done's check
-  popped, on the false ground that nothing was touched there). What has no touch behind it is
-  drawn on the neutral panel: a typed proof's derivation and Done, the key made on the new
-  YubiKey before its touch ("Adding the unlock method…"), and a Done after a prompt that came
-  between the proof's touch and the end — a new password chosen — where the green would arrive
-  only to leave. **The buttons are the dialog's foot
-  band's** (ruled 2026-10-17; the panel's own *Cancel* in the body was the last of the web
-  modal's shapes): *Continue* beside *Cancel* while a prompt is up — the submit of the step's
-  form by its id, so Enter in a field still presses it — *Cancel* alone while nothing is asked;
-  after a failure the user did not choose — the YubiKey stopped waiting, a refusal — *Start
-  again* (accent) beside *Cancel*, as the lock screen's failure has them (ruled 2026-10-17; the
-  dialog offered only *Close*, and the act had to be found on the page and begun anew): the page
-  begins the same act with what it was begun with — the same new unlock method and name, the
-  same unlock method to remove, the same backup file — in the same dialog, which stays open, the
-  failure standing until the new ceremony's first event takes its place; *Close* once the
-  ceremony has otherwise ended. Escape is *Cancel* while it runs and closes the dialog after. The panel
-  keeps one height for every step, the tallest's — the PIN's last try under an enrolment's line,
-  354 px measured in Edge, 356 on the 4 px grid — so the box, 519 px, never jumps as the steps
-  swap (ruled 2026-10-17; it was the mock's 380, which left 26 px of nothing under the tallest).
-  A button that grows to share a row centres its label, as a wide one does
-  (*Continue*, *Unlock*, *Start again*). What the page cannot say in place is an InfoBar in the
-  page's notice slot (*InfoBars*, under *Notices and their tiers*, above; ruled 2026-10-26, phase
-  4b of the design review's direction 4): the toasts, and 2026-09-07's ruling that put them at
-  the top of the window, centred on it, dropping in a little and leaving upward — `Toasts`, 16 px
-  from the top, the text centred and balanced — are superseded. The controls are Windows' own, not a web page's
-  (ruled 2026-10-17, from WinUI's values; the mockup's stills of WinUI states had become the
-  states themselves). One rule for what looks like a link: a command is a button — *Cancel*,
-  *Lock now*, "Use recovery key instead" are subtle buttons, 24 px high in the layer's foot —
-  the lock screen's further commands too (*Backups and copies…*, *Rebuild the vault…*, "Use
-  recovery key instead": 28 px; the panel's *Cancel* is a standard button beside its primary) and the replaced copy's *Restore
+  *Re-key vault…*, *Replace recovery keys…*, *Show recovery key…*, *Export backup…*, the
+  password with every YubiKey) and the proof of *Import archives from a backup…* (§13). It has
+  no title line of its own: the dialog's title names the act (ruled 2026-10-14, after the title
+  was printed twice). Its views are the lock screen's, chosen by the same rule and turned the
+  same way: the key art while a YubiKey is waited for — "Insert a YubiKey that already unlocks
+  this vault" over the vault's YubiKeys by name, with "The new unlock method comes next." for an
+  enrolment alone (the other acts prove it is you and say nothing of a next step) — two YubiKeys
+  and one that is not the vault's as on the lock screen, the YubiKey's name as a chip, the PIN's
+  fields with their reserved lines and the retries' inks, the last try's bar, a blocked PIN's
+  lead and danger bar, a failure where it happened ("The YubiKey stopped waiting" in neutral ink
+  after a timed-out touch), and the end as what is now true ("Unlock method added", "Vault
+  re-keyed") over the accent check. A typed proof — a vault with no YubiKey proves it is you
+  with its password — heads as the YubiKey's wait does, with what to type and why: "Type a
+  password that already unlocks this vault" over "It proves it is you." ("The new unlock method
+  comes next." for an enrolment, whose line already says the proving) (ruled 2026-10-17; the
+  field stood alone under the dialog's title and said neither). The headings, a failure's among
+  them, are the section size (16/22), since the dialog's title already stands at 20/28 and a 20
+  px lead under it would rank the step with the act; the touch's lead is the hero, as on the
+  lock screen. An enrolment draws a two-part line under the title, *Prove it is you · Add the
+  new unlock method* — two halves, not three steps — its first half passing at the core's
+  `SwapKey` or at the new secret's prompt; its swap is the key art over "Remove <the YubiKey
+  that proved it>" and "Then insert the new YubiKey. Enfold carries on by itself.", and its
+  second half's wait reads "Now insert the new YubiKey" (the core's own words for the swap, "the
+  key to enroll", are never shown). **The touch takes the box over** as it takes the lock's
+  stage: the touch's gradient fills the body under an opacity that moves (220 ms on the entering
+  curve; 160 ms on the exit's), the box's stroke fades with it, the title, the line and the
+  words take the touch's inks, the rings, the hero, its line and the receipt stand in the middle
+  — and the foot band stays as it is, with its *Cancel*. The green holds through whatever
+  follows a touch with nothing asked since, as on the lock screen: the proof's derivation
+  ("Checking that it is you…", since the vault is open already) and a proof's Done, and the new
+  YubiKey's touch in an enrolment's second half — the core has the new YubiKey prove itself by
+  its PIN and its touch before the vault depends on it — through the Done after it (ruled
+  2026-10-17; the green used to leave as that Done's check popped, on the false ground that
+  nothing was touched there). What has no touch behind it is drawn on the neutral panel: a typed
+  proof's derivation and Done, the key made on the new YubiKey before its touch ("Adding the
+  unlock method…"), and a Done after a prompt that came between the proof's touch and the end —
+  a new password chosen — where the green would arrive only to leave. Once the proof has passed,
+  the lead says what is being written, on whichever ground the derivation stood (ruled
+  2026-10-27): "Removing the unlock method and re-keying the vault…", "Changing the password and
+  re-keying the vault…", "Turning the password on and re-keying the vault…", "Replacing the
+  recovery keys and re-keying the vault…" ("…the recovery key…" for one), "Re-keying the
+  vault…", or without the re-key "Removing the unlock method…", "Changing the password…",
+  "Updating every YubiKey…", and for an enrolment "Adding the unlock method…"; then, when a
+  backup was asked for, "Saving the backup…". The end keeps its title and adds under it, as they
+  apply, read from the left on the neutral panel — an end that adds anything is never drawn on
+  the touch's green: a replacement's receipt, one row per recovery key, its label
+  and "<new ID> replaces <old ID>", and what to do with the replaced recovery keys'
+  sheets; an attention bar when the retirement of the file's earlier state did not
+  land, "The vault file still holds its state from before this change: a copy of it
+  taken now still opens with the unlock method removed. <why> Until Enfold has cleared
+  it, changes to the unlock methods, re-keying the vault, backups, and creating,
+  importing, re-keying, forgetting, restoring or deleting archives wait; Enfold tries
+  again at each of them and at the next unlock. You can still open your archives and change the
+  files inside them." — its first sentence in the act's own words: "with a YubiKey and the old
+  password", "with a YubiKey alone", "with the replaced recovery keys", "still holds the vault's
+  old key", none after adding an unlock method or turning the password off, and "The vault file
+  still holds earlier versions of its list of archives", with ", which the vault's old key
+  reads" after a re-key, where only those are left — ending "The backup you asked for waits
+  too." when the act's backup was skipped for it; an attention bar when the backup failed, "The
+  backup was not saved. <why> Export one from Backups and copies."; after a YubiKey's enrolment
+  proved with *Use recovery key instead*, the line of §13's *The recovery-key proof*; and the
+  next step, decided from what the act committed, which its final state carries: an info line
+  with its sentence and, under it, a small standard button that closes this dialog and opens the
+  next act's, in one chain with the password first (§13), its line ending "Enfold first tries
+  again to finish clearing the vault file." while the retirement's bar stands: after a re-keying
+  removal of a YubiKey that left only recovery keys, "Add the new YubiKey now; then, if an
+  earlier copy of the vault file may be out there, replace the recovery keys." ("…change the
+  password and replace the recovery keys." with the password on) with *Add an unlock method…*,
+  which stays the next step while the vault has recovery keys alone, an unlock method added from
+  it going on in the same chain; after a re-keying removal with the password on, "If an earlier
+  copy of the vault file may be out there, change the password, then replace the recovery keys."
+  with *Change…*; after a re-keying removal with it off, or a re-keying password change or
+  turning on, "If an earlier copy of the vault file may be out there, replace the recovery keys
+  too." with *Replace recovery keys…* ("an earlier copy or backup … the other recovery keys"
+  after a recovery key's removal), each in the singular where one recovery key is left; after a
+  replacement with the password on, "If an earlier copy of the vault file may be out there,
+  change the password too: the vault's own record of it was readable the same way." with
+  *Change…*, unless the password was changed earlier in the same chain; and never back to
+  recovery keys or a password change the same chain made — a chain being the acts begun from one
+  another's ends, which an act begun from the page itself that re-keys starts anew and a lock
+  ends. A recovery key's enrolment ends in the recovery key's dialog rather than here, so its
+  next step is said once that dialog has closed, in the Vault page's notice slot: the same
+  sentence, *Add an unlock method…* and a close button. A failure of a removal, a password
+  change, turning the password on or off, a re-key or a replacement adds "Nothing was changed."
+  under its bar, save a save that could not be confirmed or a conflict with another writer,
+  which says so in its own words; a replacement that had shown recovery keys adds "The
+  recovery keys shown were never added: destroy what you kept of them.", or, when its
+  outcome is unknown — a save that could not be confirmed or a conflict, from its commit
+  or the retirement after it — "The new recovery keys work only if the Vault page lists
+  their IDs after you reopen it: keep every sheet until you have looked.", each in the
+  singular for one recovery key. An act whose commit has landed ends done whatever fails
+  after it, save an outcome that is unknown, which is Broken. **The buttons are the
+  dialog's foot band's** (ruled 2026-10-17; the panel's own *Cancel* in the body was the
+  last of the web modal's shapes): *Continue* beside *Cancel* while a prompt is up — the
+  submit of the step's form by its id, so Enter in a field still presses it — *Cancel*
+  alone while nothing is asked; after a failure the user did not choose — the YubiKey stopped
+  waiting, a refusal — *Start again* (accent) beside *Cancel*, as the lock screen's failure has
+  them (ruled 2026-10-17; the dialog offered only *Close*, and the act had to be found on the
+  page and begun anew): the page begins the same act with what it was begun with — the same new
+  unlock method and name, the same unlock method to remove, the same backup file — in the same
+  dialog, which stays open, the failure standing until the new ceremony's first event takes its
+  place; *Close* once the ceremony has otherwise ended. Escape is *Cancel* while it runs and
+  closes the dialog after. The panel keeps one height for every step, the tallest's — the PIN's
+  last try under an enrolment's line, 354 px measured in Edge, 356 on the 4 px grid — so the
+  box, 519 px, never jumps as the steps swap (ruled 2026-10-17; it was the mock's 380, which
+  left 26 px of nothing under the tallest). A button that grows to share a row centres its
+  label, as a wide one does (*Continue*, *Unlock*, *Start again*). What the page cannot say in
+  place is an InfoBar in the page's notice slot (*InfoBars*, under *Notices and their tiers*,
+  above; ruled 2026-10-26, phase 4b of the design review's direction 4): the toasts, and
+  2026-09-07's ruling that put them at the top of the window, centred on it, dropping in a
+  little and leaving upward — `Toasts`, 16 px from the top, the text centred and balanced — are
+  superseded. The controls are Windows' own, not a web page's (ruled 2026-10-17, from WinUI's
+  values; the mockup's stills of WinUI states had become the states themselves). One rule for
+  what looks like a link: a command is a button — *Cancel*, *Lock now*, "Use recovery key
+  instead" are subtle buttons, 24 px high in the layer's foot — the lock screen's further
+  commands too (*Backups and copies…*, *Rebuild the vault…*, "Use recovery key instead": 28 px;
+  the panel's *Cancel* is a standard button beside its primary) and the replaced copy's *Restore
   it…*, a small button on its bar's 40 px line (ruled 2026-10-17; each was a link) —
   and a hyperlink button (*Show in Explorer*, *Locate…*, *Details…*) is kept for going somewhere
   or revealing something, and for the create dialog's *Keep it elsewhere…* and *Use the usual
@@ -3436,20 +3690,23 @@ code set in muted mono where an InfoBar shows it (ruled 2026-10-14; the fallback
 ## 8. Memory hygiene
 
 The three retained secrets — the VMK and K_P in `keystore.Unlocked`, the KWK in
-`keystore.Session` — live in pages the process allocates outside the Go heap (`internal/secmem`:
-`VirtualAlloc` + `VirtualLock`, so they are never written to the pagefile; erased by a loop the
-compiler cannot elide and released on `Close` and `Lock`; a page the kernel refuses to lock is
-used unlocked and logged once, never fatal; three pages fit the default minimum working set of
-50, so the working set is not raised). Not memguard (SCOPE, ruled 2026-09-13): a secret handed
-to crypto/aes, HKDF, Argon2 or ML-KEM is copied by the library beyond any enclave's reach, and
-the comments say where. Every other secret buffer the application owns is zeroed best-effort
-(`kdf.Zero`) when it is done with. Crash dumps: `SetErrorMode(SEM_NOGPFAULTERRORBOX |
-SEM_FAILCRITICALERRORS)` means the system does not invoke Windows Error Reporting for the
-process, and `WerAddExcludedApplication` (per user, no elevation) covers what the error mode
-does not — a report raised for something other than the process's own fault; WER's LocalDumps,
-an administrator's opt-in that writes memory to disk independently of the rest of WER, and the
-hibernation file remain outside a user-mode process's control and are the documented limit.
-Destroying the window on close destroys the renderer's copy of what was on screen.
+`keystore.Session` — and, since 2026-10-27, each new recovery key a replacement holds until the
+replacement ends (`keystore.PreparedRecovery`, §13) live in pages the process allocates outside
+the Go heap (`internal/secmem`: `VirtualAlloc` + `VirtualLock`, so they are never written to the
+pagefile; erased by a loop the compiler cannot elide and released on `Close` and `Lock`; a page
+the kernel refuses to lock is used unlocked and logged once, never fatal; three pages fit the
+default minimum working set of 50, so the working set is not raised; a replacement adds one page
+per new recovery key while it runs, a count not measured against that minimum). Not memguard
+(SCOPE, ruled 2026-09-13): a secret handed to crypto/aes, HKDF, Argon2 or ML-KEM is copied by
+the library beyond any enclave's reach, and the comments say where. Every other secret buffer
+the application owns is zeroed best-effort (`kdf.Zero`) when it is done with. Crash dumps:
+`SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS)` means the system does not invoke
+Windows Error Reporting for the process, and `WerAddExcludedApplication` (per user, no
+elevation) covers what the error mode does not — a report raised for something other than the
+process's own fault; WER's LocalDumps, an administrator's opt-in that writes memory to disk
+independently of the rest of WER, and the hibernation file remain outside a user-mode process's
+control and are the documented limit. Destroying the window on close destroys the renderer's
+copy of what was on screen.
 
 ## 9. BitLocker
 
@@ -3471,11 +3728,14 @@ The core is tested without Wails: it takes app-side interfaces `Cards` (`Readers
 `Token` returning `keystore.Token`, `Serial`, `Close`) with app-side `Prompter`/`PINStatus`/
 `KeyInfo` types, so the ceremony and enrollment drivers run against a fake that covers every
 `piv` error the states depend on; one windows-tagged adapter is the only importer of
-`internal/piv`. Lock triggers are an interface the shell implements and the tests drive. Keystore
-and archive are the real packages over temp files; timers take a clock. The shell is exercised
-by hand in `wails3 dev` with `ENFOLD_DATA_DIR` set to a throwaway data folder — which now holds
-the vault too (§2.1), so a throwaway folder is a throwaway vault — instead of `%LOCALAPPDATA%\Enfold`. Frontend tests cover the copy mapping of
-ceremony states and the "never 0 attempts" rule.
+`internal/piv`. Lock triggers are an interface the shell implements and the tests drive.
+Keystore and archive are the real packages over temp files; timers take a clock. The keystore
+exports two test hooks, `SetCommitFault` and `SetWriteSeen` (since 2026-10-27; nil outside
+tests, each returning its restore), so that the core's tests fail a commit at a named step and
+see where each write lands (FORMAT R41). The shell is exercised by hand in `wails3 dev` with
+`ENFOLD_DATA_DIR` set to a throwaway data folder — which now holds the vault too (§2.1), so a
+throwaway folder is a throwaway vault — instead of `%LOCALAPPDATA%\Enfold`. Frontend tests cover
+the copy mapping of ceremony states and the "never 0 attempts" rule.
 
 ## 11. Format changes this layer needs (FORMAT.md §7)
 
@@ -3732,20 +3992,27 @@ retry and an adopted pending touch neither lose it nor ask again. The Vault page
 *Password with every YubiKey*, "On: …" or "Off: …", with *Change…*, *Turn off…* or *Turn on…*
 (ruled 2026-10-17: "entangled" is the format's word and stays in this prose; the row read
 *Entangled password*), backed by `Keys.EntangledState() {On, CanEnable,
-Reason}`: turning it on asks for the new password twice, changing it asks for the new one twice,
-turning it off confirms — "Stop requiring a password with every YubiKey?", "After this, a YubiKey opens the
-vault with its PIN and touch alone. One of the vault's unlock methods is asked for first." and *Turn off
-the password*, a standard button beside *Cancel*, since nothing should suggest weakening the
-vault (ruled 2026-10-18; its primary was the accent *Turn off password*, over a body that said
-nothing of the proof asked next), while turning it on and changing it keep the accent; each is a ceremony for the VMK by any way in and then re-wraps every
-hardware slot offline from the kept `K_P`, drawing a fresh `entangle_salt` (FORMAT §6). **The
-old password is not asked** (the ruling of 2026-09-07): whoever reaches the VMK — by the
-recovery key or the standalone password as much as by a token — can already enrol a way in of
-their own, so asking the old password there would be friction and not a guard, while the
-password's purpose, a second factor against a stolen or broken token, is untouched: a stolen
-token does not reach this page. The critique's alternative — the old asked once, checked offline
-for one Argon2id run against the kept `K_P`, with a *Forgot it?* path that turns the password
-off through the removal ceremony — is recorded in DECISIONS should the ruling be revisited.
+Reason}`: turning it on asks whether the vault file could have been copied before now and then
+for the new password twice, changing it asks whether someone else may know the password and then
+for the new one twice, each re-keying the vault in the same commit on its first, pre-selected
+answer (below), and turning it off confirms — "Stop requiring a password with every YubiKey?",
+"After this, a YubiKey opens the vault with its PIN and touch alone. One of the vault's unlock
+methods is asked for first." and *Turn off the password*, a standard button beside *Cancel*,
+since nothing should suggest weakening the vault (ruled 2026-10-18; its primary was the accent
+*Turn off password*, over a body that said nothing of the proof asked next), while turning it on
+and changing it keep the accent; each is a ceremony for the VMK by any way in and then re-wraps
+every hardware slot offline from the kept `K_P`, drawing a fresh `entangle_salt` (FORMAT §6).
+**No field asks for the old password** (the ruling of 2026-09-07; reworded 2026-10-27, since the
+proof itself may ask it): the change proves an unlock method first, as every act on this page
+does, so proving with a YubiKey asks for the vault's current password with its PIN, as an unlock
+does; but the dialog has no field of its own for the old password, and nothing else asks for it:
+whoever reaches the VMK — by the recovery key or the standalone password as much as by a token —
+can already enrol a way in of their own, so asking the old password there would be friction and
+not a guard, while the password's purpose, a second factor against a stolen or broken token, is
+untouched: a stolen token does not reach this page. The critique's alternative — the old asked
+once, checked offline for one Argon2id run against the kept `K_P`, with a *Forgot it?* path that
+turns the password off through the removal ceremony — is recorded in DECISIONS should the ruling
+be revisited.
 
 Turning it on is refused where the slot invariant would break (FORMAT §6.4): in a vault whose
 active slots are all hardware keys, one password would then stand in front of every way in, so
@@ -3775,8 +4042,10 @@ recovery key, and the dialog says which before the button is pressed, naming eac
 by its ID (below). A file that no VMK and no key opens is reported as *not this vault, or from a
 generation this vault no longer keeps*, never as corruption. The ceremony re-wraps what it read
 under this vault's `KWK` and returns a handle with the record list; the handle lives until
-`MergeRecords` consumes it, the dialog closes (`Vault.DiscardRecords(handle)`), or a lock trigger
-drops it with every held key (§2.1). `Vault.MergeRecords(handle, ids)` is then an ordinary
+`MergeRecords` consumes it, the dialog closes (`Vault.DiscardRecords(handle)`), a lock trigger
+drops it with every held key (§2.1), or a re-key of this vault drops it, since its keys are
+wrapped under the `KWK` the re-key replaced (a merge then answers `ceremony.stale_prompt`, as for
+any dropped handle). `Vault.MergeRecords(handle, ids)` is then an ordinary
 registry write on the session, refused with `vault.archives_open` while any archive is open,
 `ceremony.in_progress` while a ceremony runs and `op.in_progress` while a save, verify, compact
 or rotation runs. A file that opens but fails its own slot-region hash (FORMAT R25) is listed
@@ -3805,45 +4074,223 @@ written with `revision = max(local, incoming) + 1` and this vault's `device_id` 
 `last_writer`, so a merge in the other direction sees a descendant rather than a rival
 (SYNC.md §5).
 
-**The rotate dialog** — *Re-key the vault?*, opened by *Re-key vault…* (ruled 2026-10-17; it
-was *Rotate now…*, which collided with the archive's *Rotate key…*), its body "Every unlock
-method gets the new key now; no YubiKey is needed for this. Backups made before today keep
-opening with the methods they had." and its buttons *Re-key vault*, or *Back up, then re-key*
-with the backup ticked, and *Cancel* — shows the last backup's time and, past a week or with none, asks for a
-backup first — it asks, it never refuses to rotate without one — and it never keeps a copy of
-the vault (FORMAT §18.3, DESIGN trap 29). Its backup, like every `Keys.Export`, records
-`lastExportAt`.
+**The rotate dialog** — *Re-key the vault?*, opened by *Re-key vault…* (ruled 2026-10-17; it was
+*Rotate now…*, which collided with the archive's *Rotate key…*), its body "Every unlock method
+gets the new key now; one of them proves it is you first, and the other YubiKeys need not be
+present. Backups made before today keep opening with the methods they had." (ruled 2026-10-27;
+it said "no YubiKey is needed for this", while the proof is a YubiKey wherever the vault has
+one; on a vault with no YubiKey the first sentence ends at "first") and its buttons *Re-key
+vault*, or *Re-key, then back up* with the backup ticked, as it is whenever the vault has a
+recovery key, and *Cancel* — shows the last backup's time and offers a backup by the rule every
+dialog that re-keys shares (below): it asks, it never refuses to rotate without one, and it
+never keeps a copy of the vault (FORMAT §18.3, DESIGN trap 29). **The backup is taken after the
+re-key**, inside the rotation's own ceremony once the re-key and its retiring commit have landed
+(`RotateNow(backupPath)`: one proof, one dialog), at the vault's new key, and, like every
+`Keys.Export`, records `lastExportAt`. Ruled 2026-10-27, reversing 2026-09-07 and 2026-10-17,
+which took it before ("no backup means no rotation"): a backup taken before is at the vault's
+key being retired, which on the "lost" path must be assumed leaked, and adopting it continues at
+the vault's retired key (FORMAT §15, R28); one taken after is at the vault's new key and holds
+no removed recovery key.
+
+**Re-keying at a removal, a password change and turning the password on** (ruled 2026-10-27;
+DESIGN §5, *Revocation*). *Remove…* opens *Remove <name>?* — "(added <date>)" after the name
+where two methods share it — a form. Its body says what stops and what still opens: "Desk
+YubiKey stops unlocking this vault now. An earlier copy of the vault file still opens with it; a
+backup never held it.", or for a recovery key, the one method a backup holds, "Copies and
+backups of the vault made earlier still open with it."; while Enfold's folder keeps replaced
+vault files (`RetiredCopies`), a line says that those which had the method still open with it
+until they are deleted; where the YubiKey removed is the last of the vault's YubiKeys and no
+password remains, a line says "After this the vault has only its recovery keys: add the new
+YubiKey here now, or after unlocking with a recovery key." Then it asks DESIGN §5's factual
+question, naming the method: "Why are you removing this YubiKey?" (or "this recovery key?") over
+*Lost, stolen, or I am not sure*, first and pre-selected, and *I still have it and it was never
+out of my control*; a standalone password is asked "Why are you removing this password?" over
+*Someone else may know it, or I am not sure* and *Only I have ever known it*, since a password
+is not lost but known. Under each answer a second line says what it does, "The vault is
+re-keyed, as recommended." or "The vault keeps its key."; the dialog opens on the checked answer
+(§6, Forms), and its height does not change with the answer. Under the question an info line
+says the limit plainly, whichever the answer: "Re-keying protects the future, not the past:
+whatever someone could open until now, they may already have copied.", and, while the vault has
+a recovery key besides any removed, what is left to do about it, in the singular where one is
+left: whoever opened an earlier copy with the method could also read the recovery keys — and,
+with the password on, the vault's own record of the password — so the user changes the password
+afterwards and then replaces the recovery keys with *Replace recovery keys…* (below), a
+YubiKey's line with the password on saying to change the password even where no recovery key is
+left; for a recovery key, whoever has it can open an earlier copy or backup and read the other
+recovery keys there, so *Replace recovery keys…* is the act to take instead, which removes this
+one too, and the user checks the unlock methods and removes any they did not add (FORMAT R38),
+then, with the password on, changes the password. *Change…* opens *Change the password for every
+YubiKey?*, whose body says one unlock method proves it is you first and the other YubiKeys need
+not be present, and which asks "Why are you changing the password?" with the standalone
+password's two answers; *Turn on…* asks "Could the vault file have been copied before now?" over
+*Yes, or I am not sure* and *No, it was never copied*, since a copy made before the switch keeps
+opening with a YubiKey alone; each has the info line in its own words, pointing to *Replace
+recovery keys…*. *Turn off…* asks nothing and offers no re-key: the file then opens without the
+password anyway, so a re-key would revoke nothing. The first answer makes the act and the re-key
+one commit (FORMAT §8), so a crash, a failure or a lock leaves the old state whole or the new
+one; every act that writes the slot region, the re-key, the replacement and an enrolment among
+them, is followed in its ceremony by the commit that retires the file's earlier state (FORMAT
+R41), and when that does not land the act still ends done, saying so, takes no backup, and the
+changes §2.1 names wait until it lands, each trying to finish it first, as the next unlock does;
+the files inside the archives do not wait. A commit that fails after writing part of its change
+is retired at once inside its own act, so that "Nothing was changed." stays true of the file. A
+removal the invariant would refuse is refused before any ceremony. A re-keying removal of a
+YubiKey does not ask for the YubiKey it takes away: the wait names the other YubiKeys, and where
+none remains and no standalone password does, the proof is one of the vault's recovery keys; a
+password's removal is proved by typing a password, the one removed included. **The backup** is
+one rule in the five dialogs, the rotate dialog's and the replacement's included: the *Last
+backup* fact, a reason — the replacement's, the removed recovery key's on either answer, the
+re-key's, or, where a backup is owed, why a backup matters — then *Export a backup afterwards*,
+drawn whenever a recovery key remains after the act and ticked on every answer that re-keys —
+the act's own re-key leaves every earlier backup at the vault's old key, which the backups card
+then calls behind — at a recovery key's removal on either answer, since the backups made while
+it was enrolled hold it, and otherwise while no backup is recorded here, the last is over a week
+old, was made before the vault was last re-keyed or holds only replaced recovery keys; where no
+recovery key would remain, "No backup of this vault can be made without a recovery key." stands
+in its place, with no reason above it. The tick follows the answer as it changes, and the two
+answers' reasons share one place, so that the dialog's height does not change. Each primary
+names what its press does, the backup included: *Remove and re-key*, *Remove unlock method*,
+*Remove, re-key and back up*, *Remove, then back up*, and likewise *Change…*, *Turn on…*,
+*Re-key, then back up* and *Replace, then back up*. The backup is written inside the act's
+ceremony after its change has committed and been retired, from the re-keyed vault; a Save dialog
+cancelled at the press changes nothing, and an export that fails leaves the act done, its end
+saying the backup was not saved and why. Each act proves an unlock method once and ends as what
+is now true: "Unlock method removed and vault re-keyed", "Unlock method removed", "Password
+changed and vault re-keyed", "Password changed", "Password turned on and vault re-keyed", "Vault
+re-keyed", "Recovery keys replaced and vault re-keyed" ("Recovery key replaced and vault
+re-keyed" for one); turning the password on or off without a re-key ends "Done". **The ends
+point onward in one chain, the password first**: a re-keying removal's end offers *Add an unlock
+method…* where a YubiKey's removal left the vault with recovery keys alone, else *Change…* where
+the password is on, else *Replace recovery keys…*; an unlock method added from that end's button
+goes on in the same chain; a re-keying password change's or turning on's end offers *Replace
+recovery keys…*; the replacement's end offers *Change…* where the password is on and was not
+changed earlier in the chain, and otherwise nothing; and an end never points back to recovery
+keys or a password change its own chain made, a chain being the acts begun from one another's
+ends: an act begun from the page itself that re-keys starts a new one, so that a later exposure
+gets the whole advice again (§6, Controls). Each end decides from what its act committed, and
+each says when the step is needed: "If an earlier copy of the vault file may be out there". Each
+act is its own commit, not one repair: until the chain's last act lands, the recovery keys an
+earlier copy held still open the vault, and whoever holds one reads what the vault file holds
+meanwhile.
+
+**Replace recovery keys…** (ruled 2026-10-27; DESIGN §5, the table's fourth row; FORMAT R38). In
+the head of *Unlock methods*, beside *Add an unlock method…* and *Re-key vault…*; greyed while
+the vault has no recovery key ("This vault has no recovery key to replace.") or only recovery
+keys ("Add a YubiKey or a password first: a new recovery key can be shown again only through
+one."; the core refuses with `vault.setup_needed`: no protector would remain to show a
+new recovery key again, and adding one is the next step anyway). Its dialog, *Replace
+the recovery key?* or *Replace the 2 recovery keys?*, a form that opens on its submit
+and says each line in the singular for one recovery key, says that Enfold makes as many
+new recovery keys as the vault has, one for each, that the old ones stop unlocking this
+vault and that copies and backups made before still open with them; when it is needed
+— an earlier copy of the vault file, or a backup, may have been opened by someone
+else, who could then read every recovery key in it — and, since a replacement replaces
+recovery keys only, to remove first the unlock method that copy was opened with, if it
+was a YubiKey or a password, and any unlock method the user did not add; with the password on,
+to change the password too, unless a re-keying password change or turning the password on came
+earlier in the same chain; to have somewhere to keep each new recovery key before starting, and
+that Enfold's idle lock, after the vault's idle time without input (`idleEffectiveMinutes`, the
+time the session runs on, never a stored value the core clamps), ends the replacement with
+nothing changed; the backup block, always ticked, since every earlier backup then opens only
+with replaced recovery keys; and *Replace recovery keys* (accent; *Replace recovery key* for
+one) or *Replace, then back up*, and *Cancel*. `Keys.ReplaceRecoveryKeys(backupPath)` is one
+ceremony of kind `replace`: the proof (a YubiKey, else the password; never a recovery key);
+then, for each old recovery key in the order the page lists them, a new recovery key made with
+the old one's label, its ID none that another unlock method or another new recovery key shows
+(FORMAT §18.4), and shown in the recovery key's dialog in keep mode (§6) until the user has kept
+it (`StepKeepKey`, the prompt `kept`), the next one made only then; then the confirmation
+(`StepConfirm`, the prompt `confirm`), one row per recovery key, its label and which new ID
+replaces which old one; then one commit that adds the new recovery slots, removes every old one
+and re-keys the vault, the new recovery keys' copies kept under the vault's new key only (FORMAT
+§8), so none is ever readable with its old one; then the commit that retires the earlier state;
+then the backup, after. Until the commit nothing is written, and each new recovery key is held
+in a locked page from its making until the replacement ends (§8). A cancel, a lock or a failure
+before the commit changes nothing — the act at once retiring whatever a failed commit wrote of
+the new recovery keys, so that no sheet the page says to destroy still opens anything — and the
+page names the recovery keys shown and never added — in the failed dialog, and in a bar on the
+Vault page that stays until closed, across a lock, and goes when another vault is opened,
+imported or created — so their sheets can be destroyed; every one-time link the act made is
+dropped at its end, whatever the end; an outcome that is not known — a save that could not be
+confirmed, or a conflict with another writer, which may come after the replacement itself
+committed — is Broken, and the dialog and the Vault page's bar say to keep every sheet until,
+after *Reopen*, the Vault page's IDs say which recovery keys are the vault's, never to destroy
+them; the bar then settles itself by those IDs, at the first read of the unlock methods after
+the reopen's unlock. The end lists the same rows and, by what the backup did, says to destroy
+the replaced recovery keys' sheets and files once the new backup opens, or to export one now; of
+the backups made before, it says that they still open with the replaced recovery keys and that
+this vault can still import archives from them (FORMAT §18.2), and leaves
+them to the user. Its next step is *Change…* where the password is on and was not changed
+earlier in the chain; otherwise it offers none. The backups card then says, until a new backup
+is recorded, that the last one "opens only with recovery keys this vault no longer has".
+
+**The recovery-key proof** (ruled 2026-10-27, narrowing 2026-10-17's "the dialogs offer no
+recovery key"). An act on this page proves with a recovery key in two cases only, besides a
+vault whose methods are all recovery keys, which proves every act with one as before. A
+re-keying removal of the vault's only YubiKey, with no standalone password: the YubiKey removed
+is not asked for and nothing else proves, so the proof is one of the vault's recovery keys, its
+note saying why ("One of this vault's recovery keys proves it is you, since the YubiKey being
+removed is not asked for."). And *Add an unlock method…* adding a YubiKey or a recovery key on a
+vault that has a YubiKey and a recovery key: under the opening wait for a YubiKey of the vault
+stands *Use recovery key instead*, and at *No match* *Use recovery key* is the accent with the
+step's own line, as on the lock screen (§6 names this exception); pressed, the act is cancelled
+and begun again with `BeginEnroll(kind, label, true)`, the dialog staying up throughout, and the
+proof is the recovery key ("Your recovery key proves it is you, since no YubiKey of this vault
+is at hand. The new YubiKey comes next."). A new YubiKey then comes at once, with no YubiKey to
+take out first, and the end says the next step: "Now remove the lost YubiKey: Remove… on its
+card asks why, and re-keys the vault when it was lost." A new recovery key is shown as any added
+one is, its caption saying "48 digits. They can be shown again from the Vault page only after
+you add a YubiKey or a password and prove it."; *Remove…* on the lost YubiKey is then enabled,
+which is how a user with no spare YubiKey yet withdraws the lost one. No other act, and no other
+moment of these two, offers a recovery key; the showing of a recovery key is still authorised by
+a YubiKey or a password and never by a recovery key (DESIGN §5), though that YubiKey may itself
+have been added with a recovery key, which is why the replacement asks for unknown unlock
+methods to be removed. So the case the feature exists for — one YubiKey, lost, and one recovery
+key — goes: unlock with the recovery key; add the new YubiKey, proving with the recovery key;
+remove the lost one, answered *Lost, stolen, or I am not sure*, proving with the new YubiKey and
+re-keying; with the password on, change it; then replace the recovery key. With no new YubiKey
+yet, a second recovery key added the same way lets the lost one be removed now.
 
 **The recovery key's ID** (FORMAT §18.4) is on the sheet, in the text file and at the reveal; the
 recovery prompt lists the vault's recovery slots as *label · ID · date* (`SlotView.CreatedAt`)
 so the right sheet is picked before a digit is typed.
 
-**`lastExportAt`** is the settings file's (§3): an object `{vaultId, at}` — the hex `vault_id` of
-the vault exported and Unix seconds — written only by `Keys.Export`. It reads as *never* when
-absent, zero, ahead of the clock, or carrying another vault's id, and *never* makes the
-confirmations above say that no backup is recorded here rather than name a date. It is a local,
-unauthenticated convenience: it chooses wording, pre-selects the rotate dialog's backup
-checkbox and dates the backups card's status (§6, through `Vault.BackupStatus`, §3), and it
-never gates a cryptographic operation.
+**`lastExportAt`** is the settings file's (§3): an object `{vaultId, at, gen, recovery}` — the
+hex `vault_id` of the vault exported, Unix seconds, and since 2026-10-27 the VMK generation
+exported and the hex IDs of the recovery slots the backup holds (a stamp without them makes no
+claim about either) — written only by `Keys.Export` and by the backup an act takes after its
+change. It reads as *never* when absent, zero, ahead of the clock, or carrying another vault's
+id, and *never* makes the confirmations above say that no backup is recorded here rather than
+name a date. It is a local, unauthenticated convenience: it chooses wording, ticks the backup of
+the dialogs that re-key and dates the backups card's status, which also says when the vault was
+re-keyed after it or its recovery keys were replaced (§6, through `Vault.BackupStatus`, §3), and
+it never gates a cryptographic operation.
 
 **The acts run their ceremony in a dialog of their own** (ruled 2026-10-17). Once *Add an unlock
-method*, *Remove <name>?*, the rotate dialog or the password's own dialog is answered, once
-*Export backup…*'s Save dialog has named a place, and at once for *Show recovery key…*, the
-act's ceremony stands in a dialog that
-bears its name — *Add an unlock method*, *Remove an unlock method*, *Re-key the vault*, *Show the
-recovery key*, *Export a backup*, *Password with every YubiKey* — drawn as §6, *Controls*, says:
-the lock screen's views at a dialog's size, one height for every step, the touch's green over the
-body, and its buttons in the foot band. The proof is the core's way in for a slot change — the
-YubiKey where the vault has one, else its password (`acquireUnlocked`) — so the dialog opens on
-the YubiKey's wait at once rather than on a quiet instant. The enrolment's is the one two-part
-line (*Prove it is you · Add the new unlock method*); a recovery key enrolled, and the reveal,
-end in the recovery key's dialog (§6), which takes over from the act's. The proof of *Import
-archives from a backup…* runs the same panel inside that dialog, between its proof step and its
-list, the foot band's *Continue* and *Cancel* then the panel's. A proof typed on a vault with no
-YubiKey heads with what to type and why, as the YubiKey's wait does; a failure the user did not
-choose offers *Start again* beside *Cancel* in the act's own dialog, which begins the act again
-with what it was begun with — the rotation after a failed backup begins with the backup again,
-to the same file, since no backup means no rotation (ruled 2026-10-17).
+method*, *Remove <name>?*, the rotate dialog, the password's own dialogs or the replacement's is
+answered, once *Export backup…*'s Save dialog has named a place, and at once for *Show recovery
+key…*, the act's ceremony stands in a dialog that bears its name — *Add an unlock method*,
+*Remove an unlock method*, *Re-key the vault*, *Show the recovery key*, *Export a backup*,
+*Password with every YubiKey* (turning it on or off), *Change the password for every YubiKey*,
+*Replace the recovery keys* (*Replace the recovery key* for one) — drawn as §6, *Controls*,
+says: the lock screen's views at a dialog's size, one height for every step, the touch's green
+over the body, and its buttons in the foot band. The proof is the core's way in for a slot
+change — the YubiKey where the vault has one, else its password (`acquireUnlocked`), not asking
+for the YubiKey a re-keying removal takes away, and a recovery key in the two cases of *The
+recovery-key proof* (above) — so the dialog opens on the YubiKey's wait at once rather than on a
+quiet instant. The enrolment's is the one two-part line (*Prove it is you · Add the new unlock
+method*); a recovery key enrolled, and the reveal, end in the recovery key's dialog (§6), which
+takes over from the act's; a replacement's new recovery keys are shown in it before
+its commit, and the act's dialog returns for the confirmation and the end. The
+proof of *Import archives from a backup…* runs the same panel inside that dialog,
+between its proof step and its list, the foot band's *Continue* and *Cancel* then
+the panel's. A proof typed on a vault with no YubiKey heads with what to type
+and why, as the YubiKey's wait does; a failure the user did not choose offers
+*Start again* beside *Cancel* in the act's own dialog, which begins the act again with what it
+was begun with — an act that failed with its outcome known changed nothing and wrote no backup,
+so it begins again whole, its backup to the same file, and a replacement with new recovery keys
+(ruled 2026-10-27, reversing 2026-10-17's "no backup means no rotation": the rotation's backup
+came first, and *Start again* after a failed backup began with the backup again); a failure
+whose outcome is unknown leaves the vault Broken (§2.1), which refuses the act begun again.
 
 **What changes in §3.** `VaultStatus` gains `Entangled`, `VaultFileSize` and `TamperedReason`
 (`vault.tampered_hash` · `vault.tampered_generation`, so the warning can tell a damaged file from a
@@ -3877,8 +4324,11 @@ reveal ends with its URL), `Vault.IncomingRecords(handle) IncomingFile{Records
 []IncomingRecord{ArchiveID, Name, Description, CreatedAt, Versions, Action skip · version · add ·
 forgotten, ForgottenAt, Differs []{Field, Theirs}, Ticked}, Tampered}` (Tampered: that file fails
 its own R25 hash), `Vault.MergeRecords(handle, ids)` (a registry write on the session)
-and `Vault.DiscardRecords(handle)`, `Keys.EntangledState()`, `Keys.SetEntangled(on)` and
-`Keys.ChangeEntangledPassword()` (ceremonies of kind `entangle`; the standalone password and the
+and `Vault.DiscardRecords(handle)`, `Keys.EntangledState()`, `Keys.SetEntangled(on, rekey,
+backupPath)` and `Keys.ChangeEntangledPassword(rekey, backupPath)` (ceremonies of kind
+`entangle` and, since 2026-10-27, `password`), since 2026-10-27
+`Keys.ReplaceRecoveryKeys(backupPath)` (a ceremony of kind `replace`) and the third argument of
+`Keys.BeginEnroll(kind, label, withRecoveryKey)` (the standalone password and the
 first way in are the only `Choose` prompts, each typed twice on the page and sent once under the
 one prompt — the first way in's in two fields of the create, restore or finish-setup dialog,
 which answer the ceremony's first `Choose` prompt from there, the rest in a second field under
@@ -3897,8 +4347,10 @@ pointer to it from the Vault page's Backups card), and on the Archives page's em
 vault must be Unlocked for it, so the lock screen cannot offer it; the key-not-in-vault dialog's
 *Import archives from a backup…* hands its ask to the Archives page, which opens the picker on
 arrival, and a merge that succeeds there opens the file that dialog was about (§6, the Archive
-page). The merge dialog stands above every route and closes on a lock. The rotate dialog's pre-selected backup performs the export and then the rotation in one
-press; a Save dialog cancelled at the export rotates nothing.
+page). The merge dialog stands above every route and closes on a lock. The rotate dialog's
+backup is taken in the same press and the same ceremony as the rotation, after it (until
+2026-10-27 the page began the rotation while the export's ceremony still ran, which the core
+refused, so the vault was never re-keyed); a Save dialog cancelled at the press rotates nothing.
 
 ## 14. Install, upgrade, uninstall
 

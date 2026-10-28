@@ -548,7 +548,7 @@ func TestSetEntangledOnIsRefusedByTheInvariantBeforeAnyPrompt(t *testing.T) {
 		t.Fatalf("entangled state on a hardware-only vault: %+v", got)
 	}
 	rec.reset()
-	if e := c.SetEntangled(true); !isCode(e, CodeInvariant) {
+	if e := c.SetEntangled(true, false, ""); !isCode(e, CodeInvariant) {
 		t.Fatalf("turning it on: %v", e)
 	}
 	// Refused before anything: no ceremony was started, so nothing could
@@ -569,7 +569,7 @@ func TestSetEntangledOnIsRefusedByTheInvariantBeforeAnyPrompt(t *testing.T) {
 	}
 	// And the switch can now be turned on: the new password is chosen once.
 	rec.reset()
-	if e := c.SetEntangled(true); e != nil {
+	if e := c.SetEntangled(true, false, ""); e != nil {
 		t.Fatal(e)
 	}
 	pin = rec.waitCeremony(t, StepPIN, true)
@@ -616,7 +616,7 @@ func TestSetEntangledNeverAsksTheOldPassword(t *testing.T) {
 	h, _, _ := entangledHarness(t, "the first password")
 	h.unlockWithToken()
 	h.rec.reset()
-	if e := h.c.ChangeEntangledPassword(); e != nil {
+	if e := h.c.ChangeEntangledPassword(false, ""); e != nil {
 		t.Fatal(e)
 	}
 	// The unlock half asks for the vault's password as it always does; the
@@ -630,7 +630,7 @@ func TestSetEntangledNeverAsksTheOldPassword(t *testing.T) {
 	h.rec.waitCeremony(t, StepDone, false)
 	chosen := 0
 	for _, e := range h.rec.snapshot() {
-		if s, ok := e.payload.(CeremonyState); ok && s.Kind == "entangle" && s.Step == StepPassword && s.PromptID != "" && s.Choose {
+		if s, ok := e.payload.(CeremonyState); ok && s.Kind == "password" && s.Step == StepPassword && s.PromptID != "" && s.Choose {
 			chosen++
 		}
 	}
@@ -670,7 +670,7 @@ func TestSetEntangledOffIsNeverRefused(t *testing.T) {
 	h, _, _ := entangledHarness(t, "the vault password")
 	h.unlockWithToken()
 	h.rec.reset()
-	if e := h.c.SetEntangled(false); e != nil {
+	if e := h.c.SetEntangled(false, false, ""); e != nil {
 		t.Fatal(e)
 	}
 	h.answerTokenUnlock("123456")
@@ -702,7 +702,7 @@ func TestSetEntangledOffIsNeverRefused(t *testing.T) {
 	}
 	// Changing a password the vault has not got is refused before any
 	// prompt, so a salt redraw cannot happen by the wrong button.
-	if e := h.c.ChangeEntangledPassword(); !isCode(e, CodeParams) {
+	if e := h.c.ChangeEntangledPassword(false, ""); !isCode(e, CodeParams) {
 		t.Fatalf("changing a password the vault has not got: %v", e)
 	}
 }
@@ -755,7 +755,7 @@ func TestChangeEntangledPasswordRewrapsEveryHardwareSlotOffline(t *testing.T) {
 
 	rec.reset()
 	opensBefore, touchesBefore := cards.openCount(), a.touchCount()
-	if e := c.ChangeEntangledPassword(); e != nil {
+	if e := c.ChangeEntangledPassword(false, ""); e != nil {
 		t.Fatal(e)
 	}
 	pin = rec.waitCeremony(t, StepPIN, true)
@@ -906,10 +906,10 @@ func TestEntangleAndExportAreRefusedWhileTampered(t *testing.T) {
 	if st := h.status(); !st.Tampered || st.TamperedReason != CodeTamperedHash {
 		t.Fatalf("status: %+v", st)
 	}
-	if e := h.c.SetEntangled(false); !isCode(e, CodeVaultTampered) {
+	if e := h.c.SetEntangled(false, false, ""); !isCode(e, CodeVaultTampered) {
 		t.Fatalf("turning the switch off while tampered: %v", e)
 	}
-	if e := h.c.ChangeEntangledPassword(); !isCode(e, CodeVaultTampered) {
+	if e := h.c.ChangeEntangledPassword(false, ""); !isCode(e, CodeVaultTampered) {
 		t.Fatalf("changing the password while tampered: %v", e)
 	}
 	if e := h.c.ExportBackup(filepath.Join(t.TempDir(), "b.eks")); !isCode(e, CodeVaultTampered) {
@@ -919,7 +919,7 @@ func TestEntangleAndExportAreRefusedWhileTampered(t *testing.T) {
 		t.Fatalf("enrolling while tampered: %v", e)
 	}
 
-	// The two pre-checks that run before beginMutation answer the freeze
+	// The two pre-checks that run before beginAs answer the freeze
 	// first: on a vault the invariant would refuse and on one whose switch
 	// is off, the reason must still be the one the user can act on (A.5).
 	c2, rec2 := hardwareOnlyCore(t)
@@ -931,10 +931,10 @@ func TestEntangleAndExportAreRefusedWhileTampered(t *testing.T) {
 	c2.vault.tampered, c2.vault.tamperedReason = keystore.ErrTampered, CodeTamperedHash
 	c2.vault.warnings[CodeVaultTampered] = true
 	c2.mu.Unlock()
-	if e := c2.SetEntangled(true); !isCode(e, CodeVaultTampered) {
+	if e := c2.SetEntangled(true, false, ""); !isCode(e, CodeVaultTampered) {
 		t.Fatalf("turning the switch on while tampered: %v", e)
 	}
-	if e := c2.ChangeEntangledPassword(); !isCode(e, CodeVaultTampered) {
+	if e := c2.ChangeEntangledPassword(false, ""); !isCode(e, CodeVaultTampered) {
 		t.Fatalf("changing the password of an unentangled vault while tampered: %v", e)
 	}
 	if st := c2.Status(); st.Ceremony != nil {
@@ -987,7 +987,7 @@ func TestLastExportAtIsWrittenOnlyByExport(t *testing.T) {
 	h.unlockWithPassword()
 	// A rotation and a registry write leave it alone.
 	h.rec.reset()
-	if e := h.c.RotateNow(); e != nil {
+	if e := h.c.RotateNow(""); e != nil {
 		t.Fatal(e)
 	}
 	p := h.rec.waitCeremony(t, StepPassword, true)

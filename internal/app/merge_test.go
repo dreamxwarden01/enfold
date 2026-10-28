@@ -239,7 +239,7 @@ func TestInspectRecordsOpensWithAHistoryVMK(t *testing.T) {
 		t.Fatal(e)
 	}
 	h.rec.reset()
-	if e := h.c.RotateNow(); e != nil {
+	if e := h.c.RotateNow(""); e != nil {
 		t.Fatalf("rotate: %v", e)
 	}
 	p := h.rec.waitCeremony(t, StepPassword, true)
@@ -271,7 +271,7 @@ func TestInspectRecordsAsksTheRecoveryKeyForALaterGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.rec.reset()
-	if e := h.c.RotateNow(); e != nil {
+	if e := h.c.RotateNow(""); e != nil {
 		t.Fatalf("rotate: %v", e)
 	}
 	p := h.rec.waitCeremony(t, StepPassword, true)

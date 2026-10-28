@@ -1450,7 +1450,7 @@ func TestSetCloseActionMovesOneField(t *testing.T) {
 	}
 	// A stamp another writer put down between two of these is not put back
 	// by them: only the fields a call owns are applied after the write.
-	h.c.recordExport()
+	h.c.recordExport(1, nil)
 	if e := h.c.SetCloseAction(CloseQuit); e != nil {
 		t.Fatal(e)
 	}
@@ -1552,7 +1552,7 @@ func TestEnrollPasswordAndRemove(t *testing.T) {
 		t.Fatalf("enrollment locked the vault: %s", st.State)
 	}
 	h.rec.reset()
-	if e := h.c.RemoveSlot(second); e != nil {
+	if e := h.c.RemoveSlot(second, false, ""); e != nil {
 		t.Fatal(e)
 	}
 	p3 := h.rec.waitCeremony(t, StepPassword, true)

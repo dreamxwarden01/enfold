@@ -17,18 +17,23 @@ import * as app$0 from "../models.js";
 /**
  * BeginEnroll adds a way in: "token", "password" or "recovery". An
  * enrolled key inherits the vault's entangled password and is wrapped from
- * the kept K_P, so no password is chosen here (APP.md §13).
+ * the kept K_P, so no password is chosen here (APP.md §13). withRecoveryKey
+ * proves with a recovery key instead of a YubiKey: the user has none of the
+ * vault's at hand; for a YubiKey or a recovery key added to a vault with a
+ * YubiKey and a recovery key (ruled 2026-10-27).
  */
-export function BeginEnroll(kind: string, label: string): $CancellablePromise<void> {
-    return $Call.ByID(309727738, kind, label);
+export function BeginEnroll(kind: string, label: string, withRecoveryKey: boolean): $CancellablePromise<void> {
+    return $Call.ByID(309727738, kind, label, withRecoveryKey);
 }
 
 /**
- * ChangeEntangledPassword replaces the vault's password; a ceremony, and
- * the old password is never a field.
+ * ChangeEntangledPassword replaces the vault's password; a ceremony, and the
+ * old password is never a field. rekey re-keys the vault in the same commit;
+ * a backupPath that is not empty exports a backup inside the ceremony, after
+ * the change.
  */
-export function ChangeEntangledPassword(): $CancellablePromise<void> {
-    return $Call.ByID(3747209322);
+export function ChangeEntangledPassword(rekey: boolean, backupPath: string): $CancellablePromise<void> {
+    return $Call.ByID(3747209322, rekey, backupPath);
 }
 
 /**
@@ -50,8 +55,22 @@ export function ExportBackup(path: string): $CancellablePromise<void> {
     return $Call.ByID(3159373965, path);
 }
 
-export function RemoveSlot(recipientID: string): $CancellablePromise<void> {
-    return $Call.ByID(1280438677, recipientID);
+/**
+ * RemoveSlot removes an unlock method; rekey re-keys the vault in the same
+ * commit; backupPath as above.
+ */
+export function RemoveSlot(recipientID: string, rekey: boolean, backupPath: string): $CancellablePromise<void> {
+    return $Call.ByID(1280438677, recipientID, rekey, backupPath);
+}
+
+/**
+ * ReplaceRecoveryKeys makes as many new recovery keys as the vault has,
+ * shows each to be kept, and on the user's confirmation replaces every old
+ * one and re-keys the vault in one commit; backupPath as above. The digits
+ * arrive over the one-time URL, never here.
+ */
+export function ReplaceRecoveryKeys(backupPath: string): $CancellablePromise<void> {
+    return $Call.ByID(3877776464, backupPath);
 }
 
 /**
@@ -62,8 +81,11 @@ export function RevealRecoveryKey(recipientID: string): $CancellablePromise<void
     return $Call.ByID(207819850, recipientID);
 }
 
-export function RotateNow(): $CancellablePromise<void> {
-    return $Call.ByID(332274822);
+/**
+ * RotateNow re-keys the vault; backupPath as above.
+ */
+export function RotateNow(backupPath: string): $CancellablePromise<void> {
+    return $Call.ByID(332274822, backupPath);
 }
 
 /**
@@ -76,11 +98,11 @@ export function SaveRecoveryKey(handle: string, path: string): $CancellablePromi
 
 /**
  * SetEntangled turns the vault's password on or off; turning it on asks
- * for the new password, turning it off asks for nothing. Both are
- * ceremonies, and neither ever asks the old password.
+ * for the new password in the ceremony, and rekey re-keys the vault in the
+ * same commit. Turning it off takes neither rekey nor a backup.
  */
-export function SetEntangled(on: boolean): $CancellablePromise<void> {
-    return $Call.ByID(2247223905, on);
+export function SetEntangled(on: boolean, rekey: boolean, backupPath: string): $CancellablePromise<void> {
+    return $Call.ByID(2247223905, on, rekey, backupPath);
 }
 
 export function Slots(): $CancellablePromise<app$0.SlotView[] | null> {

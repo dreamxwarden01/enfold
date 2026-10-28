@@ -27,6 +27,8 @@ const m = vi.hoisted(() => ({
   Close: vi.fn(),
   CloseAll: vi.fn(),
   BackupStatus: vi.fn(),
+  LastExportAt: vi.fn(),
+  Slots: vi.fn(),
   SettingsGet: vi.fn(),
   SettingsSet: vi.fn(),
   CheckFiles: vi.fn(),
@@ -52,8 +54,8 @@ vi.mock("./api", async () => {
     Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children },
     Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath, Close: m.Close, CloseAll: m.CloseAll, CheckFiles: m.CheckFiles },
     Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided, PendingOpen: m.PendingOpen },
-    Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: never, Lock: m.Lock, BackupStatus: m.BackupStatus },
-    Keys: { Slots: never, EntangledState: never },
+    Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: m.LastExportAt, Lock: m.Lock, BackupStatus: m.BackupStatus },
+    Keys: { Slots: m.Slots, EntangledState: never },
     Settings: { Get: m.SettingsGet, Set: m.SettingsSet },
   };
 });
@@ -112,7 +114,10 @@ beforeEach(async () => {
   m.Lock.mockReset().mockResolvedValue(undefined);
   m.Close.mockReset().mockResolvedValue(undefined);
   m.CloseAll.mockReset().mockResolvedValue([]);
-  m.BackupStatus.mockReset().mockResolvedValue({ at: 0, archives: 0, missing: 0, rekeyed: 0 });
+  m.BackupStatus.mockReset().mockResolvedValue({ at: 0, archives: 0, missing: 0, rekeyed: 0, vaultRekeyed: false, keysReplaced: false });
+  // Both answer nothing unless a test says otherwise, as they always did.
+  m.LastExportAt.mockReset().mockImplementation(() => new Promise(() => {}));
+  m.Slots.mockReset().mockImplementation(() => new Promise(() => {}));
   m.SettingsGet.mockReset().mockImplementation(() => new Promise(() => {}));
   m.SettingsSet.mockReset().mockResolvedValue(undefined);
   store = (await import("./state.svelte")).store;
@@ -1204,7 +1209,7 @@ describe("the backup status", () => {
   it("is dropped when the state changes, so no count of nothing reads as current", async () => {
     store.boot();
     m.handlers["vault.state"]({ data: status(1, "unlocked") });
-    store.backup = { at: 5, archives: 2, missing: 0, rekeyed: 0 };
+    store.backup = { at: 5, archives: 2, missing: 0, rekeyed: 0, vaultRekeyed: false, keysReplaced: false };
     // The lock's read is held back: until it lands the card says the date alone.
     m.BackupStatus.mockReturnValue(new Promise(() => {}));
     m.handlers["vault.state"]({ data: status(2, "locked") });
@@ -1215,6 +1220,290 @@ describe("the backup status", () => {
     m.BackupStatus.mockRejectedValueOnce(new Error("internal"));
     await store.refreshBackup();
     expect(store.backup).toBeNull();
+  });
+});
+
+// The acts that may re-key the vault (APP.md §13, ruled 2026-10-27): what
+// the store reads again at their end, what it keeps of a replacement that
+// showed keys and did not replace with them, and the chain of acts begun
+// from one another's ends (lib/rekey.ts).
+describe("the acts that may re-key the vault", () => {
+  const event = (data: Record<string, unknown>) => m.handlers["vault.ceremony"]({ data: { promptId: "", choose: false, error: "", rekey: false, backedUp: false, keepIndex: 0, keepCount: 0, ...data } });
+  const slot = (recoveryId: string, type = "recovery") => ({ recipientId: recoveryId || type, type, label: recoveryId || type, createdAt: 1, removable: true, recoveryId });
+
+  beforeEach(() => {
+    m.Status.mockReturnValue(new Promise(() => {}));
+    store.boot();
+    m.handlers["vault.state"]({ data: status(1, "unlocked") });
+    m.LastExportAt.mockClear();
+    m.Slots.mockClear();
+  });
+
+  it("reads the backups card again when an act that can re-key ends", () => {
+    event({ seq: 10, kind: "remove", step: "done", rekey: true });
+    expect(m.LastExportAt).toHaveBeenCalledTimes(1);
+    event({ seq: 11, kind: "replace", step: "done", rekey: true, newIds: ["NEW1-0001"] });
+    expect(m.LastExportAt).toHaveBeenCalledTimes(2);
+    event({ seq: 12, kind: "unlock", step: "done" });
+    expect(m.LastExportAt).toHaveBeenCalledTimes(2);
+    // and the unlock methods, for the acts that change them
+    expect(m.Slots).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the backups card and the unlock methods again at the Done of exactly the acts that move them", () => {
+    // The card: an export's date, a re-key's VaultRekeyed, a replacement's
+    // KeysReplaced, the backup an act takes after its change. The unlock
+    // methods and the switch: every act that changes them, an enrolment
+    // included and an export not.
+    const card = ["export", "remove", "password", "entangle", "rotate", "replace"];
+    const methods = ["remove", "password", "entangle", "rotate", "enroll", "replace"];
+    let seq = 10;
+    for (const kind of ["export", "remove", "password", "entangle", "rotate", "enroll", "replace", "unlock", "reveal", "verify"]) {
+      m.LastExportAt.mockClear();
+      m.Slots.mockClear();
+      event({ seq: seq++, kind, step: "deriving", phase: "commit", rekey: kind !== "rotate" });
+      expect(m.LastExportAt, kind).not.toHaveBeenCalled();
+      expect(m.Slots, kind).not.toHaveBeenCalled();
+      event({ seq: seq++, kind, step: "done", rekey: kind !== "rotate" });
+      expect(m.LastExportAt, kind).toHaveBeenCalledTimes(card.includes(kind) ? 1 : 0);
+      expect(m.Slots, kind).toHaveBeenCalledTimes(methods.includes(kind) ? 1 : 0);
+    }
+  });
+
+  it("marks the chain changed at a re-keying turn-on's Done, so the replacement after it offers no Change", () => {
+    store.noteAct({ act: "on", rekey: true, fromFollow: false });
+    expect(store.chain).toEqual({ id: 1, replaced: [], changed: false });
+    event({ seq: 10, kind: "entangle", step: "done", rekey: true, after: { recoveryIds: ["OLD1-0001", "OLD2-0002"], entangled: true, setupNeeded: false } });
+    expect(store.chain).toEqual({ id: 1, replaced: [], changed: true });
+    expect(store.lastAct?.chain?.changed).toBe(true);
+    expect(store.followUp?.act).toBe("replace");
+    store.noteAct({ act: "replace", rekey: true, fromFollow: true });
+    event({ seq: 11, kind: "replace", step: "done", rekey: true, keepCount: 2, newIds: ["NEW1-0001", "NEW2-0002"], after: { recoveryIds: ["NEW1-0001", "NEW2-0002"], entangled: true, setupNeeded: false } });
+    expect(store.followUp).toBeNull();
+  });
+
+  it("leaves the chain as it was at a Done that turned the password off", () => {
+    store.noteAct({ act: "remove", type: "hardware", rekey: true, fromFollow: false });
+    event({ seq: 10, kind: "entangle", step: "done", rekey: false, after: { recoveryIds: ["OLD1-0001"], entangled: false, setupNeeded: false } });
+    expect(store.chain).toEqual({ id: 1, replaced: [], changed: false });
+  });
+
+  it("ends a recovery key's enrolment where the core ends it, at the new key's showing", () => {
+    // A YubiKey's removal left recovery keys alone; the end's Add an unlock
+    // method… then added a recovery key, which leaves the vault so still.
+    store.noteAct({ act: "remove", type: "hardware", rekey: true, fromFollow: false });
+    event({ seq: 10, kind: "remove", step: "done", rekey: true, after: { recoveryIds: ["AAAA-0001", "AAAA-0002"], entangled: false, setupNeeded: true } });
+    expect(store.followUp?.act).toBe("add");
+    store.noteAct({ act: "enroll", type: "recovery", fromFollow: true });
+    m.Slots.mockClear();
+    event({ seq: 11, kind: "enroll", step: "deriving", phase: "commit" });
+    expect(m.Slots).not.toHaveBeenCalled();
+    expect(store.followUp).toBeNull();
+    event({ seq: 12, kind: "enroll", step: "recovery", slotLabel: "/once/1", recoveryId: "AAAA-0003", after: { recoveryIds: ["AAAA-0001", "AAAA-0002", "AAAA-0003"], entangled: false, setupNeeded: true } });
+    expect(m.Slots).toHaveBeenCalledTimes(1);
+    expect(store.followUp?.act).toBe("add");
+    // A reveal's showing ends no act.
+    m.Slots.mockClear();
+    event({ seq: 13, kind: "reveal", step: "recovery", slotLabel: "/once/2", recoveryId: "AAAA-0001" });
+    expect(m.Slots).not.toHaveBeenCalled();
+  });
+
+  it("names the recovery keys a replacement showed and never added, across a lock", () => {
+    event({ seq: 10, kind: "replace", step: "waiting_for_key", rekey: true });
+    event({ seq: 11, kind: "replace", step: "keep_key", rekey: true, promptId: "k1", keepIndex: 1, keepCount: 2, oldIds: ["OLD1-0001", "OLD2-0002"], newIds: ["NEW1-0001"] });
+    event({ seq: 12, kind: "replace", step: "keep_key", rekey: true, promptId: "k2", keepIndex: 2, keepCount: 2, oldIds: ["OLD1-0001", "OLD2-0002"], newIds: ["NEW1-0001", "NEW2-0002"] });
+    expect(store.replaceNotice).toBeNull();
+    event({ seq: 13, kind: "replace", step: "failed", error: "ceremony.cancelled", rekey: true, newIds: ["NEW1-0001", "NEW2-0002"] });
+    expect(store.ceremony).toBeNull(); // a cancel is over at once
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001", "NEW2-0002"], known: true });
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001", "NEW2-0002"], known: true });
+    // The next replacement's first event clears it, and its Done says nothing.
+    m.handlers["vault.state"]({ data: status(3, "unlocked") });
+    event({ seq: 14, kind: "replace", step: "waiting_for_key", rekey: true });
+    expect(store.replaceNotice).toBeNull();
+    event({ seq: 15, kind: "replace", step: "done", rekey: true, newIds: ["NEW3-0003"] });
+    expect(store.replaceNotice).toBeNull();
+  });
+
+  it("keeps the IDs it saw when the end does not repeat them", () => {
+    event({ seq: 10, kind: "replace", step: "keep_key", rekey: true, promptId: "k1", keepIndex: 1, keepCount: 1, newIds: ["NEW1-0001"] });
+    event({ seq: 11, kind: "replace", step: "failed", error: "ceremony.cancelled", rekey: true });
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: true });
+  });
+
+  it("says an unknown replacement as unknown, never never-added, until the reopened vault lists its keys", async () => {
+    event({ seq: 10, kind: "replace", step: "keep_key", rekey: true, promptId: "k1", keepIndex: 1, keepCount: 1, newIds: ["NEW1-0001"] });
+    event({ seq: 11, kind: "replace", step: "failed", error: "vault.conflict", rekey: true, newIds: ["NEW1-0001"] });
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: false });
+    // A read of the slots made before the reopen settles nothing.
+    m.Slots.mockResolvedValue([slot("OLD1-0001"), slot("", "hardware")]);
+    await store.refreshSlots();
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: false });
+    m.handlers["vault.state"]({ data: status(2, "broken") });
+    m.handlers["vault.state"]({ data: status(3, "locked") }); // Reopen
+    await vi.waitFor(() => expect(m.Slots).toHaveBeenCalledTimes(2));
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: false });
+    m.Slots.mockResolvedValue([slot("NEW1-0001"), slot("", "hardware")]);
+    m.handlers["vault.state"]({ data: status(4, "unlocked") });
+    await vi.waitFor(() => expect(store.replaceNotice).toBeNull());
+  });
+
+  it("makes an unknown replacement known never added when the reopened vault lists none of its keys", async () => {
+    event({ seq: 10, kind: "replace", step: "failed", error: "vault.indeterminate", rekey: true, newIds: ["NEW1-0001", "NEW2-0002"] });
+    m.handlers["vault.state"]({ data: status(2, "broken") });
+    m.handlers["vault.state"]({ data: status(3, "locked") });
+    m.Slots.mockResolvedValue([slot("OLD1-0001"), slot("OLD2-0002"), slot("", "hardware")]);
+    m.handlers["vault.state"]({ data: status(4, "unlocked") });
+    await vi.waitFor(() => expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001", "NEW2-0002"], known: true }));
+  });
+
+  it("settles nothing on a slot read the core refused, and waits for one it answers", async () => {
+    event({ seq: 10, kind: "replace", step: "failed", error: "vault.indeterminate", rekey: true, newIds: ["NEW1-0001"] });
+    m.handlers["vault.state"]({ data: status(2, "broken") });
+    m.handlers["vault.state"]({ data: status(3, "locked") });
+    m.Slots.mockRejectedValue(new Error("internal"));
+    m.handlers["vault.state"]({ data: status(4, "unlocked") });
+    await vi.waitFor(() => expect(m.Slots).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: false });
+    m.Slots.mockResolvedValue([slot("NEW1-0001")]);
+    await store.refreshSlots();
+    expect(store.replaceNotice).toBeNull();
+  });
+
+  it("drops the notice with the vault it was about", () => {
+    event({ seq: 10, kind: "replace", step: "failed", error: "ceremony.cancelled", rekey: true, newIds: ["NEW1-0001"] });
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    event({ seq: 11, kind: "import", step: "done" });
+    expect(store.replaceNotice).toBeNull();
+    event({ seq: 12, kind: "replace", step: "failed", error: "ceremony.cancelled", rekey: true, newIds: ["NEW2-0002"] });
+    expect(store.replaceNotice).not.toBeNull();
+    m.handlers["vault.state"]({ data: { ...status(3, "locked"), path: "E:/other.eks" } });
+    expect(store.replaceNotice).toBeNull();
+  });
+
+  it("drops the notice when a create at the same path ends with its new recovery key", async () => {
+    event({ seq: 10, kind: "replace", step: "failed", error: "vault.indeterminate", rekey: true, newIds: ["NEW1-0001"] });
+    m.handlers["vault.state"]({ data: status(2, "broken") });
+    m.handlers["vault.state"]({ data: status(3, "locked") });
+    // A rebuild over the vault, at the same path: the path check cannot drop it.
+    event({ seq: 11, kind: "create", step: "deriving" });
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: false });
+    // The create opens the new vault, then shows its recovery key: its end.
+    m.Slots.mockResolvedValue([slot("C0DE-0001"), slot("", "hardware")]);
+    m.handlers["vault.state"]({ data: status(4, "unlocked") });
+    event({ seq: 12, kind: "create", step: "recovery", slotLabel: "/once/1", recoveryId: "C0DE-0001" });
+    expect(store.replaceNotice).toBeNull();
+    // The new vault's unlock methods never settle a notice about the old one
+    // (read at the lock, then at the create's unlock).
+    await vi.waitFor(() => expect(m.Slots).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(store.replaceNotice).toBeNull();
+  });
+
+  it("drops the notice at a create's Done too, a lock having landed before its key was shown", () => {
+    event({ seq: 10, kind: "replace", step: "failed", error: "ceremony.cancelled", rekey: true, newIds: ["NEW1-0001"] });
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    event({ seq: 11, kind: "create", step: "done" });
+    expect(store.replaceNotice).toBeNull();
+  });
+
+  it("never settles a new replacement's unknown notice with the read armed for the one before", async () => {
+    // An unknown notice, the reopen, and an unlock whose read the core
+    // refused: that read settled nothing, and the settle stays armed.
+    event({ seq: 10, kind: "replace", step: "failed", error: "vault.indeterminate", rekey: true, newIds: ["NEW1-0001"] });
+    m.handlers["vault.state"]({ data: status(2, "broken") });
+    m.handlers["vault.state"]({ data: status(3, "locked") });
+    m.Slots.mockRejectedValue(new Error("internal"));
+    m.handlers["vault.state"]({ data: status(4, "unlocked") });
+    await vi.waitFor(() => expect(m.Slots).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: false });
+    // A new replacement shows a key and fails unknown, before any reopen.
+    event({ seq: 11, kind: "replace", step: "waiting_for_key", rekey: true });
+    expect(store.replaceNotice).toBeNull();
+    event({ seq: 12, kind: "replace", step: "keep_key", rekey: true, promptId: "k1", keepIndex: 1, keepCount: 1, newIds: ["NEW2-0002"] });
+    event({ seq: 13, kind: "replace", step: "failed", error: "vault.conflict", rekey: true, newIds: ["NEW2-0002"] });
+    expect(store.replaceNotice).toEqual({ ids: ["NEW2-0002"], known: false });
+    // The slots read now are the ones from before it: they settle nothing.
+    m.Slots.mockResolvedValue([slot("OLD1-0001"), slot("", "hardware")]);
+    await store.refreshSlots();
+    expect(store.replaceNotice).toEqual({ ids: ["NEW2-0002"], known: false });
+  });
+
+  it("decides the end from the committed facts, not stale slots", async () => {
+    // The vault: two YubiKeys and one recovery key, the password off; the
+    // recovery key removed with a re-key.
+    const late = deferred<unknown>();
+    m.Slots.mockReturnValueOnce(late.promise);
+    store.noteAct({ act: "remove", type: "recovery", rekey: true, fromFollow: false });
+    event({ seq: 10, kind: "remove", step: "waiting_for_key", rekey: true });
+    event({ seq: 11, kind: "remove", step: "done", rekey: true, after: { recoveryIds: [], entangled: false, setupNeeded: false } });
+    // The slots are still the ones read before the act, the removed key among them.
+    store.slots = [slot("", "hardware"), { ...slot("", "hardware"), recipientId: "h2" }, slot("OLD1-0001")];
+    expect(store.followUp).toBeNull();
+    late.resolve([slot("", "hardware"), { ...slot("", "hardware"), recipientId: "h2" }]);
+    await vi.waitFor(() => expect(store.slots).toHaveLength(2));
+    expect(store.followUp).toBeNull();
+  });
+
+  it("believes the later of two slot reads whose replies arrive out of order", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    m.Slots.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const a = store.refreshSlots();
+    const b = store.refreshSlots();
+    second.resolve([slot("NEW1-0001")]);
+    await b;
+    first.resolve([slot("OLD1-0001")]);
+    await a;
+    expect(store.slots.map((s) => s.recoveryId)).toEqual(["NEW1-0001"]);
+  });
+
+  it("offers the next step from the act's end, along its chain", () => {
+    store.noteAct({ act: "remove", type: "hardware", rekey: true, fromFollow: false });
+    expect(store.chain).toEqual({ id: 1, replaced: [], changed: false });
+    event({ seq: 10, kind: "remove", step: "done", rekey: true, after: { recoveryIds: ["OLD1-0001"], entangled: true, setupNeeded: false } });
+    expect(store.followUp?.act).toBe("change");
+    // The end's Change… continues the chain; its re-keying change marks it.
+    store.noteAct({ act: "password", rekey: true, fromFollow: true });
+    expect(store.chain?.id).toBe(1);
+    event({ seq: 11, kind: "password", step: "done", rekey: true, after: { recoveryIds: ["OLD1-0001"], entangled: true, setupNeeded: false } });
+    expect(store.chain).toEqual({ id: 1, replaced: [], changed: true });
+    expect(store.lastAct?.chain?.changed).toBe(true);
+    expect(store.followUp?.act).toBe("replace");
+    // Its Replace recovery keys… goes on in the chain, and the chain ends there.
+    store.noteAct({ act: "replace", rekey: true, fromFollow: true });
+    event({ seq: 12, kind: "replace", step: "done", rekey: true, keepCount: 1, newIds: ["NEW1-0001"], after: { recoveryIds: ["NEW1-0001"], entangled: true, setupNeeded: false } });
+    expect(store.chain?.replaced).toEqual(["NEW1-0001"]);
+    expect(store.followUp).toBeNull();
+    // An act begun from the page that does not re-key ends the chain.
+    store.noteAct({ act: "remove", type: "hardware", rekey: false, fromFollow: false });
+    expect(store.chain).toBeNull();
+    store.noteAct({ act: "rotate", fromFollow: false });
+    expect(store.chain?.id).toBe(2);
+    store.noteAct(null);
+    expect([store.chain, store.lastAct]).toEqual([null, null]);
+  });
+
+  it("keeps the act's chain and start when it is begun again with a recovery key", () => {
+    store.noteAct({ act: "remove", type: "hardware", rekey: true, fromFollow: false });
+    store.noteAct({ act: "enroll", type: "token", fromFollow: true });
+    store.noteRecoverySwitch();
+    expect(store.lastAct).toMatchObject({ act: "enroll", type: "token", withRecoveryKey: true, fromFollow: true, chain: { id: 1 } });
+  });
+
+  it("ends the chain at a lock, and keeps the replacement's notice", () => {
+    store.noteAct({ act: "remove", type: "hardware", rekey: true, fromFollow: false });
+    event({ seq: 10, kind: "replace", step: "failed", error: "ceremony.cancelled", rekey: true, newIds: ["NEW1-0001"] });
+    expect(store.chain).not.toBeNull();
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    expect(store.chain).toBeNull();
+    expect(store.lastAct).toBeNull();
+    expect(store.replaceNotice).toEqual({ ids: ["NEW1-0001"], known: true });
+    store.dismissReplaceNotice();
+    expect(store.replaceNotice).toBeNull();
   });
 });
 

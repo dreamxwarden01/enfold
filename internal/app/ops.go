@@ -2060,8 +2060,31 @@ func (c *Core) reclaimFailed(oa *openArchive, err error) error {
 // RotateKey is registry-first (R33, trap 21): the new version published,
 // the old retired, then the archive adopts it, then the receipt. The
 // Archives page never asks for the archive to be opened first (APP.md §2.3).
+// The new version is a secret written into the vault file, so it waits
+// behind an owed retirement (FORMAT R41). The barrier is met first, before
+// anything reads the vault: the forgotten check reads the registry through
+// the Session and the open of a closed archive unwraps its key through it,
+// while a slot change commits through the same handle from its own
+// goroutine (APP.md §3; the review of the repairs, finding A). The forgotten
+// check shares the barrier's hold of the state mutex, so that no ceremony
+// begins between the two, and a refusal there neither opens the archive nor
+// starts an operation. The barrier is met again at the synchronous check,
+// ahead of that check's Session read, since a ceremony can begin while the
+// archive is opened, and at the registry write.
 func (c *Core) RotateKey(id string) (string, *Error) {
-	if e := c.refuseIfForgotten(id); e != nil {
+	if _, ok := parseID(id); !ok {
+		return "", coded(CodeParams)
+	}
+	c.mu.Lock()
+	e := c.retireBarrierLocked()
+	if e == nil {
+		e = c.refuseIfForgottenLocked(id)
+	}
+	c.mu.Unlock()
+	if e != nil {
+		if e.Code == CodeIndeterminate || e.Code == CodeConflict {
+			c.emitState() // the barrier entered Broken
+		}
 		return "", e
 	}
 	oa, e := c.acquireForOperation(id)
@@ -2069,9 +2092,17 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 		return "", e
 	}
 	c.mu.Lock()
-	if _, e := c.sessionLocked(); e != nil {
+	if e := c.retireBarrierLocked(); e != nil {
 		c.mu.Unlock()
 		c.releaseClaim(oa) // no operation to run: a handle opened for one goes
+		if e.Code == CodeIndeterminate || e.Code == CodeConflict {
+			c.emitState() // the barrier entered Broken
+		}
+		return "", e
+	}
+	if _, e := c.sessionLocked(); e != nil {
+		c.mu.Unlock()
+		c.releaseClaim(oa)
 		return "", coded(CodeNeedsUnlock)
 	}
 	c.mu.Unlock()
@@ -2090,21 +2121,20 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 		defer kdf.Zero(key[:])
 		o.progress(0, 3, "registry")
 		c.mu.Lock()
-		sess, e := c.sessionLocked()
-		if e != nil {
-			c.mu.Unlock()
-			return nil, e
-		}
-		wrapped, nonce, err := sess.WrapArchiveKey(oa.id, kid, key)
-		if err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
 		now := c.now().Unix()
-		e = c.updateRegistryLocked(func(g *registry) error {
+		// Proceeding because a retiring pass committed is not enough: the
+		// barrier admits only with nothing owed. The key is wrapped inside
+		// the write, past the barrier's refusal of a handle a ceremony holds
+		// and under the Session the write commits with, as CreateArchive's
+		// is.
+		e := c.publishRegistryLocked(func(g *registry) error {
 			a := findRecord(g, oa.id)
 			if a == nil {
 				return errors.New("archive record missing")
+			}
+			wrapped, nonce, err := c.vault.sess.WrapArchiveKey(oa.id, kid, key)
+			if err != nil {
+				return err
 			}
 			for i := range a.Versions {
 				if a.Versions[i].State == format.VersionCurrent {
@@ -2162,7 +2192,14 @@ func (c *Core) RotateKey(id string) (string, *Error) {
 // compresses the same way; anything else is params. A path where a file
 // already exists is refused with archive.exists: the archive layer
 // creates with O_EXCL and Enfold never overwrites a file it did not make
-// (APP.md §6). The folder is remembered for the next create's dialog.
+// (APP.md §6). The folder is remembered for the next create's dialog. A new
+// record and its wrapped key wait behind an owed retirement (FORMAT R41):
+// the barrier is met before the file is created, and again at the registry
+// write, whose refusal removes the new file. The key is wrapped at that
+// write, under the Session it commits with: the mutex is released while the
+// file is made, a re-keying act can land meanwhile, and a key wrapped
+// before it would be published under a KWK no Session of the vault unwraps
+// (the outside review of the diff, finding 3).
 func (c *Core) CreateArchive(p, name, method string) (string, *Error) {
 	if !filepath.IsAbs(p) {
 		return "", coded(CodeParams)
@@ -2190,15 +2227,17 @@ func (c *Core) CreateArchive(p, name, method string) (string, *Error) {
 	}
 	defer kdf.Zero(key[:])
 	c.mu.Lock()
+	if e := c.retireBarrierLocked(); e != nil {
+		c.mu.Unlock()
+		if e.Code == CodeIndeterminate || e.Code == CodeConflict {
+			c.emitState() // the barrier entered Broken
+		}
+		return "", e
+	}
 	sess, e := c.sessionLocked()
 	if e != nil {
 		c.mu.Unlock()
 		return "", e
-	}
-	wrapped, nonce, err := sess.WrapArchiveKey(id, kid, key)
-	if err != nil {
-		c.mu.Unlock()
-		return "", c.fail("wrap", err)
 	}
 	opts := archive.Options{
 		DeviceID:      sess.Registry().DeviceID,
@@ -2219,8 +2258,17 @@ func (c *Core) CreateArchive(p, name, method string) (string, *Error) {
 	seq := a.Seq()
 	size, _, _ := a.Stat()
 	a.Close()
+	if c.seams.created != nil {
+		c.seams.created() // a test, between the file and its record
+	}
 	now := c.now().Unix()
-	if e := c.updateRegistry(func(g *registry) error {
+	if e := c.publishRegistry(func(g *registry) error {
+		// c.vault.sess is the Session this write commits with, read under
+		// the same hold of the state mutex, past the barrier.
+		wrapped, nonce, err := c.vault.sess.WrapArchiveKey(id, kid, key)
+		if err != nil {
+			return err
+		}
 		g.Archives = append(g.Archives, format.ArchiveRecord{
 			ArchiveID: id, Name: name, LastPath: p, Policy: policy, CreatedAt: now, CurrentKID: kid,
 			LastStoredSize: size, LastWrittenAt: now, LastSeq: seq, Revision: 1, LastWriter: g.DeviceID,

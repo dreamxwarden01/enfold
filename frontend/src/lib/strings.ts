@@ -35,7 +35,10 @@
 // button repeats the verb with its object (*Forget archive…* →
 // [Forget archive]). Hide / Unhide are the list's alone; *Forget
 // archive…* / *Restore* make a record soft for 30 days and back; *Re-key
-// archive…* and *Re-key vault…* are two operations with two names; the
+// archive…* and *Re-key vault…* are two operations with two names;
+// *Replace recovery keys…* makes a new recovery key for each one the vault
+// has and re-keys the vault in the same step, the plural whatever the
+// count, since a command names the act (ruled 2026-10-27); the
 // backup verbs are exactly four — *Inspect a backup…*, *Test that a backup
 // opens…*, *Import archives from a backup…*, *Replace this vault with a
 // copy…* (*Replace with a copy…* on a banner's button) — and *Restore
@@ -97,12 +100,37 @@ export const stepCopy: Record<StepKey, StepCopy> = {
   [CeremonyStep.StepReleasing]: { title: "Releasing the YubiKey", body: "It forgets the PIN." },
   [CeremonyStep.StepDone]: { title: "Done", body: "" },
   [CeremonyStep.StepFailed]: { title: "Could not continue", body: "" },
+  // A replacement's new recovery key, shown in the recovery key's dialog
+  // in keep mode (APP.md §13, ruled 2026-10-27): nothing is the vault's
+  // until the confirmation, so the line says so.
+  [CeremonyStep.StepKeepKey]: { title: "Keep the new recovery key", body: "Print it, save it as a text file, or write it down. Nothing changes until you confirm." },
+  // The replacement's one confirmation before its commit (ruled
+  // 2026-10-27, R-B): the panel draws each new key beside the one it
+  // replaces under replaceCopy.ready, which is this title.
+  [CeremonyStep.StepConfirm]: { title: "Ready to replace", body: "" },
 };
 
 // stepText is stepCopy for any step value, the generator's zero included.
 export function stepText(step: CeremonyStep): StepCopy {
   return (stepCopy as Record<string, StepCopy>)[step] ?? { title: "", body: "" };
 }
+
+// listJoin says a list the way a sentence does: "a", "a and b", "a, b and
+// c". One shape for the groups mistyped and the recovery keys a
+// replacement showed.
+function listJoin(items: readonly (string | number)[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+// What waits while a retirement is owed (FORMAT R41, ruled 2026-10-27,
+// R-A): one list for an act's bar (ceremonyCopy.retireNotFinished) and for
+// the refusal of a held act (vault.retire_owed), naming by their on-screen
+// words exactly the acts the core holds, then what does not wait. The
+// content of an archive is not held, so the last sentence says the files
+// inside can still be changed by the user, never that they change by
+// themselves.
+export const retireHeld =
+  "changes to the unlock methods, re-keying the vault, backups, and creating, importing, re-keying, forgetting, restoring or deleting archives wait; Enfold tries again at each of them and at the next unlock. You can still open your archives and change the files inside them.";
 
 // What a ceremony says beyond its step's own line, on the lock screen's
 // panel and the Vault page's alike (APP.md §6, ruled 2026-10-17). The
@@ -137,7 +165,7 @@ export const ceremonyCopy = {
   groupsMistyped: (groups: number[]): string =>
     groups.length === 1
       ? `Group ${groups[0]} does not check out. Compare its six digits with the sheet.`
-      : `Groups ${groups.slice(0, -1).join(", ")} and ${groups[groups.length - 1]} do not check out. Compare their digits with the sheet.`,
+      : `Groups ${listJoin(groups)} do not check out. Compare their digits with the sheet.`,
   groupsTyped: (n: number, of: number): string => `${n} of ${of} groups`,
   // The dialogs' enrolment: two halves, not three steps (ruled
   // 2026-10-17) — proving it is you, then adding the new unlock method.
@@ -170,17 +198,130 @@ export const ceremonyCopy = {
   lastTryHere: "A wrong PIN now blocks this YubiKey's PIN until it is reset.",
   // The end of a dialog's ceremony, by kind: what is now true, over the
   // dialog's Close.
+  // A password change is its own act with its own end (kind "password");
+  // turning the password on or off without a re-key keeps the generic
+  // "Done", there being no entry for kind "entangle".
   doneTitle: {
     enroll: "Unlock method added",
     remove: "Unlock method removed",
     rotate: "Vault re-keyed",
     export: "Backup saved",
+    password: "Password changed",
   } as Record<string, string>,
-  // Whose recovery key the panel asks for follows the act (APP.md §13).
+  // An act that re-keyed the vault in the same step as its own change
+  // says both (ruled 2026-10-27; CeremonyState.rekey). doneTitleOf picks.
+  doneRekeyed: {
+    remove: "Unlock method removed and vault re-keyed",
+    password: "Password changed and vault re-keyed",
+    entangle: "Password turned on and vault re-keyed",
+    replace: "Recovery keys replaced and vault re-keyed",
+    replaceOne: "Recovery key replaced and vault re-keyed",
+  } as Record<string, string>,
+  // What is being done once the proof has passed (CeremonyState.phase):
+  // the change and its re-key under "commit", the backup asked for under
+  // "backup" (APP.md §13). phaseLeadOf picks.
+  phaseLead: {
+    remove: "Removing the unlock method…",
+    removeRekey: "Removing the unlock method and re-keying the vault…",
+    password: "Changing the password…",
+    passwordRekey: "Changing the password and re-keying the vault…",
+    entangle: "Updating every YubiKey…",
+    entangleRekey: "Turning the password on and re-keying the vault…",
+    rotate: "Re-keying the vault…",
+    replaceRekey: "Replacing the recovery keys and re-keying the vault…",
+    replaceRekeyOne: "Replacing the recovery key and re-keying the vault…",
+    backup: "Saving the backup…",
+  } as Record<string, string>,
+  // Under the danger bar of a failed removal, password change, turning on
+  // or off, re-key or replacement: a failure before the change landed
+  // leaves the file as it was, and no backup is written before the change.
+  // Not for vault.indeterminate or vault.conflict, whose own words say a
+  // save could not be confirmed (lib/lockscreen.ts nothingChanged).
+  nothingChanged: "Nothing was changed.",
+  // The backup an act was asked for, not written though the change stands
+  // (CeremonyState.backupError): why, then the way to take one now.
+  backupNotSaved: (why: string): string => `The backup was not saved. ${why} Export one from Backups and copies.`,
+  // The retirement of the file's earlier state did not land (FORMAT R41);
+  // the change stands, and what writes a record or a secret waits for it
+  // while the content of an archive does not (ruled 2026-10-27, R-A).
+  // lead is retireLeadOf's; why is the code's own line; backupToo, the
+  // act's backup skipped for it (backupError vault.retire_owed), which has
+  // no bar of its own, so this one says it.
+  retireNotFinished: (lead: string, why: string, backupToo: boolean): string =>
+    `${lead} ${why} Until Enfold has cleared it, ${retireHeld}${backupToo ? " The backup you asked for waits too." : ""}`,
+  // The bar's first sentence, by what is left: the state before the change,
+  // with what a copy taken now opens with; or only earlier versions of the
+  // list of archives (CeremonyState.retireRemnant), which no copy opens
+  // with the method withdrawn, said by whether the act re-keyed.
+  retireLead: {
+    state: (what: string): string => `The vault file still holds its state from before this change${what ? `: a copy of it taken now ${what}` : ""}.`,
+    remnantOldKey: "The vault file still holds earlier versions of its list of archives, which the vault's old key reads.",
+    remnant: "The vault file still holds earlier versions of its list of archives.",
+  },
+  // What a copy of the file taken now still opens with, by the act. None
+  // after an enrolment or turning the password off, which withdrew
+  // nothing: the state before asked for more, not less.
+  retireWhat: {
+    remove: "still opens with the unlock method removed",
+    password: "still opens with a YubiKey and the old password",
+    entangle: "still opens with a YubiKey alone",
+    replace: "still opens with the replaced recovery keys",
+    replaceOne: "still opens with the replaced recovery key",
+    rotate: "still holds the vault's old key",
+  } as Record<string, string>,
+  // A failed replacement, by what is known of the keys it showed
+  // (lib/rekey.ts replaceResult): never added, so the sheets name keys
+  // that never existed; or not known, so nothing says to destroy them. A
+  // count of one is singular, and "both sheets" are the old and the new.
+  keysNeverAdded: "The recovery keys shown were never added: destroy what you kept of them.",
+  keysNeverAddedOne: "The recovery key shown was never added: destroy what you kept of it.",
+  keysWorkIfListed: "The new recovery keys work only if the Vault page lists their IDs after you reopen it: keep every sheet until you have looked.",
+  keysWorkIfListedOne: "The new recovery key works only if the Vault page lists its ID after you reopen it: keep both sheets until you have looked.",
+  // The end's next step (ruled 2026-10-27): one chain, the password first,
+  // and an unlock method first where only recovery keys are left
+  // (lib/rekey.ts followUp picks one; the button names its command).
+  followUp: {
+    addFirst: "Add the new YubiKey now; then, if an earlier copy of the vault file may be out there, replace the recovery keys.",
+    addFirstOn: "Add the new YubiKey now; then, if an earlier copy of the vault file may be out there, change the password and replace the recovery keys.",
+    changeFirst: "If an earlier copy of the vault file may be out there, change the password, then replace the recovery keys.",
+    changeFirstRecovery: "If an earlier copy or backup may be out there, change the password, then replace the other recovery keys.",
+    replace: "If an earlier copy of the vault file may be out there, replace the recovery keys too.",
+    replaceRecovery: "If an earlier copy or backup may be out there, replace the other recovery keys too.",
+    // The same four for one recovery key left: a count of one is singular
+    // everywhere (DECISIONS 2026-09-09), and the acceptance scenario's
+    // vault has exactly one. followUp picks by the end's committed count.
+    // addFirst and addFirstOn need none: a vault left with recovery keys
+    // alone keeps at least 2 of them (the two-method rule).
+    changeFirstOne: "If an earlier copy of the vault file may be out there, change the password, then replace the recovery key.",
+    changeFirstRecoveryOne: "If an earlier copy or backup may be out there, change the password, then replace the other recovery key.",
+    replaceOne: "If an earlier copy of the vault file may be out there, replace the recovery key too.",
+    replaceRecoveryOne: "If an earlier copy or backup may be out there, replace the other recovery key too.",
+    // After a replacement, the password on and not changed yet in the chain.
+    changeAfterReplace: "If an earlier copy of the vault file may be out there, change the password too: the vault's own record of it was readable the same way.",
+    // Added while the end carries a retirement that did not land: the next
+    // act's begin is the retry, which the bar above says waits.
+    retryFirst: " Enfold first tries again to finish clearing the vault file.",
+  },
+  // After an enrolment of a YubiKey begun with Use recovery key instead,
+  // and after no other: the lost YubiKey is the next thing to remove.
+  afterRecoveryProof: "Now remove the lost YubiKey: Remove… on its card asks why, and re-keys the vault when it was lost.",
+  // Whose recovery key the panel asks for, and why one proves it (APP.md
+  // §13): the kinds that always ask one, by kind; the others by cause, a
+  // YubiKey left out of a removal, the switch, or a vault of recovery keys
+  // alone (lib/rekey.ts recoveryNoteOf), never by kind, since adding a
+  // password to such a vault would read "no YubiKey is at hand".
   recoveryNote: {
     verify: "The backup's recovery key. Nothing here changes.",
     import: "The copy's own recovery key: it replaces this vault only once it opens.",
     records: "This vault's recovery key first, if the file is a copy of this vault; if it does not open the file, the file's own recovery key is asked for next.",
+    enroll: "Your recovery key proves it is you, since no YubiKey of this vault is at hand. The new YubiKey comes next.",
+    enrollRecovery: "Your recovery key proves it is you, since no YubiKey of this vault is at hand. The new recovery key comes next.",
+    remove: "One of this vault's recovery keys proves it is you, since the YubiKey being removed is not asked for.",
+    only: "This vault has only its recovery keys, so one of them proves it is you.",
+    nextMethod: " The new unlock method comes next.",
+    // A vault never set up has one recovery key, and its Vault page adds
+    // the first unlock method (vaultCopy.setupLine): one is singular.
+    onlyOne: "This vault has only its recovery key, so it proves it is you.",
   } as Record<string, string>,
   recoveryRefused: {
     file: "That is not that file's recovery key. Check the digits against its paper.",
@@ -198,6 +339,43 @@ export const ceremonyCopy = {
   // panel (it read "Opens. …" in the panel).
   verified: (archives: number): string => `The backup opens. ${plural(archives, "archive")} inside.`,
 };
+
+// doneTitleOf is the end of a dialog's ceremony, what is now true (APP.md
+// §6, Controls), by kind and whether the act re-keyed (CeremonyState.rekey);
+// a replacement always re-keys, and one key is singular (keepCount).
+// Undefined where the end is the generic "Done" (turning the password on
+// or off without a re-key).
+export function doneTitleOf(c: { kind: string; rekey?: boolean; keepCount?: number }): string | undefined {
+  if (c.kind === "replace") return (c.keepCount ?? 0) === 1 ? ceremonyCopy.doneRekeyed.replaceOne : ceremonyCopy.doneRekeyed.replace;
+  return (c.rekey ? ceremonyCopy.doneRekeyed[c.kind] : undefined) ?? ceremonyCopy.doneTitle[c.kind];
+}
+
+// phaseLeadOf is the lead once the proof has passed, by the act's phase
+// (CeremonyState.phase); undefined during the proof, where the panel says
+// it is checking that it is you.
+export function phaseLeadOf(c: { kind: string; rekey?: boolean; phase?: string; keepCount?: number }): string | undefined {
+  if (c.phase === "backup") return ceremonyCopy.phaseLead.backup;
+  if (c.phase !== "commit") return undefined;
+  if (c.kind === "replace" && c.keepCount === 1) return ceremonyCopy.phaseLead.replaceRekeyOne;
+  // An enrolment's commit says what its second half's wait already says: a
+  // recovery key's enrolment has no second half, and would otherwise read
+  // "Checking that it is you…" while its new unlock method is written (the
+  // core sets the phase for every act that changes the unlock methods).
+  if (c.kind === "enroll") return lockCopy.derivingLead.adding;
+  return ceremonyCopy.phaseLead[c.rekey ? `${c.kind}Rekey` : c.kind];
+}
+
+// retireLeadOf is the retirement bar's first sentence: earlier versions of
+// the list of archives alone, worded by whether the act re-keyed; else the
+// state before the change, with what a copy taken now opens with, and
+// nothing more after an enrolment or turning the password off (after
+// says the switch is off), which withdrew nothing.
+export function retireLeadOf(c: { kind: string; rekey?: boolean; keepCount?: number; retireRemnant?: boolean; after?: { entangled: boolean } | null }): string {
+  if (c.retireRemnant) return c.rekey || c.kind === "rotate" ? ceremonyCopy.retireLead.remnantOldKey : ceremonyCopy.retireLead.remnant;
+  if (c.kind === "enroll" || (c.kind === "entangle" && c.after?.entangled === false)) return ceremonyCopy.retireLead.state("");
+  const key = c.kind === "replace" && c.keepCount === 1 ? "replaceOne" : c.kind;
+  return ceremonyCopy.retireLead.state(ceremonyCopy.retireWhat[key] ?? "");
+}
 
 // codeCopy is what an error code says. Every code has an entry; the test
 // checks it.
@@ -227,6 +405,17 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeVaultUnlocked]: "Lock the vault first.",
   [Code.CodeSettingsUnsaved]: "The vault's place could not be recorded in the settings. Check the data folder is writable, or Enfold may open the previous vault next time.",
   [Code.CodeSetupNeeded]: "This vault has only its recovery key so far. Finish setting it up first.",
+  // A retirement still owed (FORMAT R41, ruled 2026-10-27): one cause,
+  // true wherever the owed state came from (a change, a re-key alone, an
+  // older file's first unlock here, earlier versions of the list of
+  // archives alone), and every act that waits for it. It reads right as
+  // the standing notice and as the refusal of a held act.
+  [Code.CodeRetireOwed]: `Enfold has not finished clearing the vault file's earlier state. Until it has, ${retireHeld}`,
+  // Finish setting up refused before its ceremony while the vault's
+  // password is on: its first unlock method cannot be written then, and a
+  // recovery key and the Vault page can (ruled 2026-10-27). The lock
+  // screen's greyed Finish setting up… says it too.
+  [Code.CodeSetupPasswordOn]: "This vault's password is on, so its setup cannot be finished here. Unlock with a recovery key, then add a YubiKey on the Vault page.",
   [Code.CodeArchivesOpen]: "Close the open archives first: their saves would land in the wrong vault.",
   [Code.CodeNeedsUnlock]: "Unlock the vault first.",
   [Code.CodeAuth]: "That did not open the vault.",
@@ -1199,6 +1388,10 @@ export const commandCopy = {
   addRecoveryKey: "Add a recovery key…",
   removeUnlockMethod: "Remove…",
   showRecoveryKey: "Show recovery key…",
+  // Every recovery key at once, so it stands in the head of Unlock
+  // methods and not on one card; plural whatever the count (ruled
+  // 2026-10-27).
+  replaceRecoveryKeys: "Replace recovery keys…",
   exportBackup: "Export backup…",
   inspectBackup: "Inspect a backup…",
   testBackup: "Test that a backup opens…",
@@ -1530,21 +1723,158 @@ export const dialogCopy = {
   },
   // FORMAT.md §18.3, DESIGN trap 29: the backup is asked for, never
   // required, and no copy of the vault is kept beside it.
+  // The body says what authorises the act: one unlock method proves it is
+  // you, a YubiKey wherever the vault has one (keys.go acquireUnlocked).
+  // The backup is the shared block's (backupAfter, primaries), taken after
+  // the re-key (ruled 2026-10-27).
   rekeyVault: {
     title: "Re-key the vault?",
-    body: "Every unlock method gets the new key now; no YubiKey is needed for this. Backups made before today keep opening with the methods they had.",
+    body: (yubiKey: boolean): string =>
+      yubiKey
+        ? "Every unlock method gets the new key now; one of them proves it is you first, and the other YubiKeys need not be present. Backups made before today keep opening with the methods they had."
+        : "Every unlock method gets the new key now; one of them proves it is you first. Backups made before today keep opening with the methods they had.",
     lastBackup: "Last backup",
     noBackup: "None recorded here",
-    backupFirst: "Export a backup first",
     backupWhy: "A backup is what brings your archives back if this vault is lost.",
     primary: "Re-key vault",
-    primaryWithBackup: "Back up, then re-key",
   },
+  // The question at a removal, a password change and turning the password
+  // on (DESIGN §5; ruled 2026-10-27): the fact the user can answer, never
+  // the technical choice. The answer that re-keys stands first and is
+  // pre-selected; each has a second line that says what it does.
+  rekeyQuestion: {
+    hardware: "Why are you removing this YubiKey?",
+    recovery: "Why are you removing this recovery key?",
+    password: "Why are you removing this password?",
+    change: "Why are you changing the password?",
+    on: "Could the vault file have been copied before now?",
+    lost: "Lost, stolen, or I am not sure",
+    kept: "I still have it and it was never out of my control",
+    known: "Someone else may know it, or I am not sure",
+    onlyMe: "Only I have ever known it",
+    copied: "Yes, or I am not sure",
+    notCopied: "No, it was never copied",
+    rekeys: "The vault is re-keyed, as recommended.",
+    keeps: "The vault keeps its key.",
+  },
+  // The limit of a re-key, said plainly (DESIGN §5), what the recovery
+  // keys' copies in the vault leave open (FORMAT R38), and the act that
+  // closes it, named and not linked (ruled 2026-10-27). The second
+  // sentence of each is drawn only while the vault has a recovery key
+  // besides any being removed, and none ends on the command's "…".
+  rekeyLimit: {
+    future: "Re-keying protects the future, not the past: whatever someone could open until now, they may already have copied.",
+    method: (noun: string): string =>
+      `If an earlier copy of the vault file may be out there, whoever opened it with this ${noun} could also read the recovery keys, which still open this vault: replace them afterwards with Replace recovery keys… on this page.`,
+    methodOn:
+      "If an earlier copy of the vault file may be out there, whoever opened it with this YubiKey could also read the recovery keys and the vault's own record of the password: change the password afterwards, then replace the recovery keys with Replace recovery keys… on this page.",
+    methodOnNoRecovery:
+      "If an earlier copy of the vault file may be out there, whoever opened it with this YubiKey could also read the vault's own record of the password: change the password afterwards.",
+    recovery:
+      "Whoever has this recovery key can open an earlier copy or backup of the vault and read the other recovery keys there: if one may be out there, use Replace recovery keys… on this page instead, which removes this one too. Check the unlock methods as well, and remove any you did not add.",
+    recoveryOn: " Then change the password.",
+    change:
+      "If an earlier copy of the vault file may be out there, whoever opened it with a YubiKey and the old password could also read the recovery keys: replace them afterwards with Replace recovery keys… on this page.",
+    on: "Whoever opens an earlier copy of the vault file with a YubiKey alone can also read the recovery keys: if such a copy may exist, replace them afterwards with Replace recovery keys… on this page.",
+    // The same for one recovery key besides any being removed: a count of
+    // one is singular everywhere (DECISIONS 2026-09-09), and the acceptance
+    // scenario's vault has exactly one (lib/rekey.ts rekeyLimitOf picks).
+    // The command keeps its plural, since a command names the act.
+    methodOne: (noun: string): string =>
+      `If an earlier copy of the vault file may be out there, whoever opened it with this ${noun} could also read the recovery key, which still opens this vault: replace it afterwards with Replace recovery keys… on this page.`,
+    methodOnOne:
+      "If an earlier copy of the vault file may be out there, whoever opened it with this YubiKey could also read the recovery key and the vault's own record of the password: change the password afterwards, then replace the recovery key with Replace recovery keys… on this page.",
+    recoveryOne:
+      "Whoever has this recovery key can open an earlier copy or backup of the vault and read the other recovery key there: if one may be out there, use Replace recovery keys… on this page instead, which removes this one too. Check the unlock methods as well, and remove any you did not add.",
+    changeOne:
+      "If an earlier copy of the vault file may be out there, whoever opened it with a YubiKey and the old password could also read the recovery key: replace it afterwards with Replace recovery keys… on this page.",
+    onOne: "Whoever opens an earlier copy of the vault file with a YubiKey alone can also read the recovery key: if such a copy may exist, replace it afterwards with Replace recovery keys… on this page.",
+  },
+  // The backup an act offers to take after its change (APP.md §13, ruled
+  // 2026-10-27): the tick, the reason under the Last backup fact by what
+  // ticks it (lib/rekey.ts backupReason), and the line in the tick's place
+  // where no recovery key would remain, since a backup holds the recovery
+  // keys alone (FORMAT R28).
+  backupAfter: {
+    tick: "Export a backup afterwards",
+    whyRekey: "A backup made before the re-key is at the vault's old key, and restoring it would bring that key back; one made afterwards is not.",
+    whyRecovery: (label: string): string => `Backups made while ${label} was an unlock method hold it and open with it; one made afterwards does not.`,
+    whyReplace: "Backups made before now open only with the old recovery keys; one made afterwards holds the new ones.",
+    whyReplaceOne: "Backups made before now open only with the old recovery key; one made afterwards holds the new one.",
+    none: "No backup of this vault can be made without a recovery key.",
+  },
+  // The primaries, by act: [kept, re-keyed, kept and backed up, re-keyed
+  // and backed up] (lib/rekey.ts primaryOf). Each names what the press
+  // does; none ends on "…", since no dialog follows but the Save dialog,
+  // which is the system's.
+  primaries: {
+    remove: ["Remove unlock method", "Remove and re-key", "Remove, then back up", "Remove, re-key and back up"],
+    password: ["Change password", "Change and re-key", "Change, then back up", "Change, re-key and back up"],
+    on: ["Turn on password", "Turn on and re-key", "Turn on, then back up", "Turn on, re-key and back up"],
+    rotate: ["Re-key vault", "Re-key vault", "Re-key, then back up", "Re-key, then back up"],
+    replace: ["Replace recovery keys", "Replace recovery keys", "Replace, then back up", "Replace, then back up"],
+  } as Record<string, [string, string, string, string]>,
+  // The replacement's primary for one key, in the singular.
+  replaceOne: "Replace recovery key",
   removeUnlockMethod: {
-    title: (label: string): string => `Remove ${label}?`,
-    body: (label: string): string => `${label} stops unlocking this vault now. Copies and backups of the vault made earlier still open with it.`,
-    how: "What such a copy opens reaches this vault's archives too, until every recovery key that copy held is replaced here and the vault is then re-keyed. The vault refuses a removal that would leave fewer than 2 unlock methods.",
-    primary: "Remove unlock method",
+    // Every password is named "Password", so two cards can read alike: the
+    // title then says when this one was added, as its card does.
+    title: (label: string, added?: string): string => (added ? `Remove ${label} (added ${added})?` : `Remove ${label}?`),
+    // A backup holds the recovery keys alone (FORMAT R28): only a recovery
+    // key's removal leaves backups that still open with it.
+    body: (label: string, type: string): string =>
+      type === "recovery"
+        ? `${label} stops unlocking this vault now. Copies and backups of the vault made earlier still open with it.`
+        : `${label} stops unlocking this vault now. An earlier copy of the vault file still opens with it; a backup never held it.`,
+    // Replaced copies keep their unlock methods (APP.md §13); the damaged
+    // copy does not open, so it is not counted.
+    retired: (n: number, label: string): string =>
+      n === 1
+        ? `Enfold keeps 1 replaced vault file in its folder; if it had ${label}, it still opens with it until you delete it.`
+        : `Enfold keeps ${n} replaced vault files in its folder; those that had ${label} still open with it until you delete them.`,
+    // Only when the YubiKey removed leaves no YubiKey and no password: such
+    // a vault cannot finish its setup from the lock screen while its
+    // password is on, and this page adds an unlock method either way.
+    lastProtector: "After this the vault has only its recovery keys: add the new YubiKey here now, or after unlocking with a recovery key.",
+    // A re-key changes no archive's key and no recovery key (FORMAT R38),
+    // so this promises neither.
+    how: (label: string, type: string): string =>
+      type === "recovery"
+        ? `Re-keying gives the vault a new key in the same step, and every unlock method that stays gets it. An earlier copy or backup opened with ${label} then reaches nothing in this vault through ${label}; the other recovery keys it held still do, until they are replaced. An archive that existed then stays open to it, files added later included, until that archive is re-keyed with Re-key archive… on its page. The backups made while ${label} was an unlock method still open with it, and this vault can still import archives from them; where you keep them is yours to decide. The vault refuses a removal that would leave fewer than 2 unlock methods.`
+        : `Re-keying gives the vault a new key in the same step, and every unlock method that stays gets it. An earlier copy of the vault file opened with ${label} then reaches nothing in this vault through ${label}; the recovery keys it held still do, until they are replaced. An archive that existed then stays open to such a copy, files added later included, until that archive is re-keyed with Re-key archive… on its page. A backup made before now is at the old key; the one taken afterwards is at the new one. The vault refuses a removal that would leave fewer than 2 unlock methods.`,
+  },
+  // Replace recovery keys… (ruled 2026-10-27): one ceremony and one step
+  // that adds the new keys, removes every old one and re-keys the vault,
+  // so that no new key is ever kept in the vault where an old one can read
+  // it. The title and the body count, so the user knows how many sheets to
+  // have ready; one key is singular everywhere.
+  replaceRecoveryKeys: {
+    title: (n: number): string => (n === 1 ? "Replace the recovery key?" : `Replace the ${n} recovery keys?`),
+    body: (n: number): string =>
+      n === 1
+        ? "Enfold makes a new recovery key for you to keep, and the old one stops unlocking this vault. Copies and backups of the vault made before now still open with the old one."
+        : `Enfold makes ${n} new recovery keys for you to keep, one for each, and the old ones stop unlocking this vault. Copies and backups of the vault made before now still open with the old ones.`,
+    when: (n: number): string =>
+      n === 1
+        ? "Replace it when an earlier copy of the vault file, or a backup, may have been opened by someone else: whoever did could read the recovery key in it, which keeps opening this vault until it is replaced. If that copy was opened with a YubiKey or a password, remove that unlock method first, and remove any unlock method you did not add."
+        : "Replace them when an earlier copy of the vault file, or a backup, may have been opened by someone else: whoever did could read every recovery key in it, and those keep opening this vault until they are replaced. If that copy was opened with a YubiKey or a password, remove that unlock method first, and remove any unlock method you did not add.",
+    // With the password on, unless the chain the dialog was opened in has
+    // changed it already (lib/rekey.ts replaceFacts).
+    whenOn: " Change the password too: the vault's own record of it was readable the same way.",
+    // The idle lock counts real input only, and 48 digits written by hand
+    // is minutes without any: the line names the time before it starts.
+    // n is the recovery keys replaced, as for the title: one is singular.
+    ready: (minutes: number, n: number): string =>
+      (n === 1
+        ? "Have somewhere to keep the new recovery key before you start: print it, save it as a text file, or write it down. Nothing changes until you have kept it and confirmed."
+        : "Have somewhere to keep each new recovery key before you start: print it, save it as a text file, or write it down. Nothing changes until you have kept every one and confirmed.") +
+      ` Enfold locks after ${plural(minutes, "minute")} without input, which ends the replacement with nothing changed: printing or saving is quicker than writing 48 digits by hand.`,
+    how: "Enfold makes the new keys first and shows each one in turn. When you confirm, one step adds them, removes every old recovery key and re-keys the vault, so the copy of each new recovery key the vault keeps is never readable with an old one. An earlier copy or backup then reaches nothing in this vault through its recovery keys; an archive that existed then stays open to it, files added later included, until that archive is re-keyed with Re-key archive… on its page. Each new recovery key takes the name of the one it replaces, so you know where it goes.",
+    // The same for one key. "Its recovery keys" stays plural there: they
+    // are the earlier copy's, which may have held more than the vault has
+    // now, and are not counted.
+    howOne: "Enfold makes the new recovery key first and shows it. When you confirm, one step adds it, removes the old recovery key and re-keys the vault, so the copy of the new recovery key the vault keeps is never readable with the old one. An earlier copy or backup then reaches nothing in this vault through its recovery keys; an archive that existed then stays open to it, files added later included, until that archive is re-keyed with Re-key archive… on its page. The new recovery key takes the name of the one it replaces, so you know where it goes.",
+    howOn: " Such a copy also held the vault's record of the password, which only changing the password replaces.",
   },
   addUnlockMethod: {
     title: "Add an unlock method",
@@ -1564,19 +1894,22 @@ export const dialogCopy = {
     passwordInherited: "This vault asks for its password with every YubiKey, so this one will too. Nothing is asked for here.",
     primary: "Add unlock method",
   },
-  // Password with every YubiKey (APP.md §13): the old password is never
-  // asked, and why is the disclosure's, not the body's.
+  // Password with every YubiKey (APP.md §13): no field asks for the old
+  // password, though a YubiKey's proof asks the current one with its PIN;
+  // why is the disclosure's, not the body's. The body says what authorises
+  // the act, and turning it on promises what is true of this file only: a
+  // copy made before keeps opening with a YubiKey alone.
   passwordOn: {
     title: "Require a password with every YubiKey?",
-    body: "Every YubiKey will ask for this password as well as its PIN, so a stolen YubiKey alone cannot open the vault. The recovery key and a password unlock method do not change.",
+    body: "Every YubiKey will ask for this password as well as its PIN, so a stolen YubiKey alone cannot open this vault file. The recovery key and a password unlock method do not change.",
     next: "You choose the password in the next step.",
-    how: "The vault asks for one of its unlock methods first, then updates every YubiKey's entry without needing the YubiKey present.",
+    how: "The vault asks for one of its unlock methods first, then updates every YubiKey's entry without needing the YubiKey present. Re-keying gives the vault a new key in the same step. An earlier copy of the vault file, which opens with a YubiKey alone, then reaches nothing in this vault through that YubiKey; the recovery keys it held still do, until they are replaced. An archive that existed then stays open to it until that archive is re-keyed with Re-key archive… on its page.",
     primary: "Turn on password",
   },
   passwordChange: {
     title: "Change the password for every YubiKey?",
-    body: "Every YubiKey asks for the new password from now on; none needs to be present. You choose it in the next step.",
-    how: "The old password is not asked for: whoever reaches this page has already opened the vault, and could add an unlock method of their own.",
+    body: "Every YubiKey asks for the new password from now on; one unlock method proves it is you first, and the other YubiKeys need not be present. You choose the password in the next step.",
+    how: "This dialog has no field for the old password: whoever reaches this page has already opened the vault, and could add an unlock method of their own. Proving it is you with a YubiKey still asks for the current password with its PIN. Re-keying gives the vault a new key in the same step. An earlier copy of the vault file opened with a YubiKey and the old password then reaches nothing in this vault through them; the recovery keys it held still do, until they are replaced. An archive that existed then stays open to it until that archive is re-keyed with Re-key archive… on its page.",
     primary: "Change password",
   },
   // Turning it off weakens the vault, so its primary is a standard button,
@@ -1607,8 +1940,23 @@ export const vaultCopy = {
   unlockMethods: "Unlock methods",
   methodCount: (n: number): string => plural(n, "unlock method"),
   rule: codeCopy[Code.CodeInvariant],
+  // A YubiKey's greyed Remove… says what to do (ruled 2026-10-27): a new
+  // YubiKey, or a second recovery key added with Use recovery key instead
+  // when none is at hand yet, either of which makes it removable.
+  ruleYubiKey: "To remove this YubiKey, add a new one or a recovery key first: the vault always keeps at least 2 unlock methods.",
   lockedLine: "Unlock the vault to change its unlock methods.",
-  setupLine: "This vault has only its recovery key. Add a YubiKey or a password to finish setting it up; the recovery key is asked for first.",
+  // By the recovery keys' count: one is a vault never set up; two or more
+  // were left by a removal, and the vault was set up then.
+  setupLine: (n: number): string =>
+    n === 1
+      ? "This vault has only its recovery key. Add a YubiKey or a password to finish setting it up; the recovery key is asked for first."
+      : "This vault has only its recovery keys. Add a YubiKey or a password; a recovery key is asked for first.",
+  // Replace recovery keys…'s greyed titles (ruled 2026-10-27): a vault
+  // with none to replace, and one whose unlock methods are all recovery
+  // keys, where a new key could be shown again only through a YubiKey or a
+  // password it does not have.
+  noRecoveryToReplace: "This vault has no recovery key to replace.",
+  replaceNeedsProtector: "Add a YubiKey or a password first: a new recovery key can be shown again only through one.",
   foot: (name: string): string => name,
   // A change's greyed title while Tampered (APP.md §13): the remedy is the
   // banner's button, on this page too (direction 9). It names no side: the
@@ -1651,6 +1999,12 @@ export const vaultCopy = {
     return `${plural(rekeyed, "archive")} re-keyed since ${verb} not in it.`;
   },
   backupHoldsAll: "It holds every archive key.",
+  // A backup behind for a reason no count says (Vault.BackupStatus): made
+  // before the vault was re-keyed, or holding only recovery keys a
+  // replacement removed. Each stands for the counts, and the second wins,
+  // being the more pressing (lib/backup.ts).
+  backupBeforeRekey: "It was made before the vault was re-keyed.",
+  backupKeysReplaced: "It opens only with recovery keys this vault no longer has.",
   // The old caveat, under the status: the stamp is this PC's record of an
   // export, not a look at the file (lastExportAt gates nothing).
   backupCaveat: "Recorded here, not proof the file is still there.",
@@ -1723,6 +2077,9 @@ export const vaultCopy = {
     reveal: "Show the recovery key",
     entangle: "Password with every YubiKey",
     export: "Export a backup",
+    password: "Change the password for every YubiKey",
+    replace: "Replace the recovery keys",
+    replaceOne: "Replace the recovery key",
   } as Record<string, string>,
 };
 
@@ -1978,6 +2335,14 @@ export const importCopy = {
   archivesTitle: "Import archives from a backup",
   archivesBody: "The ticked archives are added to this vault, which otherwise stays as it is. Where the two differ, this vault's own name and description are kept.",
   archivesPrimary: (n: number): string => (n > 0 ? `Import ${plural(n, "archive")}` : "Import archives"),
+  // A copy made before a re-key brings the key it retired back (FileInfo
+  // rekeyed), under the replace sentence.
+  beforeRekey: "It was made before this vault was re-keyed: unlock methods removed since may still open it, and whatever is added to it later.",
+  // The vault this replaces still owes a retirement (VaultStatus
+  // retireOwed): the dated copy kept of it opens with what its last change
+  // withdrew, so the confirmation says so after the replaced vault's own
+  // unlock methods.
+  replacedOwes: "It also still holds its state from before its last change, so it opens with any unlock method that change removed too. Delete it once the new vault opens.",
 };
 
 // ---- The Settings page (APP.md §6, ruled 2026-10-17) ---------------------
@@ -2142,4 +2507,62 @@ export const revealCopy = {
   gone: "The recovery key could not be shown here: its one-time link was already used.",
   goneHow: "Show it again from the Vault page: unlock, then prove a YubiKey or a password once more.",
   notHeld: "The recovery key is no longer held. Show it again from the Vault page.",
+  // A replacement's new key, shown before it is the vault's (APP.md §13,
+  // ruled 2026-10-27): until the confirmation it opens nothing, so the
+  // lead says from when it does, and "by itself" since "alone" read as
+  // "only this key". No second confirmation here either (ruled 2026-09-09,
+  // held for the replacement): the act's own confirmation is the one. Keep
+  // mode, like every showing, is not dismissed by Escape or the backdrop:
+  // Cancel is its one way out.
+  titleKeep: (i: number, n: number): string => (n === 1 ? "Your new recovery key" : `New recovery key ${i} of ${n}`),
+  replaces: (label: string, id: string): string => `Replaces ${label} · ${id}.`,
+  keepOpens: "Once you confirm, this recovery key opens the vault file by itself, and backups made from then on. Keep it from others.",
+  // n is the digits; count, the new keys the replacement shows
+  // (CeremonyState.keepCount): one is singular.
+  keepDigitsLine: (n: number, count: number): string =>
+    count === 1 ? `${n} digits. Nothing changes until this recovery key is kept and you confirm.` : `${n} digits. Nothing changes until every new recovery key is kept and you confirm.`,
+  // A key that cannot be shown before the commit: the ordinary showing's
+  // words ("show it again from the Vault page") are false then.
+  keepGone: "This recovery key could not be shown here. Nothing has changed: cancel, and start the replacement again.",
+  next: "Next recovery key",
+  continue: "Continue",
+  // A recovery key added with Use recovery key instead: no YubiKey or
+  // password is at hand to show it again with.
+  digitsLineLater: (n: number): string => `${n} digits. They can be shown again from the Vault page only after you add a YubiKey or a password and prove it.`,
+};
+
+// ---- Replace recovery keys… inside its ceremony (APP.md §13, ruled 2026-10-27)
+//
+// The confirmation pairs each new key with the one it replaces, under the
+// old key's name, and the end says the same as its receipt (FORMAT.md
+// §18.4: the sheets carry the IDs). What the end says of earlier backups
+// is what is true of them, never an order to destroy them: a merge still
+// reads them. A count of one is singular everywhere (the One forms,
+// chosen by keepCount).
+export const replaceCopy = {
+  ready: "Ready to replace",
+  newKeys: "New",
+  replacedKeys: "Replaced",
+  readyLine: "The replaced keys stop unlocking this vault, and every new one works from now on. Check that you can read each new recovery key before you go on.",
+  readyLineOne: "The replaced key stops unlocking this vault, and the new one works from now on. Check that you can read the new recovery key before you go on.",
+  pair: (newId: string, oldId: string): string => `${newId} replaces ${oldId}`,
+  backedUp: "Destroy the replaced keys' sheets and files once the new backup opens (Test that a backup opens…). The backups made before still open with the replaced keys, and this vault can still import archives from them.",
+  noBackup: "No backup holds the new keys yet, and every earlier one opens only with the replaced keys. Export one from Backups and copies, and destroy the replaced keys' sheets and files once it opens.",
+  afterFailedBackup: "Destroy the replaced keys' sheets and files once a new backup opens.",
+  backedUpOne: "Destroy the replaced key's sheet and file once the new backup opens (Test that a backup opens…). The backups made before still open with the replaced key, and this vault can still import archives from them.",
+  noBackupOne: "No backup holds the new key yet, and every earlier one opens only with the replaced key. Export one from Backups and copies, and destroy the replaced key's sheet and file once it opens.",
+  afterFailedBackupOne: "Destroy the replaced key's sheet and file once a new backup opens.",
+  // The Vault page's notice after a replacement ended without replacing
+  // anything once keys were shown (lib/rekey.ts replaceNotice): the IDs,
+  // since an ID is not secret and the sheets carry them.
+  notAdded: (ids: string[]): string =>
+    ids.length === 1
+      ? `Nothing was replaced. Recovery key ${ids[0]} was shown but never added: destroy what you kept of it.`
+      : `Nothing was replaced. Recovery keys ${listJoin(ids)} were shown but never added: destroy what you kept of them.`,
+  // Its outcome not known (vault.indeterminate or vault.conflict): never
+  // "destroy", and words true of both causes.
+  unknown: (ids: string[]): string =>
+    ids.length === 1
+      ? `Recovery key ${ids[0]} was shown, and Enfold could not tell whether it replaced the old one. Reopen the vault; the Vault page then lists the recovery keys it has. Keep both sheets until then.`
+      : `Recovery keys ${listJoin(ids)} were shown, and Enfold could not tell whether they replaced the old ones. Reopen the vault; the Vault page then lists the recovery keys it has. Keep every sheet until then.`,
 };

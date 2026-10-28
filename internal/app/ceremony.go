@@ -41,6 +41,13 @@ type ceremony struct {
 	card        Card
 	unlockPub   []byte
 	unlockLabel string
+	// without is the YubiKey a re-keying removal takes away, which its proof
+	// does not count as one to prove with (zero for every other act), and
+	// recoveryProof the user's word that no YubiKey of the vault is at hand:
+	// acquireUnlocked proves with a recovery key then (ruled 2026-10-27).
+	// Both set at begin, before the goroutine starts, and never after.
+	without       [16]byte
+	recoveryProof bool
 	// held is the card open right now, probed while a prompt stands.
 	held Card
 	// att is the agreement in flight the ceremony waits on (attempt.go);
@@ -69,10 +76,13 @@ type parkAt struct {
 func (p *parkAt) Error() string { return "park: " + string(p.code) }
 
 // prompt is a mailbox with an identity: answered once, by the id it was
-// issued with, never by the next prompt's answer.
+// issued with, never by the next prompt's answer. Its kind is one of the
+// four secrets, or kept or confirm, a replacement's two answers with no
+// value (StepKeepKey, StepConfirm): they come through the same mailbox, so
+// that neither can answer a secret's prompt nor a secret theirs.
 type prompt struct {
 	id     string
-	kind   string // pin | password | recovery | mgmtkey
+	kind   string // pin | password | recovery | mgmtkey | kept | confirm
 	choose bool   // a secret being chosen now: the minimum applies
 	ch     chan string
 	gone   chan error // the key held for this prompt went away
@@ -261,7 +271,7 @@ func (cer *ceremony) run(fn func(ctx context.Context) error) {
 		}
 		// A commit whose outcome is unknown, or one the file refused as
 		// conflicting, leaves the handle broken: the state says so.
-		if cer.mutation && (errors.Is(err, keystore.ErrIndeterminate) || errors.Is(err, keystore.ErrConflict)) {
+		if cer.mutation && unknownOutcome(err) {
 			cer.c.mu.Lock()
 			cer.c.brokenLocked(err)
 			cer.c.mu.Unlock()
@@ -1169,7 +1179,12 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 		ks.Close()
 		return ErrTokenCancelled
 	}
-	c.publishUnlockedLocked(ks, unl) // settles the owed receipts
+	if err := c.publishUnlockedLocked(ks, unl); err != nil { // settles the owed receipts
+		// The retirement the file owed could not be confirmed: the vault is
+		// Broken, and the unlock ends Failed over it.
+		c.mu.Unlock()
+		return err
+	}
 	c.mu.Unlock()
 	cer.set(func(s *CeremonyState) { s.Step = StepDone })
 	if hc != nil {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
@@ -29,6 +30,12 @@ type incomingSet struct {
 	// tampered is the incoming file's own R25 verdict, carried to the
 	// dialog as IncomingFile.Tampered.
 	tampered bool
+	// wrappedAt is this vault's generation whose KWK the keys were re-wrapped
+	// under; generation above is the incoming file's own. A re-keying act
+	// drops every set (installNext), and the merge refuses one whose
+	// generation is not the vault's as a backstop: its keys would be
+	// published under a KWK no Session of this vault unwraps.
+	wrappedAt uint64
 }
 
 // InspectRecords opens another keystore file's registry for a merge (APP.md
@@ -44,7 +51,11 @@ type incomingSet struct {
 // publishes an unlock and therefore never purges (§13, "The purge has one
 // trigger"), and it runs on a tampered vault for the same reason the reveal
 // does: R25's freeze is over the mutating calls and the export (APP.md §13,
-// amendment A.5), and a merge is a way out rather than a change.
+// amendment A.5), and a merge is a way out rather than a change. It is the
+// first half of MergeRecords, which the barrier holds, so the barrier holds
+// it at its begin: an owed retirement refuses it before the proof and the
+// choice of archives rather than at the merge's write after both (FORMAT
+// R41, ruled 2026-10-27).
 func (c *Core) InspectRecords(path string) *Error {
 	if path == "" {
 		return coded(CodeParams)
@@ -52,7 +63,7 @@ func (c *Core) InspectRecords(path string) *Error {
 	if _, err := os.Stat(path); err != nil {
 		return c.fileError("inspect records", err)
 	}
-	return c.beginWithVMK("records", true, func(cer *ceremony, unl *keystore.Unlocked) error {
+	return c.beginAs("records", actOpts{allowTampered: true}, func(cer *ceremony, unl *keystore.Unlocked) error {
 		staged, serr := c.stage(path, c.inspectName())
 		if serr != nil {
 			return c.fileError("inspect records", serr)
@@ -86,6 +97,7 @@ func (c *Core) InspectRecords(path string) *Error {
 			return err
 		}
 		set := c.buildIncomingSet(path, fr)
+		set.wrappedAt = unl.Keystore().Generation() // the KWK convert wrapped to
 		if fr.Tampered != nil {
 			// Reported, never a refusal: every field of a row comes from
 			// its authenticated registry, and what R25 guards — the slot
@@ -431,7 +443,15 @@ func (c *Core) MergeRecords(handle string, ids []string) *Error {
 	// A ticked record the vault holds as forgotten is restored, which is the
 	// one merge path that may touch a forgotten record (A.2).
 	wrote := false
-	e := c.updateRegistryAtLocked(true, func(g *registry, at int64) error {
+	// Records and their keys are added and forgotten ones restored: the
+	// write waits behind an owed retirement (FORMAT R41).
+	e := c.publishRegistryAtLocked(true, func(g *registry, at int64) error {
+		// Read here, past the barrier's and the write's refusals of a held
+		// handle, and under the Session this write commits with.
+		if gen := c.vault.ks.Generation(); gen != set.wrappedAt {
+			// What the dialog holds has passed, as a dropped handle has.
+			return fmt.Errorf("%w: the records were wrapped at generation %d, the vault is at %d", coded(CodeStalePrompt), set.wrappedAt, gen)
+		}
 		// One kid index for the whole write, kept current as records are
 		// taken so that two rows cannot claim the same kid.
 		owners := ownersOf(g)
@@ -479,6 +499,9 @@ func (c *Core) MergeRecords(handle string, ids []string) *Error {
 		return nil
 	})
 	if e != nil {
+		if e.Code == CodeStalePrompt {
+			delete(c.vault.incoming, handle) // wrapped for a generation the vault left
+		}
 		return e
 	}
 	delete(c.vault.incoming, handle)

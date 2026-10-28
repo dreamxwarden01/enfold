@@ -105,7 +105,12 @@
     // refuses (lib/firstwayin); a vault proves itself with its own and
     // takes none — the core reads kind, label and tick for a backup alone.
     const way = isBackup ? first?.take() : { kind: "token" as const, label: "", entangle: false, password: "" };
-    if (!way) return;
+    if (!way) {
+      // The cards stand under the confirmation, so at a short window this
+      // press can mark them below the fold: they are brought into view.
+      first?.reveal();
+      return;
+    }
     onclose();
     store.dismissCeremony();
     // Held before the call, for the Choose prompt the adopted backup asks
@@ -145,8 +150,16 @@
      submission does. The read-only path is no field to type in, so the
      focus opens on the box until a file is read. Anchored at the top: a
      file read, and a card opened, make it taller, and the title must not
-     climb. -->
-<Dialog {title} {onclose} onsubmit={() => void (eff === "inplace" ? useInPlace() : doImport())} anchored>
+     climb. Medium (520 px), with the confirmation said before the choice
+     of how the file will unlock: in a 1086 × 694 window a backup's box
+     ran to 861 px (901 while the replaced vault owes its retirement)
+     against the 654 it may take, and the tick the primary waits for
+     stood below the fold, so nothing in view said why the primary was
+     greyed (the re-key feature's final shoot, F2). The wider box takes a
+     line each from the replace sentence and the bar, and the order puts
+     the bar and its tick in view with the box; the cards follow, and what
+     comes after the press stays the body's last line, over the button. -->
+<Dialog {title} {onclose} onsubmit={() => void (eff === "inplace" ? useInPlace() : doImport())} anchored medium>
   <div class="field">
     <div class="field-top"><label for="im-path">{vaultCopy.file}</label></div>
     <div class="row">
@@ -170,26 +183,38 @@
     <TextField id="im-name" label={vaultCopy.name} bind:value={name} bind:valid={nameValid} {attempt} />
     {#if isBackup}
       <p>{kept ? importCopy.backupReplaces : importCopy.backupRestores}</p>
-      <FirstWayIn bind:this={first} heading={firstMethodCopy.headImport} context="adopt" {attempt} idPrefix="im" />
+      <!-- A copy made before a re-key brings back the key the re-key retired
+           (FileInfo.rekeyed; ruled 2026-10-27). -->
+      {#if info.rekeyed}<p>{importCopy.beforeRekey}</p>{/if}
     {:else}
       <p>{kept ? importCopy.vaultReplaces : importCopy.vaultRestores}</p>
+      {#if info.rekeyed}<p>{importCopy.beforeRekey}</p>{/if}
+    {/if}
+    <!-- The confirmation, or what forbids the act, right under what the file
+         does to this vault and before the choice of how it unlocks (the
+         dialog's comment, above). -->
+    {#if openArchives > 0}
+      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{openArchives} archive{openArchives === 1 ? " is" : "s are"} still open. Close them first: their saves would land in the wrong vault.</span></div>
+    {:else if kept && st}
+      <!-- The vault this replaces may still hold its state from before its
+           last change (VaultStatus.retireOwed): the copy kept of it then
+           opens with what that change removed, so the bar says so after its
+           own unlock methods (ruled 2026-10-27). -->
+      <div class="bar attention">
+        <svg class="i i-14"><use href="#i-warn" /></svg>
+        <span>{eff === "inplace" ? "Enfold switches to this file from" : "This replaces"} <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {eff === "inplace" || st.keptElsewhere ? `It stays where it is${st.keptElsewhere ? ", at " + st.path : ""}, untouched` : "It is kept as a dated copy in Enfold's folder, never deleted"}: its own unlock methods still open it, and archives only it holds open only with it.{st.retireOwed ? ` ${importCopy.replacedOwes}` : ""}</span>
+      </div>
+      <label class="check"><input type="checkbox" bind:checked={confirm} />{eff === "inplace" ? "Switch to this file" : "Replace this vault"} ({st.displayName})</label>
+    {/if}
+    {#if isBackup}
+      <FirstWayIn bind:this={first} heading={firstMethodCopy.headImport} context="adopt" {attempt} idPrefix="im" />
+    {:else}
       <div class="field">
         <div class="field-top"><label for="im-method">{importCopy.proveWith}</label></div>
         <select id="im-method" class="input" bind:value={method}>
           {#each ways as w (w.v)}<option value={w.v}>{w.t}</option>{/each}
         </select>
       </div>
-    {/if}
-    {#if openArchives > 0}
-      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{openArchives} archive{openArchives === 1 ? " is" : "s are"} still open. Close them first: their saves would land in the wrong vault.</span></div>
-    {:else if kept && st}
-      <div class="bar attention">
-        <svg class="i i-14"><use href="#i-warn" /></svg>
-        <span>{eff === "inplace" ? "Enfold switches to this file from" : "This replaces"} <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {eff === "inplace" || st.keptElsewhere ? `It stays where it is${st.keptElsewhere ? ", at " + st.path : ""}, untouched` : "It is kept as a dated copy in Enfold's folder, never deleted"}: its own unlock methods still open it, and archives only it holds open only with it.</span>
-      </div>
-      <label class="check"><input type="checkbox" bind:checked={confirm} />{eff === "inplace" ? "Switch to this file" : "Replace this vault"} ({st.displayName})</label>
-    {/if}
-    {#if !isBackup}
       <p class="t-quiet">Advanced: {#if eff === "copy"}<button type="button" class="btn link" onclick={() => (mode = "inplace")}>use the file where it is</button> instead of copying it. Only on a BitLocker-protected fixed drive; removable media and network shares are outside Enfold's protection.{:else}the file stays where it is and becomes the vault by reference; nothing is copied, nothing is proved first. <button type="button" class="btn link" onclick={() => (mode = "copy")}>Copy it in instead</button>.{/if}</p>
     {/if}
   {:else}

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
 	"github.com/dreamxwarden01/enfold/internal/kdf"
@@ -213,6 +214,15 @@ func requireEntangleKey(hdr format.SlotRegionHeader, kp *[32]byte) error {
 // hardware slot inherits the vault's switch and reads nothing about it from
 // its own record (§18.1).
 func newRecord(spec SlotSpec, vaultID [16]byte, kp *[32]byte, vmk [32]byte, gen uint64) (format.SlotRecord, error) {
+	// A recovery slot is made by the half a replacement shares, which draws
+	// its own recipient ID, and is then wrapped at once.
+	if rs, ok := spec.(RecoverySlot); ok {
+		s, err := recoveryRecord(rs.Key, rs.Label, vaultID)
+		if err != nil {
+			return s, err
+		}
+		return s, wrapHybrid(&s, kdf.HybridRecovery, vaultID, vmk, gen)
+	}
 	s := format.SlotRecord{State: format.SlotActive, CreatedAt: now()}
 	if _, err := rand.Read(s.RecipientID[:]); err != nil {
 		return s, err
@@ -242,18 +252,6 @@ func newRecord(spec SlotSpec, vaultID [16]byte, kp *[32]byte, vmk [32]byte, gen 
 		s.SlotPubkey, s.MLKEMEK = kdf.HybridPublic(skX, dk)
 		return s, wrapHybrid(&s, kdf.HybridPassword, vaultID, vmk, gen)
 
-	case RecoverySlot:
-		s.Type, s.Curve, s.Label = format.SlotRecovery, format.CurveX25519, sp.Label
-		if _, err := rand.Read(s.SlotSalt[:]); err != nil {
-			return s, err
-		}
-		skX, dk, err := recoveryKeys(&s, sp.Key, vaultID)
-		if err != nil {
-			return s, err
-		}
-		s.SlotPubkey, s.MLKEMEK = kdf.HybridPublic(skX, dk)
-		return s, wrapHybrid(&s, kdf.HybridRecovery, vaultID, vmk, gen)
-
 	case HardwareSlot:
 		if _, err := ecdh.P256().NewPublicKey(sp.PublicKey); err != nil {
 			return s, fmt.Errorf("%w: token public key: %v", ErrParams, err)
@@ -269,6 +267,34 @@ func newRecord(spec SlotSpec, vaultID [16]byte, kp *[32]byte, vmk [32]byte, gen 
 		return s, wrapHardware(&s, kp, vaultID, vmk, gen)
 	}
 	return s, fmt.Errorf("%w: unknown slot spec %T", ErrParams, spec)
+}
+
+// recipientIDs is where recoveryRecord draws a recovery slot's recipient ID:
+// crypto/rand's reader, replaced only by a test whose reader returns a
+// colliding prefix first, which is how PrepareRecovery's redraw is shown.
+// Package-level, as now is: a test that sets it does not run in parallel.
+var recipientIDs io.Reader = rand.Reader
+
+// recoveryRecord is a recovery slot's record with nothing wrapped into it yet
+// (§3.1, §6.3): its recipient ID and slot_salt drawn and its public keys
+// derived from r. newRecord wraps the VMK into it at once; a replacement keeps
+// it unwrapped until its rotation wraps the new VMK into it, so that no new
+// recovery slot ever holds the retiring one (§8).
+func recoveryRecord(r kdf.RecoveryKey, label string, vaultID [16]byte) (format.SlotRecord, error) {
+	s := format.SlotRecord{State: format.SlotActive, CreatedAt: now()}
+	if _, err := io.ReadFull(recipientIDs, s.RecipientID[:]); err != nil {
+		return s, err
+	}
+	s.Type, s.Curve, s.Label = format.SlotRecovery, format.CurveX25519, label
+	if _, err := rand.Read(s.SlotSalt[:]); err != nil {
+		return s, err
+	}
+	skX, dk, err := recoveryKeys(&s, r, vaultID)
+	if err != nil {
+		return s, err
+	}
+	s.SlotPubkey, s.MLKEMEK = kdf.HybridPublic(skX, dk)
+	return s, nil
 }
 
 // passwordKeys derives a password slot's key pair from the password and the

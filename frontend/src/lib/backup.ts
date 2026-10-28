@@ -11,7 +11,9 @@
 //
 // - none: nothing to say — no archives, and no backup either.
 // - never: no backup recorded here, with archives the vault alone holds.
-// - behind: a backup, lacking archives created or re-keyed since.
+// - behind: a backup, lacking archives created or re-keyed since, made
+//   before the vault was last re-keyed, or opening only with recovery keys
+//   a replacement removed (VaultRekeyed, KeysReplaced; ruled 2026-10-27).
 // - current: a backup holding every archive key.
 //
 // The counts are read only from an unlocked registry that is not Tampered
@@ -32,7 +34,18 @@ export function backupKind(b: BackupStatus | null, known: boolean): BackupKind {
   const at = b?.at ?? 0;
   if (!known) return at > 0 ? "current" : "never";
   if (at <= 0) return (b?.archives ?? 0) > 0 ? "never" : "none";
-  return (b?.missing ?? 0) > 0 || (b?.rekeyed ?? 0) > 0 ? "behind" : "current";
+  return (b?.missing ?? 0) > 0 || (b?.rekeyed ?? 0) > 0 || !!b?.vaultRekeyed || !!b?.keysReplaced ? "behind" : "current";
+}
+
+// behindRest is what a behind backup lacks, said in one sentence: that it
+// opens only with recovery keys this vault no longer has, the more pressing
+// fact, before that it was made before the vault was re-keyed; each stands
+// for the counts, since either is reason enough to export again whatever
+// was created since. Otherwise the counts.
+function behindRest(b: BackupStatus | null): string {
+  if (b?.keysReplaced) return vaultCopy.backupKeysReplaced;
+  if (b?.vaultRekeyed) return vaultCopy.backupBeforeRekey;
+  return vaultCopy.backupLacks(b?.missing ?? 0, b?.rekeyed ?? 0);
 }
 
 // The line as drawn: `tone` attention is a bar with the backup icon, plain
@@ -67,7 +80,7 @@ export function backupLine(b: BackupStatus | null, known: boolean, when: string)
     case "behind":
       line.tone = "attention";
       line.head = vaultCopy.backedUp(when);
-      line.rest = vaultCopy.backupLacks(b?.missing ?? 0, b?.rekeyed ?? 0);
+      line.rest = behindRest(b);
       break;
     case "current":
       line.tone = "plain";

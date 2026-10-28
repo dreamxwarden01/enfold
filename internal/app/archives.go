@@ -596,6 +596,18 @@ func (c *Core) envelopeAt(path string) (*format.Envelope, *Error) {
 //   - closing: inside CloseArchive, immediately before it takes the state
 //     mutex. A close held here is inside the core and cannot proceed, so
 //     what another caller sees meanwhile is not a matter of timing.
+//   - rekeyed: a re-keying act's commits have landed, before the next
+//     Session is installed (landChange).
+//   - committed: an act's change has landed, before its retirement
+//     (landChange): the moment between the two commits of FORMAT R41.
+//   - created: CreateArchive has made its archive file and not yet
+//     published its record, the state mutex released: the moment a
+//     re-keying act can land in.
+//   - failAt: asked with "commit", "retire" or "session" before the act's
+//     keystore write, before the retirement an act, the unlock or the
+//     barrier would make, or before the next Session's derivation after a
+//     landed commit; what it returns fails that step in place of the call,
+//     and nil lets the call run.
 //
 // Every field is nil in every build but a test's.
 type seams struct {
@@ -603,6 +615,18 @@ type seams struct {
 	redeciding func()
 	relocated  func()
 	closing    func()
+	rekeyed    func()
+	committed  func()
+	created    func()
+	failAt     func(point string) error
+}
+
+// fail is failAt's answer for point, nil when no test set the seam.
+func (s *seams) fail(point string) error {
+	if s.failAt == nil {
+		return nil
+	}
+	return s.failAt(point)
 }
 
 // opening is one archive.Open on its way: the file it is opening, and the

@@ -21,7 +21,7 @@
   import { middlePath, samePath } from "../lib/paths";
   import { firstRunCard, retiredAt } from "../lib/firstrun";
   import { wordedForToken } from "../lib/outcome";
-  import { NO_PHASE, derivingOf, discs, green, insertLed, lastTry, lineKind, padlockOpen as padlockOpenOf, phaseAfter, pinLeads, retriesTone, viewOf, wayOf } from "../lib/lockscreen";
+  import { NO_PHASE, derivingOf, discs, finishGreyed, green, insertLed, lastTry, lineKind, padlockOpen as padlockOpenOf, phaseAfter, pinLeads, retriesTone, viewOf, wayOf } from "../lib/lockscreen";
   import { HeldView } from "../lib/stage.svelte";
   import type { View, Way } from "../lib/lockscreen";
   import SecretInput from "./SecretInput.svelte";
@@ -45,6 +45,12 @@
   const broken = $derived(st?.state === VaultState.StateBroken);
   // A backup adopted but not set up: the one action is finishing setup.
   const setupNeeded = $derived(!!st?.setupNeeded && st?.state === VaultState.StateLocked);
+  // Where the vault's password is on (a removal of its only YubiKey can
+  // leave it so), the setup cannot write its first unlock method: Finish
+  // setting up… is greyed with why, before any ceremony, and the accent and
+  // the focus pass to Unlock with recovery key, after which the Vault page
+  // adds the YubiKey (ruled 2026-10-27).
+  const finishWhy = $derived(finishGreyed(st));
   // A vault whose everyday way in is a password: no YubiKey among its
   // unlock methods (keystore.ErrPolicy forbids the two side by side).
   const passwordOnly = $derived(!!st?.hasPasswordSlot && !st?.hasHardwareSlot);
@@ -706,8 +712,12 @@
           <div class="lead">
             <h2 class="t-title">{setupNeeded ? lockCopy.finishLead(vaultName) : busy ? lockCopy.busyLead(vaultName) : passwordOnly ? lockCopy.unlockVault(vaultName) : vaultName}</h2>
             <!-- The caption names the state the header names: a broken vault
-                 is not simply locked (ruled 2026-10-17). -->
-            <div class="cap">{setupNeeded ? lockCopy.setupLine : busy ? lockCopy.busyLine : broken ? brokenLine : restLine}</div>
+                 is not simply locked (ruled 2026-10-17). Where Finish setting
+                 up… is greyed, the caption says why, in the words of its
+                 title: the setup line would ask for the first unlock method
+                 the greyed button cannot add, and would name one recovery
+                 key where a removal always leaves two or more. -->
+            <div class="cap">{setupNeeded ? (finishWhy ?? lockCopy.setupLine) : busy ? lockCopy.busyLine : broken ? brokenLine : restLine}</div>
           </div>
           {#if st?.pendingTouch}<div class="infoline"><svg class="i i-14"><use href="#i-info" /></svg><span>{lockCopy.pendingTouch}</span></div>{/if}
           <!-- The status's own note: the five minutes from the touch ran
@@ -732,6 +742,11 @@
                  last try and the kept copy (APP.md §6, ruled 2026-10-17). -->
             <div class="infoline att"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("vault.broken")}</span></div>
             <button type="button" class="btn accent wide" onclick={() => void Vault.Reopen()} use:takeFocus>{lockCopy.reopen}</button>
+          {:else if setupNeeded && finishWhy}
+            <!-- A greyed control keeps the pointer for its reason (APP.md §6,
+                 Controls). -->
+            <button type="button" class="btn wide" disabled title={finishWhy}><svg class="i i-14"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
+            <button type="button" class="btn accent wide" onclick={() => begin("recovery")} use:takeFocus>{lockCopy.unlockWithRecovery}</button>
           {:else if setupNeeded}
             <button type="button" class="btn accent wide" onclick={openSetup} use:takeFocus><svg class="i i-14"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
             <button type="button" class="btn wide" onclick={() => begin("recovery")}>{lockCopy.unlockWithRecovery}</button>

@@ -341,14 +341,18 @@ R3, R38, §7.6) in the authenticated registry, one record per recovery slot, rem
 slot, re-encrypted by rotation. It adds no new principal — only a key derived from the VMK opens the
 record, and the session's cached keys cannot — but it makes a VMK exposure a recovery-key
 exposure, and one that rotation does not cure (§5 Revocation, trap 11). What it adds is a
-*second showing*, from the Keys page, after a ceremony that recovers the VMK through a YubiKey
+*second showing*, from the Vault page, after a ceremony that recovers the VMK through a YubiKey
 or a password — never through the recovery key itself (the ruling: a protector authorises the
 showing), and never through the session's cached keys, which do not include the VMK (the user's
 ruling, 2026-09-07: "the KWK cannot open it, so a protector must open the VMK to authorise a
 showing"). Every showing — the first one included — offers the same three ways out: the digits
 saved as a text file that the core writes (the page passes a place, never the digits), printed,
-or written down; the last two are confirmed a second time, since the page cannot tell a print
-from a cancelled one and the first click is a reflex.
+or written down; each counts at once, with no second confirmation (ruled 2026-09-09, superseding
+2026-09-07's: a user set on leaving is not stopped by one, the recovery key can be shown again
+from the Vault page, and at the moment it is first shown the vault holds nothing yet). A
+replacement of the recovery keys, whose new recovery keys cannot be shown again before its
+commit, asks once before that commit, listing each new recovery key beside the one it replaces
+(ruled 2026-10-27, `APP.md` §13).
 
 **X25519 here, not P-256.** An X25519 private key is any 32 bytes after clamping, so
 deterministic derivation from a seed is trivial. P-256 requires rejection sampling into
@@ -359,7 +363,9 @@ already carry a `slot_type` and an algorithm ID, so mixing curves across slot ty
 Result: **every slot type is asymmetric, and VMK rotation never requires any physical
 credential to be present** — nor, since Revision 2, the entangled password: its key is kept
 under the VMK (`FORMAT.md` §3.1, §18.1). Rotation can therefore be unconditional and invisible,
-which is the only way it will actually happen, and it is always complete (`FORMAT.md` §8).
+which is the only way it will actually happen, and it always re-wraps every way in at once
+(`FORMAT.md` §8), the vault file's own earlier state being retired by the commit after it
+(`FORMAT.md` R41).
 
 ### Revocation
 
@@ -376,9 +382,9 @@ thousand archives rotates in well under a second — and **no file data is re-en
 | Depth | Cost | What it actually revokes |
 | --- | --- | --- |
 | Delete the slot record only | ~1 KB | Essentially nothing |
-| **+ rotate the VMK** | ~60 B per archive | **All future access.** The removed credential now yields only the old VMK, which opens nothing in the current keystore |
+| **+ rotate the VMK** | ~60 B per archive | **What the removed credential reaches from now on.** It yields only the old VMK, which opens nothing in the current keystore — but an earlier copy it opened also gave up that day's recovery keys and `K_P`, which the rows below take back, and the keys of archives that existed then, which a VMK rotation never changes (`FORMAT.md` §8) |
 | + rotate archive keys | index rewrite per archive | Withdraws access to archives whose keys were released to a low-trust machine |
-| + replace every recovery slot | a new key to write down, per slot | What the escrow of `FORMAT.md` R38 exposed: a holder of the VMK — or of any copy of the keystore and one of its ways in — read every recovery key of that date, and those digits survive every rotation |
+| + replace every recovery slot | a new recovery key to keep, per slot; one act, *Replace recovery keys…*, which rotates in the same commit (`APP.md` §13) | What the escrow of `FORMAT.md` R38 exposed: a holder of the VMK — or of any copy of the keystore and one of its ways in — read every recovery key of that date, and those digits survive every rotation |
 | + change the entangled password | one password to memorise; every hardware slot re-wrapped offline, no token present | What `K_P` under the VMK exposes (`FORMAT.md` §18.1): a holder of any generation's VMK read `K_P`, can grind it back to the password, and keeps the second factor for every later generation, since rotation re-wraps `K_P` and never replaces it |
 
 **Rotation is offered on every slot removal and credential change, pre-selected.**
@@ -405,15 +411,50 @@ nobody can answer it. This can be answered:
 
 **Changing a standalone or entangled password needs its own wording**, since the question above
 does not fit it. Without rotation, "I changed my password because I think it leaked" accomplishes
-nothing: the old password plus an old keystore copy still opens archives added afterwards. Default
-to rotating on any password change.
+nothing: the old password plus an old keystore copy still opens archives added afterwards.
+Default to rotating on any password change.
+
+**The change and its rotation are one commit, and the file keeps no state before it** (ruled
+2026-10-27). The slot record goes, or the new password's `K_P` arrives, in the same superblock
+flip that installs the new VMK (`FORMAT.md` §8), so a crash, a failure or a lock leaves the old
+state whole or the new one, never a removal or a password change without the rotation it was
+asked for; and a second commit at once retires the slot region and the superblock copy that
+still name the state before (`FORMAT.md` R41), which the withdrawn credential would otherwise
+open inside the vault file itself — two such commits where a writer before that rule left a tail
+in the live slot region copy. Should that commit fail, the bytes themselves record that it is
+owed: no change that writes a slot, an archive record or a secret, and no backup, lands until it
+does, each trying to finish it first, while the vault stays readable and the files inside its
+archives can still change; the next unlock finishes it before the vault is used. That commit,
+and every commit after it, also zero-fills the registry ciphertext no superblock copy names any
+more, which the retiring VMK would otherwise still read (`FORMAT.md` R41). On screen the
+question names the method, "this YubiKey", "this recovery key" or "this password", since a
+YubiKey is never a bare "key" there, and the re-keying answer stands first. A password,
+standalone or entangled, is asked whether someone else may know it (`APP.md` §13). Turning the
+entangled password on is a credential change too: a copy of the vault file made before the
+switch keeps opening with a YubiKey alone, so the rotation is offered, pre-selected, asked as
+whether the file could have been copied. Turning it off offers none: the file then opens without
+the password anyway, so a rotation would revoke nothing. Replacing the recovery keys is an act
+of its own, never folded into a removal: it makes and shows the new recovery keys first, each
+kept as any recovery key is, asks once with each beside the one it replaces, and then, in one
+commit, adds them, removes every old one and rotates, so no new recovery key is ever kept under
+a VMK an exposed recovery key still opens; the removal and the password change point to it in
+one chain, the password first, saying when it is needed. Where no YubiKey can prove a slot
+change — the vault's only YubiKey is the one removed, or the user says at the enrolment that it
+is lost — a recovery key may (ruled 2026-10-27). It still never authorises a showing of an
+escrowed recovery key, though a YubiKey enrolled with it can: so the replacement also asks the
+user to remove any unlock method they did not add.
 
 No rotation is deferred since Revision 2: every way in is re-wrapped from stored public keys
-and the kept `K_P`, so a rotation that commits is complete (`FORMAT.md` §8).
+and the kept `K_P`, so a rotation that commits re-wraps every way in at once (`FORMAT.md` §8);
+what the file still holds of the state before is retired next (`FORMAT.md` R41).
 
-**This does not depend on TRIM or secure erasure.** After rotation, a slot record recovered
-from unallocated SSD blocks decrypts to the *old* VMK, which is useless against the current
-keystore. Wear levelling and TRIM only become relevant at the third tier.
+**This does not depend on TRIM or secure erasure, once the table's last rows are done.** After
+rotation, a slot record recovered from unallocated SSD blocks decrypts to the *old* VMK, which
+opens nothing in the current keystore by itself; an old registry recovered beside it is an
+earlier copy like any other, whose recovery keys and `K_P` the table's last two rows take back.
+Within the vault file the writer leaves neither (`FORMAT.md` R41); on the medium beneath it the
+old bytes may stay, which is why those rows matter. Wear levelling and TRIM only become relevant
+at the third tier.
 
 **What no design can revoke:** data the adversary could already decrypt at the moment they
 took their copy. They had the plaintext available then; nothing done afterwards un-discloses
@@ -588,9 +629,10 @@ Destroying the VMK while keeping the KWK is not cosmetic. An attacker who dumps 
 only the KWK gets a one-time snapshot of the contents. An attacker who gets the VMK can **add
 their own YubiKey as a legitimate slot** and retain silent, permanent access — and, since
 `FORMAT.md` R38, read every recovery key, which no rotation revokes: a suspected VMK exposure is
-answered by replacing every recovery slot, then rotating (§5). Least privilege applies to key
-caching, and the reveal ceremony is the one place besides a slot change where the VMK is
-recovered at all.
+answered by replacing every recovery slot with a rotation in the same commit (*Replace recovery
+keys…*) and by changing the entangled password with a rotation of its own (§5). Least privilege
+applies to key caching, and the reveal ceremony is the one place besides a slot change where the
+VMK is recovered at all.
 
 ### Timeouts
 
@@ -757,9 +799,10 @@ Correct in this document, and easy to lose during implementation.
     of the slot record still reaches the unchanged VMK and therefore every archive key, including
     those of archives created afterwards — and with write access they can splice the old slot
     region back outright, and such copies are likely to exist. Rotation is pre-selected on every
-    removal and every password change, and since Revision 2 none is deferred (§5, Revocation).
-    Since `FORMAT.md` R38 a VMK that leaked read every recovery key too, and rotation does not
-    revoke those: replacing every recovery slot does.
+    removal, every password change and turning the password on, and since Revision 2 none is
+    deferred (§5, Revocation). Since `FORMAT.md` R38 a VMK that leaked read every recovery key
+    too, and rotation does not revoke those: replacing every recovery slot does — one act that
+    rotates in the same commit (`APP.md` §13).
 12. **The keystore must never go to public cloud storage**, and the storage layer should be
     BitLocker-encrypted. This is the only mitigation for the post-quantum exposure in §2, and
     BitLocker is volume-level — it does nothing for a file uploaded off that volume
@@ -999,8 +1042,12 @@ Correct in this document, and easy to lose during implementation.
     there may be another archive, or a copy someone made. A delete opens the file, reads the
     envelope's `archive_id`, and removes only a match; anything else leaves the file and says so.
 29. **A pre-rotation copy of the vault re-opens the slot you just removed.** Rotation exists to
-    revoke; a "keep the old file" safety net keeps the revoked way in alive. The safety net is a
-    backup — recovery slot only — taken before, which the rotate dialog asks for (APP.md §13).
+    revoke; a "keep the old file" safety net keeps the revoked way in alive, and so does the
+    file's own losing superblock copy and slot region copy until they are retired (`FORMAT.md`
+    R41). The safety net is a backup — recovery slots only — which every dialog that rotates
+    offers to take right after the rotation, at the new VMK (APP.md §13): one taken before is at
+    the VMK being retired, and adopting it would bring the retired VMK back (ruled
+    2026-10-27; until then the backup was taken before).
 30. **A secret kept under the VMK exposes nothing the VMK does not — except the one that is a
     function of a human secret.** The retired VMKs and the escrowed recovery keys are reachable
     only through a VMK of this vault, and none opens more than that VMK opened in its day.

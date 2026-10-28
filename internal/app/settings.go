@@ -11,10 +11,17 @@ import (
 
 // lastExport is when this machine last wrote a backup, and of which vault
 // (APP.md §13). It is local and unauthenticated: it words a confirmation
-// and pre-selects a checkbox, and gates nothing.
+// and pre-selects a checkbox, and gates nothing. Gen is the VMK generation
+// the backup was made at and Recovery the hex recipient IDs of the recovery
+// slots it holds, so that the backups card can say when the vault was
+// re-keyed or its recovery keys replaced since (ruled 2026-10-27). Neither is
+// secret: both are plaintext in the vault file. A stamp written before they
+// existed carries neither and makes no claim about either.
 type lastExport struct {
-	VaultID string `json:"vaultId"`
-	At      int64  `json:"at"`
+	VaultID  string   `json:"vaultId"`
+	At       int64    `json:"at"`
+	Gen      uint64   `json:"gen,omitempty"`
+	Recovery []string `json:"recovery,omitempty"`
 }
 
 // settingsFile is the machine-local part of Settings: nothing secret and

@@ -39,10 +39,15 @@ consequences worth stating up front:
   the recommended one)
 - Recovery key: 48 digits, BitLocker encoding with its checksum; kept once more under the VMK
   (`FORMAT.md` R38) so it can be shown again after a YubiKey or password unlock; every showing
-  offers save as a text file, print, or written down with a second confirmation (ruling
-  2026-09-07)
+  offers save as a text file, print, or written down, each counting at once with no second
+  confirmation (ruled 2026-09-09, superseding 2026-09-07's; held for every showing on
+  2026-10-27, a replacement of the recovery keys included, which asks once, before its commit,
+  with each new recovery key beside the one it replaces)
 - The slot invariant enforced as a predicate on every mutation
-- VMK rotation, pre-selected on removals and password changes
+- VMK rotation, pre-selected on removals, password changes and turning the password on, in one
+  commit with the change, the vault file's earlier state retired after it (`FORMAT.md` §8, R41)
+- Replacing every recovery key in one act, which re-keys the vault in the same commit, each new
+  recovery key shown and kept before it (ruled 2026-10-27; `FORMAT.md` R38)
 - Manual keystore export: registry + recovery slot only
 - **One vault per Windows user**, at `%LOCALAPPDATA%\Enfold\vault.eks`; a vault or a backup from
   elsewhere is *imported* — copied in and proved with one of its own ways in before the file it
@@ -79,12 +84,13 @@ consequences worth stating up front:
   which is the whole defence: the pinned Wails offers no way to turn the WebView2 cache off, so
   the profile lives in a folder the app owns, swept at startup and deleted best-effort at exit,
   and the browser engine is never handed decrypted content it may keep (`DESIGN.md` trap #13)
-- The retained VMK, KWK and K_P allocations live in pages the process allocates outside the Go
-  heap, `VirtualLock`ed and erased explicitly; every other secret buffer the application owns is
-  zeroed best-effort when it is done with; automatic Windows Error Reporting is off for the
-  process. Not `memguard` (ruled 2026-09-13 on an outside feasibility pass: in a Go program
-  every secret crosses into crypto/aes, HKDF, Argon2 and ML-KEM as a plain slice the library
-  copies, so an enclave protects nothing past that first call, and its guard pages, canaries
+- The retained VMK, KWK and K_P allocations, and a replacement's new recovery keys until the
+  replacement ends, live in pages the process allocates outside the Go heap, `VirtualLock`ed and
+  erased explicitly; every other secret buffer the application owns is zeroed best-effort when
+  it is done with; automatic Windows Error Reporting is off for the process. Not `memguard`
+  (ruled 2026-09-13 on an outside feasibility pass: in a Go program every secret crosses into
+  crypto/aes, HKDF, Argon2 and ML-KEM as a plain slice the library copies, so an enclave
+  protects nothing past that first call, and its guard pages, canaries
   and lifecycle machinery buy no more than the wrapper does against the threat that is in
   scope — the pagefile and a later read of the disk). Library copies, the renderer's strings,
   hibernation and dumps someone configured elsewhere stay outside it, and the document says so

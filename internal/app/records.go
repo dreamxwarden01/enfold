@@ -152,12 +152,19 @@ func (c *Core) ArchiveDetails(id string) (ArchiveDetails, *Error) {
 // forgotten, and nothing for every other case, so the caller's own answers —
 // not open, not found, locked — are unchanged (APP.md §13).
 func (c *Core) refuseIfForgotten(id string) *Error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refuseIfForgottenLocked(id)
+}
+
+// refuseIfForgottenLocked is refuseIfForgotten under a hold of the state
+// mutex the caller already has: RotateKey's, which met the barrier in it
+// first. Caller holds the state mutex.
+func (c *Core) refuseIfForgottenLocked(id string) *Error {
 	aid, ok := parseID(id)
 	if !ok {
 		return nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	sess, e := c.sessionLocked()
 	if e != nil {
 		return nil
@@ -190,10 +197,23 @@ func (c *Core) busyForRecordLocked(aid [16]byte) *Error {
 // forgotten_at becomes the write's own modified_at, never the raw clock, and
 // a second Forget does not move it — the retention clock never restarts. The
 // keys stay until the purge at an unlock more than thirty days later.
+// Forgetting a record waits behind an owed retirement (FORMAT R41, ruled
+// 2026-10-27): the barrier is met before the archive is closed, so that a
+// refused Forget neither closes it nor cancels its operation, and again at
+// the write.
 func (c *Core) ForgetArchive(id string) *Error {
 	aid, ok := parseID(id)
 	if !ok {
 		return coded(CodeParams)
+	}
+	c.mu.Lock()
+	e := c.retireBarrierLocked()
+	c.mu.Unlock()
+	if e != nil {
+		if e.Code == CodeIndeterminate || e.Code == CodeConflict {
+			c.emitState() // the barrier entered Broken
+		}
+		return e
 	}
 	// The archive is closed first, a running operation cancelled with it
 	// (APP.md §13): there are no unsaved changes to ask about.
@@ -203,7 +223,7 @@ func (c *Core) ForgetArchive(id string) *Error {
 		c.mu.Unlock()
 		return e
 	}
-	e := c.updateRegistryAtLocked(false, func(g *registry, modifiedAt int64) error {
+	e = c.publishRegistryAtLocked(false, func(g *registry, modifiedAt int64) error {
 		a := findRecord(g, aid)
 		if a == nil {
 			return coded(CodeArchiveNotFound)
@@ -228,12 +248,14 @@ func (c *Core) ForgetArchive(id string) *Error {
 }
 
 // RestoreArchive clears forgotten_at: the record is an ordinary one again.
+// Moving a record between forgotten and current waits behind an owed
+// retirement (FORMAT R41), as forgetting it does.
 func (c *Core) RestoreArchive(id string) *Error {
 	aid, ok := parseID(id)
 	if !ok {
 		return coded(CodeParams)
 	}
-	e := c.updateRegistryAt(true, func(g *registry, _ int64) error {
+	e := c.publishRegistryAt(true, func(g *registry, _ int64) error {
 		a := findRecord(g, aid)
 		if a == nil {
 			return coded(CodeArchiveNotFound)
@@ -262,6 +284,15 @@ func (c *Core) updateRegistryAt(allowForgotten bool, fn func(g *registry, modifi
 	return c.updateRegistryAtLocked(allowForgotten, fn)
 }
 
+// publishRegistryAt is updateRegistryAt for a write the barrier holds (a
+// record added, removed or moved between current and forgotten, or a secret
+// written): the barrier and the write under one hold of the state mutex.
+func (c *Core) publishRegistryAt(allowForgotten bool, fn func(g *registry, modifiedAt int64) error) *Error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.publishRegistryAtLocked(allowForgotten, fn)
+}
+
 // The four outcomes of a delete (APP.md §13, DESIGN.md trap 28), as errors
 // the build-tagged seam returns and this file maps to codes. Only a proven
 // match and a proven mismatch ever touch the record.
@@ -283,7 +314,11 @@ var deleteArchiveFile = deleteArchiveFileIfMatches
 // last_path is opened once and removed through that same handle, never by the
 // name a second time: absence is decided on the parent folder, the archive_id
 // is read from the handle that will do the removal, and the record is
-// forgotten only after the file is gone.
+// forgotten only after the file is gone. Deleting a record waits behind an
+// owed retirement (FORMAT R41): the barrier is met under the same hold of
+// the state mutex as the claim on the record, before the file is removed,
+// and again at the write. While the claim stands no slot change begins
+// (beginAs), so that no change and failed retirement land between the two.
 func (c *Core) DeleteArchive(id string, alsoFile bool) *Error {
 	if !alsoFile {
 		return c.ForgetArchive(id)
@@ -301,6 +336,13 @@ func (c *Core) DeleteArchive(id string, alsoFile bool) *Error {
 	c.mu.Lock()
 	if e := c.busyForRecordLocked(aid); e != nil {
 		c.mu.Unlock()
+		return e
+	}
+	if e := c.retireBarrierLocked(); e != nil {
+		c.mu.Unlock()
+		if e.Code == CodeIndeterminate || e.Code == CodeConflict {
+			c.emitState() // the barrier entered Broken
+		}
 		return e
 	}
 	sess, e := c.sessionLocked()
@@ -363,8 +405,11 @@ func (c *Core) DeleteArchive(id string, alsoFile bool) *Error {
 	}
 	// The file is gone; only now is the record forgotten. An already
 	// forgotten record keeps the forgotten_at it has: the retention clock
-	// never restarts.
-	e = c.updateRegistryAt(true, func(g *registry, modifiedAt int64) error {
+	// never restarts. The barrier is met again here: a registry write it does
+	// not hold can have failed after writing meanwhile. Should it refuse, the
+	// record stays current with its file missing, read as a lost file's is,
+	// and Forget finishes it once the retirement lands.
+	e = c.publishRegistryAt(true, func(g *registry, modifiedAt int64) error {
 		rec := findRecord(g, aid)
 		if rec == nil {
 			return errNoChange // purged while the file was being removed

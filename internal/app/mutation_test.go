@@ -494,7 +494,7 @@ func TestRemovableFalseForTheLastRecoverySlotWhileEntangled(t *testing.T) {
 	check("entangled, unlocked", false)
 
 	h.rec.reset()
-	if e := h.c.SetEntangled(false); e != nil {
+	if e := h.c.SetEntangled(false, false, ""); e != nil {
 		t.Fatal(e)
 	}
 	h.answerTokenUnlock("123456")

@@ -4,7 +4,8 @@
 // the ceremony's event, what the stage shows — so that the decisions can
 // be tested apart from the component. The steps themselves are the
 // core's (APP.md §2.2); this only says where each one is drawn.
-import { CeremonyStep } from "./api";
+import { CeremonyStep, Code } from "./api";
+import { codeText } from "./strings";
 
 // Way is the ceremony's way in, as far as the page knows it.
 export type Way = "token" | "password" | "recovery" | "";
@@ -47,10 +48,13 @@ export function wayOf(method: string, begun: Way, c: { kind: string; step: Cerem
 //   blocked   the PIN is blocked (the core parks there until a cancel)
 //   swap      an enrolment's swap in a dialog: the YubiKey that proved it
 //             is you to come out before the new one goes in (dialogViewOf)
+//   confirm   a replacement's one confirmation before its commit: each new
+//             recovery key beside the one it replaces (StepConfirm)
 //   wait      any other step that asks nothing here (records, a swap, a
-//             recovery key being shown)
+//             recovery key being shown, a replacement's new key, which the
+//             recovery key's dialog shows in keep mode)
 //   hold      nothing new to draw: keep what is on the panel
-export type View = "firstrun" | "rest" | "insert" | "edge" | "secret" | "recovery" | "touch" | "opening" | "done" | "failed" | "blocked" | "swap" | "wait" | "hold";
+export type View = "firstrun" | "rest" | "insert" | "edge" | "secret" | "recovery" | "touch" | "opening" | "done" | "failed" | "blocked" | "swap" | "confirm" | "wait" | "hold";
 
 export interface StageFacts {
   // running: a ceremony is on the screen, the settle after the unlock
@@ -113,6 +117,14 @@ export function viewOf(f: StageFacts): View {
       return "secret";
     case CeremonyStep.StepRecovery:
       return c.promptId ? "recovery" : "wait";
+    // A replacement asks its one confirmation in the act's own dialog
+    // (APP.md §13, ruled 2026-10-27, R-B); its new keys are shown by the
+    // recovery key's dialog in keep mode, which the Vault page mounts in
+    // this dialog's place, so the panel has nothing to draw for them.
+    case CeremonyStep.StepConfirm:
+      return c.promptId ? "confirm" : "wait";
+    case CeremonyStep.StepKeepKey:
+      return "wait";
     case CeremonyStep.StepTouch:
       return "touch";
     // The green holds through whatever follows a touch in the same
@@ -425,17 +437,22 @@ export function typedProofLeads(f: { way: Way; shows: string; choose?: boolean; 
 }
 
 // FootButton is one of a dialog ceremony's foot-band buttons, in their
-// order: the act first, the way out after it.
-export type FootButton = "continue" | "again" | "cancel" | "close";
+// order: the act first, the way out after it. "recovery" is Use recovery
+// key, the act at an enrolment's No match where the switch is offered.
+export type FootButton = "continue" | "again" | "recovery" | "cancel" | "close";
 
 // dialogFoot: what a dialog ceremony's foot band holds (APP.md §6,
 // Controls; ruled 2026-10-17). Continue beside Cancel at a prompt; Cancel
 // alone while nothing is asked. Over, a failure the user did not choose —
 // the YubiKey stopped waiting, a refusal — offers Start again beside
 // Cancel, as the lock screen's failure does, where the page can begin the
-// act again; anything else over has Close alone.
-export function dialogFoot(f: { over: boolean; view: View; asks: boolean; again: boolean }): FootButton[] {
+// act again; anything else over has Close alone. At No match, where the
+// recovery-key switch is offered (recovery, offersRecoverySwitch), the
+// lock screen's own row: Use recovery key, then Cancel (ruled 2026-10-27,
+// the one exception to a dialog's No match holding Cancel alone).
+export function dialogFoot(f: { over: boolean; view: View; asks: boolean; again: boolean; recovery?: boolean; step?: CeremonyStep }): FootButton[] {
   if (f.over) return f.view === "failed" && f.again ? ["again", "cancel"] : ["close"];
+  if (f.recovery && f.view === "edge" && f.step === CeremonyStep.StepNoMatch) return ["recovery", "cancel"];
   return f.asks ? ["continue", "cancel"] : ["cancel"];
 }
 
@@ -445,6 +462,9 @@ export interface DialogFacts {
   // passed, afterTouch: as StageFacts' (passedAfter).
   passed?: boolean;
   afterTouch?: boolean;
+  // endsWithMore: the end carries more than its title (endsWithMore below),
+  // so it is drawn on the neutral done view whatever came before it.
+  endsWithMore?: boolean;
 }
 
 // dialogViewOf is the view a dialog's panel asks for: the lock screen's
@@ -458,11 +478,78 @@ export interface DialogFacts {
 // neutral panel otherwise: after a typed proof, or after a prompt that
 // came between the proof's touch and the end (a new password chosen, a
 // recovery key shown), where the green would arrive only to leave.
+//
+// An end with more to say than its title (endsWithMore) is drawn on the
+// neutral done view even after a touch: the touch's view holds its rings
+// and a hero title, so a bar and a receipt would pass the panel's height,
+// and an attention bar on the touch's green would read as success and
+// failure at once (ruled 2026-10-27).
 export function dialogViewOf(f: DialogFacts): View {
   const c = f.c;
   const v = viewOf({ running: true, firstRun: false, way: f.way, c, passed: f.passed, afterTouch: f.afterTouch });
   if (!c) return v;
   if (v === "wait" && c.step === CeremonyStep.StepSwapKey && c.removeLabel) return "swap";
+  if (c.step === CeremonyStep.StepDone && f.endsWithMore && (v === "touch" || v === "done")) return "done";
   if (v === "touch" && c.step !== CeremonyStep.StepTouch && !f.afterTouch) return c.step === CeremonyStep.StepDone ? "done" : "opening";
   return v;
+}
+
+// endsWithMore: a dialog's end carries more than its title — a retirement
+// that did not land, a backup not saved, a replacement's receipt, the next
+// step's button (follow) or the line after an enrolment proved with the
+// switch (nextLine) — and so stands on the neutral done view.
+export function endsWithMore(
+  c: { kind: string; step: CeremonyStep | string; retireError?: string; backupError?: string; newIds?: readonly string[] | null },
+  o: { follow?: boolean; nextLine?: boolean } = {},
+): boolean {
+  if (c.step !== CeremonyStep.StepDone) return false;
+  return !!c.retireError || !!c.backupError || (c.kind === "replace" && !!c.newIds?.length) || !!o.follow || !!o.nextLine;
+}
+
+// provesFirst: the acts that prove it is you with an unlock method the
+// vault already has, so that their wait names the vault's YubiKeys (APP.md
+// §13).
+const PROVES_FIRST = new Set(["enroll", "remove", "rotate", "export", "reveal", "entangle", "password", "records", "replace"]);
+export function provesFirst(kind: string): boolean {
+  return PROVES_FIRST.has(kind);
+}
+
+// choosesVaultPassword: the acts whose chosen password is the vault's,
+// asked of every YubiKey: turning it on, and changing it.
+export function choosesVaultPassword(kind: string): boolean {
+  return kind === "entangle" || kind === "password";
+}
+
+// nothingChanged: a failure of these acts changed nothing — a failure
+// before the change landed leaves the file as it was, and no backup is
+// written before the change — unless the save could not be confirmed or
+// another writer changed the file, which Broken says in its own words.
+const CHANGES = new Set(["remove", "password", "entangle", "rotate", "replace"]);
+export function nothingChanged(c: { kind: string; error?: string }): boolean {
+  return CHANGES.has(c.kind) && c.error !== Code.CodeIndeterminate && c.error !== Code.CodeConflict;
+}
+
+// offersRecoverySwitch: Use recovery key instead is offered at an
+// enrolment's wait for a YubiKey of the vault, and Use recovery key at its
+// No match (ruled 2026-10-27): an enrolment of a YubiKey or a recovery key,
+// begun without the switch, in its first half (the proof), on a vault
+// whose unlock methods hold a YubiKey and a recovery key. Never for another
+// act, whose dialog holds Cancel alone at No match (APP.md §6).
+export function offersRecoverySwitch(
+  c: { kind: string },
+  a: { act: string; type?: string; withRecoveryKey?: boolean } | null | undefined,
+  slots: readonly { type: string }[],
+  second: boolean,
+): boolean {
+  if (c.kind !== "enroll" || !a || a.act !== "enroll" || a.withRecoveryKey || second) return false;
+  if (a.type !== "token" && a.type !== "recovery") return false;
+  return slots.some((s) => s.type === "hardware") && slots.some((s) => s.type === "recovery");
+}
+
+// finishGreyed: the lock screen's Finish setting up… on a vault whose
+// password is on, whose first unlock method the setup cannot write (ruled
+// 2026-10-27): greyed with this reason as its title, and the accent passes
+// to Unlock with recovery key. Both facts are known while Locked.
+export function finishGreyed(st: { setupNeeded: boolean; entangled: boolean } | null | undefined): string | undefined {
+  return st?.setupNeeded && st.entangled ? codeText(Code.CodeSetupPasswordOn) : undefined;
 }

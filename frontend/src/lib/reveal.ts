@@ -11,7 +11,14 @@
 // groups drawn at random, each ticked when its six digits match, and
 // *I have written it down* stays pressable whatever it says — so nothing
 // is asked twice.
-import { revealCopy } from "./strings";
+//
+// Keep mode is the same dialog for a new key Replace recovery keys… shows
+// before it is the vault's (APP.md §13, ruled 2026-10-27, R-B): the ways
+// count at once there too, with no second confirmation, since the act's
+// own confirmation before its commit pairs every new key with the one it
+// replaces. Its band goes on to the next key rather than closing, and
+// Cancel is its one way out, which cancels the replacement.
+import { dialogCopy, footCopy, revealCopy } from "./strings";
 
 export interface Kept {
   // where the core wrote the text file, empty until it has
@@ -53,6 +60,56 @@ export function ways(k: Kept): BandButton[] {
 // is taken, the band's after.
 export function band(k: Kept): BandButton {
   return keptSomehow(k) ? { act: "done", label: revealCopy.done, accent: true } : { act: "wrote", label: revealCopy.wroteDown, accent: false };
+}
+
+// ---- Keep mode ------------------------------------------------------------
+
+export type KeepAct = Act | "next" | "stay" | "cancel";
+
+export interface KeepButton {
+  act: KeepAct;
+  label: string;
+  accent: boolean;
+  // Stay unlocked is a subtle button, as the status bar's is.
+  subtle?: boolean;
+}
+
+// keepBand is keep mode's foot, in the band's order: the act, any other way
+// on, the way out. Before any way is taken, I have written it down
+// (standard) and Cancel; once one is, Next recovery key (the accent), or
+// Continue for the last, and Cancel. Each way counts at once, I have
+// written it down included. A key that could not be shown (its one-time
+// link failed, or the handle is no longer held) leaves Cancel alone: any
+// other button would answer that a key the user never saw was kept, and a
+// key never kept must never become the vault's. Stay unlocked stands in the
+// idle deadline's last minute (lib/foot.ts staysUnlocked), since the dialog
+// stands over the status bar that offers it, and keeping a key by hand is
+// minutes without input.
+export function keepBand(k: Kept, o: { last: boolean; gone: boolean; stay: boolean }): KeepButton[] {
+  const cancel: KeepButton = { act: "cancel", label: dialogCopy.cancel, accent: false };
+  if (o.gone) return [cancel];
+  const act: KeepButton = keptSomehow(k)
+    ? { act: "next", label: o.last ? revealCopy.continue : revealCopy.next, accent: true }
+    : { act: "wrote", label: revealCopy.wroteDown, accent: false };
+  return o.stay ? [act, { act: "stay", label: footCopy.stayUnlocked, accent: false, subtle: true }, cancel] : [act, cancel];
+}
+
+// keepTitle is keep mode's title: which of the new keys this is, and one
+// key in the singular.
+export function keepTitle(index: number, count: number): string {
+  return revealCopy.titleKeep(index, count);
+}
+
+// digitsLine is the caption under the digits: a key shown before the
+// replacement's confirmation says nothing changes until then, in the
+// singular when the replacement makes one key (keepCount, which keep mode
+// must pass); a recovery key added with Use recovery key instead says when
+// it can be shown again, there being no YubiKey or password at hand to
+// prove with; any other promises the Vault page's showing.
+export function digitsLine(n: number, mode?: "later" | ""): string;
+export function digitsLine(n: number, mode: "keep", keepCount: number): string;
+export function digitsLine(n: number, mode: "keep" | "later" | "" = "", keepCount = 0): string {
+  return mode === "keep" ? revealCopy.keepDigitsLine(n, keepCount) : mode === "later" ? revealCopy.digitsLineLater(n) : revealCopy.digitsLine(n);
 }
 
 // The key is eight groups of six digits (FORMAT.md §18.4).

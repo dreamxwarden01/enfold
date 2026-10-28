@@ -402,6 +402,14 @@ p .btn.link:hover:not(:disabled), p .btn.link:active:not(:disabled) { background
 details.how > summary { width: fit-content; font: var(--t-body); color: var(--accent-ink); cursor: pointer; border-radius: var(--r-ctl); transition: color var(--dur-out) var(--ease-enter); }
 details.how > summary:hover { color: var(--accent-ink-hover); transition-duration: var(--dur-hover); }
 details.how > p { margin: var(--s2) 0 0; color: var(--ink-2); }
+/* An info line in a dialog's body: a sentence in the second ink with the
+   info icon and no box, since it says and does not gate (the extract
+   dialog's, ruled 2026-10-18). One rule here for the dialogs that re-key
+   (ruled 2026-10-27): the limit of a re-key under the question, and when
+   Replace recovery keys… is needed. The icon stands on the first 20 px
+   line, as a bar's does (.bar .i.i-14). */
+.dialog-body > .infoline { display: flex; align-items: flex-start; gap: var(--s2); color: var(--ink-2); }
+.dialog-body > .infoline .i { flex: none; margin-top: 3px; }
 .btn.wide { width: 100%; justify-content: center; }
 /* A button that grows to share a row centres its label, as a wide one
    does (APP.md §6, Controls): Continue, Unlock, Start again. */

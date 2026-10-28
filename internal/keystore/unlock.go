@@ -373,6 +373,22 @@ func (s *Session) UpdateRegistryAt(fn func(g *format.Registry, modifiedAt int64)
 	return updateRegistryAt(s.k, s.meta, fn)
 }
 
+// Retire is Unlocked.Retire made through a Session, which holds the Metadata
+// key and the generation: the application uses it to finish an owed
+// retirement before a mutation that writes a record or a secret, or a backup
+// (R41). Its tampered verdict, which decides whether nothing is copied
+// forward, is R25's over the live region, the check an Unlocked made at
+// unlock and keeps.
+func (s *Session) Retire() error {
+	if err := s.live(); err != nil {
+		return err
+	}
+	if !s.k.RetireOwed() {
+		return nil
+	}
+	return s.k.retire(s.meta, s.gen, s.k.reg.VerifySlotRegion(s.k.region) != nil)
+}
+
 // updateRegistry is the one path a registry change takes: clone the
 // Keystore's registry, let fn edit the clone, validate, commit. The commit
 // installs the clone as the Keystore's registry.

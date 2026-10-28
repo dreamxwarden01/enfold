@@ -1412,7 +1412,7 @@
   // archive the list marks missing, with its cure.
   const figures = $derived(unlocked ? vaultFigures(every ?? store.archives) : null);
   const backupAt = $derived(store.backup?.at ?? store.lastExportAt);
-  const backupOwed = $derived(backupLine(store.backup ?? (backupAt ? { at: backupAt, archives: 0, missing: 0, rekeyed: 0 } : null), unlocked && !tampered && !!store.backup, "").suggestExport);
+  const backupOwed = $derived(backupLine(store.backup ?? (backupAt ? { at: backupAt, archives: 0, missing: 0, rekeyed: 0, vaultRekeyed: false, keysReplaced: false } : null), unlocked && !tampered && !!store.backup, "").suggestExport);
   // The missing rows are the vault's, not the filter's: read from the
   // whole registry as the list view shows it (hidden ones with Show
   // hidden), whatever the filter box holds.

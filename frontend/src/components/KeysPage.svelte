@@ -6,12 +6,22 @@
   // here, and every backup action is here, the two that need a lock among
   // them: they lock and hand the lock screen its ask. Nothing on the page
   // is saved by a bar: a choice applies when it is made (SaveBar's one job).
+  //
+  // The acts that may re-key the vault (ruled 2026-10-27) ask the fact first
+  // and offer the backup taken after the change (RekeyQuestion,
+  // BackupChoice); their ends carry the next step a compromise calls for,
+  // one chain of acts begun from one another's ends (lib/rekey.ts, the
+  // store's lastAct and chain). Replace recovery keys… is a vault-wide act,
+  // so it stands in the section's head; its new keys are shown here, in the
+  // recovery key's dialog in keep mode, while its ceremony waits for each.
   import { Archives, CeremonyStep, Keys, Shell, Vault, errorOf } from "../lib/api";
-  import type { ArchiveSummary, FileInfo, SlotView } from "../lib/api";
+  import type { AfterFacts, ArchiveSummary, CeremonyState, FileInfo, SlotView } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { chipCopy, codeText, commandCopy, dialogCopy, importCopy, lockCopy, pendingCopy, sinceText, vaultCopy } from "../lib/strings";
+  import { ceremonyCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, lockCopy, noticeCopy, pendingCopy, replaceCopy, revealCopy, sinceText, vaultCopy } from "../lib/strings";
   import { backupLine } from "../lib/backup";
   import { backupLine as backupDone, checkedLine } from "../lib/foot";
+  import type { Answer, FollowUp } from "../lib/rekey";
+  import { backupSavedOnClose, ceremonyTitleOf, lastProtector, primaryOf, questionOf, rekeyLimitOf, removeRule, replaceGreyed, replaceMinutes } from "../lib/rekey";
   import { date, dateTime, leaf, minutesLabel } from "../lib/format";
   import { pending } from "../lib/pending";
   import { fieldMenu } from "../lib/fieldmenu";
@@ -19,6 +29,10 @@
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
   import EntangledDialog from "./EntangledDialog.svelte";
+  import RekeyQuestion from "./RekeyQuestion.svelte";
+  import BackupChoice from "./BackupChoice.svelte";
+  import ReplaceDialog from "./ReplaceDialog.svelte";
+  import RecoveryReveal from "./RecoveryReveal.svelte";
   import PendingLabel from "./PendingLabel.svelte";
   import RenameVaultDialog from "./RenameVaultDialog.svelte";
   import TamperedBar from "./TamperedBar.svelte";
@@ -45,10 +59,16 @@
   let removing = $state<SlotView | null>(null);
   let rotating = $state(false);
   let renaming = $state(false);
+  let replacing = $state(false);
   let backup = $state<FileInfo | null>(null);
+  // Whether the dialog now open was opened by an end's next step, its
+  // button, so that the act it begins goes on in that end's chain
+  // (lib/rekey.ts chainFor); every other opening is the page's own, and
+  // begins a chain of its own when the act re-keys.
+  let fromFollow = $state(false);
 
   // The vault's entangled password (APP.md §13): one switch for the whole
-  // vault, on / change / off, and the old password is never asked for.
+  // vault, on / change / off, and no field asks for the old password.
   const ent = $derived(store.entangled);
   let entangling = $state<"" | "on" | "change" | "off">("");
   // Why the switch is greyed: turning it on where every active slot is a
@@ -61,8 +81,15 @@
   // (direction 9).
   const greyed = $derived(!unlocked ? codeText("vault.needs_unlock") : tampered ? vaultCopy.changesOff : undefined);
 
+  // A refusal of this page's own press is an error InfoBar in the notice
+  // slot, at the top of the column; the press may have been made far below
+  // it — the backups card, which a short window reaches only by scrolling,
+  // where the barrier refuses *Export backup…* while a retirement is owed —
+  // so the slot is brought into view with it (NoticeSlot reveal).
+  let slot = $state<ReturnType<typeof NoticeSlot>>();
   function fail(e: unknown) {
     store.notice(codeText(errorOf(e).code), "error");
+    slot?.reveal();
   }
 
   // Every ceremony this page starts can change the unlock methods or the
@@ -72,19 +99,41 @@
   // (CeremonyPanel onagain; ruled 2026-10-17). Begun again, the failed
   // ceremony is left on the panel until the new one's first event takes
   // its place, so the dialog stays open and does not close and reopen.
+  // Begun again, an act records no new start: it keeps the chain its first
+  // begin recorded (store.noteAct). Whether the act could be begun is the
+  // answer, for the recovery-key switch below.
   let again = $state<(() => Promise<unknown>) | null>(null);
 
-  async function begin(run: () => Promise<unknown>, keep = false) {
+  async function begin(run: () => Promise<unknown>, keep = false): Promise<boolean> {
     again = () => begin(run, true);
-    if (!keep) store.dismissCeremony();
+    if (!keep) {
+      store.dismissCeremony();
+      heldFollow = null;
+    }
+    let ok = true;
     try {
       await run();
     } catch (e) {
+      ok = false;
       fail(e);
     }
     await store.refreshSlots();
     await store.refreshEntangled();
+    return ok;
   }
+
+  // An act that may take a backup after its change (APP.md §13; ruled
+  // 2026-10-27): the file is kept for the status bar's done line when the
+  // dialog closes on a Done that wrote it (CeremonyState.backedUp). Start
+  // again repeats the act with the same file: an act that failed changed
+  // nothing and wrote nothing.
+  function beginWith(run: (backup: string) => Promise<unknown>, backup: string): Promise<boolean> {
+    backupTo = backup;
+    return begin(() => run(backup));
+  }
+
+  // The vault's recovery keys, as the cards list them.
+  const recoveryKeys = $derived(store.slots.filter((s) => s.type === "recovery").length);
 
   function slotIcon(t: string): string {
     return t === "hardware" ? "i-yubi" : t === "recovery" ? "i-recovery" : "i-password";
@@ -102,18 +151,212 @@
   }
 
   // A card's *Remove…*: greyed by the vault's state first, then by the
-  // two-method rule, each with its reason as the title.
+  // two-method rule, each with its reason as the title. A YubiKey's says
+  // what to add first, which is how a lost one becomes removable (ruled
+  // 2026-10-27).
   function removeTitle(s: SlotView): string | undefined {
-    return greyed ?? (s.removable ? undefined : vaultCopy.rule);
+    return greyed ?? (s.removable ? undefined : removeRule(s.type));
+  }
+
+  // Add an unlock method…, from the head, or from an end's next step
+  // (follow), which adds the new YubiKey first.
+  function openAdd(follow = false) {
+    fromFollow = follow;
+    if (follow) {
+      addKind = "token";
+      addLabel = "";
+    }
+    adding = true;
   }
 
   // Add an unlock method, preset to a recovery key: the action beside the
   // greyed password switch (APP.md §13).
   function addRecoveryKey() {
+    fromFollow = false;
     addKind = "recovery";
     addLabel = "";
     adding = true;
   }
+
+  // An enrolment begins with a YubiKey of the vault as its proof wherever
+  // there is one (keys.go acquireUnlocked). Use recovery key instead begins
+  // it again with a recovery key (ruled 2026-10-27): LastAct carries no
+  // label and again re-runs the act as begun, so the start keeps this
+  // second closure beside it, which keeps the chain and the start as the
+  // first begin recorded them; the switch marks only withRecoveryKey.
+  let toRecovery = $state<(() => Promise<boolean>) | null>(null);
+
+  function startEnroll(kind: "token" | "password" | "recovery", label: string) {
+    store.noteAct({ act: "enroll", type: kind, fromFollow });
+    toRecovery = () => begin(() => Keys.BeginEnroll(kind, label, true), true);
+    void begin(() => Keys.BeginEnroll(kind, label, false));
+  }
+
+  // The ceremony drawn while the switch cancels one and begins the next,
+  // so that the dialog stays up until the new one's first event takes its
+  // place, as Start again's does (the cancelled one is dropped by the store
+  // at once).
+  let held = $state<CeremonyState | null>(null);
+  let holdUntilNew = false;
+
+  async function switchToRecovery() {
+    const go = toRecovery;
+    if (!go || !c) return;
+    held = c;
+    await Vault.CancelUnlock().catch(() => {});
+    await untilDropped();
+    store.noteRecoverySwitch();
+    holdUntilNew = true;
+    const begun = await go();
+    // Refused, nothing will take the held state's place; begun, the new
+    // ceremony's first event has normally arrived by the time the call has
+    // answered and the unlock methods are read again, and a hold that
+    // outlived it would leave a dialog no button can end.
+    if (!begun) release();
+    else setTimeout(() => holdUntilNew && release(), 2000);
+  }
+
+  function release() {
+    holdUntilNew = false;
+    held = null;
+  }
+
+  // The cancelled ceremony is gone from the store, or ended, or 8 s have
+  // passed: the lock screen's own bound for the same wait (Lock.svelte
+  // untilLocked).
+  function untilDropped(): Promise<void> {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        if (!store.ceremony || store.ceremonyIsOver) return resolve();
+        if (Date.now() - started > 8000) return resolve();
+        setTimeout(tick, 50);
+      };
+      tick();
+    });
+  }
+
+  // ---- The remove dialog (ruled 2026-10-27) -------------------------------
+
+  // It asks why, and the answer that re-keys is pre-selected; the backup's
+  // tick follows the answer (BackupChoice), set again each time it opens.
+  let removeAnswer = $state<Answer>("rekey");
+  let removeTicked = $state(false);
+
+  function openRemove(m: SlotView) {
+    removeAnswer = "rekey";
+    removing = m;
+  }
+
+  // Every password is named "Password", so two cards can read alike: the
+  // title then says when this one was added, as its card does.
+  function removeAdded(m: SlotView): string | undefined {
+    return store.slots.some((s) => s.recipientId !== m.recipientId && s.label === m.label) ? date(m.createdAt) : undefined;
+  }
+
+  // The recovery keys left besides the one removed: the limit's second
+  // sentence speaks of them, so it is drawn only while there is one.
+  function otherRecovery(m: SlotView): number {
+    return store.slots.filter((s) => s.type === "recovery" && s.recipientId !== m.recipientId).length;
+  }
+
+  // The form's submit: the dialog closes, the Save dialog asks for the
+  // backup's file when the tick is on (cancelled, nothing is removed), the
+  // act is recorded for its end's next step, then it begins.
+  async function doRemove() {
+    const target = removing;
+    if (!target) return;
+    const rekey = removeAnswer === "rekey";
+    const tick = removeTicked;
+    removing = null;
+    let path = "";
+    if (tick) {
+      path = await pickBackup();
+      if (!path) return;
+    }
+    const id = target.recipientId;
+    store.noteAct({ act: "remove", type: target.type, rekey, fromFollow: false });
+    await beginWith((b) => Keys.RemoveSlot(id, rekey, b), path);
+  }
+
+  // ---- The password's dialogs ----------------------------------------------
+
+  function openEntangle(mode: "on" | "change" | "off", follow = false) {
+    fromFollow = follow;
+    entangling = mode;
+  }
+
+  // ---- Replace recovery keys… ------------------------------------------------
+
+  // Greyed with its reason as the title (APP.md §6, Controls): locked,
+  // Tampered, no recovery key, or every unlock method a recovery key.
+  const replaceWhy = $derived(replaceGreyed({ unlocked, tampered, recoveryKeys, setupNeeded: !!st?.setupNeeded }));
+  // from: the end whose next step opened the dialog, whose committed facts
+  // it reads (lib/rekey.ts replaceFacts).
+  let replaceFrom = $state<{ after: AfterFacts; changed: boolean } | undefined>(undefined);
+
+  function openReplace(from?: { after: AfterFacts; changed: boolean }) {
+    fromFollow = !!from;
+    replaceFrom = from;
+    replacing = true;
+  }
+
+  // Keep mode's caption: the old key the new one replaces, by its name and
+  // ID, so the new sheet goes where the old one is (the new key at
+  // keepIndex replaces oldIds[keepIndex-1]).
+  function replacesLine(cer: CeremonyState): string {
+    const old = cer.oldIds?.[cer.keepIndex - 1] ?? "";
+    const label = store.slots.find((s) => s.type === "recovery" && s.recoveryId === old)?.label ?? ceremonyCopy.recoveryKey;
+    return revealCopy.replaces(label, old);
+  }
+
+  // ---- The end's next step ---------------------------------------------------
+
+  // The command a next step's button opens, in the verb table's words.
+  function followLabel(f: FollowUp): string {
+    return f.act === "add" ? commandCopy.addUnlockMethod : f.act === "change" ? vaultCopy.change : commandCopy.replaceRecoveryKeys;
+  }
+
+  // The press closes the ceremony dialog and opens the next act's, which
+  // goes on in the same chain: the Add dialog, the password's Change…, or
+  // the replacement's with the end's committed facts and the chain's
+  // changed (ruled 2026-10-27).
+  function openFollow(f: FollowUp, after: AfterFacts | null | undefined) {
+    const changed = store.chain?.changed ?? false;
+    closeCeremony();
+    heldFollow = null;
+    if (f.act === "add") openAdd(true);
+    else if (f.act === "change") openEntangle("change", true);
+    else openReplace(after ? { after, changed } : undefined);
+  }
+
+  // The end's next step for the ceremony on the screen (store.followUp,
+  // decided from its committed facts and the chain, never from the cards).
+  const follow = $derived.by(() => {
+    const f = store.followUp;
+    const ended = c;
+    if (!f || !ended) return undefined;
+    return { text: f.text, label: followLabel(f), onpress: () => openFollow(f, ended.after) };
+  });
+
+  // A recovery key's enrolment ends in the recovery key's dialog, which
+  // App draws above every route, and not in this page's ceremony dialog
+  // (internal/app/keys.go BeginEnroll). The next step its end carries — an
+  // enrolment begun from an end's "add" that leaves the vault with recovery
+  // keys alone still says to add the new YubiKey — is kept here and said in
+  // the page's notice slot once that dialog has closed, with its button. A
+  // new act, the button, its close and a lock drop it.
+  let heldFollow = $state<{ f: FollowUp; after: AfterFacts } | null>(null);
+  $effect(() => {
+    const cer = store.ceremony;
+    if (!cer || cer.kind !== "enroll" || cer.step !== CeremonyStep.StepRecovery || cer.promptId || !cer.after) return;
+    const f = store.followUp;
+    if (f) heldFollow = { f, after: cer.after };
+  });
+  $effect(() => {
+    if (!unlocked) heldFollow = null;
+  });
+  const heldShown = $derived(heldFollow && unlocked && !store.ceremony ? heldFollow : null);
 
   // ---- This vault ---------------------------------------------------------
 
@@ -153,17 +396,18 @@
     return (await Shell.SaveFile(vaultCopy.exportPicker, `backup-${new Date().toISOString().slice(0, 10)}.eks`, "")) || "";
   }
 
-  // The file a plain export is writing, for its done line: said in the
-  // foot once its dialog is closed on "Backup saved", with the way to the
-  // file (direction 4). A backup taken before a re-key leaves none, since
-  // the re-key is the act that ends there.
-  let exportedTo = "";
+  // The file a backup is writing, for its done line: said in the foot
+  // once its dialog is closed on a Done that wrote it — a plain export's
+  // "Backup saved", or an act's that took the backup after its change —
+  // with the way to the file (direction 4; ruled 2026-10-27).
+  let backupTo = "";
 
+  // An export has no next step: the chain ends with it.
   async function exportBackup() {
     const p = await pickBackup();
     if (!p) return;
-    exportedTo = p;
-    await exportTo(p);
+    store.noteAct(null);
+    if (await beginWith((b) => Keys.ExportBackup(b), p)) await store.refreshLastExport();
   }
 
   // The Archives page's summary's *Export…* came here to start this
@@ -176,28 +420,6 @@
     if (asked && unlocked && !tampered) void exportBackup();
   });
 
-  // The export itself, apart from the file picked for it, so that Start
-  // again saves to the same file.
-  async function exportTo(p: string, keep = false): Promise<boolean> {
-    again = () => exportTo(p, true);
-    if (!keep) store.dismissCeremony();
-    try {
-      await Keys.ExportBackup(p);
-    } catch (e) {
-      fail(e);
-      return false;
-    }
-    await store.refreshLastExport();
-    return true;
-  }
-
-  // The rotate dialog asks for a backup first when the last one is over a
-  // week old or none is recorded here — it asks, it never refuses, and it
-  // never keeps a copy of the vault (APP.md §13, DESIGN trap 29).
-  const WEEK = 604800;
-  const backupAge = $derived(store.lastExportAt ? Math.floor(store.now / 1000) - store.lastExportAt : -1);
-  const backupWanted = $derived(backupAge < 0 || backupAge > WEEK);
-
   // The backups' status (direction 9, ruled 2026-10-18): the last backup
   // against what it lacks, by lib/backup.ts. The counts are read only
   // from an unlocked registry that is not Tampered (the core answers them
@@ -205,31 +427,33 @@
   // alone — or that no backup is recorded — and claims nothing about what
   // a backup holds. The date is relative: recency is the point.
   const backupAt = $derived(store.backup?.at ?? store.lastExportAt);
-  const bline = $derived(backupLine(store.backup ?? (backupAt ? { at: backupAt, archives: 0, missing: 0, rekeyed: 0 } : null), unlocked && !tampered && !!store.backup, backupAt ? sinceText(backupAt, store.now) : ""));
+  const bline = $derived(
+    backupLine(store.backup ?? (backupAt ? { at: backupAt, archives: 0, missing: 0, rekeyed: 0, vaultRekeyed: false, keysReplaced: false } : null), unlocked && !tampered && !!store.backup, backupAt ? sinceText(backupAt, store.now) : ""),
+  );
   const addAccent = $derived(unlocked && !tampered && !bline.suggestExport);
+
+  // The Re-key dialog: the backup is the shared block's, ticked whenever a
+  // recovery key is there to back up, and taken after the re-key (ruled
+  // 2026-10-27: a backup taken before would bring the old key back). It
+  // asks and never refuses, and never keeps a copy of the vault (APP.md
+  // §13, DESIGN trap 29). One act, so Start again after a failed backup is
+  // the re-key and its backup again, to the same file.
   let rotateBackup = $state(false);
 
   function openRotate() {
-    rotateBackup = backupWanted; // pre-selected, and the user may clear it
     rotating = true;
   }
 
   async function doRotate() {
+    const tick = rotateBackup;
     rotating = false;
-    if (!rotateBackup) return begin(() => Keys.RotateNow());
-    const p = await pickBackup();
-    if (p) await rekey(p);
-  }
-
-  // The backup the rotate dialog asked for, then the rotation: no backup,
-  // no rotation, and Start again after a failed backup begins with the
-  // backup again, to the same file.
-  async function rekey(p: string, keep = false) {
-    if (!(await exportTo(p, keep))) {
-      again = () => rekey(p, true);
-      return;
+    let path = "";
+    if (tick) {
+      path = await pickBackup();
+      if (!path) return;
     }
-    await begin(() => Keys.RotateNow());
+    store.noteAct({ act: "rotate", rekey: true, fromFollow: false });
+    await beginWith((b) => Keys.RotateNow(b), path);
   }
 
   // Inspect a backup… reads the file's label; proving it opens is *Test
@@ -327,17 +551,32 @@
   // mid-ceremony).
   function closeCeremony() {
     const ended = store.ceremony;
-    if (exportedTo && ended?.kind === "export" && ended.step === CeremonyStep.StepDone) store.showDone(backupDone(exportedTo));
-    exportedTo = "";
+    if (backupTo && backupSavedOnClose(ended)) store.showDone(backupDone(backupTo));
+    backupTo = "";
+    held = null;
     store.dismissCeremony();
     void store.refreshSlots();
     void store.refreshEntangled();
   }
 
+  // While the switch holds the last state, the next ceremony is about to
+  // take its place: Escape waits for it.
   function escapeCeremony() {
+    if (held) return;
     if (store.ceremonyIsOver) closeCeremony();
     else void Vault.CancelUnlock();
   }
+
+  // The ceremony on the panel: the store's, or the one the switch holds
+  // until the new one's first event.
+  const shownC = $derived(c ?? held);
+  $effect(() => {
+    if (c && holdUntilNew) release();
+  });
+  // A lock closes every dialog, the held one too.
+  $effect(() => {
+    if (!unlocked && held) release();
+  });
 </script>
 
 <div class="layer-head"><h1 class="t-title">{vaultCopy.title}</h1>{#if !unlocked}<span class="chip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}</div>
@@ -358,14 +597,26 @@
        phase 4b), and a page with no list has nothing to hold still. The
        backups line stays in its card: it is the card's fact, not the
        page's state. -->
-  <NoticeSlot flow>
+  <NoticeSlot flow bind:this={slot}>
     {#if tampered}
       <!-- First on the page (direction 9; APP.md §6, The Tampered banner): the danger tier, with
            the fix every greyed change here points at. -->
       <div class="fold" transition:unfold><TamperedBar reason={st?.tamperedReason} /></div>
     {/if}
-    {#if st?.setupNeeded && unlocked}
-      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine}</span></div></div>
+    {#if store.replaceNotice}
+      <!-- The keys a replacement showed and did not replace with (ruled
+           2026-10-27): named until closed or until the next replacement
+           begins, across a lock, since an ID is not secret. -->
+      {@const rn = store.replaceNotice}
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{rn.known ? replaceCopy.notAdded(rn.ids) : replaceCopy.unknown(rn.ids)}</span><button type="button" class="x20" title={noticeCopy.close} aria-label={noticeCopy.close} onclick={() => store.dismissReplaceNotice()}><svg class="i i-14" aria-hidden="true"><use href="#i-x" /></svg></button></div></div>
+    {/if}
+    {#if heldShown}
+      <!-- A recovery key's enrolment's next step, said once its dialog has
+           closed; it says what the setup line would, and more. -->
+      {@const hf = heldShown}
+      <div class="fold" transition:unfold><div class="bar"><svg class="i i-14"><use href="#i-info" /></svg><span class="grow">{hf.f.text}</span><button type="button" class="btn sm" onclick={() => openFollow(hf.f, hf.after)}>{followLabel(hf.f)}</button><button type="button" class="x20" title={noticeCopy.close} aria-label={noticeCopy.close} onclick={() => (heldFollow = null)}><svg class="i i-14" aria-hidden="true"><use href="#i-x" /></svg></button></div></div>
+    {:else if st?.setupNeeded && unlocked}
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine(recoveryKeys)}</span></div></div>
     {/if}
     {#if !unlocked}
       <!-- Locked is the safe state: the plain bar, no tier's colour
@@ -385,8 +636,11 @@
                line's *Unlock* or an owed backup's *Export backup…* takes
                it, and this one is standard then (the final shoot of
                phase 4a counted two). -->
-          <button type="button" class="btn sm" class:accent={addAccent} disabled={!unlocked || tampered} title={greyed} onclick={() => (adding = true)}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.addUnlockMethod}</button>
+          <button type="button" class="btn sm" class:accent={addAccent} disabled={!unlocked || tampered} title={greyed} onclick={() => openAdd()}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.addUnlockMethod}</button>
           <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={openRotate}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyVault}</button>
+          <!-- Every recovery key at once, so here and not on a card, whose
+               button would promise to replace that one (ruled 2026-10-27). -->
+          <button type="button" class="btn sm" disabled={!!replaceWhy} title={replaceWhy} onclick={() => openReplace()}><svg class="i i-14"><use href="#i-recovery" /></svg>{commandCopy.replaceRecoveryKeys}</button>
         </span>
       </div>
       <!-- One card per way in, 4 px from the next: Windows Settings' list
@@ -408,9 +662,9 @@
             </div>
             <div class="slot-acts">
               {#if m.type === "recovery"}
-                <button type="button" class="btn sm" disabled={!unlocked} title={unlocked ? undefined : greyed} onclick={() => { const id = m.recipientId; void begin(() => Keys.RevealRecoveryKey(id)); }}>{commandCopy.showRecoveryKey}</button>
+                <button type="button" class="btn sm" disabled={!unlocked} title={unlocked ? undefined : greyed} onclick={() => { const id = m.recipientId; store.noteAct(null); void begin(() => Keys.RevealRecoveryKey(id)); }}>{commandCopy.showRecoveryKey}</button>
               {/if}
-              <button type="button" class="btn sm" disabled={!m.removable || !unlocked || tampered} title={removeTitle(m)} onclick={() => (removing = m)}>{commandCopy.removeUnlockMethod}</button>
+              <button type="button" class="btn sm" disabled={!m.removable || !unlocked || tampered} title={removeTitle(m)} onclick={() => openRemove(m)}>{commandCopy.removeUnlockMethod}</button>
             </div>
           </li>
         {/each}
@@ -427,10 +681,10 @@
           </div>
           <div class="ctl row">
             {#if ent?.on}
-              <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => (entangling = "change")}>{vaultCopy.change}</button>
-              <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => (entangling = "off")}>{vaultCopy.turnOff}</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => openEntangle("change")}>{vaultCopy.change}</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => openEntangle("off")}>{vaultCopy.turnOff}</button>
             {:else}
-              <button type="button" class="btn sm" disabled={!unlocked || tampered || !ent?.canEnable} title={greyed ?? (entangleBlocked ? vaultCopy.passwordBlockedShort : undefined)} onclick={() => (entangling = "on")}>{vaultCopy.turnOn}</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered || !ent?.canEnable} title={greyed ?? (entangleBlocked ? vaultCopy.passwordBlockedShort : undefined)} onclick={() => openEntangle("on")}>{vaultCopy.turnOn}</button>
             {/if}
           </div>
         </div>
@@ -590,7 +844,7 @@
       <p>{dialogCopy.addUnlockMethod.passwordInherited}</p>
     {/if}
     {#snippet actions()}
-      <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} title={!addLabel && addKind === "recovery" ? dialogCopy.addUnlockMethod.needName : undefined} onclick={() => { adding = false; const kind = addKind, label = addKind === "password" ? "Password" : addLabel; void begin(() => Keys.BeginEnroll(kind, label)); addLabel = ""; }}>{dialogCopy.addUnlockMethod.primary}</button>
+      <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} title={!addLabel && addKind === "recovery" ? dialogCopy.addUnlockMethod.needName : undefined} onclick={() => { adding = false; const kind = addKind, label = addKind === "password" ? "Password" : addLabel; startEnroll(kind, label); addLabel = ""; }}>{dialogCopy.addUnlockMethod.primary}</button>
       <button type="button" class="btn" onclick={() => (adding = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
@@ -598,13 +852,31 @@
 
 {#if removing}
   {@const target = removing}
+  {@const q = questionOf("remove", target.type)}
   <!-- The dialog template (strings.ts): the consequence, then what still
-       opens; the mechanism behind "How this works" (ruled 2026-10-17). -->
-  <Dialog title={dialogCopy.removeUnlockMethod.title(target.label)} onclose={() => (removing = null)}>
-    <p>{dialogCopy.removeUnlockMethod.body(target.label)}</p>
-    <details class="how"><summary>{dialogCopy.howThisWorks}</summary><p>{dialogCopy.removeUnlockMethod.how}</p></details>
+       opens; the mechanism behind "How this works" (ruled 2026-10-17). A
+       form that asks why first (ruled 2026-10-27): it opens on the checked
+       answer, Enter presses the primary, Escape is Cancel. Its height does
+       not change with the answer or the tick, so it stays centred. -->
+  <Dialog title={dialogCopy.removeUnlockMethod.title(target.label, removeAdded(target))} onclose={() => (removing = null)} onsubmit={() => void doRemove()}>
+    <p>{dialogCopy.removeUnlockMethod.body(target.label, target.type)}</p>
+    {#if (st?.retiredCopies ?? 0) > 0}
+      <!-- Replaced copies keep their unlock methods (APP.md §13). -->
+      <p>{dialogCopy.removeUnlockMethod.retired(st?.retiredCopies ?? 0, target.label)}</p>
+    {/if}
+    {#if lastProtector(store.slots, target)}
+      <p>{dialogCopy.removeUnlockMethod.lastProtector}</p>
+    {/if}
+    <RekeyQuestion legend={q.legend} rekey={q.rekey} keep={q.keep} bind:answer={removeAnswer} />
+    <!-- The limit of a re-key and what is left to do, whichever the answer:
+         a sentence, not a gate. -->
+    <p class="infoline"><svg class="i i-14" aria-hidden="true"><use href="#i-info" /></svg><span>{rekeyLimitOf({ act: "remove", type: target.type, passwordOn: !!ent?.on, otherLeft: otherRecovery(target) })}</span></p>
+    <BackupChoice act="remove" rekey={removeAnswer === "rekey"} removing={target.type} label={target.label} bind:ticked={removeTicked} />
+    <details class="how"><summary>{dialogCopy.howThisWorks}</summary><p>{dialogCopy.removeUnlockMethod.how(target.label, target.type)}</p></details>
     {#snippet actions()}
-      <button type="button" class="btn danger-fill" onclick={() => { removing = null; const id = target.recipientId; void begin(() => Keys.RemoveSlot(id)); }}>{dialogCopy.removeUnlockMethod.primary}</button>
+      <!-- The destructive act, so danger-fill, naming what the press does,
+           the backup included while ticked. -->
+      <button type="submit" class="btn danger-fill">{primaryOf("remove", removeAnswer === "rekey", removeTicked)}</button>
       <button type="button" class="btn" onclick={() => (removing = null)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
@@ -615,29 +887,39 @@
 {/if}
 
 {#if rotating}
+  <!-- The body says what authorises the act: one unlock method proves it
+       is you, a YubiKey wherever the vault has one (keys.go
+       acquireUnlocked). -->
   <Dialog title={dialogCopy.rekeyVault.title} onclose={() => (rotating = false)}>
-    <p>{dialogCopy.rekeyVault.body}</p>
-    <dl class="kv"><dt>{dialogCopy.rekeyVault.lastBackup}</dt><dd>{store.lastExportAt ? sinceText(store.lastExportAt, store.now) : dialogCopy.rekeyVault.noBackup}</dd></dl>
-    {#if backupWanted}
-      <p>{dialogCopy.rekeyVault.backupWhy}</p>
-    {/if}
-    <label class="check"><input type="checkbox" bind:checked={rotateBackup} />{dialogCopy.rekeyVault.backupFirst}</label>
+    <p>{dialogCopy.rekeyVault.body(!!st?.hasHardwareSlot)}</p>
+    <BackupChoice act="rotate" rekey={true} bind:ticked={rotateBackup} />
     {#snippet actions()}
-      <button type="button" class="btn accent" onclick={doRotate}>{rotateBackup ? dialogCopy.rekeyVault.primaryWithBackup : dialogCopy.rekeyVault.primary}</button>
+      <button type="button" class="btn accent" onclick={() => void doRotate()}>{primaryOf("rotate", true, rotateBackup)}</button>
       <button type="button" class="btn" onclick={() => (rotating = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
 
 {#if entangling && ent}
-  <EntangledDialog mode={entangling} onclose={() => (entangling = "")} {begin} />
+  <EntangledDialog mode={entangling} onclose={() => (entangling = "")} {begin} {beginWith} pick={pickBackup} {fromFollow} />
+{/if}
+
+{#if replacing}
+  <ReplaceDialog onclose={() => (replacing = false)} {beginWith} pick={pickBackup} from={replaceFrom} minutes={replaceMinutes(st)} />
 {/if}
 
 {#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel}
   <!-- the recovery key is revealed by App, above every route -->
-{:else if c}
-  <Dialog title={vaultCopy.ceremonyTitle[c.kind] ?? vaultCopy.ceremonyTitle.export} onclose={escapeCeremony} dismissable={store.ceremonyIsOver}>
-    <CeremonyPanel {c} onclose={closeCeremony} onagain={again ? () => void again?.() : undefined} />
+{:else if c && c.step === CeremonyStep.StepKeepKey && c.promptId && c.slotLabel}
+  <!-- A replacement's new key, shown by the recovery key's dialog in keep
+       mode in the act's dialog's place, one after another (keyed on the
+       one-time URL, as App keys its mount); its Cancel ends the act. -->
+  {#key c.slotLabel}
+    <RecoveryReveal url={c.slotLabel} kind={c.kind} vaultName={store.vaultName} recoveryId={c.recoveryId ?? ""} keep={{ promptId: c.promptId, index: c.keepIndex, count: c.keepCount, replaces: replacesLine(c) }} oncancel={() => void Vault.CancelUnlock()} />
+  {/key}
+{:else if shownC}
+  <Dialog title={ceremonyTitleOf(shownC, recoveryKeys)} onclose={escapeCeremony} dismissable={store.ceremonyIsOver && !held}>
+    <CeremonyPanel c={shownC} onclose={closeCeremony} onagain={again ? () => void again?.() : undefined} {follow} onrecovery={shownC.kind === "enroll" && toRecovery ? () => void switchToRecovery() : undefined} />
   </Dialog>
 {/if}
 
@@ -649,7 +931,10 @@
   /* The section's head: the title, its count, and the vault-wide acts at
      the right, centred on the title's line. */
   .ks-head .count { margin-left: 0; }
-  .head-acts { margin-left: auto; display: flex; gap: var(--s2); align-self: center; }
+  /* Three acts beside the title and its count (ruled 2026-10-27): a
+     narrower window wraps them under the title rather than overflowing. */
+  .ks-head { flex-wrap: wrap; row-gap: var(--s2); }
+  .head-acts { margin-left: auto; display: flex; flex-wrap: wrap; gap: var(--s2); align-self: center; }
   /* The ways in: separate cards, 4 apart, as .setcard's rows are. */
   .slots { display: flex; flex-direction: column; gap: var(--s1); margin: 0; padding: 0; list-style: none; }
   .backup { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s3); }

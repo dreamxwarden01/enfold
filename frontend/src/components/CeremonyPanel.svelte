@@ -15,16 +15,29 @@
   // beside Cancel after a failure the page can begin again, Close at the
   // end (lib/lockscreen dialogFoot, lib/dialogs DialogHost). The steps are
   // the core's (APP.md §2.2); this only draws them.
-  import { CeremonyStep, Code, Vault } from "../lib/api";
+  //
+  // The acts that may re-key the vault (ruled 2026-10-27) add four things.
+  // The lead after the proof says what is being done (CeremonyState.phase).
+  // A replacement's one confirmation is a view of its own, each new key
+  // beside the one it replaces (StepConfirm). An end that carries more than
+  // its title — the replacement's receipt, a retirement or a backup that did
+  // not land, the next step's button (follow), the line after an enrolment
+  // proved with the switch — is drawn on the neutral done view, those items
+  // under the title in that order (lib/lockscreen endsWithMore). And an
+  // enrolment whose proof waits for a YubiKey of the vault offers the
+  // recovery key instead (onrecovery; lib/lockscreen offersRecoverySwitch),
+  // the one exception to a dialog's No match holding Cancel alone.
+  import { CeremonyStep, Code, Vault, submitSecret } from "../lib/api";
   import type { CeremonyState } from "../lib/api";
   import { fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import { getContext, untrack } from "svelte";
   import { store } from "../lib/state.svelte";
-  import { ceremonyCopy, codeText, dialogCopy, lockCopy, retriesText, stepText } from "../lib/strings";
+  import { ceremonyCopy, codeText, dialogCopy, doneTitleOf, lockCopy, phaseLeadOf, replaceCopy, retriesText, stepText } from "../lib/strings";
   import { motion, delay, FAST, GAP } from "../lib/motion";
   import { NO_TRACK, key as formKey, track } from "../lib/pinform";
-  import { NO_HALVES, dialogFoot, dialogViewOf, dialogWay, discs, green, halvesAfter, insertLed, lastTry, pinLeads, retriesTone, typedProofLeads } from "../lib/lockscreen";
+  import { NO_HALVES, choosesVaultPassword, dialogFoot, dialogViewOf, dialogWay, discs, endsWithMore, green, halvesAfter, insertLed, lastTry, offersRecoverySwitch, pinLeads, provesFirst, retriesTone, typedProofLeads } from "../lib/lockscreen";
+  import { afterRecoveryProof, backupBar, failedNotes, pairRows, primaryOf, recoveryNoteOf, replaceBackupItems, retireBar } from "../lib/rekey";
   import { HeldView } from "../lib/stage.svelte";
   import { DIALOG_HOST } from "../lib/dialogs";
   import type { DialogHost } from "../lib/dialogs";
@@ -41,8 +54,17 @@
     // dialog, as the lock screen's does, rather than only Close and the
     // page's button pressed anew. Left out, a failure has Close alone.
     onagain?: () => void;
+    // follow: the end's next step (lib/rekey.ts followUp, read by the page
+    // from the act's committed facts and its chain): the sentence, and the
+    // command its button opens. The press closes this dialog and opens the
+    // next act's.
+    follow?: { text: string; label: string; onpress: () => void };
+    // onrecovery: Use recovery key instead, which the page passes for an
+    // enrolment; drawn only while offersRecoverySwitch holds. The page
+    // cancels this ceremony and begins the act again with a recovery key.
+    onrecovery?: () => void;
   }
-  let { c, onclose, onagain }: Props = $props();
+  let { c, onclose, onagain, follow, onrecovery }: Props = $props();
 
   // The dialog this panel stands in (Dialog.svelte): its foot band and its
   // green are lent to the panel while it is mounted.
@@ -65,16 +87,23 @@
 
   // The way it proves it is you, and the view the step asks for.
   const way = $derived(dialogWay(c.method ?? "", !!store.status?.hasHardwareSlot, c));
+  // After an enrolment of a YubiKey begun with the switch, the end says the
+  // lost YubiKey is the next to remove (lib/rekey.ts afterRecoveryProof).
+  const nextLine = $derived(afterRecoveryProof(c, store.lastAct));
+  // An end with more to say than its title stands on the neutral done view.
+  const more = $derived(endsWithMore(c, { follow: !!follow, nextLine }));
   // The green holds through what follows a touch — the proof's, or the new
   // YubiKey's in an enrolment's second half — and only that (afterTouch).
   const sameCeremony = $derived(store.ceremonyPassed.kind === c.kind);
   const want = $derived(
-    dialogViewOf({ c, way, passed: store.ceremonyPassed.passed && sameCeremony, afterTouch: store.ceremonyPassed.afterTouch && sameCeremony }),
+    dialogViewOf({ c, way, passed: store.ceremonyPassed.passed && sameCeremony, afterTouch: store.ceremonyPassed.afterTouch && sameCeremony, endsWithMore: more }),
   );
   // A derivation in the proof checks it is you, the vault being open
   // already; one in an enrolment's second half makes the new unlock method
-  // (a key made on the new YubiKey before its touch).
-  const derivingLead = $derived(second ? lockCopy.derivingLead.adding : ceremonyCopy.checking);
+  // (a key made on the new YubiKey before its touch). Once the proof has
+  // passed, an act that writes the vault says what it is doing, by its
+  // phase: the change (and its re-key), then the backup asked for.
+  const derivingLead = $derived(phaseLeadOf(c) ?? (second ? lockCopy.derivingLead.adding : ceremonyCopy.checking));
 
   // The PIN's step, as on the lock screen (APP.md §6): every token
   // ceremony here asks the PIN and the vault's password in one form, in
@@ -93,7 +122,7 @@
     form.shows === "pin"
       ? ceremonyCopy.pin
       : c.choose
-        ? c.kind === "entangle"
+        ? choosesVaultPassword(c.kind)
           ? ceremonyCopy.chooseVaultPassword
           : ceremonyCopy.choosePassword
         : way === "token"
@@ -101,7 +130,7 @@
           : ceremonyCopy.password,
   );
   const secretNote = $derived(
-    form.shows === "pin" || !c.choose ? "" : c.kind === "entangle" ? ceremonyCopy.chooseVaultPasswordNote : ceremonyCopy.chooseMethodPasswordNote,
+    form.shows === "pin" || !c.choose ? "" : choosesVaultPassword(c.kind) ? ceremonyCopy.chooseVaultPasswordNote : ceremonyCopy.chooseMethodPasswordNote,
   );
   const secretError = $derived(form.shows === "pin" ? (form.pinError ? ceremonyCopy.wrongPin : "") : form.passwordError ? ceremonyCopy.wrongPassword : "");
 
@@ -126,9 +155,11 @@
 
   // Every act on the Vault page, and the import's proof, proves it is you
   // with an unlock method the vault already has, so its wait for a
-  // YubiKey says which.
-  const proves = $derived(["enroll", "remove", "rotate", "export", "reveal", "entangle", "records"].includes(c.kind));
-  const hardwareLabels = $derived(store.slots.filter((s) => s.type === "hardware").map((s) => s.label));
+  // YubiKey says which (lib/lockscreen provesFirst). A re-keying removal of
+  // a YubiKey does not ask for the one it removes (CeremonyState.without),
+  // so the line leaves it out.
+  const proves = $derived(provesFirst(c.kind));
+  const hardwareLabels = $derived(store.slots.filter((s) => s.type === "hardware" && !(c.without && s.recipientId === c.without)).map((s) => s.label));
   const waitTitle = $derived(
     insertStep !== CeremonyStep.StepWaitingForKey
       ? stepText(insertStep).title
@@ -161,9 +192,50 @@
   const asks = $derived(
     !over &&
       ((shown === "secret" && !!c.promptId && (form.shows !== "none" || c.step === CeremonyStep.StepManagementKey)) ||
-        (shown === "recovery" && !!c.promptId)),
+        (shown === "recovery" && !!c.promptId) ||
+        (shown === "confirm" && !!c.promptId)),
   );
-  const buttons = $derived(dialogFoot({ over, view: shown, asks, again: !!onagain }));
+  // The recovery-key switch (ruled 2026-10-27): an enrolment of a YubiKey
+  // or a recovery key, begun without it, in its proof, on a vault with a
+  // YubiKey and a recovery key — one tested rule (lib/lockscreen).
+  const switchOn = $derived(!!onrecovery && offersRecoverySwitch(c, store.lastAct, store.slots, second));
+  const buttons = $derived(dialogFoot({ over, view: shown, asks, again: !!onagain, recovery: switchOn, step: c.step }));
+
+  // Use recovery key instead, pressed once per ceremony: the page cancels
+  // this one and begins the act again in this same dialog, so the panel
+  // starts over with it, as Start again's does.
+  let switchFrom = -1;
+  function recovery() {
+    if (switchFrom === c.seq) return;
+    switchFrom = c.seq;
+    halves = NO_HALVES;
+    tracked = NO_TRACK;
+    onrecovery?.();
+  }
+
+  // The replacement's confirmation (ruled 2026-10-27, R-B): each new key
+  // beside the one it replaces, under the old key's name, which the new one
+  // takes; the press answers the confirm prompt, once.
+  const keys = $derived(c.keepCount || c.newIds?.length || 0);
+  const rows = $derived(pairRows(c, store.slots));
+  let confirmedFor = "";
+  function confirmIt(e: SubmitEvent) {
+    e.preventDefault();
+    if (!c.promptId || confirmedFor === c.promptId) return;
+    confirmedFor = c.promptId;
+    submitSecret("confirm", c.promptId, "");
+  }
+
+  // The end's items, in the order they stand under the title (ruled
+  // 2026-10-27): a replacement's receipt and what its backup did, a
+  // retirement that did not land, a backup that was not saved, the next
+  // step, the line after an enrolment proved with the switch.
+  const ends = $derived(replaceBackupItems(c));
+  const retire = $derived(retireBar(c));
+  const backupNotSaved = $derived(backupBar(c));
+  // The recovery view's note, by why a recovery key proves it (lib/rekey.ts
+  // recoveryNoteOf), never by the kind alone.
+  const recoveryKeys = $derived(store.slots.filter((s) => s.type === "recovery").length);
 
   // Start again: the page begins the act anew in this same dialog, so the
   // box stays where it is and the panel reads the new ceremony from its
@@ -186,7 +258,7 @@
   // vault is open already, so the derivation checks it is you.
   const touchLead = $derived(
     c.step === CeremonyStep.StepDone
-      ? (ceremonyCopy.doneTitle[c.kind] ?? stepText(c.step).title)
+      ? (doneTitleOf(c) ?? stepText(c.step).title)
       : c.step === CeremonyStep.StepDeriving
         ? derivingLead
         : stepText(c.step).title,
@@ -254,6 +326,12 @@
         {#if shown === "insert"}
           <KeyArt led={insertLed(insertStep, held.found, c)} />
           <div class="lead"><h3 class="t-section">{waitTitle}</h3>{#if waitLine}<div class="cap">{waitLine}</div>{/if}</div>
+          {#if switchOn && insertStep !== CeremonyStep.StepTwoKeys}
+            <!-- No YubiKey of this vault at hand: the lock screen's own words
+                 for the same switch, a subtle button under the lead. Two
+                 YubiKeys in, the core carries on by itself once one is out. -->
+            <button type="button" class="btn subtle sm start" onclick={recovery}>{lockCopy.useRecoveryInstead}</button>
+          {/if}
           {#if c.error && c.step === CeremonyStep.StepWaitingForKey}
             <!-- A cancelled touch still pending is a note, not a fault; the
                  Smart Card service not running is said in the attention ink
@@ -269,7 +347,10 @@
           <KeyArt led={c.step === CeremonyStep.StepNoMatch ? "off" : "found"} />
           <div class="lead">
             <h3 class="t-section">{stepText(c.step).title}</h3>
-            <div class="cap">{c.step === CeremonyStep.StepNoMatch ? ceremonyCopy.noMatchWithoutRecovery : stepText(c.step).body}</div>
+            <!-- No match names the button the foot then has where the switch
+                 is offered, as the lock screen's line does; elsewhere the
+                 line says what can be done instead of naming one. -->
+            <div class="cap">{c.step === CeremonyStep.StepNoMatch && !switchOn ? ceremonyCopy.noMatchWithoutRecovery : stepText(c.step).body}</div>
           </div>
         {:else if shown === "secret"}
           <!-- With no step line naming it, the PIN's step heads with its own
@@ -308,7 +389,7 @@
         {:else if shown === "recovery"}
           <RecoveryInput
             promptId={c.promptId ?? ""}
-            note={ceremonyCopy.recoveryNote[c.kind] ?? ""}
+            note={recoveryNoteOf(c, store.lastAct, recoveryKeys)}
             error={c.error === "vault.auth" ? recoveryRefused(c.kind) : ""}
             {formId}
           />
@@ -339,9 +420,49 @@
             <h3 class="t-section">{c.step === CeremonyStep.StepDeriving ? derivingLead : stepText(c.step).title}</h3>
             {#if c.step === CeremonyStep.StepDeriving ? !!c.error : !!stepText(c.step).body}<div class="cap">{c.step === CeremonyStep.StepDeriving ? codeText(c.error ?? "") : stepText(c.step).body}</div>{/if}
           </div>
+        {:else if shown === "confirm"}
+          <!-- The replacement's one confirmation: the pairing and where each
+               sheet goes stand to the last check, then what the press does.
+               The foot's submit names this form. -->
+          <form id={formId} class="confirm" novalidate onsubmit={confirmIt}>
+            <div class="lead"><h3 class="t-section">{replaceCopy.ready}</h3></div>
+            <dl class="kv">
+              {#each rows as r, i (i)}<dt>{r.label}</dt><dd>{r.text}</dd>{/each}
+            </dl>
+            <p class="t-quiet">{keys === 1 ? replaceCopy.readyLineOne : replaceCopy.readyLine}</p>
+          </form>
         {:else if shown === "done"}
           <div class="donedisc pop" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="m5.6 10.3 2.9 2.9 5.9-6.2" /></svg></div>
-          <div class="lead"><h3 class="t-section">{ceremonyCopy.doneTitle[c.kind] ?? stepText(c.step).title}</h3></div>
+          <div class="lead"><h3 class="t-section">{doneTitleOf(c) ?? stepText(c.step).title}</h3></div>
+          {#if more}
+            <!-- What the end carries, under the title at the view's width and
+                 read from the left, each only when it applies. -->
+            <div class="ends">
+              {#if c.kind === "replace" && rows.length}
+                <dl class="kv">
+                  {#each rows as r, i (i)}<dt>{r.label}</dt><dd>{r.text}</dd>{/each}
+                </dl>
+              {/if}
+              {#each ends as item, i (i)}
+                {#if item.tone === "attention"}
+                  <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{item.text}</span></div>
+                {:else}
+                  <p>{item.text}</p>
+                {/if}
+              {/each}
+              {#if retire}<div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{retire}</span></div>{/if}
+              {#if backupNotSaved}<div class="bar attention"><svg class="i i-14"><use href="#i-backup" /></svg><span>{backupNotSaved}</span></div>{/if}
+              {#if follow}
+                <!-- The cure is a command, so a button (APP.md §6, Controls),
+                     beside the sentence that says when it is needed. -->
+                <div class="infoline follow">
+                  <svg class="i i-14"><use href="#i-info" /></svg>
+                  <div class="said"><span>{follow.text}</span><button type="button" class="btn sm" onclick={follow.onpress}>{follow.label}</button></div>
+                </div>
+              {/if}
+              {#if nextLine}<p>{ceremonyCopy.afterRecoveryProof}</p>{/if}
+            </div>
+          {/if}
         {:else if shown === "failed"}
           {#if c.error === "token.touch"}
             <!-- Where it happened and in neutral ink: the YubiKey stopped
@@ -351,6 +472,10 @@
           {:else}
             <div class="lead"><h3 class="t-section">{stepText(c.step).title}</h3></div>
             <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error ?? "")}</span></div>
+            <!-- That nothing was changed, for the acts whose failure before
+                 the change leaves the file as it was, and what is known of
+                 the keys a replacement showed (lib/rekey.ts failedNotes). -->
+            {#each failedNotes(c) as note, i (i)}<p class="t-quiet">{note}</p>{/each}
           {/if}
         {:else if shown === "blocked"}
           <!-- On the PIN's step, where it arises: whose PIN, then what it
@@ -380,7 +505,10 @@
 {#snippet foot()}
   {#each buttons as b (b)}
     {#if b === "continue"}
-      <button type="submit" class="btn accent" form={formId}>{lockCopy.continue}</button>
+      <!-- At the replacement's confirmation the submit names what it does. -->
+      <button type="submit" class="btn accent" form={formId}>{shown === "confirm" ? primaryOf("replace", true, false, keys) : lockCopy.continue}</button>
+    {:else if b === "recovery"}
+      <button type="button" class="btn accent" onclick={recovery}>{lockCopy.useRecoveryKey}</button>
     {:else if b === "again"}
       <button type="button" class="btn accent" onclick={again}>{lockCopy.startAgain}</button>
     {:else if b === "close"}
@@ -416,4 +544,14 @@
   .view .touch-lead { margin: 0; }
   .view .touch-sub { min-height: 20px; }
   .view .touch-slot { padding-top: 0; }
+  /* The switch under the wait's lead stands at the view's start. */
+  .view .start { align-self: flex-start; }
+  /* The confirmation is the view's own column. */
+  .confirm { display: contents; }
+  /* An end's items: under the centred check and title, at the view's
+     full width and read from the left, 12 apart (APP.md §6). */
+  .ends { align-self: stretch; display: flex; flex-direction: column; gap: var(--s3); text-align: left; }
+  /* The next step's line: its sentence, and under it the command's button
+     at its own width. */
+  .follow .said { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); min-width: 0; }
 </style>

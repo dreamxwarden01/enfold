@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { band, digitsOnly, keptSomehow, pickGroups, readbackMark, ways } from "./reveal";
+import { band, digitsLine, digitsOnly, keepBand, keepTitle, keptSomehow, pickGroups, readbackMark, ways } from "./reveal";
+import { staysUnlocked } from "./foot";
 
 const none = { savedTo: "", printed: false, wroteDown: false };
 const row = (k: typeof none) => ways(k).map((b) => `${b.accent ? "*" : ""}${b.label}`);
@@ -50,6 +51,60 @@ describe("the reveal's ways and its band", () => {
       const accents = [...ways(k), band(k)].filter((x) => x.accent).length;
       expect(accents).toBe(1);
     }
+  });
+});
+
+// Keep mode (APP.md §13, ruled 2026-10-27, R-B): a replacement's new key,
+// shown before it is the vault's. Each way counts at once with no second
+// confirmation, the band goes on to the next key, and Cancel is the one
+// way out.
+describe("keep mode's band", () => {
+  const kb = (k: typeof none, o: Partial<{ last: boolean; gone: boolean; stay: boolean }> = {}) =>
+    keepBand(k, { last: false, gone: false, stay: false, ...o }).map((b) => `${b.accent ? "*" : ""}${b.subtle ? "~" : ""}${b.label}`);
+  it("offers I have written it down and Cancel before any way is taken", () => {
+    expect(kb(none)).toEqual(["I have written it down", "Cancel"]);
+    expect(keepBand(none, { last: false, gone: false, stay: false }).map((b) => b.act)).toEqual(["wrote", "cancel"]);
+  });
+  it("goes on at once after any way, with no second confirmation", () => {
+    for (const k of [{ ...none, wroteDown: true }, { ...none, printed: true }, { ...none, savedTo: "E:\\key.txt" }]) {
+      expect(kb(k)).toEqual(["*Next recovery key", "Cancel"]);
+      expect(kb(k, { last: true })).toEqual(["*Continue", "Cancel"]);
+    }
+    expect(keepBand({ ...none, wroteDown: true }, { last: false, gone: false, stay: false })[0].act).toBe("next");
+  });
+  it("leaves Cancel alone when the key could not be shown", () => {
+    expect(kb(none, { gone: true })).toEqual(["Cancel"]);
+    expect(kb({ ...none, wroteDown: true }, { gone: true, stay: true })).toEqual(["Cancel"]);
+  });
+  it("carries Stay unlocked in the idle deadline's last minute only, subtle, before Cancel", () => {
+    const at = 1_760_000_000;
+    const stay = staysUnlocked(at, 0, (at - 30) * 1000);
+    expect(stay).toBe(true);
+    expect(staysUnlocked(at, 0, (at - 120) * 1000)).toBe(false);
+    expect(kb(none, { stay })).toEqual(["I have written it down", "~Stay unlocked", "Cancel"]);
+    expect(kb({ ...none, printed: true }, { stay, last: true })).toEqual(["*Continue", "~Stay unlocked", "Cancel"]);
+  });
+  it("has one accent across the row and the band", () => {
+    for (const k of [none, { ...none, printed: true }, { ...none, wroteDown: true }]) {
+      const accents = [...ways(k), ...keepBand(k, { last: false, gone: false, stay: true })].filter((x) => x.accent).length;
+      expect(accents).toBe(1);
+    }
+  });
+  it("leaves the ordinary showing's band as it was", () => {
+    expect(foot(none)).toBe("I have written it down");
+    expect(foot({ ...none, wroteDown: true })).toBe("*Done");
+  });
+  it("titles a new key by its place, and one key in the singular", () => {
+    expect(keepTitle(1, 2)).toBe("New recovery key 1 of 2");
+    expect(keepTitle(2, 2)).toBe("New recovery key 2 of 2");
+    expect(keepTitle(1, 1)).toBe("Your new recovery key");
+  });
+  it("captions the digits by when the key can be shown again", () => {
+    expect(digitsLine(48)).toBe("48 digits. They can be shown again from the Vault page: unlock, then prove a YubiKey or a password once more.");
+    expect(digitsLine(48, "keep", 2)).toBe("48 digits. Nothing changes until every new recovery key is kept and you confirm.");
+    // One new key is singular (a count of one is singular everywhere).
+    expect(digitsLine(48, "keep", 1)).toBe("48 digits. Nothing changes until this recovery key is kept and you confirm.");
+    expect(digitsLine(48, "later")).toBe("48 digits. They can be shown again from the Vault page only after you add a YubiKey or a password and prove it.");
   });
 });
 

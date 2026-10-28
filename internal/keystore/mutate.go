@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"runtime"
 	"slices"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
@@ -559,13 +560,27 @@ func (u *Unlocked) keyFitsSlot(recipientID [16]byte, r kdf.RecoveryKey) bool {
 	return false
 }
 
-// RemoveSlot deletes the slot with this recipient ID and commits. Removal
-// revokes nothing by itself (DESIGN.md §5); the caller offers Rotate, with
-// rotation pre-selected.
+// RemoveSlot deletes the slot with this recipient ID and commits, at the same
+// generation. Removal revokes nothing by itself (DESIGN.md §5): the caller
+// offers RemoveSlotAndRotate, with rotation pre-selected, and retires the
+// state before the removal with Retire either way (R41).
 func (u *Unlocked) RemoveSlot(recipientID [16]byte) error {
 	if err := u.mutable(); err != nil {
 		return err
 	}
+	slots, err := u.without(recipientID)
+	if err != nil {
+		return err
+	}
+	// A recovery slot's recovery_escrow record goes with it (commitSlots
+	// prunes it); K_P and the VMK history do not (R38).
+	return u.commitSlots(u.k.hdr, slots, nil)
+}
+
+// without is RemoveSlot's first half, shared: clone the live records, find
+// this one (ErrNotFound), delete it, and check the invariant over the rest
+// under the live header.
+func (u *Unlocked) without(recipientID [16]byte) ([]format.SlotRecord, error) {
 	slots := cloneSlots(u.k.slots)
 	idx := -1
 	for i := range slots {
@@ -574,15 +589,242 @@ func (u *Unlocked) RemoveSlot(recipientID [16]byte) error {
 		}
 	}
 	if idx < 0 {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	slots = append(slots[:idx], slots[idx+1:]...)
 	if err := checkInvariant(u.k.hdr, slots); err != nil {
+		return nil, err
+	}
+	return slots, nil
+}
+
+// RemoveSlotAndRotate removes the slot with this recipient ID and rotates the
+// VMK in the same commit (§8): the record leaves the set that step 3 prunes
+// against and step 4 wraps, so its recovery_escrow record is dropped, never
+// re-encrypted, and it is never wrapped the new VMK. ErrNotFound and the
+// invariant's errors refuse before any key is drawn. One flip, so a crash
+// leaves the slot and the old VMK, or neither: never a removal without its
+// rotation, and never the removed credential opening the new VMK.
+func (u *Unlocked) RemoveSlotAndRotate(recipientID [16]byte) error {
+	if err := u.mutable(); err != nil {
 		return err
 	}
-	// A recovery slot's recovery_escrow record goes with it (commitSlots
-	// prunes it); K_P and the VMK history do not (R38).
-	return u.commitSlots(u.k.hdr, slots, nil)
+	slots, err := u.without(recipientID)
+	if err != nil {
+		return err
+	}
+	return u.rotate(slots, nil, nil, nil)
+}
+
+// ChangeEntangledPasswordAndRotate is ChangeEntangledPassword and Rotate in one
+// commit: a fresh entangle_salt and K_P, a new VMK and generation, every active
+// slot wrapped the new VMK (hardware ones from the new K_P), and the
+// entangled_key record holding the new K_P under the new KWK_secrets; the old
+// K_P is in no record of the new state (DESIGN trap 30). ErrParams while the
+// switch is off. The old password is never a parameter (APP.md §13).
+func (u *Unlocked) ChangeEntangledPasswordAndRotate(e Entangle) error {
+	if err := u.mutable(); err != nil {
+		return err
+	}
+	if !u.k.hdr.Entangle {
+		return fmt.Errorf("%w: the vault has no entangled password to change", ErrParams)
+	}
+	// §6.4 over the set this commit writes under the header it writes, whose
+	// only input to the predicate, the entangle byte, stays on: the verdict
+	// before Argon2id runs, as for every change of the header.
+	slots := cloneSlots(u.k.slots)
+	if err := checkInvariant(format.SlotRegionHeader{Entangle: true}, slots); err != nil {
+		return err
+	}
+	hdr, kp, err := newHeader(&e, u.k.sb.VaultID)
+	if err != nil {
+		return err
+	}
+	if err := u.rotate(slots, &hdr, kp, nil); err != nil {
+		kdf.Zero(kp[:])
+		return err
+	}
+	u.installKP(kp)
+	return nil
+}
+
+// SetEntangledAndRotate is SetEntangled(true, &e) and Rotate in one commit:
+// the header's switch on with a fresh entangle_salt, a new VMK and generation,
+// every hardware slot wrapped from the new K_P, and the entangled_key record
+// created under the new KWK_secrets. ErrParams while the switch is already on;
+// ErrInvariant, from the sets the new header would make, before the password
+// is derived (as SetEntangled orders it).
+func (u *Unlocked) SetEntangledAndRotate(e Entangle) error {
+	if err := u.mutable(); err != nil {
+		return err
+	}
+	if u.k.hdr.Entangle {
+		return fmt.Errorf("%w: the vault's password is already on", ErrParams)
+	}
+	slots := cloneSlots(u.k.slots)
+	if err := checkInvariant(format.SlotRegionHeader{Entangle: true}, slots); err != nil {
+		return err
+	}
+	hdr, kp, err := newHeader(&e, u.k.sb.VaultID)
+	if err != nil {
+		return err
+	}
+	if err := u.rotate(slots, &hdr, kp, nil); err != nil {
+		kdf.Zero(kp[:])
+		return err
+	}
+	u.installKP(kp)
+	return nil
+}
+
+// PreparedRecovery is a recovery slot made ready for ReplaceRecoveryAndRotate:
+// its recipient ID and slot salt drawn and its public keys derived from the
+// key (§3.1, §6.3), nothing wrapped yet. It holds the key itself, in a locked
+// page as the Unlocked holds the VMK and K_P, until Zero: the prepared keys
+// stay in memory through the keep and confirm steps, which may last until a
+// prompt's deadline, and a recovery key is worth as much as either.
+type PreparedRecovery struct {
+	rec format.SlotRecord
+	// vault is the vault ID the public keys were derived under, so that a
+	// slot prepared for one vault is never written into another, where its
+	// key would not open it.
+	vault [16]byte
+	key   *secmem.Buffer // the 16 bytes of R; Free on Zero
+}
+
+// RecipientID is the prepared slot's recipient ID, whose first four bytes are
+// the key's ID (§18.4); fixed before the key is shown, so the sheet names the
+// slot that will exist.
+func (p *PreparedRecovery) RecipientID() [16]byte { return p.rec.RecipientID }
+
+// Zero erases the key the prepared slot holds and gives its page back. A
+// second call does nothing, and the slot can no longer be written afterwards.
+func (p *PreparedRecovery) Zero() {
+	if p == nil || p.key == nil {
+		return
+	}
+	p.key.Free()
+}
+
+// prepareDraws bounds PrepareRecovery's redraw. One draw meets at most twice
+// format.MaxSlots four-byte prefixes in 2^32, so the bound is reached only by
+// a broken source of randomness, which is refused rather than looped on.
+const prepareDraws = 16
+
+// PrepareRecovery makes a recovery slot ready for a replacement: label is the
+// label it will carry, and others are the slots this replacement has already
+// prepared. A recipient ID whose first four bytes are those of an active slot
+// or of one of others is drawn again, so that a new sheet's ID never equals
+// one the vault lists or another new sheet's (§18.4). The caller's r is
+// copied into the prepared slot's page; the caller zeroes its own. Reads
+// only; current(), not mutable().
+func (u *Unlocked) PrepareRecovery(r kdf.RecoveryKey, label string, others []*PreparedRecovery) (*PreparedRecovery, error) {
+	if err := u.current(); err != nil {
+		return nil, err
+	}
+	vaultID := u.k.sb.VaultID
+	for range prepareDraws {
+		rec, err := recoveryRecord(r, label, vaultID)
+		if err != nil {
+			return nil, err
+		}
+		if u.prefixTaken(rec.RecipientID, others) {
+			continue
+		}
+		p := &PreparedRecovery{rec: rec, vault: vaultID, key: secmem.New(kdf.RecoveryKeySize)}
+		copy(p.key.Bytes(), r[:])
+		return p, nil
+	}
+	return nil, fmt.Errorf("%w: %d recipient IDs drawn, each sharing its first four bytes with a slot", ErrDuplicate, prepareDraws)
+}
+
+// prefixTaken reports whether rid's first four bytes, the key ID a sheet
+// shows (§18.4), are those of an active slot or of a slot already prepared.
+func (u *Unlocked) prefixTaken(rid [16]byte, others []*PreparedRecovery) bool {
+	for i := range u.k.slots {
+		if u.k.slots[i].State == format.SlotActive && [4]byte(u.k.slots[i].RecipientID[:4]) == [4]byte(rid[:4]) {
+			return true
+		}
+	}
+	for _, p := range others {
+		if p != nil && [4]byte(p.rec.RecipientID[:4]) == [4]byte(rid[:4]) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReplaceRecoveryAndRotate replaces every recovery slot with the prepared ones
+// and rotates the VMK, in one commit (§8, R38): every record of slot_type 3 is
+// removed whatever its state, the prepared records join the set, and the
+// rotation prunes the old keys' recovery_escrow records, seals the new keys'
+// under the new KWK_secrets, and wraps the new VMK into every active slot, the
+// new ones included. ErrParams with none prepared; ErrDuplicate for a
+// recipient ID already in the set or prepared twice; the invariant's errors,
+// before any key is drawn. The prepared slots stay the caller's to Zero.
+func (u *Unlocked) ReplaceRecoveryAndRotate(news []*PreparedRecovery) error {
+	if err := u.mutable(); err != nil {
+		return err
+	}
+	if len(news) == 0 {
+		return fmt.Errorf("%w: no recovery key prepared", ErrParams)
+	}
+	vaultID := u.k.sb.VaultID
+	var slots []format.SlotRecord
+	for _, s := range cloneSlots(u.k.slots) {
+		if s.Type != format.SlotRecovery {
+			slots = append(slots, s)
+		}
+	}
+	// The keys leave their pages only for the call, and the copies are zeroed
+	// when it returns. The capacity is fixed, so no append leaves a copy
+	// behind in an array the defer does not reach.
+	adds := make([]recoveryAdd, 0, len(news))
+	defer func() {
+		for i := range adds {
+			kdf.Zero(adds[i].key[:])
+		}
+	}()
+	for _, p := range news {
+		if p == nil {
+			return fmt.Errorf("%w: a prepared recovery slot that is nil", ErrParams)
+		}
+		if p.vault != vaultID {
+			return fmt.Errorf("%w: a recovery slot prepared for another vault", ErrParams)
+		}
+		key := p.key.Bytes()
+		if len(key) != kdf.RecoveryKeySize {
+			return fmt.Errorf("%w: a prepared recovery slot whose key was zeroed", ErrParams)
+		}
+		rid := p.rec.RecipientID
+		for i := range u.k.slots {
+			if u.k.slots[i].RecipientID == rid {
+				return ErrDuplicate
+			}
+		}
+		for i := range adds {
+			if adds[i].rid == rid {
+				return ErrDuplicate
+			}
+		}
+		// The key is copied straight into the slice's own element, never
+		// through a local the defer would not reach.
+		adds = append(adds, recoveryAdd{rid: rid})
+		copy(adds[len(adds)-1].key[:], key)
+		runtime.KeepAlive(p.key)
+		slots = append(slots, cloneSlots([]format.SlotRecord{p.rec})...)
+	}
+	if err := checkInvariant(u.k.hdr, slots); err != nil {
+		return err
+	}
+	return u.rotate(slots, nil, nil, adds)
+}
+
+// recoveryAdd is a new recovery slot's escrow plaintext, sealed by rotate
+// under the new KWK_secrets in the commit that creates the slot (R38).
+type recoveryAdd struct {
+	rid [16]byte
+	key kdf.RecoveryKey
 }
 
 // Rotate performs the VMK rotation of §8, entire and atomic: a fresh VMK and
@@ -593,17 +835,47 @@ func (u *Unlocked) RemoveSlot(recipientID [16]byte) error {
 // K_P step 3 held. No credential need be present and no password typed, so a
 // rotation that commits is complete: no stale slot, no partial rotation, no
 // options. Everything lands in one superblock flip; anything that fails is
-// abandoned before it (§1, fail closed).
+// abandoned before it (§1, fail closed). It rotates the live slot set; the
+// caller retires the losing copy with Retire (R41).
 func (u *Unlocked) Rotate() error {
 	if err := u.mutable(); err != nil {
 		return err
 	}
+	return u.rotate(cloneSlots(u.k.slots), nil, nil, nil)
+}
+
+// rotate is §8 over the records and the header this commit writes. slots are
+// the records that survive or arrive (a clone of the live set for a plain
+// rotation; without the removed record for a removal; without every recovery
+// record and with the prepared ones for a replacement), already checked
+// against the invariant by the caller. hdr nil copies the live header
+// forward; non-nil, it is the header a password change or turning the
+// password on writes, and kpNew is the K_P that header derived: the
+// entangled_key record is written from it (replacing the record there, which
+// must still open; created where there was none) and every hardware slot is
+// wrapped from it. hdr and kpNew are both nil or both set. adds are the escrow
+// plaintexts of the recovery records in slots that the live set does not
+// have; every other recovery record in slots keeps the escrow record it has,
+// if any (one without still rotates, as Rotate always has; checkAdds).
+// One commit; on success the handle holds the new VMK and generation, and
+// kpNew is still the caller's to install (installKP).
+func (u *Unlocked) rotate(slots []format.SlotRecord, hdr *format.SlotRegionHeader, kpNew *[32]byte, adds []recoveryAdd) error {
+	// The arguments are refused before any key is drawn.
+	if (hdr == nil) != (kpNew == nil) {
+		return fmt.Errorf("%w: a rotation writes a new header and the K_P it derived together, or neither", ErrParams)
+	}
+	if hdr != nil && !hdr.Entangle {
+		return fmt.Errorf("%w: a K_P is written only under a header whose password is on", ErrParams)
+	}
+	if err := checkAdds(u.k.slots, slots, adds); err != nil {
+		return err
+	}
 	// No entry check over this handle's own K_P: step 3 recovers the
 	// authoritative one from the secrets section and the guard below it, over
-	// that value and the header the commit copies forward, is the one that
-	// decides — before any slot is re-wrapped. A rotation must be possible from
-	// the VMK alone, whatever the handle held when it opened (§8, "no rotation
-	// is deferred").
+	// that value and the header the commit writes, is the one that decides —
+	// before any slot is re-wrapped. A rotation must be possible from the VMK
+	// alone, whatever the handle held when it opened (§8, "no rotation is
+	// deferred").
 	vaultID := u.k.sb.VaultID
 	var newVMK [32]byte
 	if _, err := rand.Read(newVMK[:]); err != nil {
@@ -654,24 +926,26 @@ func (u *Unlocked) Rotate() error {
 		return err
 	}
 
-	// Step 3, the secrets section. Pruned first, so a removal-then-rotation
-	// drops the removed slot's recovery_escrow record and never carries it
-	// forward (R38); kinds 2 and 3 belong to the vault and survive. Then every
-	// kept record is decrypted under the retiring KWK_secrets — keeping the
-	// entangled_key's plaintext as the K_P step 4 needs — and re-encrypted
-	// under KWK_secrets' with a fresh nonce and its AAD unchanged. A record
-	// that does not open, or one left un-re-encrypted, abandons the rotation
-	// before the flip (§1, fail closed).
-	pruneSecrets(reg, u.k.slots)
+	// Step 3, the secrets section. Pruned against the set this commit writes,
+	// so a removal or a replacement that rotates drops the escrow record of
+	// every recovery slot that leaves and never carries it forward (R38);
+	// kinds 2 and 3 belong to the vault and survive. Then every kept record is
+	// decrypted under the retiring KWK_secrets and re-encrypted under
+	// KWK_secrets' with a fresh nonce and its AAD unchanged. A record that
+	// does not open, or one left un-re-encrypted, abandons the rotation before
+	// the flip (§1, fail closed) — the entangled_key included when a new K_P
+	// replaces it: it must still open, and is then discarded.
+	pruneSecrets(reg, slots)
 	kwkS, kwkSNew := kdf.KWKSecrets(u.vmk(), vaultID), kdf.KWKSecrets(newVMK, vaultID)
 	defer kdf.Zero(kwkS)
 	defer kdf.Zero(kwkSNew)
+	// recKP is the entangled_key record's own plaintext, the K_P step 4 wraps
+	// from when no new one is written. The defer reaches this buffer and
+	// nothing else, never *kpNew, which the caller installs after the call.
+	var recKP [32]byte
 	var kp *[32]byte
-	defer func() {
-		if kp != nil {
-			kdf.Zero(kp[:])
-		}
-	}()
+	defer kdf.Zero(recKP[:])
+	metKP := false
 	for i := range reg.Secrets {
 		rec := &reg.Secrets[i]
 		pt, err := openSecretWith(kwkS, vaultID, rec)
@@ -679,8 +953,16 @@ func (u *Unlocked) Rotate() error {
 			return corrupt("the secrets record of kind %d, id %x, does not unwrap under the current KWK_secrets", rec.Kind, rec.ID)
 		}
 		if rec.Kind == format.SecretEntangledKey {
-			kept := pt
-			kp = &kept
+			metKP = true
+			if kpNew != nil {
+				// The old K_P opened, which is all the rule asks of it; it is
+				// in no record of the new state (DESIGN trap 30).
+				kdf.Zero(pt[:])
+				pt = *kpNew
+			} else {
+				recKP = pt
+				kp = &recKP
+			}
 		}
 		next, err := sealSecretWith(kwkSNew, vaultID, rec.Kind, rec.ID, pt)
 		kdf.Zero(pt[:])
@@ -688,6 +970,15 @@ func (u *Unlocked) Rotate() error {
 			return err
 		}
 		*rec = next
+	}
+	// Turning the password on: the section had no entangled_key, and the new
+	// K_P's record is created in its place in the section's order.
+	if kpNew != nil && !metKP {
+		rec, err := sealSecretWith(kwkSNew, vaultID, format.SecretEntangledKey, [16]byte{}, *kpNew)
+		if err != nil {
+			return err
+		}
+		reg.SetSecret(rec)
 	}
 	// The retiring VMK, keyed by the generation it held — the value before
 	// step 1's increment (§8 step 3, §18.2). Two records for one generation
@@ -701,33 +992,52 @@ func (u *Unlocked) Rotate() error {
 		return err
 	}
 	reg.SetSecret(hist)
-	// The header is copied forward, so its entangle byte still decides whether
-	// step 4 needs K_P; the section it was read from has just been checked.
-	if err := requireEntangleKey(u.k.hdr, kp); err != nil {
+	// The new recovery slots' escrow, sealed under KWK_secrets' alone: no new
+	// key is ever readable with a VMK an old one opens (R38, §8).
+	for i := range adds {
+		a := &adds[i] // by index: a range copy would be a key the caller's defer never zeroes
+		pt := a.key.Padded()
+		rec, err := sealSecretWith(kwkSNew, vaultID, format.SecretRecoveryEscrow, a.rid, pt)
+		kdf.Zero(pt[:])
+		if err != nil {
+			return err
+		}
+		reg.SetSecret(rec)
+	}
+	// The header the commit writes decides whether step 4 needs K_P; the
+	// section it was read from has just been checked.
+	h, wrapKP := u.k.hdr, kp
+	if hdr != nil {
+		h, wrapKP = *hdr, kpNew
+	}
+	if err := requireEntangleKey(h, wrapKP); err != nil {
 		return err
 	}
 
-	// Step 4: the new VMK into every active slot, from stored public keys —
-	// a hardware slot from a fresh ECDH against its slot_pubkey plus that K_P,
-	// a software slot from a fresh ML-KEM encapsulation. Any failure is fatal:
-	// there is no password to ask for and nothing to defer (§8).
-	slots := cloneSlots(u.k.slots)
+	// Step 4: the new VMK into every active slot of the set this commit
+	// writes, from stored public keys — a hardware slot from a fresh ECDH
+	// against its slot_pubkey plus that K_P, a software slot from a fresh
+	// ML-KEM encapsulation. A prepared recovery slot carries the public keys
+	// wrapHybrid reads, so it is wrapped here like any other and no new record
+	// is ever wrapped at the retiring generation. Any failure is fatal: there
+	// is no password to ask for and nothing to defer (§8).
 	for i := range slots {
 		s := &slots[i]
 		if s.State != format.SlotActive {
 			continue
 		}
-		if err := rewrap(s, kp, vaultID, newVMK, newGen); err != nil {
+		if err := rewrap(s, wrapKP, vaultID, newVMK, newGen); err != nil {
 			return err
 		}
 	}
 
-	// Step 5: the slot region, the registry, then the superblock flip. The
-	// handle's K_P is left as it was — a rotation re-wraps K_P, it never
-	// replaces it (§18.1).
+	// Step 5: the slot region, the registry, then the superblock flip; with a
+	// new header, commit's agreement check runs against it. The handle's K_P
+	// is left as it was — a rotation re-wraps K_P, it never replaces it
+	// (§18.1); a new one is the caller's to install.
 	metaNew := kdf.MetadataKey(newVMK, vaultID)
 	defer kdf.Zero(metaNew)
-	if err := u.k.commit(txn{slots: slots, reg: reg, meta: metaNew, gen: newGen}); err != nil {
+	if err := u.k.commit(txn{slots: slots, hdr: hdr, reg: reg, meta: metaNew, gen: newGen}); err != nil {
 		return err
 	}
 	// The new VMK goes over the retiring one in the page it lived in, which
@@ -735,6 +1045,74 @@ func (u *Unlocked) Rotate() error {
 	copy(u.vmkBuf.Bytes(), newVMK[:])
 	u.gen = newGen
 	return nil
+}
+
+// checkAdds holds a rotation to R38's "every recovery slot has its record
+// from the commit that creates it": adds are exactly the escrow plaintexts of
+// the active recovery records of slots that the live set does not have, one
+// each. A recovery record the live set already has keeps the record it has,
+// which the secrets loop carries forward.
+func checkAdds(live, slots []format.SlotRecord, adds []recoveryAdd) error {
+	known := make(map[[16]byte]bool, len(live))
+	for i := range live {
+		known[live[i].RecipientID] = true
+	}
+	arriving := make(map[[16]byte]bool)
+	for i := range slots {
+		s := &slots[i]
+		if s.State == format.SlotActive && s.Type == format.SlotRecovery && !known[s.RecipientID] {
+			arriving[s.RecipientID] = true
+		}
+	}
+	seen := make(map[[16]byte]bool, len(adds))
+	for _, a := range adds {
+		if !arriving[a.rid] || seen[a.rid] {
+			return fmt.Errorf("%w: an escrow plaintext for no recovery slot this rotation creates", ErrParams)
+		}
+		seen[a.rid] = true
+	}
+	if len(seen) != len(arriving) {
+		return fmt.Errorf("%w: a recovery slot this rotation creates has no escrow plaintext", ErrParams)
+	}
+	return nil
+}
+
+// Retire finishes the retirement the file owes (R41), in full: while
+// Keystore.RetireOwed holds, a retiring commit where one is needed — the live
+// slot region, byte for byte and the rest of the copy zeroed, written into the
+// copy the live superblock does not name, never into the live copy, and the
+// registry re-sealed with only its date advanced, at the handle's generation,
+// the superblock going to the losing copy as every commit's does, its scrub
+// following its flip — and the scrub alone where only unnamed registry units
+// remain, or only the fsync a trim or a scrub's zeros wait for, which the scrub
+// makes even when it finds nothing left to write: zeros the cache already reads
+// are no proof that the disk holds them. A retirement has landed only once that
+// fsync has. One retiring commit retires a file this writer made; a file that
+// carries a legacy tail (bytes past slot_region_len in its live copy, or past
+// the tag in its live registry's last 4 KiB unit) takes a second, once that
+// copy and that registry are no longer live. Never a third: a file still owed
+// after two is a corruption (wrapping format.ErrInvalid). A scrub's I/O error,
+// its fsync's included, is returned and leaves the file owed and the handle
+// sound. Nothing is written when nothing is owed. On a tampered region (R25)
+// nothing is copied forward: a registry-only commit stands in for each retiring
+// commit, zeros go over the slot region copy neither superblock copy names, and
+// the scrub runs; ErrTampered is returned only while the live copy's own tail
+// remains, which only a region write could clear.
+//
+// A tampered region does not refuse it, since what it does there copies
+// nothing forward: current(), not mutable(). The verdict is the one this
+// handle made at unlock, or R25's over the region as it is now, either of
+// which keeps the region from being written forward.
+func (u *Unlocked) Retire() error {
+	if err := u.current(); err != nil {
+		return err
+	}
+	if !u.k.RetireOwed() {
+		return nil
+	}
+	meta := kdf.MetadataKey(u.vmk(), u.k.sb.VaultID)
+	defer kdf.Zero(meta)
+	return u.k.retire(meta, u.gen, u.tampered != nil || u.k.reg.VerifySlotRegion(u.k.region) != nil)
 }
 
 // rewrap wraps vmk into an existing record from its stored public keys,

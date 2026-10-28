@@ -5276,3 +5276,212 @@ their first lines' width again (263 → 207, 288 → 232, 239 → 188 px); hover
 cover both lines, screen-reader names are unchanged. APP.md §13's menu clause says so. Seen and
 left: "This archive is closing" on a file row's menu is 156 px of text in a 159 px measure, so
 the real window's metrics may give it two lines, which the rule allows.
+
+**VMK rotation at a removal and a password change, and replacing the recovery keys: designed and
+built** (ruled 2026-10-27; built 2026-10-28). The entry of 2026-10-27, *VMK rotation at a slot's
+removal and a password change: build it*, ruled the rotation built; this is
+how, after the designer's six critiques, two outside reviews and the owner's rulings on each
+(docs/research/vmk-rotation.md, whose section *As built* says where the build departed from it;
+from now on the specs, not that document, are the authority). *One commit*: the keystore gained
+`RemoveSlotAndRotate`, `ChangeEntangledPasswordAndRotate`, `SetEntangledAndRotate` and
+`ReplaceRecoveryAndRotate` over one internal rotation that `Rotate` now also calls, pruning and
+wrapping the slot set the commit writes rather than the live one; FORMAT §8 already allowed it
+and now says so. Two commits were declined: a stop between them leaves a removal without its
+rotation that nothing on disk records, and the other order wraps the new VMK into the slot being
+removed. *The retiring commit* (FORMAT R41): the losing superblock copy kept the whole state
+before every commit, and a registry-only save left the other slot region copy as it was, so
+after a removal the file itself still opened with the removed credential; every act that writes
+the slot region, an enrolment included, is now followed by a full commit that writes the live
+region into the copy that is not live, its rest zeroed, and re-seals the registry with only its
+date advanced, and every region write zeroes the rest of its copy. The live copy is never
+written in place, which is what FORMAT §4 doubles the region to avoid: a file that holds an old
+tail there takes a second retiring commit once the first has made the other copy live, and one
+still owed after two is corrupt. *No registry left unnamed* (the second review's finding 1,
+taken as written): a registry no superblock copy names is not inert, as the design first said —
+AES-GCM is a counter mode, and with the Metadata key it was sealed under and one known block,
+every registry beginning with the same sixteen bytes, its holder reads the rest — so every
+registry write pads its last 4 KiB unit with zeros, and every commit, after its flip, writes
+zeros over every 4 KiB unit of the registry area that no superblock copy's registry touches, up
+to the file's physical end, which the writer keeps, since a commit that failed before its flip
+can leave a registry past the end of the last one: never a unit a reader reads, never a
+superblock, so the zero-fill has no commit point, and never once another writer has committed,
+which it reads both superblock copies again to know. *Made durable* (ruled on the first review's
+finding that a failed retirement was only logged): the mark is the file's own bytes — a
+retirement is owed while either region copy holds anything but the live region or zeros, the
+losing superblock copy is damaged, of another vault or generation, names a registry outside the
+file or anything but the live region, or the registry area holds a nonzero byte outside the two
+named registries, a byte that cannot be read counting as owed while the vault still opens — so
+it survives a failure, a crash, a reopen and a copy, and the unlock finishes one before the
+Session is installed, as *Finish setting up* does before its first unlock method. While a region
+copy or the losing superblock copy is owed, a registry-only save carries one retiring pass in
+its own flip, and is made as it is where that pass cannot be written. *Where it cannot be
+finished* (ruled 2026-10-27 on the second review, R-A): the vault stays readable, and every
+mutation that writes a slot, an archive record or a secret, and every backup, waits behind a
+barrier until the retirement has landed in full, each first trying to finish it; the content of
+an existing archive does not wait, since a content write changes no key and writes only the
+archive's receipt, which the design verified operation by operation, and an archive's key, which
+no vault re-key changes, reaches content written before and after alike. As built the barrier
+holds the keystore acts, the export, creating, re-keying, forgetting, restoring and deleting an
+archive, the merge and its inspection, *Finish setting up* and, deferred rather than refused,
+the purge at unlock; a receipt, a verify's hash, an archive's name, description, hidden flag and
+path and the vault's lock times are not held. Its state is read from the file's bytes and kept
+with the lock screen's facts, so it holds across a lock and a Broken state; unknown outcomes
+stay Broken; a retirement that reports an error but leaves nothing owed has landed; a Tampered
+vault that owes is retired as far as R25 allows — a registry-only commit in place of each
+retiring one, zeros over the slot region copy no superblock copy names, the zero-fill
+— and refuses the archive changes the barrier holds only while a live copy's own tail
+remains, until a good copy is imported, the core admitting them on a Tampered vault that
+owes nothing and the page greying them either way, while the keystore acts and the export
+are refused on any Tampered vault, as they always were; a commit that fails before its
+flip is retired at once inside its own act; an import over a vault that still owes keeps
+a dated copy that still opens with what the owed change withdrew, which its confirmation
+says. Revision 3's stricter reading, the vault kept locked, was ruled out, and so was
+its gate on archive content. A superblock mark (`rotation_pending` reused) was declined:
+unauthenticated, blind to files written before, and the bytes are the hazard itself. The first
+review's lighter mirror-and-wipe was declined too: a second write path beside `commit`, and one
+that cannot clear a tail in the live copy without writing it in place; its merits — no registry
+sealed, no date moved, a shape the reader already accepts — were real. An earlier draft's
+reason, that two bodies give the reader a fallback, was wrong and was struck: a reader chooses a
+superblock copy by its checksum alone, and FORMAT has no fallback on a damaged body, which would
+be a rollback lever.
+
+*One ceremony*: `Keys.RemoveSlot(id, rekey, backupPath)`, `Keys.ChangeEntangledPassword(rekey,
+backupPath)`, `Keys.SetEntangled(on, rekey, backupPath)` and `Keys.RotateNow(backupPath)` take
+the choice as arguments, `Keys.BeginEnroll(kind, label, withRecoveryKey)` the switch below,
+their call IDs unchanged, and `Keys.ReplaceRecoveryKeys(backupPath)` is new; the user proves an
+unlock method once, is not asked for the YubiKey a re-keying removal takes away, and a removal
+the invariant would refuse is refused before any ceremony, as is a backup that would hold no
+recovery key; a lock that lands after the commit ends the act done, not failed; a record that
+does not open is `vault.invalid`, not `archive.invalid`. *The questions*: DESIGN §5's words,
+naming the method ("Why are you removing this YubiKey?"), the re-keying answer first and
+pre-selected, each answer saying what it does; a password, removed or changed, is asked whether
+someone else may know it; turning the password on, whether the vault file could have been copied
+before; turning it off asks nothing. *The limit*, said plainly under every question: "Re-keying
+protects the future, not the past: whatever someone could open until now, they may already have
+copied.", with what the recovery keys' escrow leaves open and the act that closes it; no dialog
+promises any longer that an earlier copy "reaches no archive created from now on" while its
+recovery keys still open the vault. The bodies of the password change and the re-key say that
+one unlock method proves it is you and the other YubiKeys need not be present; they said no
+YubiKey was needed. The change's disclosure says there is no field for the old password, while a
+YubiKey's proof still asks the current one; it said the old password was not asked for. *The
+backup is taken after the change* (ruled 2026-10-27, reversing 2026-09-07 and 2026-10-17, which
+took it before and ruled "no backup means no rotation"), inside the act's ceremony, at the
+vault's new key, by one rule in five dialogs, ticked on every answer that re-keys, since the
+act's own re-key leaves every earlier backup at the vault's old key; and only once the
+retirement has landed, being otherwise skipped and said so, its stamp unchanged: a backup taken
+before is at the vault's key being retired, and adopting it would bring the vault's retired key
+back. The stamp now records the generation and the recovery keys a backup holds, so the backups
+card says when the last backup predates a re-key or holds only replaced recovery keys; the
+import's confirmation says when a copy predates a re-key, from the file's own generation against
+the vault's. *Replace recovery keys…* (ruled 2026-10-27; it was left undone on 2026-09-07, and
+the first review's option of folding it into the removal was declined): an act of its own in the
+head of *Unlock methods*, one ceremony and one commit — the proof, then as many new recovery
+keys as the vault has, each with the old one's label and an ID that no unlock method of the
+vault and no other new recovery key shows, held in a locked page and shown in the recovery key's
+dialog until kept, then its one confirmation, which pairs each new ID with the one it replaces,
+then the commit that adds them, removes every old recovery key and re-keys, so no new recovery
+key is ever escrowed where an exposed VMK reads it. No recovery key's showing asks a second time
+(R-B: 2026-09-09 holds everywhere, the replacement included; the design's first reading of the
+quoted 2026-09-07 words, a second confirmation for a recovery key written down, was retired, and
+SCOPE and DESIGN were brought to 2026-09-09's words). A cancel or a failure before the commit
+changes nothing, and the page names the recovery keys shown and never added; an outcome not
+known, a conflict included, which may come after the replacement committed, says to keep every
+sheet until the Vault page's IDs, after a reopen, decide it, never to destroy them. Its end says
+to destroy the replaced recovery keys' sheets once the new backup opens, and of the earlier
+backups only what is true: they still open with the replaced recovery keys, and this vault can
+still import archives from them (FORMAT §18.2). *The chain*: the removal's "lost"
+path, the password change's "someone else may know it" path and a re-keying turn-on point onward
+in their info line and, as a button, in their end, saying when it is needed — *Add an unlock
+method…* first where a YubiKey's removal left the vault with recovery keys alone, then the
+password where it is on, then *Replace recovery keys…*, whose own end offers the password where
+it is on and was not changed before it. The end decides from what the act committed, carried in
+its final state, not from a slot list read before. A chain is the acts begun from one another's
+ends: within one, no end points back to recovery keys or a password the chain itself
+changed; an act begun from the page starts a new chain, so a later exposure gets the
+whole advice again (the second review's finding 6: the first design suppressed it by
+every recovery key made since the page loaded). Each act is its own commit, not one
+repair: until the chain's last lands, the recovery keys an earlier copy held still
+open the vault. *The recovery-key proof* (ruled 2026-10-27, narrowing 2026-10-17's
+"the dialogs offer no recovery key"): a re-keying removal of the vault's only YubiKey
+proves with a recovery key, and *Add an unlock method…* adding a YubiKey or a recovery
+key offers *Use recovery key instead* under its wait and *Use recovery key* at its *No
+match*, the one exception APP §6's *No match* rule now names; a password's removal still proves
+with the password, and nothing else does. Cryptographically it adds nothing the VMK it yields
+does not give; through the app it lets a recovery key enrol a YubiKey, and a showing is
+authorised by a protector, which may itself have been enrolled with a recovery key, so the
+replacement and the recovery key's removal ask the user to remove any unlock method they did not
+add. The case the feature exists for — one YubiKey, lost, one recovery key — is its acceptance
+scenario: unlock with the recovery key, add the new YubiKey with it, remove the lost one with a
+re-key, change the password if it is on, replace the recovery key; with no new YubiKey yet, a
+second recovery key added the same way lets the lost one be removed at once. *Finish setting up*
+is refused before its ceremony while the vault's password is on (`vault.setup_password_on`),
+since a removal can now leave such a vault with recovery keys alone and `AddFirstWayIn` cannot
+take its header; the lock screen greys it, says why in its line and gives the accent to *Unlock
+with recovery key*. *Ends*: "Unlock method removed and vault re-keyed", "Password changed and
+vault re-keyed", "Password turned on and vault re-keyed", "Password changed", "Recovery keys
+replaced and vault re-keyed"; the change of the password has its own ceremony kind, `password`,
+and the replacement `replace`. The remove dialog's body no longer says a removed YubiKey or
+password still opens backups: a backup holds the recovery keys only.
+
+*As built* (2026-10-28), in six parts, each built against the design and reviewed, and repaired
+where its review asked, with an integration review and repair of the first three before the
+rest: the keystore's retirement, its combined commits and the replacement, the app and its
+barrier, the bindings and the UI mock, the page's logic and copy, its components. The specs say
+what was built where it departs from the design; these departures matter to a reader. The owed
+condition's losing-copy clause also counts another vault's copy and a registry extent outside
+the file, and a byte that cannot be read counts as owed while the vault still opens (the design
+was silent; R-A asks for a readable vault). A registry save carries the retiring pass only while
+a region copy or the losing superblock copy is owed, earlier registry bytes alone being left to
+every commit's own zero-fill. A retirement that reports an error with nothing left owed is
+treated as landed, never as a failure; a trim or a zero-fill whose fsync failed is still owed,
+however the bytes read back through the cache, and a retry makes that fsync even when it finds
+nothing left to zero (the outside review of the diff, findings 1 and 2). A new archive's key,
+and an archive re-key's, is wrapped inside the registry write that publishes it, under the
+Session that write commits with; a re-key drops the records a merge has staged, and a merge
+refuses records wrapped at another generation; the barrier before a registry write refuses while
+a ceremony or a pending touch holds the vault's handle, whatever the cached fact says, and an
+archive re-key meets it before anything reads the vault; the replacement's warning names the
+idle time the session runs on, not the minutes as stored (the same review, findings 3, 4, 5 and
+9, and the review of those repairs). The date and the size the Vault page shows follow every
+retirement the core makes, not only the barrier's; a reopen refused as busy keeps a failed
+retirement's warning for the next open of the same vault. Every act of the Vault page, the
+reveal included, is refused with `op.in_progress` while a delete is between removing an
+archive's file and forgetting its record. A lock that lands between a recovery key's enrolment
+and its showing ends the act done, the recovery key shown again from the Vault page. A Tampered
+vault's export stays refused, as it always was (the design's §2.4 said it was admitted). A
+recovery key's enrolment ends in the recovery key's dialog, not at Done (save when a lock landed
+before the recovery key could be shown), so its next step is said in the Vault page's notice
+slot once that dialog closes; an enrolment's commit leads "Adding the unlock method…". A count
+of one is singular in every line that counts the recovery keys — the info lines, the ends, the
+replacement's dialog and its keep mode, the recovery note — where the design gave several only
+in the plural; the command alone keeps "Replace recovery keys…", since
+a command names the act, and the *How this works* texts keep "the recovery keys it held", an
+earlier copy's, uncounted. The lock screen's line under a greyed *Finish setting up…* is its
+reason, not the setup line. The bindings are generated as build/Taskfile.yml's generate task
+runs them, with the build flags, which change nothing in the output (the design named the line
+before it and no flags). *Two defects found on the way and fixed*: the Re-key dialog's *Back up,
+then re-key* never re-keyed — the page began the rotation while the export's ceremony still ran,
+the core refused it with `ceremony.in_progress`, and the mock hid it; the backup written inside
+the act's own ceremony, after the re-key, removed the fault, and the act's tests land both. And
+two app tests, TestExtractOfAName255UnitsLong and TestDragOutRunsAsAnOperation, compared
+`t.TempDir()` paths as strings, which with `GOTMPDIR` exported in its POSIX form from Git Bash
+hold both kinds of slash, so they had failed since they were added while the files landed where
+they should; fe9b2ec cleans the paths before comparing. *Not done here*: a *Change…* for the
+standalone password; a recovery-key proof for a vault whose standalone password is forgotten; a
+lock-screen path that gives a vault left with recovery keys alone, its password on, a YubiKey
+through `AddSlot`; erasing a shown recovery key's digits from memory rather than dropping the
+last reference to them; re-keying every archive in one act. *Seen in the build and left*: the
+lock screen's setup line says "its recovery key" also where a removal left two and the password
+is off, since the status carries no count while Locked; a replacement whose outcome is unknown
+offers *Start again*, unseen behind Broken; the *How this works* texts say "the recovery keys it
+held" on a vault that has none, and the bodies of the re-key and the password change say "the
+other YubiKeys need not be present" on a vault with one; the on-screen invariant still says a
+recovery key is always kept, which two YubiKeys with the password off need not. *After the
+specs* (2026-10-28), two layout fixes from the last screenshots of the build (headless Edge,
+1086 × 694), no word changed: a refusal of the Vault page's own press now brings its notice slot
+into view, since the barrier's refusal of *Export backup…* had opened its bar above a short
+window and the press seemed to do nothing; and the import dialog *Replace this vault with a
+copy* is 520 px wide and says its confirmation before the cards and "Prove it with", a press the
+cards refuse bringing them into view, since its content ran to 861–901 px in a 654 px box and
+the tick its greyed *Replace vault* waits for stood below the fold. The import dialog's order is
+the build's, not a ruling: the owner may reverse it.

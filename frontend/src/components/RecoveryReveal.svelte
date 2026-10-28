@@ -30,13 +30,31 @@
   // groups drawn once per dialog, each ticked when its six digits match.
   // What is typed there is compared in this page's memory and nowhere
   // else, and goes with the dialog.
+  //
+  // Keep mode (keep set) is the same dialog for a new key Replace recovery
+  // keys… shows before it is the vault's (APP.md §13, ruled 2026-10-27,
+  // R-B), which the Vault page mounts in the act's dialog's place while the
+  // ceremony is at StepKeepKey, one key after another (keyed on the URL).
+  // Its differences: the title counts the keys, a caption says which old
+  // key this one replaces so the new sheet goes where the old one is, the
+  // lead says from when the key opens the vault, and the digits' caption
+  // that nothing changes until the confirmation. Each way still counts at
+  // once, with no second confirmation: the act's own confirmation, before
+  // its commit, pairs every new key with the one it replaces. The band goes
+  // on to the next key (lib/reveal.ts keepBand), its press answering the
+  // ceremony's kept prompt; Cancel is its one way out, which cancels the
+  // replacement, and Escape and the backdrop do nothing here as in every
+  // showing. A key that cannot be shown leaves Cancel alone: any other
+  // button would answer that a key the user never saw was kept.
   import { tick } from "svelte";
   import Dialog from "./Dialog.svelte";
-  import { Keys, Shell, errorOf } from "../lib/api";
+  import { Keys, Shell, Vault, errorOf, submitSecret } from "../lib/api";
   import { codeText, revealCopy } from "../lib/strings";
   import { recoveryKeyFileName, recoveryKeyTitle } from "../lib/print";
-  import { band, digitsOnly, keptSomehow, pickGroups, readbackMark, ways } from "../lib/reveal";
-  import type { Act } from "../lib/reveal";
+  import { band, digitsLine, digitsOnly, keepBand, keepTitle, keptSomehow, pickGroups, readbackMark, ways } from "../lib/reveal";
+  import type { Act, KeepAct } from "../lib/reveal";
+  import { digitsLater } from "../lib/rekey";
+  import { staysUnlocked } from "../lib/foot";
   import { store } from "../lib/state.svelte";
 
   interface Props {
@@ -47,11 +65,22 @@
     // and the print, heads the sheet, and is the dialog heading's label so
     // the sheet can be told from another one later.
     recoveryId?: string;
-    ondone: () => void;
+    ondone?: () => void;
+    // keep: keep mode, a replacement's new key — the prompt its press
+    // answers, which of the new keys this is and how many, and the caption
+    // that names the old key it replaces. oncancel is keep mode's Cancel,
+    // which cancels the replacement.
+    keep?: { promptId: string; index: number; count: number; replaces: string };
+    oncancel?: () => void;
   }
-  let { url, kind, vaultName, recoveryId = "", ondone }: Props = $props();
+  let { url, kind, vaultName, recoveryId = "", ondone, keep, oncancel }: Props = $props();
   let digits = $state("");
   let failed = $state(false);
+  // Keep mode: the handle is no longer held (a save answered
+  // ceremony.stale_prompt), so the key cannot be kept from here; and the
+  // press already answered, so a second one asks nothing of a prompt gone.
+  let stale = $state(false);
+  let answered = $state(false);
   let savedTo = $state("");
   let printedAt = $state("");
   // Whether *Print…* has been pressed and whether *I have written it down*
@@ -90,7 +119,7 @@
   function finish() {
     typed = ["", ""];
     void Keys.DropRecoveryKey(handle).catch(() => {});
-    ondone();
+    ondone?.();
   }
 
   async function save() {
@@ -101,7 +130,10 @@
       savedTo = p;
     } catch (e) {
       const code = errorOf(e).code;
-      store.notice(code === "ceremony.stale_prompt" ? revealCopy.notHeld : codeText(code), "error");
+      // In keep mode the ordinary words ("show it again from the Vault
+      // page") are false before the commit: the dialog says keepGone.
+      if (keep && code === "ceremony.stale_prompt") stale = true;
+      else store.notice(code === "ceremony.stale_prompt" ? revealCopy.notHeld : codeText(code), "error");
     }
   }
 
@@ -148,6 +180,44 @@
   const foot = $derived(band({ savedTo, printed, wroteDown }));
   const kept = $derived(keptSomehow({ savedTo, printed, wroteDown }));
 
+  const dialogTitle = $derived(keep ? keepTitle(keep.index, keep.count) : kind === "reveal" ? revealCopy.title : revealCopy.titleNew);
+  // The digits' caption: keep mode's says nothing changes until the
+  // confirmation; a recovery key added with Use recovery key instead says
+  // when it can be shown again, no YubiKey or password being at hand to
+  // prove with (lib/rekey.ts digitsLater); any other promises the Vault
+  // page's showing.
+  const digitsCaption = $derived(
+    keep ? digitsLine(digits.length, "keep", keep.count) : digitsLine(digits.length, kind === "enroll" && digitsLater(store.lastAct) ? "later" : ""),
+  );
+
+  // Keep mode's band (lib/reveal.ts keepBand). Stay unlocked stands in the
+  // idle deadline's last minute, as the status bar's does, since this
+  // dialog stands over the status bar: keeping a key by hand is minutes
+  // without input, and the press is real input.
+  const gone = $derived(failed || stale);
+  const stay = $derived(!!store.status && store.unlocked && staysUnlocked(store.status.locksAt, store.status.absoluteAt, store.now));
+  const keepFoot = $derived(keep ? keepBand({ savedTo, printed, wroteDown }, { last: keep.index >= keep.count, gone, stay }) : []);
+
+  // The key is kept: the ceremony's prompt answered, the handle dropped
+  // (the core drops what it minted at the act's end as well) and the
+  // readback's fields cleared. The next key's dialog takes this one's
+  // place on the next event.
+  function keepNext() {
+    if (!keep || answered) return;
+    answered = true;
+    typed = ["", ""];
+    checking = false;
+    submitSecret("kept", keep.promptId, "");
+    void Keys.DropRecoveryKey(handle).catch(() => {});
+  }
+
+  function keepAct(a: KeepAct) {
+    if (a === "wrote") wroteDown = true;
+    else if (a === "next") keepNext();
+    else if (a === "stay") void Vault.Activity().catch((e) => store.notice(codeText(errorOf(e).code), "error"));
+    else if (a === "cancel") oncancel?.();
+  }
+
   function onInput(i: number, e: Event) {
     const el = e.currentTarget as HTMLInputElement;
     const v = digitsOnly(el.value);
@@ -157,19 +227,28 @@
   }
 </script>
 
-<Dialog title={kind === "reveal" ? revealCopy.title : revealCopy.titleNew} onclose={() => {}} medium>
+<Dialog title={dialogTitle} onclose={() => {}} medium>
   {#snippet heading()}
     {#if recoveryId && !failed}<span class="kid" title={revealCopy.idLabel} aria-label="{revealCopy.idLabel} {recoveryId}">{recoveryId}</span>{/if}
   {/snippet}
-  {#if failed}
+  {#if failed && !keep}
     <p>{revealCopy.gone}</p>
     <div class="bar"><svg class="i i-14"><use href="#i-info" /></svg><span>{revealCopy.goneHow}</span></div>
   {:else}
+    <!-- Keep mode names the key this one replaces first, so the new sheet
+         goes where the old one is. -->
+    {#if keep}<p class="t-quiet">{keep.replaces}</p>{/if}
     <!-- Both risks, one sentence each (direction 9): what the key opens,
-         and what it cannot open without. -->
-    <p>{revealCopy.leadOpens}</p>
+         and what it cannot open without. A new key in keep mode opens
+         nothing until the confirmation, so its first sentence says from
+         when it does. -->
+    <p>{keep ? revealCopy.keepOpens : revealCopy.leadOpens}</p>
     <p>{revealCopy.leadNothing}</p>
-    {#if !digits}
+    {#if keep && gone}
+      <!-- In place of the digits: nothing has changed, and the way on is
+           to cancel and start again. -->
+      <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{revealCopy.keepGone}</span></div>
+    {:else if !digits}
       <p>{revealCopy.loading}</p>
     {:else}
       <div class="digits">
@@ -217,7 +296,7 @@
         </div>
         <p class="t-quiet">{revealCopy.onlyACheck}</p>
       {/if}
-      <p class="t-quiet">{revealCopy.digitsLine(digits.length)}</p>
+      <p class="t-quiet">{digitsCaption}</p>
       <p class="t-quiet">{revealCopy.textFile}</p>
       {#if savedTo}
         <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{revealCopy.savedTo(savedTo)}</span></div>
@@ -231,7 +310,14 @@
     {/if}
   {/if}
   {#snippet actions()}
-    {#if failed}
+    {#if keep}
+      <!-- Keep mode's band: the act, any other way on, the way out
+           (lib/reveal.ts keepBand). The act waits for the digits, and is
+           pressed once. -->
+      {#each keepFoot as b (b.act)}
+        <button type="button" class="btn" class:accent={b.accent} class:subtle={b.subtle} disabled={b.act !== "cancel" && b.act !== "stay" && (!digits || answered)} onclick={() => keepAct(b.act)}>{b.label}</button>
+      {/each}
+    {:else if failed}
       <button type="button" class="btn accent" onclick={finish}>{revealCopy.done}</button>
     {:else}
       <!-- One button, lib/reveal.ts band: *I have written it down* until a

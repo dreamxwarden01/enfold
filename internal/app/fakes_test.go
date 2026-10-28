@@ -700,6 +700,9 @@ func newHarness(t *testing.T, cards *fakeCards, hwPub []byte) *harness {
 func newHarnessEntangled(t *testing.T, cards *fakeCards, hwPub []byte, password string) *harness {
 	t.Helper()
 	dir := t.TempDir()
+	// Before the core's Close is registered, so that it runs after it
+	// (tempdir_test.go).
+	removeTempDirs(t, dir)
 	vault := filepath.Join(dir, "vault.eks")
 	rk, err := kdf.NewRecoveryKey()
 	if err != nil {

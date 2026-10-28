@@ -522,7 +522,10 @@ func TestAPanicInsideTheCommitLeavesNoTransactionOpen(t *testing.T) {
 // holds, and 255 plus a suffix is a name no volume will take — the file could
 // not be extracted at all (the outside audit of 2026-09-09).
 func TestExtractOfAName255UnitsLong(t *testing.T) {
-	dir := t.TempDir()
+	// Cleaned, since the test compares paths as strings: with GOTMPDIR
+	// exported from Git Bash in POSIX form, t.TempDir() returns a path
+	// with both kinds of slash, which filepath.Join never produces.
+	dir := filepath.Clean(t.TempDir())
 	longest := strings.Repeat("n", format.MaxNameUnits)
 	tmp, err := extractTempName(filepath.Join(dir, longest))
 	if err != nil {

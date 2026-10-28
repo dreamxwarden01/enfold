@@ -200,7 +200,10 @@ func TestDragOutRunsAsAnOperation(t *testing.T) {
 	h.unlockWithPassword()
 	id, aID, dID, _ := h.dragSource(t)
 	drags := h.useDrags()
-	stage := t.TempDir()
+	// Cleaned, since outcomes are compared to it as strings: with
+	// GOTMPDIR exported from Git Bash in POSIX form, t.TempDir() returns
+	// a path with both kinds of slash, which filepath.Join never produces.
+	stage := filepath.Clean(t.TempDir())
 	drags.script = func(f *fakeDrag) (dragout.Result, error) {
 		// A hover, a release, the drop's own request: Preparing, the
 		// extraction, Awaiting.
@@ -309,7 +312,7 @@ func TestDragOutCancelDuringPreparing(t *testing.T) {
 	h.add(t, id, rootID, PolicySkip, big)
 	bigID := h.row(t, id, rootID, "big.bin").ID
 	drags := h.useDrags()
-	stage := t.TempDir()
+	stage := filepath.Clean(t.TempDir())
 	var extractErr error
 	drags.script = func(f *fakeDrag) (dragout.Result, error) {
 		f.opts.OnPhase(dragout.Phase{Step: dragout.Preparing})
@@ -370,7 +373,7 @@ func TestDragOutCancelDuringTheLastPlacement(t *testing.T) {
 	h.unlockWithPassword()
 	id, _, dID, _ := h.dragSource(t)
 	drags := h.useDrags()
-	stage := t.TempDir()
+	stage := filepath.Clean(t.TempDir())
 	var extractErr error
 	drags.script = func(f *fakeDrag) (dragout.Result, error) {
 		f.opts.OnPhase(dragout.Phase{Step: dragout.Preparing})
@@ -426,7 +429,7 @@ func TestDragOutSelfDropFinishesAtOnce(t *testing.T) {
 	h.unlockWithPassword()
 	id, aID, _, _ := h.dragSource(t)
 	drags := h.useDrags()
-	stage := t.TempDir()
+	stage := filepath.Clean(t.TempDir())
 	extracts := 0
 	drags.script = func(f *fakeDrag) (dragout.Result, error) {
 		f.opts.OnPhase(dragout.Phase{Step: dragout.Done, Reason: dragout.SelfDrop})
@@ -510,7 +513,7 @@ func TestCloseDuringAwaitingFinishesAtOnce(t *testing.T) {
 	h.unlockWithPassword()
 	id, aID, _, _ := h.dragSource(t)
 	drags := h.useDrags()
-	stage := t.TempDir()
+	stage := filepath.Clean(t.TempDir())
 	drags.script = func(f *fakeDrag) (dragout.Result, error) {
 		f.opts.OnPhase(dragout.Phase{Step: dragout.Preparing})
 		if err := f.opts.Extract(f.ctx, stage); err != nil {
@@ -684,7 +687,7 @@ func TestTheStagedCopySkipsTheFsync(t *testing.T) {
 	}}
 
 	drags := h.useDrags()
-	stage := t.TempDir()
+	stage := filepath.Clean(t.TempDir())
 	drags.script = func(f *fakeDrag) (dragout.Result, error) {
 		f.opts.OnPhase(dragout.Phase{Step: dragout.Preparing})
 		if err := f.opts.Extract(f.ctx, stage); err != nil {

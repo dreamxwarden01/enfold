@@ -3385,11 +3385,12 @@ transition starts, the tokens collapse to 0 — and the settle with them.
 - *The focus ring on a selectable row* — a row of the file list or of the Archives list — is
   an even 2 px ring drawn inside the row (an inset box shadow on its cells, never an `outline`
   on the `<tr>`, which Chromium draws per cell, unevenly, and lets the row's bottom border
-  thicken), in a green a step darker than the selected row's own ground (`--focus-row`, one
-  token per theme), never the black outer ring of buttons and inputs (ruled 2026-09-11); and
-  the ring keeps its right edge at every width — the file list gives up its Modified and Type
-  columns below two widths, and the edge moves to the last cell still shown (ruled 2026-09-12
-  after a review found it open there).
+  thicken; in a contrast theme, a box drawn over each cell in the system's colours, as
+  *Controls* below says), in a green a step darker than the selected row's own ground
+  (`--focus-row`, one token per theme), never the black outer ring of buttons and inputs (ruled
+  2026-09-11); and the ring keeps its right edge at every width — the file list gives up its
+  Modified and Type columns below two widths, and the edge moves to the last cell still shown
+  (ruled 2026-09-12 after a review found it open there).
 - *Dialogs stay put.* A dialog that offers a choice — a *Cancel*, a *Skip*, a *Replace* —
   does not close on a click outside it: the click is nothing (ruled 2026-09-10, "they have a
   Cancel"); Esc is *Cancel* where there is one, *Close* where the one action is *Close*, and
@@ -3623,7 +3624,25 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   lookbook's green radial glow, a still of Mica until the window has the material itself (ruled
   2026-11-01, reversing 2026-10-17's solid ground): `--ground-tint` from above the rail's
   top-left corner, gone 58 % of the way out over the solid ground, and seen on the rail and the
-  lock scene, the layer and its foot painting over it. A
+  lock scene, the layer and its foot painting over it. In a Windows contrast theme
+  (`forced-colors: active`) the page is drawn in the system's colours alone, by one block at the
+  stylesheet's end (ruled 2026-11-01): the selected row, the command or menu item under the
+  pointer, the accent and filled danger buttons, a ticked box and the chosen segment are
+  Highlight under HighlightText; the current rail item wears its 3 px pill and its edge in
+  Highlight (direction 5 of the design review asked for a 3 px Highlight border; the pill
+  carries the 3 px, since a border that wide would move the item's words); a focused row is a
+  2 px Highlight ring round its fill, and a CanvasText one on a selected row, where a Highlight
+  ring would vanish into the fill (direction 5 drew it Highlight on every row); what is greyed
+  is GrayText; a greyed menu item under the keyboard takes no fill but a Highlight ring, its
+  words still GrayText and its reason in the text's colour; a focused text field is framed in
+  Highlight, and every other focus ring is CanvasText; the borders that only space things — a
+  row's 4 px ends, the rail's items, the subtle buttons — are painted the Canvas, so they do not
+  show as boxes; the icons take the colour of the text they stand by, and the mark and the key
+  art, whose SVG paint the system does not force, are drawn in CanvasText on the Canvas, the key
+  art's port in GrayText and its LED in Highlight. Nothing opts out of the system's forcing but
+  what puts Highlight behind text and the rail's progress ring, whose measure is a gradient; the
+  touch does not: its green gives way to Highlight rings round a CanvasText glyph, so the
+  palette the user chose to read by wins. A
   dialog is two parts: its body — the title 20/28, 24 px all round — which scrolls when the
   window is short, and a foot band a step below the surface, behind a stroke, 20 px above and
   below its buttons and 24 at the sides, which holds them in equal widths and wraps a button

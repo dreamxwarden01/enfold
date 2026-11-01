@@ -2,6 +2,14 @@
 browser: serves frontend/dist and answers POST /wails/runtime with canned
 data. POST /mock/state replaces parts of the state from the outside.
 
+Tours. tools/uimock/cdp.mjs is the headless Edge driver for this mock: it
+shoots the page at the native 125 % scale with the scrollbars shown
+(headless Edge's own bar; whether WebView2 lays out and draws the same is
+for a screenshot of the real window to confirm), starts its own copy of
+this server on a port the tour owns (never the default 8125 below), and
+reads the device pixels back. tools/uimock/shoot.mjs is a small tour on
+it, and README.md beside them says how to run one.
+
 Events. The runtime has no socket here, so the mock queues what the core
 would emit and the page drains it. GET /mock/events returns the queue and
 empties it; paste this into the page once to have it dispatch them:

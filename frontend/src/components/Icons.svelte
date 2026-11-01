@@ -45,7 +45,8 @@
     <symbol id="i-eye" viewBox="0 0 20 20"><path d="M2.6 10s2.8-4.6 7.4-4.6S17.4 10 17.4 10s-2.8 4.6-7.4 4.6S2.6 10 2.6 10Z"/><circle cx="10" cy="10" r="2.2"/></symbol>
     <!-- The compact rail's toggle (direction 6): three lines, NavigationView's own glyph. -->
     <symbol id="i-menu" viewBox="0 0 20 20"><path d="M3.5 5.5h13"/><path d="M3.5 10h13"/><path d="M3.5 14.5h13"/></symbol>
-    <symbol id="i-mark" viewBox="0 0 20 20"><path d="M3.2 6.4 10 2.6l6.8 3.8v7.2L10 17.4 3.2 13.6V6.4Z" class="mark-fill"/><path d="M10 2.6v7.1l6.8 3.9" class="mark-line"/><path d="M3.2 6.4 10 9.7" class="mark-line"/></symbol>
+    <!-- The mark, the folded sheet: internal/brand's Sheet(20), its sides and top fold on whole device pixels at 125 %; brand's sheet_test.go fails when the two differ, and prints this symbol as Sheet draws it. The wash, then the flap, then the lines over both. -->
+    <symbol id="i-mark" viewBox="0 0 20 20"><path class="mark-fill" d="M3.2 6.305 9.6 2.61 16 6.305 16 13.695 9.6 17.39 3.2 13.695Z"/><path class="mark-flap" d="M9.6 2.61 16 6.305 9.6 10Z"/><path class="mark-line" d="M3.2 6.305 9.6 2.61 16 6.305 16 13.695 9.6 17.39 3.2 13.695ZM9.6 2.61 9.6 10M3.2 6.305 16 13.695"/></symbol>
     <!-- The toolbar's More and the crumbs' ellipsis (direction 3): three dots, filled, since a stroked dot of this size reads as nothing. -->
     <symbol id="i-more" viewBox="0 0 20 20"><circle cx="4.8" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.2" cy="10" r="1.3" fill="currentColor" stroke="none"/></symbol>
     <!-- The Archives bar's View (direction 6): a layout — a list beside a pane — not the eye Hide uses. -->
@@ -57,6 +58,7 @@
 
 <style>
   .sprite { position: absolute; }
-  .mark-fill { fill: var(--accent-wash); stroke: var(--accent); }
-  .mark-line { stroke: var(--accent); }
+  .mark-fill { fill: var(--accent-wash); stroke: none; }
+  .mark-flap { fill: var(--mark-flap); stroke: none; }
+  .mark-line { fill: none; stroke: var(--accent); }
 </style>

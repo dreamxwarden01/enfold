@@ -1,5 +1,7 @@
 // Package brand draws Enfold's mark and tray icons: no binary assets in the
-// repository, the same shapes at every size, both themes.
+// repository, the same shapes at every size, both themes. Sheet (sheet.go)
+// is the mark's one geometry, the folded sheet: the window's mark is drawn
+// from it, and the app icon is to be.
 package brand
 
 import (
@@ -127,8 +129,13 @@ func thickLine(x1, y1, x2, y2, width float64) func(x, y float64) bool {
 	}
 }
 
-// Mark draws the application icon: a hexagonal box with its top face
-// suggested by two edges, on a rounded ground, the accent on it.
+// Mark draws the application icon as it stands today: a hexagonal box with
+// its top face suggested by two edges, on a rounded ground, the accent on
+// it. It is not the mark's geometry: that is Sheet, the folded sheet, which
+// the window's mark and drawings come from. The app icon is to be redrawn
+// from Sheet in facets (phase 5) and this figure to go; until then the
+// window's icon (main_windows.go) and tools/appicon, which the .ico is made
+// from, still draw it.
 func Mark(size int, dark bool) *image.NRGBA {
 	cv := newCanvas(size, size)
 	s := float64(size)

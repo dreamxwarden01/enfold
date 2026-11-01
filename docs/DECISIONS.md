@@ -4673,7 +4673,8 @@ ContentDialog — 24 px body, a 20/28 title, a footer band with equal-width butt
 act first and the way out last; WinUI's 20 px checkbox and radio, the slider's 4 px track and 12
 px core, the 3 px progress line; a hyperlink button only where a control reveals or goes
 somewhere, no underline at rest (reversing 2026-09-07's underline); a forced-colours block for
-contrast themes. Not built, named: one indicator sliding between rail items (the pills still
+contrast themes (so this entry said; none was built, which the phase-5 study found and
+2026-11-01 built). Not built, named: one indicator sliding between rail items (the pills still
 grow and shrink), the Archives list's single-select (direction 6), the ceremony dialogs' in-body
 Cancel (the one web-modal shape left, direction 1's), Segmented's bold selection, the wide
 dialogs at 640 rather than WinUI's 548.
@@ -5524,3 +5525,102 @@ lands in the window batch now in study. The dark tint is the one the research ca
 leak in the rail's top-left (polish-directions 971), restored as it was for the user to judge in
 the real window; in light the glow is faint at the lookbook's values, about 11 levels at the
 rail's head.
+
+## 2026-11-01 — Phase 5: the study ruled; group A, part 1 — the shooting driver, the contrast-theme block, the mark's one geometry
+
+**Phase 5's study, ruled by the judge's picks** (2026-11-01). The phase-5 study — direction 5's
+window, fork D's identity and the icon system, three designers' records, mocks shot against
+the real stylesheet and the real sprite, and an independent judge's critique over them — put
+nine questions to the user, who ruled "the judge's picks on all nine": the chrome glyphs as
+option A, the sprite redrawn on its 20 grid at 16 px with the 14 px size retired and the row's
+box back to 16 beside the 16 px glyph; the caption reads "Enfold"; the shell's file-type icons
+left as they are; Mica for the window where the build supports backdrop types and Solid where it
+does not, with the caption's theme set on the settings event; the scrollbars styled by CSS only
+if the real window's bar proves to be the classic one; the app icon drawn in Go from the mark's
+own geometry, in the sheet's facets, with no binary in the repository; and fork D's identity
+drawings at 96 and 128 px with the three brand rows gone. The build goes in two groups: A, what
+the mock can prove — the shooting driver, the contrast-theme block and the mark's geometry
+first, then fork D, the glyphs and the app icon — and B, what only the real window can (the
+caption's theme, Mica, the scrollbars, the app icon in the shell, Windows 11's four contrast
+themes), behind a switch and after the user's own baseline screenshot at 125 %. The user added
+one ask for fork D: the lock stage's panel as a floating frosted card — a little translucent, "a
+little is enough", so the ground's colour just touches it; an edge shadow for depth; a hairline
+border.
+
+**The mock's shooting driver, and its two lessons** (2026-11-01). `tools/uimock/cdp.mjs` is
+the headless Edge driver every tour now uses, `shoot.mjs` a tour on it and `README.md` the
+manual; the judge's two findings about every earlier tour are its reason. One: shoot at the
+native scale — `--force-device-scale-factor=1.25` on Edge's command line and `deviceScaleFactor:
+0` in the metrics override — since the emulated route lays SVG boxes between device pixels, and
+a bitmap or a stroke in a box at a fractional device position blurs or smears over three; the
+driver's `snapCheck` tells the two routes apart by probe boxes at quarter-pixel offsets, and
+says so when the factor is whole and the check proves nothing. Two: never pass
+`--hide-scrollbars=false` — the switch's presence hides every bar, whatever its value, and every
+earlier tour had measured the bar at 0 px; the driver refuses the switch in any form, one dash,
+two or a slash. `strokeProfile` scores a stroke's columns against the ink it is painted with
+(`CanvasText` in a contrast theme), since a score against the stroke's own darkest column passes
+a stroke split evenly over two half columns as two full ones, the very case the proof must
+exclude; and the tour fails a look unless the mark's left side is two full device columns, 1.875
+px of ink within a quarter, centred where the geometry puts it. What the shots prove is headless
+Edge's own drawing — Edge 156's 15 px Fluent bar with an 11 px thumb included; whether WebView2
+lays out and draws the same is the real window's screenshot to confirm (group B's first step),
+and the repository's text says so rather than "as the window draws it". Seen and left for B: the
+file list's bar runs the full height of its wrap, beside the sticky column header, where
+Explorer's starts below it.
+
+**The contrast-theme block, built; 2026-10-17's claim corrected** (2026-11-01). Direction 5's
+entry of 2026-10-17 listed "a forced-colours block for contrast themes" among what was built;
+none existed, as the study's judge found and the driver's forced-colour shots of HEAD showed:
+transparent row borders drawn as bars with end triangles, greyed buttons in the legacy palette's
+green, the marks and accents still teal because the engine does not force SVG paint. Built as
+APP §6 *Controls* now says, one `@media (forced-colors: active)` block at the stylesheet's end,
+in system colours alone: Highlight under HighlightText for the selected row, the command or menu
+item under the pointer, the accent and filled danger buttons, a ticked box and the chosen
+segment; the current rail item's 3 px pill and its edge in Highlight (direction 5 asked for a 3
+px border, which would move the item's words); the row focus ring as a 2 px box drawn by each
+cell — Highlight, and CanvasText on a selected row, where a Highlight ring vanishes into the
+fill; the window designer drew it Highlight on every row, and drew it as an outline on the row,
+which the cells paint over, while a pseudo-element on the row lays out as a table column; what
+is greyed in GrayText, and a greyed menu item under the keyboard with a Highlight ring and no
+fill, since the first build's fill left GrayText on Highlight at 1.03:1, the review's one major;
+the borders that only space things painted the Canvas; the icons in their text's colour; the
+mark and the key art drawn in system colours explicitly, the key art's port in GrayText and its
+LED in Highlight; and nothing opting out of the forcing but what puts Highlight behind text and
+the rail's progress ring, whose measure is a gradient — the touch's green gives way to Highlight
+rings round a CanvasText glyph, so the palette the user chose to read by wins. Measured in both
+emulated palettes under both Theme settings, light and dark unchanged to the pixel. Left: a
+list row's hover is unmarked in a contrast theme, since a 1 px Highlight box would look like the
+2 px keyboard ring the list can put on an unselected row (the owner may want a mark of a
+different kind); the invalid red of a field and the recovery cells is forced to CanvasText, the
+error line still saying it; the legacy HC Black palette's GrayText is a loud green on the key
+art's port; Windows 11's own four palettes cannot be emulated and wait for the real window (B.6);
+fork D's identity drawings join the block with A.4, and any scrollbar CSS must sit outside it.
+
+**The mark's one geometry: brand.Sheet** (2026-11-01). The study's first finding was that the
+window's mark (the sprite's i-mark), the lock stage's drawing and the app icon were three
+figures drawn by hand — the icon a different object altogether, a box on a tile. Ruled: one
+geometry, in Go, that every rendering comes from, so that no two can drift. `internal/brand`'s
+`Sheet(size)` is the folded sheet — a regular pointy-top hexagon with the fold vertex F at its
+exact centre (fork D's demo had F a unit above, which bent its diagonal by about 3 degrees), the
+fold from the top vertex down to F, the straight diagonal from the upper-left vertex through F
+to the lower-right one, the flap between the top vertex, the upper-right vertex and F; from 48
+px the thin crease from the upper-right vertex to F and D2's three lines of writing. It keeps
+D2's fit at every size: the vertical lines — both sides and the top fold — centred on multiples
+of 0.8 CSS px, one device pixel at the user's 125 %, so a 1.6 px stroke covers exactly two
+device pixels; the stroke 1.5 below 48 px, the sprite's own weight, and 1.6 from it;
+`Cropped()` the 96 × 72 box the lock stage wants; each part given as vertices and as path data.
+The sprite's i-mark is redrawn from `Sheet(20)` as three paths — the wash, the flap, the lines
+over both — and `--mark-flap` joins the three theme blocks: the surface in light; in dark the
+accent's line colour, a step above the wash, since the dark surface is no lighter than the wash
+(1.04:1) and the flap would read as a hole; transparent on the touch's green, where the mark is
+an outline in the brand's ink; Canvas under forced colours. `sheet_test.go` holds the geometry
+tests and the drift guard, which reads Icons.svelte and compares the whole i-mark symbol with
+the one Sheet(20) draws, whitespace aside — the review found a transform, a stroke-width or an
+extra element slipping past a compare of path data alone, and twelve such changes now fail it.
+Measured in the driver: the lock header's mark and the rail's, in light, dark and both forced
+palettes, put each of their three verticals on two full device columns with no partial one,
+1.88 px of ink against the 1.875 the geometry gives; HEAD's drawing smeared its top fold over
+three. `brand.Mark`, the icon as it stands, is unchanged and its comment says it is to go. Left:
+the 96 and 128 px drawings (A.4) and the app icon (A.6) come from Sheet and join the guard; the
+dark flap on the accent line reads 4.55:1 against the line and is for the user's eye in the real
+window.

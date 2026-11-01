@@ -32,6 +32,12 @@
   --accent-on: #ffffff;
   --accent-wash: #e6f1ef;
   --accent-line: #b7d8d2;
+  /* The mark's flap (internal/brand's Sheet), the sheet's back turned over:
+     the surface in light. In dark the surface is no lighter than the wash
+     (1.04:1), so the flap would read as a hole in the sheet, and it takes
+     the accent's line colour, a step above the wash (1.58:1; 1.15:1 in
+     light), instead (ruled 2026-11-01). */
+  --mark-flap: var(--surface);
   --accent-under: rgba(0, 0, 0, 0.2);
   --attention-wash: #fbf1df;
   --attention-line: #e7d1a6;
@@ -179,6 +185,7 @@
     --accent-on: #04231f;
     --accent-wash: #173430;
     --accent-line: #2c544d;
+    --mark-flap: var(--accent-line);
     --accent-under: rgba(0, 0, 0, 0.28);
     --attention-wash: #33291a;
     --attention-line: #4e3f26;
@@ -245,6 +252,7 @@
   --accent-on: #04231f;
   --accent-wash: #173430;
   --accent-line: #2c544d;
+  --mark-flap: var(--accent-line);
   --accent-under: rgba(0, 0, 0, 0.28);
   --attention-wash: #33291a;
   --attention-line: #4e3f26;
@@ -1074,10 +1082,10 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .u-head .state { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); }
 .u-head .brand, .u-head .state { transition: color var(--dur-out) var(--ease-exit); }
 .unlock.green .u-head .brand, .unlock.green .u-head .state { color: var(--touch-soft); transition: color var(--dur-move) var(--ease-enter); }
-/* The mark draws in the accent and its wash (Icons.svelte), which on the
-   green read as a white tile in light and an outline in dark: there it
-   takes the brand's ink and no fill, alike in both themes. */
-.unlock.green .u-head .brand .mark { --accent: currentColor; --accent-wash: transparent; }
+/* The mark draws in the accent, its wash and its flap (Icons.svelte), which
+   on the green read as a white tile in light and an outline in dark: there
+   it takes the brand's ink and no fill, alike in both themes. */
+.unlock.green .u-head .brand .mark { --accent: currentColor; --accent-wash: transparent; --mark-flap: transparent; }
 /* The panel's top lands at 14vh: the stage starts 64 px down (20 of
    padding, the header's 20 and its 24) and the step line takes 28 of
    the rest. */
@@ -1934,4 +1942,229 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
   .print-sheet p { font: var(--t-cap); margin: 0 0 var(--s1); max-width: 60ch; }
   .print-digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s2); margin: var(--s4) 0; max-width: 480px; }
   .print-digits span { font: var(--t-sub); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; border: 1px solid #000; padding: var(--s1) 0; }
+}
+
+/* ---------- contrast themes (APP.md §6, Controls; ruled 2026-11-01) ---------- */
+/* A Windows contrast theme is forced-colors: active. Measured in headless
+   Edge (the phase-5 study's probe), the engine then replaces every author
+   colour on an HTML element: text becomes CanvasText, a fill Canvas (its
+   alpha kept), a border or an outline CanvasText, a transparent border
+   included, which then shows; box-shadows and gradients are dropped. A
+   system colour the author names (Highlight, Canvas, GrayText...) is kept.
+   SVG fill and stroke are not forced at all, and neither is a colour set
+   on an <svg> itself. Text stands on a Canvas backplate, which over a
+   Highlight fill draws a black or white box behind the words, so an
+   element that puts Highlight behind text opts out (forced-color-adjust:
+   none) and names every colour itself, in system colours only. So every
+   state the theme draws with a wash, a shadow, a pill or a gradient is
+   redrawn here in system colours; every transparent border that only
+   spaces is painted Canvas; the icons take their text's forced colour; and
+   the mark and the key art are drawn in the system's colours explicitly.
+   A component's scoped rule carries its hash class and comes after this
+   file in the bundle, so a rule here that must beat one is one step more
+   specific (a parent or an element type), or !important where the
+   theme's own rules reach the same property at depths that vary. */
+@media (forced-colors: active) {
+  /* No material in a contrast theme (DWM draws none), so the ground is the
+     Canvas, not the glow over the ground. */
+  body { background: Canvas; }
+  /* The focus ring in the text's colour, and no inner ring: an element
+     that opts out of forcing would otherwise show the theme's own two. */
+  :focus-visible { outline-color: CanvasText; box-shadow: none; }
+
+  /* Icons follow the text they stand by: a colour set on the <svg> (the
+     third ink, the accent ink, a tier's) is not forced, so it would keep
+     its grey or green on the system's Canvas. */
+  svg.i { color: inherit !important; }
+  /* The touch's slot icon is stroked in the touch's soft white, which is
+     not forced either and vanishes on a white Canvas. */
+  .touch-slot .i { stroke: currentColor; }
+  /* The mark (Icons.svelte's i-mark): its lines in CanvasText on a Canvas
+     fill, the wash and the flap alike, as fork D draws the identity in a
+     contrast theme. */
+  #i-mark .mark-fill, #i-mark .mark-flap { fill: Canvas; }
+  #i-mark .mark-line { stroke: CanvasText; }
+  /* The key art (KeyArt.svelte) in fork D's two weights: the YubiKey's
+     lines in CanvasText, the port it goes into in GrayText, every fill the
+     Canvas, and the LED, which is what the art signals, in Highlight. */
+  .keyart svg :is(.k-port, .k-slot, .k-body, .k-plug, .k-ring) { fill: Canvas; }
+  .keyart svg :is(.k-body, .k-plug, .k-ring, .k-lines) { stroke: CanvasText; }
+  .keyart svg :is(.k-port, .k-slot, .k-dash) { stroke: GrayText; }
+  .keyart svg .k-dot { fill: Highlight; }
+  /* The recovery cells' tick, stroked in the accent. */
+  .cellbox svg.ok { stroke: CanvasText; }
+
+  /* Spacing borders stay unseen: the rows' 4 px ends, the rail's items, the
+     vault head, the compact rail's buttons, the subtle and hyperlink
+     buttons, the pane's summary rows, the viewer's icon button. The rows'
+     ends take !important: the file list's container queries move the
+     row's right end with selectors up to (0,4,3). */
+  tbody td { border-color: Canvas !important; }
+  .rail-item, .vault-head, .rail-btn, .btn.subtle, .btn.link, .btn.subtle:disabled, .btn.link:disabled { border-color: Canvas; }
+  :is(.summary, .details-head) .sum-row:not(.owed), .viewer button.vbtn.icon { border-color: Canvas; }
+  /* A separator is a fill in the stroke's colour, which forcing turns into
+     the Canvas it stands on. */
+  .sep, .menu .msep { background: CanvasText; }
+
+  /* Hover, which was a 4-6 % fill: the system's highlight, as Windows draws
+     a hovered command or menu item in a contrast theme, and the keyboard's
+     item in a menu too, unless it is greyed (below). */
+  .rail-item:hover, .vault-head:hover, .rail-btn:hover, .btn.subtle:hover:not(:disabled), .btn.link:hover:not(:disabled),
+  .menu button:hover:not([aria-disabled="true"]), .menu button:focus-visible:not([aria-disabled="true"]), button.crumb:hover, thead th .sorter:hover,
+  .x20:hover, select.input option:is(:hover, :focus-visible) {
+    forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight;
+  }
+  :is(.rail-item, .vault-head, .rail-btn, .btn.subtle, .btn.link, .menu button, button.crumb, thead th .sorter, .x20):is(:hover, :focus-visible) * { color: inherit; }
+  select.input option:is(:hover, :focus-visible)::checkmark { color: HighlightText; }
+  /* The × of a hovered rail row, under the pointer itself: the row's
+     colours turned over. */
+  .rail-item .rail-x:hover { background: HighlightText; color: Highlight; }
+  /* A link in running text takes no fill on hover, so it keeps the forced
+     link colour rather than HighlightText on the Canvas. */
+  p .btn.link:hover:not(:disabled) { forced-color-adjust: auto; color: LinkText; }
+  .btn:hover:not(:disabled), button.chip.fchip:hover { border-color: Highlight; }
+
+  /* The rail's current item (direction 5's 3 px Highlight mark,
+     polish-directions.md): its pill in Highlight, and its edge; under the
+     pointer the pill turns HighlightText on the Highlight fill. */
+  .rail-item::before { background: Highlight; }
+  .rail-item:hover::before { background: HighlightText; }
+  .rail-item[aria-current="page"], .rail-child.current { border-color: Highlight; }
+  /* The Forgotten view's chip while its view is up: a pressed toggle. */
+  button.chip.fchip.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+
+  /* The accent button, and the filled danger one, is the system's accent
+     button: Highlight under HighlightText, turned over under the pointer.
+     Greyed, the engine's GrayText stays. */
+  .btn.accent:not(:disabled), .btn.danger-fill:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .btn.accent:hover:not(:disabled), .btn.danger-fill:hover:not(:disabled) { background: HighlightText; color: Highlight; }
+  /* A hyperlink button and the How-this-works disclosure are links. */
+  .btn.link:not(:disabled), details.how > summary, details.how > summary:hover { color: LinkText; }
+  /* An item greyed by aria-disabled is not :disabled, so the engine does
+     not grey it. Its reason and its key are read, so they keep the text
+     colour, under the pointer and the keyboard too, where the hover's
+     inherit above would hand them the GrayText. The arrows land on a
+     greyed item as on any other, but it takes no Highlight fill: GrayText
+     on Highlight cannot be read (1.03:1 in the black palette, 1.08:1 in
+     the white, measured), so a Highlight ring inside the item stands
+     where the fill would be. */
+  .menu button[aria-disabled="true"], .menu button[aria-disabled="true"] .mlabel > :first-child { color: GrayText; }
+  .menu button[aria-disabled="true"] :is(.mwhy, .acc) { color: CanvasText; }
+  .menu button[aria-disabled="true"]:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+  /* Two more are greyed by their ink alone, which forcing turns into the
+     text colour: Move to's folder the selection cannot go into (its name,
+     and its icon with it) and Extract's first scope while nothing is
+     selected (its words; the engine greys the radio). Each keeps its
+     reason in the text colour. A parent (and for the label its element
+     type) puts each rule one step past the component's scoped one. */
+  .dialog .mtree .tn[aria-disabled="true"], .dialog .mtree .tn[aria-disabled="true"] .nm, .dialog label.check.off { color: GrayText; }
+
+  /* Lists (direction 5): the selection in Highlight under HighlightText,
+     its pill in HighlightText; the cells' inks, the chips, a row's buttons
+     and its box are held to it with !important, since the theme sets them
+     at every depth. The focus is a 2 px Highlight ring round the row's
+     fill, 4 px in from the card's edges as the fill is. The cells' inset
+     shadows that draw it are dropped here, and an outline on the <tr> is
+     not a ring: the cells paint over it, their Canvas ends hiding its
+     sides and a selected row's Highlight its top and bottom; and a box
+     generated on the <tr> itself is laid out as a column of the table,
+     which narrowed the Archives list's Name by 300 px (both measured). So
+     each cell carries its part of the ring in a box of its own over its
+     padding box, as each carried its part of the theme's ring: the top
+     and bottom, the first cell the left, the last shown the right. On a
+     selected row the ring is CanvasText: a Highlight ring vanishes into
+     the Highlight fill, and the file list's focus moves apart from its
+     selection (the one deviation from direction 5). A drop target's ring
+     is the same box, dashed: it was a wash and an inset stroke. */
+  tbody tr[aria-selected="true"] td, tbody tr[aria-selected="true"]:hover td { forced-color-adjust: none; background-color: Highlight; background-image: none; color: HighlightText; }
+  tbody tr[aria-selected="true"] td, tbody tr[aria-selected="true"] td * { color: HighlightText !important; }
+  tbody tr[aria-selected="true"] > td:first-child::before { background: HighlightText; }
+  tbody tr[aria-selected="true"] :is(.chips .st, .btn) { background: Highlight !important; border-color: HighlightText !important; }
+  tbody tr[aria-selected="true"] input[type="checkbox"] { background: Highlight !important; border-color: HighlightText !important; color: HighlightText !important; }
+  tbody tr:focus-visible > td { box-shadow: none !important; }
+  tbody tr:is(:focus-visible, .drop-into) > td { position: relative; }
+  tbody tr:is(:focus-visible, .drop-into) > td::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    border: 0 solid Highlight; border-block-width: 2px;
+  }
+  tbody tr:is(:focus-visible, .drop-into) > td:first-child::after { border-left-width: 2px; border-radius: 4px 0 0 4px; }
+  tbody tr:is(:focus-visible, .drop-into) > td:last-child::after { border-right-width: 2px; border-radius: 0 4px 4px 0; }
+  tbody tr[aria-selected="true"]:focus-visible > td::after { border-color: CanvasText; }
+  tbody tr.drop-into > td::after { border-style: dashed; }
+  .crumb.drop-into { outline: 2px dashed Highlight; outline-offset: -2px; }
+  /* The ring's right edge follows the file list's last column shown, as
+     the theme's own ring does (the container queries above). */
+  @container files (max-width: 840px) {
+    .file-split:not(.bare) tbody tr:is(:focus-visible, .drop-into) > td:nth-child(4)::after { border-right-width: 2px; border-radius: 0 4px 4px 0; }
+  }
+  @container files (max-width: 560px) {
+    .file-split.bare tbody tr:is(:focus-visible, .drop-into) > td:nth-child(4)::after { border-right-width: 2px; border-radius: 0 4px 4px 0; }
+  }
+  @container files (max-width: 700px) {
+    .file-split:not(.bare) tbody tr:is(:focus-visible, .drop-into) > td:nth-child(3)::after { border-right-width: 2px; border-radius: 0 4px 4px 0; }
+  }
+  @container files (max-width: 420px) {
+    .file-split.bare tbody tr:is(:focus-visible, .drop-into) > td:nth-child(3)::after { border-right-width: 2px; border-radius: 0 4px 4px 0; }
+  }
+  /* The Move to tree's chosen folder is a selected row too. */
+  .dialog .mtree .tn.sel { forced-color-adjust: none; background: Highlight; }
+  .dialog .mtree .tn.sel, .dialog .mtree .tn.sel * { color: HighlightText !important; }
+
+  /* Fields: the focus underline was a shadow; Highlight carries it. */
+  .input:not(select):focus { border-color: Highlight; outline: 1px solid Highlight; outline-offset: -2px; }
+  /* The picker's chevron is a fill through a mask, which forcing would
+     turn into the Canvas it stands on. */
+  select.input::picker-icon { background: CanvasText; }
+  select.input:disabled::picker-icon { background: GrayText; }
+
+  /* Checkbox and radio: on is Highlight, greyed is GrayText, the hover of
+     a ticked box included (its accent step would be forced away). */
+  input[type="checkbox"]:checked, input[type="checkbox"]:checked:hover:not(:disabled) { background: Highlight; border-color: Highlight; color: HighlightText; }
+  input[type="radio"]:checked { border-color: Highlight; background: HighlightText; }
+  input:is([type="checkbox"], [type="radio"]):disabled, input[type="checkbox"]:checked:disabled { border-color: GrayText; background: Canvas; color: GrayText; }
+  input[type="radio"]:checked:disabled { border-color: GrayText; background: Canvas; }
+  /* The slider and the progress lines: their gradients are dropped, so a
+     track is a solid line and the value Highlight, as the foot's line has
+     it; the slider's thumb says where its value is. */
+  input[type="range"]::-webkit-slider-runnable-track { background: CanvasText; }
+  input[type="range"]::-webkit-slider-thumb { background: Highlight; border-color: CanvasText; }
+  input[type="range"]:disabled::-webkit-slider-runnable-track, input[type="range"]:disabled::-webkit-slider-thumb { background: GrayText; }
+  progress, .fprog { background: GrayText; }
+  progress::-webkit-progress-value, progress:indeterminate, .fprog > i, .fprog.indet > i { background: Highlight; }
+  /* The pending ring: a GrayText track and its turning quarter in
+     Highlight; over Highlight, HighlightText on a paler track. */
+  .pending::before, .swap > .busy::before, .btn.pending:disabled::before, .btn:disabled .swap > .busy::before { border-color: GrayText; border-top-color: Highlight; }
+  .btn:is(.accent, .danger-fill):not(:disabled).pending::before, .btn:is(.accent, .danger-fill):not(:disabled) .swap > .busy::before,
+  tbody tr[aria-selected="true"] :is(.pending, .swap > .busy)::before { border-color: color-mix(in srgb, HighlightText 40%, Highlight); border-top-color: HighlightText; }
+
+  /* Segmented: the chosen segment in Highlight under HighlightText. */
+  .seg span.seg-hl { background: Highlight; border-color: Highlight; }
+  .seg button.seg-btn.on { forced-color-adjust: none; color: HighlightText; }
+
+  /* The rail's op mark: a Highlight dot. The ring is a measure drawn as a
+     gradient, which forcing drops, so it opts out to keep it, in system
+     colours alone: the one opt-out with no text over its Highlight. On a
+     hovered item both turn to HighlightText. */
+  .rail-mark { background: Highlight; }
+  .rail-mark.ring { forced-color-adjust: none; background: conic-gradient(Highlight calc(var(--pct) * 1%), GrayText 0); }
+  .rail-item:hover .rail-mark { background: HighlightText; }
+  .rail-item:hover .rail-mark.ring { background: conic-gradient(HighlightText calc(var(--pct) * 1%), color-mix(in srgb, HighlightText 40%, Highlight) 0); }
+  /* The foot's notices dot, a fill in its tier's ink. */
+  .layer-foot .notice-btn :is(.att-dot, .att-dot.info) { background: CanvasText; }
+  .layer-foot .notice-btn:hover :is(.att-dot, .att-dot.info) { background: HighlightText; }
+
+  /* The step line's done discs, at rest and on the touch alike. */
+  .steps .done .disc, :is(.unlock, .dialog).green .steps .done .disc { background: Highlight; border-color: Highlight; color: HighlightText; }
+  /* The touch takes no forced-color-adjust: none: the green would override
+     the palette the user chose to read by. Its gradient is dropped, and
+     the moment stays loud in the system's own terms: the rings in
+     Highlight, the core's glyph in CanvasText (it was the touch's white,
+     which is not forced and vanishes on a light Canvas), Done in
+     Highlight. */
+  :is(.unlock, .dialog).green .rings :is(span, .core) { border-color: Highlight; }
+  .rings .core svg { stroke: CanvasText; }
+  .rings.done .core { background: Highlight; border-color: Highlight; }
+  .rings.done .core svg { stroke: HighlightText; }
+  .donedisc { background: Highlight; }
+  .donedisc svg { stroke: HighlightText; }
 }

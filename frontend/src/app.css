@@ -20,6 +20,7 @@
   --stroke: #e2e2e7;
   --attention: #8a5300;
   --page: #e6e6eb;
+  --ground-tint: #e3eeeb;
   --surface: #ffffff;
   --surface-alt: #f4f4f7;
   --stroke-strong: #c9c9d0;
@@ -166,6 +167,7 @@
     --stroke: #37373d;
     --attention: #efc079;
     --page: #101012;
+    --ground-tint: #20302d;
     --surface: #2c2c31;
     --surface-alt: #33333a;
     --stroke-strong: #4a4a52;
@@ -231,6 +233,7 @@
   --stroke: #37373d;
   --attention: #efc079;
   --page: #101012;
+  --ground-tint: #20302d;
   --surface: #2c2c31;
   --surface-alt: #33333a;
   --stroke-strong: #4a4a52;
@@ -290,12 +293,17 @@
 /* ---------- page ---------------------------------------- */
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; }
-/* A solid ground (ruled 2026-10-17): the mockup's green radial glow stood
-   where Mica would be and was a still of it, not the material. The real
-   backdrop is the window's (APP.md §6, Controls). */
+/* The ground's green glow, back by the user's call (ruled 2026-11-01,
+   reversing 2026-10-17's solid ground): the lookbook's radial wash of
+   --ground-tint from above the rail's top-left corner, gone 58 % of the
+   way out, over the solid ground. It shows where the body shows — the
+   rail and the lock scene — while the layer, its foot and every card
+   paint over it, as when it was first drawn. It stands where Mica will
+   be, a still of the material, until the window has the material itself
+   (APP.md §6, Controls). */
 body {
   margin: 0;
-  background: var(--ground);
+  background: radial-gradient(140% 100% at 8% -10%, var(--ground-tint) 0%, transparent 58%), var(--ground);
   color: var(--ink);
   font: var(--t-body);
   -webkit-font-smoothing: antialiased;
@@ -630,10 +638,20 @@ input[type="checkbox"]:checked::after { opacity: 1; }
 input[type="checkbox"]:hover:not(:disabled):not(:checked), input[type="radio"]:hover:not(:disabled):not(:checked) { background: var(--ctl-hover); transition-duration: var(--dur-hover); }
 input[type="checkbox"]:active:not(:disabled):not(:checked), input[type="radio"]:active:not(:disabled):not(:checked) { background: var(--ctl-press); transition-duration: 0s; }
 input[type="checkbox"]:checked:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); transition-duration: var(--dur-hover); }
-/* A checkbox in a table row is 16 px, so it sits in the 36 px row's
-   caption line with the room WinUI gives it in a list. */
+/* The list's tick-all box is 16 px, so it sits in the header's caption
+   line with the room WinUI gives a checkbox in a list. A row's box is 14
+   (ruled 2026-11-01; it was 16): it shares its 16 px slot with the
+   row's 14 px type icon (.chk-slot, below) and crossfades with it, and at
+   16 it stood a size larger than the icon whose place it takes, so now
+   the two have one footprint. Its tick is the 16 px box's scaled by 14/16
+   about the box's middle, so the arms, the stroke and the lift keep their
+   proportions and the tick its centre. Its corners take the small radius,
+   which keeps them near the 16 px box's share of its side; 4 px would
+   round the smaller box further. */
 table input[type="checkbox"] { width: 16px; height: 16px; }
 table input[type="checkbox"]::after { width: 7px; height: 4px; }
+tbody input[type="checkbox"] { width: 14px; height: 14px; border-radius: var(--r-sm); }
+tbody input[type="checkbox"]::after { transform: translateY(-0.875px) rotate(-45deg) scale(0.875); }
 /* The radio: when on, an accent ring round a dot of the accent's ink —
    12 px at rest, 14 under the pointer, 10 while pressed. */
 input[type="radio"] { border-radius: 50%; }
@@ -1402,11 +1420,12 @@ p.dim { color: var(--ink-2); }
    2026-10-17). */
 .file-split .chk input, .arch-split .chk input { display: grid; cursor: default; }
 /* The slot: one 16 × 16 grid cell, the box and the icon after it stacked
-   in it, the 14 px icon centred. It is block-level like the box it wraps,
-   so it stands where the box stood, 10 px under the row's top, and in a
-   refused row on the name's first line (above). The icon keeps the third
-   ink it had beside the name and never takes a click: the cell is still
-   the box's, so a click there is the box's, shown or not. */
+   in it, the 14 px box and the 14 px icon centred on one footprint. It
+   is block-level like the box it wraps, so it stands where the box
+   stood, 10 px under the row's top, and in a refused row on the name's
+   first line (above). The icon keeps the third ink it had beside the
+   name and never takes a click: its square is the box's, so a click there
+   is the box's, shown or not. */
 .chk .chk-slot { display: grid; place-items: center; width: 16px; height: 16px; }
 .chk .chk-slot > * { grid-area: 1 / 1; }
 .chk .glyph { color: var(--ink-3); pointer-events: none; transition: opacity var(--dur-out) var(--ease-enter); }
@@ -1607,7 +1626,8 @@ tbody tr.up .fname { color: var(--ink-2); }
    proportion — the details are one element at the
    foot of the body instead of a column beside the list: its header is
    the whole of it when collapsed (a line of 44 px) and stays fixed at
-   its top when it is open, with the body scrolling under it. The list is
+   its top when it is open, the card as tall as what it holds and never
+   past the list's first slot, where the body scrolls under it. The list is
    never resized by any of it — the room the collapsed panel needs is the
    split's own padding — and the panel grows upwards over the list,
    pushing the selected row ahead of its top edge (the script measures
@@ -1705,8 +1725,11 @@ tbody tr.up .fname { color: var(--ink-2); }
   /* With nothing selected the line cannot open, so it offers no chevron
      (ruled 2026-10-19): the summary alone, read as it stands. */
   .details.no-row .chev { display: none; }
-  /* The body scrolls under the header, which is outside its scroller, and
-     takes the rest of the inner's fixed height. A collapsed panel clips
+  /* The body takes the rest of the inner's fixed height, which is its own
+     unless the list's first slot caps the panel (lib/archbar.ts), and only
+     then scrolls under the header, which is outside its scroller. The
+     script reads its height off its parts, never off it: it fills
+     whatever the inner was last laid out at. A collapsed panel clips
      it, and clipped is not gone: it is `inert` from the first frame of a
      collapse and hidden outright once the card is down, so no Tab and no
      click can reach a field nobody can see. */

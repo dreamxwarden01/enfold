@@ -1533,7 +1533,7 @@ swapped in between the check and the open is refused at the open. An extraction 
 descends into a reparse point below its destination: an existing directory it would enter is
 read for the reparse attribute first, and a junction there is refused (`file.destination_link`,
 the item and its subtree, reported once at its top), since a junction named
-`Enfold` in an allowed destination would carry an archive's `Enfoldault.eks` straight into
+`Enfold` in an allowed destination would carry an archive's `Enfold\vault.eks` straight into
 the data folder.
 
 **Shell** — `ShowWindow`, `CloseWindow`, `CloseDecided(action, remember)` (the close question's
@@ -1894,45 +1894,66 @@ left, a chevron on the right that is a sign and not a button; with nothing selec
 is the vault's summary instead (§13), its head on the left and, while unlocked, the backup row with *Export…* at
 its right, the missing files left to their rows' *Missing* chips (ruled 2026-10-18: the line
 was an empty *Selected*, and below the threshold the summary was nowhere) — and stays fixed at its top
-when expanded, two lines then (the eyebrow over the name, as the wide pane's heading). What
-the card holds never changes size: its inner — the header at a fixed 64 px whose top 44 px are
-the collapsed line, its two shapes cross-fading by opacity, and under it the body, name,
-description, facts and actions scrolling under the header — is laid out once at the panel's
-open height, and the collapse is the card's height alone going down to 44 px over that
+when expanded, two lines then (the eyebrow over the name, as the wide pane's heading). What the
+card holds never changes size in a motion: its inner — the header at a fixed 64 px whose top
+44 px are the collapsed line, its two shapes cross-fading by opacity, and under it the body,
+name, description, facts and actions, scrolling under the header only where the list's first
+slot stops the card short of them (below) — is laid out once at the panel's open height, and the
+collapse is the card's height alone going down to 44 px over that
 inner, clipping it; the card and its inner are each their own compositor layer, so a frame of
 the motion is one height on a flat surface and one scroll offset, never a layout of the
 body's fields nor a repaint of its text. The list sits above the collapsed card and is never
 resized by it: the expansion grows the card upwards **over** the list and **pushes the
 selected row up ahead of its top edge** — the row stays where it is until the rising edge
-reaches its foot, then rides it, the list scrolling exactly as far as the edge has come, at
-most to the list's first slot under the header row, where the card stops at the row's foot;
-the open height runs from the first slot's foot to the card's own. The
-push is not stopped by the list's own end: a row the list could not scroll that far (the
-last rows of any list, every row of a short one) is carried there past the end — a spacer
-after the table gives the room, and the list's viewport is held at its height while the
-panel is up so that a short list scrolls rather than grows — and the spacer never shrinks
+reaches its foot, then rides it, the list scrolling exactly as far as the edge has come, at most
+to the list's first slot under the header row. **The open height is the panel's own content's**
+— the 64 px header, the body's own height (its facts, its file, its name and description and
+their insets), measured with the rest, and the card's 1 px frame above and below them (ruled
+2026-11-01: the panel opened to the cap whatever it held, and one archive's facts filled the
+whole card) — **and the cap is the most it opens to**: the first slot's foot to the card's own,
+where the card stops at the row's foot and, only there, the body scrolls under the header. A row
+the rising edge never reaches is not moved at all; one under the card ends just above its edge,
+and one hidden above the first slot comes down into it. The
+push is not stopped by the list's own end: a row the list could not scroll as far as the push
+takes it (the last rows of a long list, and any row of a short one that the rising edge reaches)
+is carried there past the end — a spacer after the table gives exactly the room that push needs,
+and none when the list's own end allows it, and the list's viewport is held at its height while
+the panel is up so that a short list scrolls rather than grows — and the spacer never shrinks
 while the panel is up (a resize, which measures everything anew, is the one exception). The collapse is a spring let go: the edge goes down and the row rides
-it back until the list stands where it stood before the opening (a list scrolled by hand while the panel was up, or a row the ride could not carry all the
-way home — one sorted far down the list while the panel was up, whose foot would still be
-below the collapsed card's edge with the list at home — eases from where it is to there
-instead), never past the list's natural end, the spacer and the held viewport taken away when the motion ends. Nothing about
+it back until the list stands where it stood before the opening (a list that does not stand
+where the spring would start — scrolled by hand while the panel was up, or brought down by the
+push to a row that stood above the first slot — or a row the ride could not carry all the way
+home — one sorted far down the list while the panel was up, whose foot would still be below the
+collapsed card's edge with the list at home — eases from where it is to there instead), never
+past the list's natural end, the spacer and the held viewport taken away when the motion ends.
+Nothing about
 the motion is guessed: the arithmetic (`lib/archbar.ts`) works on numbers read from the
 page, read all together before anything is written, and every per-frame value is written to
 the element's own style — never through an inherited custom property, which restyles the
 whole subtree each frame, and never beside a read that forces a layout inside the handler.
 **The whole header is the control**: a click anywhere on the collapsed line expands, a click
 anywhere on the expanded header collapses, Enter and Space on it do the same, Esc collapses,
-and a different row clicked while expanded keeps the panel up and brings that row to the
-first slot; nothing is selected → the line is the vault's summary, the chevron dim, and a
+and a different row clicked while expanded keeps the panel up, at that row's own open height,
+and brings the row to where an opening would leave it — up to just above the edge from under the
+card, down into the first slot from above it, nowhere if it is already in view between them;
+nothing is selected → the line is the vault's summary, the chevron dim, and a
 click does nothing: the panel opens only on a selected row, its motion being built around one.
 The panel's header row carries the row's two actions, [Details…] [More ▾], and its
 body is two columns — the facts; the file with the name and description — and one column under
 520 px of body. The body is `inert` from the first frame of a collapse, and a focus inside it goes to
 the header. The list is reconciled, not left behind: a sort, a filter or a refresh that moves
-the selected row while the panel is up brings it to the first slot again (a row the filter
-took out of the list leaves the panel open at its height, nothing to push); a resize
-measures the open height again, holds the viewport at its new height and places the row
-without a second push, a running motion cancelled and placed at its targets; the layout going
+the selected row while the panel is up brings it clear of the edge again, as a click does (a row
+the filter took out of the list leaves the panel open at its height, nothing to push); a resize
+measures the open height again, the body's own height with it, holds the viewport at its new
+height and places the row without a second push — up to just above the edge if the edge has
+risen over it, down into the first slot if it stands above it, left where it is otherwise — a
+running motion cancelled and placed at its targets; the body's own height changing while the
+panel is up (the pencil's fields opened or folded, the fingerprint arriving with the record read
+whole, the save bar) moves the card to its new open height: a rising edge carries a row in view
+between the first slot and the edge as at the opening, a row the user scrolled above the first
+slot or under the card eases clear of the edge as a pick does, a falling edge carries a list in
+contact back down as at the collapse and leaves any other where it is, and a running motion is
+overtaken from where it stands; the layout going
 wide cancels the motion and clears the card's height, the spacer, the held viewport and the
 panel's state, and coming back narrow starts collapsed. The card, its inner and the body's scroller carry `will-change: transform` below the
 threshold and only there (measured: the list's own scroller gains nothing from a layer and
@@ -2047,9 +2068,11 @@ column — Name and Type ascending on the first click, Modified descending (newe
 ascending, the second click the other way, the cell wearing the one sort glyph of both lists,
 a 10 px chevron in the third ink, turned for ascending (ruled 2026-10-17; it was an arrow
 character here and a chevron on the Archives list) — and the choice stays while the
-archive is open; **a checkbox heads every row** and the header row — a row's in one 16 px
-slot that it shares with the row's type icon, 16 px in from the card's edge with the header's
-box over it, the name starting 8 px after the slot and the header's *Name* over the names, as on
+archive is open; **a checkbox heads every row** and the header row — a row's, 14 px, in one
+16 px slot that it shares with the row's 14 px type icon, the two centred on one footprint
+(ruled 2026-11-01; the box was 16, a size larger than the icon), 16 px in from the card's edge
+with the header's 16 px box over it, the name starting 8 px after the slot and the header's
+*Name* over the names, as on
 the Archives list (ruled 2026-10-26; the icon stood in the name's cell after the box's column,
 and the header's *Name* over the icons): at rest the slot holds the icon in the third ink, and
 the icon gives way to the box, the two cross-fading in place, on the row under the pointer, the
@@ -3584,7 +3607,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   under the pointer, and the 2 px accent underline over the surface only while it has the
   focus — that underline is its focus cue, and it was on every field at rest, so every field
   looked focused; a field marked wrong has the same 2 px in the danger colour, focused or not.
-  Checkboxes and radios are 20 px (16 in a list's rows), the accent filled when on — a radio
+  Checkboxes and radios are 20 px (16 for a list's tick-all box and 14 in its rows, the size of
+  the type icon a row's box shares its slot with; ruled 2026-11-01, the rows' were 16), the
+  accent filled when on — a radio
   an accent ring round a dot; a slider is a 4 px track, the accent up to the value, under a
   20 px thumb with a 12 px accent core; progress is a 3 px accent line over a 1 px track. A
   card is flat, a 1 px stroke and no shadow: a shadow says a thing floats — a menu, a floating
@@ -3594,8 +3619,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   unlock are separate cards the same 4 px apart (ruled 2026-10-17; they stood 12 apart). A
   text box has no resize grip — the description's box is two lines, scrolling past them — a
   search box has no clear button of Chromium's own, and selected text wears the accent's line
-  under the ink, never the engine's blue (ruled 2026-10-17). The window's ground is solid; the
-  green radial glow where Mica would be is gone until the window has the material itself. A
+  under the ink, never the engine's blue (ruled 2026-10-17). The window's ground wears the
+  lookbook's green radial glow, a still of Mica until the window has the material itself (ruled
+  2026-11-01, reversing 2026-10-17's solid ground): `--ground-tint` from above the rail's
+  top-left corner, gone 58 % of the way out over the solid ground, and seen on the rail and the
+  lock scene, the layer and its foot painting over it. A
   dialog is two parts: its body — the title 20/28, 24 px all round — which scrolls when the
   window is short, and a foot band a step below the surface, behind a stroke, 20 px above and
   below its buttons and 24 at the sides, which holds them in equal widths and wraps a button

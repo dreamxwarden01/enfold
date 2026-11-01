@@ -31,7 +31,7 @@
   import type { ArchCmd, ArchFacts, ArchItem } from "../lib/archcmds";
   import { closeButton } from "../lib/leave";
   import { backupLine } from "../lib/backup";
-  import { CLOSED, canExpand, collapse, edgeY, escape, expand, inContact, naturalEnd, openHeight, overScroll, picked, pushScroll, reveals, rideReachesHome, rideScroll, springScroll, toggle } from "../lib/archbar";
+  import { CLOSED, canExpand, canRide, collapse, edgeY, escape, expand, inContact, naturalEnd, openHeight, overScroll, picked, pushScroll, reveals, rideReachesHome, rideScroll, springScroll, toggle } from "../lib/archbar";
   import type { BarState, ListMetrics } from "../lib/archbar";
   import { MOVE, enter, motion, slideIn, unfold } from "../lib/motion";
   import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
@@ -420,9 +420,10 @@
 
   // land: the row a key arrived at becomes the one selected row, the
   // anchor and the pane's, and takes the focus. With the narrow panel up,
-  // the panel brings it to the list's first line itself (lib/archbar.ts);
-  // otherwise it is brought into view the nearest way, clear of the
-  // sticky header row.
+  // the panel brings it clear of its own edge itself (lib/archbar.ts):
+  // down into the first slot from above it, up to just above the edge
+  // from under it; otherwise it is brought into view the nearest way,
+  // clear of the sticky header row.
   function land(to: number | null) {
     if (to === null || to < 0) return;
     const id = rows[to].id;
@@ -489,6 +490,10 @@
   let stackEl = $state<HTMLDivElement | undefined>();
   let lineEl = $state<HTMLDivElement | undefined>();
   let paneBodyEl = $state<HTMLDivElement | undefined>();
+  // The body's two parts, the banner and the facts with the file, whose
+  // height is the panel's own (see bodyHeight and refit).
+  let padEl = $state<HTMLDivElement | null>(null);
+  let pbodyEl = $state<HTMLDivElement | null>(null);
   let spacerEl = $state<HTMLDivElement | undefined>();
   let bodyEl = $state<HTMLDivElement | undefined>(); // the layer's body
   let splitEl = $state<HTMLDivElement | undefined>(); // the list and the panel's box
@@ -502,23 +507,45 @@
   // What the movement is doing, none of it reactive: the page writes these
   // to the DOM and reads them back from here, never from the layout.
   let frame = 0; // the one frame clock
+  let settling = false; // the frame is a resize's reading, still to come
   let cardH = 0; // the card's height as last written
+  let openH = 0; // the height the inner is laid out at, the open height
   let over = 0; // the spacer's room, which never shrinks while the panel is up
   let held = false; // the list's viewport is pinned
   let scrollBefore = 0; // where the list stood before the opening
 
-  // The three numbers the stylesheet owns — the collapsed line, the open
-  // header, the air below the card — so the threshold's arithmetic stays
-  // in one place. Read once and kept: resolving a style in the click's own
-  // handler is time the movement does not have, and they change only with
-  // the stylesheet, which the breakpoint re-reads for.
-  let sizes: { line: number; head: number; foot: number } | null = null;
-  function tokens(): { line: number; head: number; foot: number } {
+  // The four numbers the stylesheet owns — the collapsed line, the open
+  // header, the air below the card and the card's own border — so the
+  // threshold's arithmetic stays in one place. Read once and kept:
+  // resolving a style in the click's own handler is time the movement
+  // does not have, and they change only with the stylesheet, which the
+  // breakpoint re-reads for. The border is the computed one, top and
+  // bottom together, which is the width the engine draws and needs no
+  // layout to say.
+  let sizes: { line: number; head: number; foot: number; border: number } | null = null;
+  function tokens(): { line: number; head: number; foot: number; border: number } {
     if (sizes) return sizes;
     const css = cardEl ? getComputedStyle(cardEl) : null;
     const px = (n: string) => (css ? parseFloat(css.getPropertyValue(n)) || 0 : 0);
-    sizes = { line: px("--panel-line"), head: px("--panel-head"), foot: px("--panel-foot") };
+    const border = css ? (parseFloat(css.borderTopWidth) || 0) + (parseFloat(css.borderBottomWidth) || 0) : 0;
+    sizes = { line: px("--panel-line"), head: px("--panel-head"), foot: px("--panel-foot"), border };
     return sizes;
+  }
+
+  // bodyHeight: the body's own height, read off its parts and not off the
+  // body. The body is the inner's flex remainder and fills whatever height
+  // the inner was last laid out at, so its box and its scrollHeight say
+  // that height and not what it holds. Its parts are never squeezed (a
+  // flex item keeps its content's height, and the body scrolls instead)
+  // and stand one on the next with no gap, no margin and no inset of the
+  // body's own, so the span from the first one's top to the last one's
+  // foot is the whole of it, fractions included.
+  function bodyHeight(): number {
+    const body = paneBodyEl;
+    const first = body?.firstElementChild;
+    const last = body?.lastElementChild;
+    if (!first || !last) return 0;
+    return last.getBoundingClientRect().bottom - first.getBoundingClientRect().top;
   }
 
   // measure: every number the movement needs, read in one pass. Nothing
@@ -553,6 +580,8 @@
         footY: layer.getBoundingClientRect().bottom - t.foot,
         line: t.line,
         head: t.head,
+        body: bodyHeight(),
+        border: t.border,
         scroll: wrap.scrollTop,
       },
     };
@@ -561,10 +590,10 @@
   const ROW = 52; // a row's height, two lines (app.css; direction 6)
 
   // bare: the same read with no row to push — the filter took the panel's
-  // row out of the list. The panel still opens to the height the first
-  // slot gives, measured with a nominal row: the first row the list does
-  // show, else a row's own height. Nothing is pushed, so the metrics say
-  // a list that neither scrolls nor needs a spacer (APP.md §6).
+  // row out of the list. The panel still opens to its own height, the cap
+  // the first slot gives measured with a nominal row: the first row the
+  // list does show, else a row's own height. Nothing is pushed, so the
+  // metrics say a list that neither scrolls nor needs a spacer (APP.md §6).
   function bare(): { m: ListMetrics; boxH: number } | null {
     const wrap = listEl;
     const layer = bodyEl;
@@ -586,6 +615,8 @@
         footY: layer.getBoundingClientRect().bottom - t.foot,
         line: t.line,
         head: t.head,
+        body: bodyHeight(),
+        border: t.border,
         scroll: wrap.scrollTop,
       },
     };
@@ -633,6 +664,14 @@
     spacerEl.style.height = `${px}px`;
   }
 
+  // lay: the inner laid out at the panel's open height, the one layout of
+  // the body a height asks for: the card's growth over it is the only
+  // thing the frames touch.
+  function lay(inner: HTMLDivElement, H: number) {
+    openH = H;
+    inner.style.height = `${H}px`;
+  }
+
   // One frame clock for both halves of the movement: the card's height
   // and the list's scroll are the same gesture in two places, and the row
   // has to ride just above the edge that pushes it. A CSS transition on
@@ -645,6 +684,7 @@
   function glide(to: number, scrollAt: ((h: number, k: number) => number) | null, ended?: () => void) {
     cancelAnimationFrame(frame);
     frame = 0;
+    settling = false;
     const from = cardH;
     const ms = motion(MOVE).duration;
     if (ms === 0) {
@@ -654,7 +694,9 @@
     }
     const began = performance.now();
     const step = (now: number) => {
-      const k = Math.min(1, (now - began) / ms);
+      // A frame's stamp is when the frame began, which can fall before the
+      // glide did: k below 0 would step the card the wrong way first.
+      const k = Math.min(1, Math.max(0, (now - began) / ms));
       const e = enter(k);
       const h = from + (to - from) * e;
       place(h, scrollAt ? scrollAt(h, e) : null);
@@ -671,10 +713,11 @@
   // raise: the opening. Read everything, then write — the held viewport,
   // the spacer, the inner's height, the card's own, the state the header
   // announces — and let the first scroll go in the first frame, so the
-  // handler forces no layout of its own. A row the filter has taken out
-  // of the list opens the card all the same, at the height the first slot
-  // gives, with nothing to push: no spacer, and the list left alone
-  // (APP.md §6).
+  // handler forces no layout of its own. The card opens to its content's
+  // height, never past the cap, and the row rides its edge only once the
+  // edge reaches it. A row the filter has taken out of the list opens the
+  // card all the same, with nothing to push: no spacer, and the list left
+  // alone (APP.md §6).
   function raise(id: string) {
     const inner = innerEl;
     const r = measure(id);
@@ -686,9 +729,7 @@
     scrollBefore = from;
     if (!held) hold(boxH);
     if (r) spacer(Math.max(over, overScroll(m)));
-    // The inner is laid out once, here: the card's growth over it is the
-    // only thing the frames touch.
-    inner.style.height = `${H}px`;
+    lay(inner, H);
     if (cardH <= 0) cardH = m.line;
     place(cardH, null); // the card's own starting height, the header with it
     glide(H, r ? (h) => rideScroll(m, from, edgeY(m, h)) : null);
@@ -697,19 +738,20 @@
   // shift: another row picked while the panel is up, or a sort, a filter
   // or a refresh that moved the row it names. The list comes to the card
   // rather than the other way about, so this is the scroll, eased from
-  // where it stands to that row's first slot — but the card is driven to
-  // the open height with it: an opening glide interrupted here would
-  // otherwise take its own half-grown height for the final one and leave
-  // the panel part-way open.
-  function shift(id: string) {
-    const r = measure(id);
+  // where it stands to where the push leaves that row — clear of the
+  // card's edge, the list not moving for a row already clear of it — but
+  // the card is driven to the open height with it, that row's content
+  // being its own: an opening glide interrupted here would otherwise take
+  // its own half-grown height for the final one and leave the panel
+  // part-way open. A reading already in hand is used as it stands.
+  function shift(id: string, r = measure(id)) {
     const inner = innerEl;
     if (!r || !inner) return;
     const { m, boxH } = r;
     if (!held) hold(boxH);
     spacer(Math.max(over, overScroll(m)));
     const H = openHeight(m);
-    inner.style.height = `${H}px`;
+    lay(inner, H);
     const from = m.scroll;
     const to = pushScroll(m);
     glide(H, (_h, k) => from + (to - from) * k);
@@ -738,7 +780,7 @@
       spacer(0);
       release();
     };
-    if (r && inContact(r.m) && rideReachesHome(r.m, scrollBefore)) {
+    if (r && inContact(r.m, scrollBefore, cardH) && rideReachesHome(r.m, scrollBefore)) {
       const m = r.m;
       glide(line, (h) => springScroll(m, scrollBefore, edgeY(m, h)), done);
       return;
@@ -748,20 +790,23 @@
   }
 
   // resettle: the window, or a banner above the list, changed size under
-  // an open panel. Every number is measured again — the held viewport let
-  // go and pinned at the new size, the spacer asked for afresh — a
-  // running motion is cancelled, and the row is placed at the first slot
-  // with no second push. The writes go first and the reading waits for
-  // the next frame: a rect read after a write, in the observer's own
-  // callback, is the forced layout the ruling forbids (DECISIONS, "The
-  // panel's frame cost, measured"), and a frame is not seen.
+  // an open panel. Every number is measured again — the body's own height
+  // with the rest, the held viewport let go and pinned at the new size,
+  // the spacer asked for afresh — a running motion is cancelled, and the
+  // row is placed where the push leaves it, with no second push. The
+  // writes go first and the reading waits for the next frame: a rect read
+  // after a write, in the observer's own callback, is the forced layout
+  // the ruling forbids (DECISIONS, "The panel's frame cost, measured"),
+  // and a frame is not seen.
   function resettle(id: string) {
     if (!innerEl) return;
     cancelAnimationFrame(frame);
+    settling = true;
     release();
     spacer(0);
     frame = requestAnimationFrame(() => {
       frame = 0;
+      settling = false;
       const inner = innerEl;
       const r = measure(id);
       const got = r ?? bare();
@@ -772,7 +817,7 @@
       // The row is gone from the list: the panel keeps its height over a
       // list with nothing to push (APP.md §6), so no spacer and no scroll.
       if (r) spacer(overScroll(m));
-      inner.style.height = `${H}px`;
+      lay(inner, H);
       place(H, r ? pushScroll(m) : null);
     });
   }
@@ -784,13 +829,58 @@
   function strand() {
     cancelAnimationFrame(frame);
     frame = 0;
+    settling = false;
     const got = bare();
     const inner = innerEl;
     if (!got || !inner) return;
     const H = openHeight(got.m);
     if (Math.abs(cardH - H) < 0.5) return;
-    inner.style.height = `${H}px`;
+    lay(inner, H);
     glide(H, null);
+  }
+
+  // refit: the body's own height changed under an open panel — the pencil
+  // opened the fields or Discard folded them, the record read whole added
+  // its fingerprint, a save bar came or went — and the panel follows its
+  // content, never past the cap (APP.md §6). Grown, the edge rises and a
+  // row in view between the first slot and the edge rides it as at the
+  // opening; a row the user scrolled above the first slot or under the
+  // card is eased clear of the edge as a pick eases it, since the ride
+  // would take it there in one frame. Shrunk, a list in contact rides the
+  // edge back down as at the collapse, never below where it stood before
+  // the opening, and a list out of contact is left where it is. A motion
+  // still running is overtaken as a shift overtakes it, from where
+  // everything stands; a resize waiting on its frame measures the body
+  // itself; a row the filter took out of the list moves the card alone.
+  // The observer that calls this runs after a layout and nothing is
+  // written before the reading, so it forces none.
+  function refit(id: string) {
+    const inner = innerEl;
+    if (settling || !inner) return;
+    const r = measure(id);
+    const got = r ?? bare();
+    if (!got) return;
+    const H = openHeight(got.m);
+    if (Math.abs(H - openH) < 0.5) return;
+    if (!r) {
+      lay(inner, H);
+      glide(H, null);
+      return;
+    }
+    const m = r.m;
+    if (frame || (H > cardH && !canRide(m, cardH))) {
+      shift(id, r);
+      return;
+    }
+    lay(inner, H);
+    if (H > cardH) {
+      spacer(Math.max(over, overScroll(m)));
+      const from = m.scroll;
+      glide(H, (h) => rideScroll(m, from, edgeY(m, h)));
+      return;
+    }
+    const before = scrollBefore;
+    glide(H, inContact(m, before, cardH) ? (h) => springScroll(m, before, edgeY(m, h)) : null);
   }
 
   // clearPanel: every narrow-only inline style off the card, its inner,
@@ -799,6 +889,8 @@
   function clearPanel() {
     cancelAnimationFrame(frame);
     frame = 0;
+    settling = false;
+    openH = 0;
     cardEl?.style.removeProperty("height");
     innerEl?.style.removeProperty("height");
     stackEl?.style.removeProperty("opacity");
@@ -844,6 +936,21 @@
     return () => seen.disconnect();
   });
 
+  // The body's parts, watched for their height, which is the panel's own
+  // (refit). Watched at every width and acted on only below the threshold
+  // with the panel up; the observer is made again when a part comes or
+  // goes, and its first report of what it watches is a refit that finds
+  // the height unchanged.
+  $effect(() => {
+    const parts = [padEl, pbodyEl].filter((e): e is HTMLDivElement => !!e);
+    if (parts.length === 0) return;
+    const seen = new ResizeObserver(() => {
+      if (narrow && bar.open && bar.id) refit(bar.id);
+    });
+    for (const el of parts) seen.observe(el);
+    return () => seen.disconnect();
+  });
+
   // Every move goes through here, so the movement is decided in one
   // place: the panel opening on a row, another row picked while it is up,
   // and the collapse that lets the list back down.
@@ -876,8 +983,8 @@
   }
 
   // The panel names the pane's row and no other: one selection, one name.
-  // A row picked while it is up keeps it up and brings that row to the
-  // top; nothing selected takes it down, the header being dead then.
+  // A row picked while it is up keeps it up and brings that row clear of
+  // its edge; nothing selected takes it down, the header being dead then.
   $effect(() => {
     const id = paneId;
     untrack(() => moveBar(picked(bar, id)));
@@ -885,7 +992,7 @@
 
   // The list is reconciled, not left behind (APP.md §6): a sort, a filter
   // or a refresh that moved the selected row while the panel is up brings
-  // it to the first slot again. What is watched is the order of the rows
+  // it clear of the edge again. What is watched is the order of the rows
   // on screen — the same row changes place with no change of id — and a
   // row the filter took out of the list leaves the panel open at its
   // height, there being nothing to push — and a motion still running for
@@ -1471,7 +1578,7 @@
   }
 
   // With the narrow panel up, picking another row sends the list riding
-  // that row to its first line (moveBar → shift, APP.md §6) over the
+  // that row clear of the edge (moveBar → shift, APP.md §6) over the
   // frames of the glide. A menu put up at once would stand where the row
   // was, and the ride's scroll would close it (ContextMenu closes on a
   // scroll under it). So the menu waits for the ride: the effect that
@@ -1726,9 +1833,9 @@
             <tbody bind:this={rowsEl}>
               {#each rows as a, i (a.id)}
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-                <!-- data-id: how the panel finds the row it must bring to
-                     the list's first line (lib/archbar.ts). The keys are
-                     the page's one handler (onKey), not the row's. -->
+                <!-- data-id: how the panel finds the row it must bring
+                     clear of its edge (lib/archbar.ts). The keys are the
+                     page's one handler (onKey), not the row's. -->
                 <tr data-id={a.id} tabindex={selId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={selId === a.id} class:forgotten={a.forgottenAt > 0} onclick={() => click(a.id)} oncontextmenu={(e) => rowCtx(e, a)} ondblclick={() => openRow(a.id)}>
                   <td class="sel-mark">
                     <div class="aname">
@@ -1797,9 +1904,10 @@
            vault's summary (direction 6). Below the stylesheet's threshold
            this one element is the bottom panel (APP.md §6, refined
            2026-09-12): its header is the whole of it when collapsed and
-           stays fixed at its top when it is up, and the body below scrolls
-           under that header. Above the threshold it is the 300 px side
-           pane. -->
+           stays fixed at its top when it is up, the card as tall as what
+           it holds, and the body below scrolls under that header only
+           where the list's first slot stops the card. Above the threshold
+           it is the 300 px side pane. -->
       <aside
         class="details"
         id="arch-details"
@@ -1808,11 +1916,13 @@
         aria-label={archivesCopy.panelLabel}
         bind:this={cardEl}
       >
-        <!-- The inner is what the card holds, and its size never changes:
-             below the threshold it is laid out once at the panel's open
-             height and the card's height alone animates over it, clipping
-             it (APP.md §6, refined 2026-09-12). Above the threshold it is
-             no box at all (display: contents) and the pane is what it was. -->
+        <!-- The inner is what the card holds, and its size never changes
+             in a motion: below the threshold it is laid out once at the
+             panel's open height — its header and its body's own height,
+             at most the cap — and the card's height alone animates over
+             it, clipping it (APP.md §6, refined 2026-09-12). Above the
+             threshold it is no box at all (display: contents) and the pane
+             is what it was. -->
         <div class="details-inner" bind:this={innerEl}>
           <!-- The header: a heading above the threshold; below it, the
                control — the whole header but the actions at its right
@@ -1868,7 +1978,7 @@
           <div class="details-body" id="arch-details-body" inert={narrow && !bar.open} bind:this={paneBodyEl}>
             {#if pane}
               {#if purge}
-                <div class="pad">
+                <div class="pad" bind:this={padEl}>
                   <div class="bar attention">
                     <svg class="i i-14"><use href="#i-warn" /></svg>
                     <div class="why">
@@ -1881,7 +1991,7 @@
                 </div>
               {/if}
 
-              <div class="pbody">
+              <div class="pbody" bind:this={pbodyEl}>
                 <!-- The facts first (direction 6): the one label · value
                      list (APP.md §6, Type and spacing), each value beside
                      its label. User words only (ruled 2026-10-17): the key

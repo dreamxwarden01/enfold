@@ -60,19 +60,25 @@ export function escape(s: BarState): BarState {
 
 // reveals: the moments the panel pushes a row up ahead of its top edge —
 // the opening itself, and a different row clicked while it is up (that
-// row is under the panel otherwise). A collapse never pushes; neither
+// row may be under the panel otherwise). A collapse never pushes; neither
 // does a click while the panel is down.
 export function reveals(before: BarState, after: BarState): boolean {
   return after.open && after.id !== null && (!before.open || before.id !== after.id);
 }
 
 // ---- the movement's arithmetic -------------------------------------------
-// The panel's top edge pushes the selected row up ahead of it, the list
-// scrolling in step, and the row rides just above the edge until it sits
-// in the list's first slot — the one under the table's own header row —
-// where the panel stops at its foot. Every row reaches that slot, the
-// last one included: the push carries the list past its natural end over
-// a spacer the page adds under the rows (overScroll), and the collapse's
+// The panel opens to its own content's height — the header and the body
+// as they lay out, in the card's own frame — and never past the list's
+// first slot, the one under the table's own header row (ruled 2026-11-01:
+// it opened to the first slot whatever it held, and one archive's facts
+// filled the whole card).
+// Its top edge pushes the selected row up ahead of it, the list scrolling
+// in step: the row stays where it is until the rising edge reaches its
+// foot, then rides just above the edge until the panel stops — under the
+// row's foot when the panel opens to the cap, and wherever its height
+// leaves the edge otherwise. Any row can be carried that far, the last
+// one included: the push carries the list past its natural end over a
+// spacer the page adds under the rows (overScroll), and the collapse's
 // spring takes it back down again (APP.md §6). The page measures, all in
 // one read before it writes anything; the arithmetic is here.
 //
@@ -97,22 +103,50 @@ export interface ListMetrics {
   // the stylesheet's two heights: the collapsed line and the open header
   readonly line: number;
   readonly head: number;
+  // the panel body's own height under that header: what its facts, its
+  // file, its name and description and their insets take, never the
+  // height the body was last laid out to fill
+  readonly body: number;
+  // the card's own border, above and below together: the inner stands
+  // inside it, so a card that showed only header and body would clip the
+  // body's foot by that much
+  readonly border: number;
   // where the list stands at the moment of the reading
   readonly scroll: number;
 }
 
-// openHeight: the first slot's foot to the card's own — the height the
-// panel opens to, whichever row it is, since every row ends in that slot.
-// The floor is the open header, so a header can never be clipped; it
-// should never bind.
-export function openHeight(m: ListMetrics): number {
+// capHeight: the first slot's foot to the card's own — the most the panel
+// ever opens to, whichever row it is. The floor is the open header, so a
+// header can never be clipped; it should never bind.
+export function capHeight(m: ListMetrics): number {
   return Math.max(m.head, Math.round(m.footY - (m.listTop + m.headHeight + m.rowHeight)));
 }
 
-// pushScroll: where the list ends up — the row in the first slot, always,
-// whatever the list's own end says.
-export function pushScroll(m: ListMetrics): number {
+// openHeight: the height the panel opens to — the header, the body's own
+// height and the card's border round them, so a panel with little to say
+// is a short one, and the cap beyond that, where the body scrolls under
+// the header. The sum is rounded up, since a body a fraction taller than
+// its box would scroll. The cap is the first slot's and stays so: the
+// border is the card's own, inside its height, not a reason to cover the
+// row.
+export function openHeight(m: ListMetrics): number {
+  return Math.min(capHeight(m), Math.max(m.head, Math.ceil(m.head + m.body + m.border)));
+}
+
+// slotScroll: the scroll that puts the row in the first slot — the
+// furthest any push takes the list, whatever the list's own end says.
+export function slotScroll(m: ListMetrics): number {
   return Math.max(0, m.rowTop - m.headHeight);
+}
+
+// pushScroll: where the push leaves the list — the ride's end, from where
+// the list stands now to the open panel's edge. A row the edge never
+// reaches stays where it is; a row under the panel comes up to just above
+// the edge; a row above the first slot comes down into it. With the
+// panel at its cap the edge is the first slot's foot, so that is where
+// every row ends.
+export function pushScroll(m: ListMetrics): number {
+  return rideScroll(m, m.scroll, edgeY(m, openHeight(m)));
 }
 
 // naturalEnd: how far the list scrolls on its own, with no spacer under
@@ -122,11 +156,15 @@ export function naturalEnd(m: ListMetrics): number {
 }
 
 // overScroll: how far past its own end the push carries the list, and so
-// how much room the spacer under the rows must give it. A short list has
-// no end to speak of — content less than viewport is a negative, and the
-// spacer covers that too, or the last row of five could never rise.
+// how much room the spacer under the rows must give it — exactly that,
+// and nothing at all for a push the list's own end allows: a short panel
+// over a short list scrolls nothing and needs nothing. A short list has
+// no end to speak of — content less than viewport is a negative, and a
+// push that does scroll it needs that blank covered too, or the last row
+// of five could never rise.
 export function overScroll(m: ListMetrics): number {
-  return Math.max(0, pushScroll(m) - (m.content - m.viewport));
+  const to = pushScroll(m);
+  return to <= naturalEnd(m) ? 0 : to - (m.content - m.viewport);
 }
 
 // edgeY: the panel's top edge, in page y, for a card of that height.
@@ -139,7 +177,18 @@ export function edgeY(m: ListMetrics, height: number): number {
 // foot; from there the list scrolls exactly as far as the edge has come,
 // and never past the first slot.
 export function rideScroll(m: ListMetrics, from: number, edge: number): number {
-  return Math.min(pushScroll(m), Math.max(from, m.listTop + m.rowTop + m.rowHeight - edge));
+  return Math.min(slotScroll(m), Math.max(from, m.listTop + m.rowTop + m.rowHeight - edge));
+}
+
+// canRide: the row stands in view between the first slot and the edge of
+// a card at `height`, so an edge rising from there carries it from where
+// it stands, as at the opening. A row the user scrolled above the first
+// slot or under the card would be taken to the ride's place in the first
+// frame, a jump; it is eased there instead, as a pick eases it (APP.md
+// §6). The pixel either way is the device's rounding: a row riding the
+// edge can end a fraction past it.
+export function canRide(m: ListMetrics, height: number): boolean {
+  return m.scroll <= slotScroll(m) + 1 && m.listTop + m.rowTop + m.rowHeight - m.scroll <= edgeY(m, height) + 1;
 }
 
 // springScroll: the collapse's mirror. The edge goes back down and the
@@ -152,11 +201,15 @@ export function springScroll(m: ListMetrics, before: number, edge: number): numb
   return Math.max(home, m.listTop + m.rowTop + m.rowHeight - edge);
 }
 
-// inContact: the row is riding the edge, so the collapse is the spring.
-// A list the user scrolled by hand while the panel was up is not in
-// contact and eases from where it is instead (APP.md §6).
-export function inContact(m: ListMetrics): boolean {
-  return Math.abs(m.scroll - pushScroll(m)) <= 1;
+// inContact: the list stands where the spring would have it with the card
+// at `height`, so the collapse can start as the spring and not jump: the
+// row riding the edge, or a row the edge never reached over a list still
+// where it stood before the opening. A list the user scrolled by hand
+// while the panel was up is not in contact, nor is one the push brought
+// down to a row above the first slot, and each eases from where it is
+// instead (APP.md §6).
+export function inContact(m: ListMetrics, before: number, height: number): boolean {
+  return Math.abs(m.scroll - springScroll(m, before, edgeY(m, height))) <= 1;
 }
 
 // rideReachesHome: whether the ride can carry the row all the way home.

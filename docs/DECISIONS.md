@@ -5485,3 +5485,42 @@ copy* is 520 px wide and says its confirmation before the cards and "Prove it wi
 cards refuse bringing them into view, since its content ran to 861–901 px in a 654 px box and
 the tick its greyed *Replace vault* waits for stood below the fold. The import dialog's order is
 the build's, not a ruling: the owner may reverse it.
+
+**The bottom panel opens to its content; the first slot's foot is the ceiling** (2026-11-01).
+The user's first finding in the real window after the VMK batch, on the Archives page under the
+pane threshold: with one archive, the Details panel filled the whole card below the row.
+2026-09-12 had it open from the first slot's foot to the card's foot for every row, so that
+every row reached the first slot. Ruled: the open height is the panel's own content's — the 64
+px header, the body's own height (its facts, file, name and description and their insets) and
+the card's border, measured with the rest in one read; the old height is the cap, binding on a
+short window or a tall body, and only then does the body scroll under the header. The ride keeps
+its meaning against the real edge: a row the edge never reaches is not moved, a row under the
+card ends just above the edge, at the cap the first slot as before, and the spacer gives exactly
+the room the push needs. A body that grows or shrinks while the panel is up (the pencil's
+fields, the Fingerprint row arriving) refits the panel: a row in view rides the edge, any other
+eases clear of it as a pick does. lib/archbar.ts stays pure (ListMetrics gains body; openHeight,
+capHeight, slotScroll, pushScroll, canRide; 71 tests, 37 before). Measured in the mock at the
+user's window: one archive, a 228 px panel in place of 448, no push; thirty archives with a low
+row, the row's foot on the edge and the spacer exactly the push. Left, both older than this: the
+opening of a row far above the first slot still moves the list in one frame, and a capped body's
+last 2 px sit under the inner's layout.
+
+**The file list's row box is 14 px** (2026-11-01). The second finding: the 16 px box in the type
+icon's slot read a little large beside the 14 px icon (the 2026-10-26 study had left the size
+alone, reading "more compact" as spacing). Ruled: the row's box is 14 × 14 with --r-sm, its tick
+scaled by 14/16 about the middle, in the 16 px slot the icon shares, so box and glyph now stand
+on one rect (0 px apart on every edge at the user's window); the header's tick-all box stays 16,
+as Explorer's header box outsizes its rows'. The hit area shrinks with it: a press on the slot's
+rim selects the row, as Explorer's does.
+
+**The ground's glow is back until Mica** (2026-11-01). The third finding: the user remembered
+the light green gradient of the lookbook and the demo and found a flat ground. Direction 5
+(2026-10-17) had ruled the painted radial "Mica" gone, "a solid ground until phase 5 gives the
+window the real thing" — a ruling the user never saw in the real window. Reversed by the user's
+call: the lookbook's tokens and recipe are restored as commit 497e78f had them (--ground-tint
+#e3eeeb light, #20302d dark; radial-gradient(140% 100% at 8% -10%, var(--ground-tint) 0%,
+transparent 58%) over var(--ground) on the body), showing where they showed then, until Mica
+lands in the window batch now in study. The dark tint is the one the research called a light
+leak in the rail's top-left (polish-directions 971), restored as it was for the user to judge in
+the real window; in light the glow is faint at the lookbook's values, about 11 levels at the
+rail's head.

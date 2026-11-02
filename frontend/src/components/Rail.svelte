@@ -159,7 +159,7 @@
              closes an archive by accident. -->
         {#each children as c (c.id)}
           <button type="button" class="rail-item rail-child" aria-current={here === `archive:${c.id}` ? "page" : undefined} aria-label={c.name} use:tip={{ text: c.name, side: "end" }} onclick={() => showArchive(c.id)}>
-            <svg class="i i-20"><use href="#i-box" /></svg>
+            <svg class="i"><use href="#i-box" /></svg>
           </button>
         {/each}
       {/if}
@@ -184,7 +184,7 @@
           {#if it.route === "archives"}
             {#each children as c (c.id)}
               <button type="button" class="rail-item rail-child" aria-current={here === `archive:${c.id}` ? "page" : undefined} onclick={() => choose(() => showArchive(c.id))}>
-                <svg class="i i-20"><use href="#i-box" /></svg><span class="ellipsis">{c.name}</span>
+                <svg class="i"><use href="#i-box" /></svg><span class="ellipsis">{c.name}</span>
               </button>
             {/each}
           {/if}
@@ -221,7 +221,7 @@
           {@const name = c.name}
           <div class="rail-item rail-child" class:current={here === `archive:${c.id}`} data-tip-anchor>
             <button type="button" class="rail-go" aria-current={here === `archive:${c.id}` ? "page" : undefined} use:tip={{ text: name, cut: true, side: "end" }} onclick={() => showArchive(c.id)}>
-              <svg class="i i-20"><use href="#i-box" /></svg><span class="ellipsis">{name}</span>
+              <svg class="i"><use href="#i-box" /></svg><span class="ellipsis">{name}</span>
             </button>
             <!-- Gone once a Close has left it and something still holds
                  it: a second Leave does nothing, and the kill switch is

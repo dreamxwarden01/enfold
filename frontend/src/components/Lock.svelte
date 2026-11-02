@@ -957,7 +957,7 @@
           {#if c.error === "token.touch"}
             <!-- Where it happened and in neutral ink: the YubiKey stopped
                  waiting, nothing refused anything (ruled 2026-10-17). -->
-            <svg class="i i-20 restlock" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-touchdot" /></svg>
+            <svg class="i restlock" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-touchdot" /></svg>
             <div class="lead"><h2 class="t-title">{lockCopy.stoppedWaiting}</h2><div class="cap">{lockCopy.stoppedLine}</div></div>
           {:else}
             <div class="lead"><h2 class="t-title">{stepText(c.step).title}</h2></div>

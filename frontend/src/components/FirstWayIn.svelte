@@ -204,7 +204,7 @@
     <div class="mcard" class:open={method === "token"}>
       <label class="mhead">
         <input type="radio" name="{idPrefix}-method" value="token" checked={method === "token"} onchange={() => choose("token")} aria-describedby="{idPrefix}-token-line" />
-        <svg class="i i-20 micon" aria-hidden="true"><use href="#i-yubi" /></svg>
+        <svg class="i micon" aria-hidden="true"><use href="#i-yubi" /></svg>
         <span class="mtext"><span class="mtitle">{firstMethodCopy.token.title}</span><span id="{idPrefix}-token-line" class="mline">{firstMethodCopy.token.line}</span></span>
       </label>
       <div class="mgrow" class:on={method === "token"} inert={method !== "token"}>
@@ -231,7 +231,7 @@
     <div class="mcard" class:open={method === "password"}>
       <label class="mhead">
         <input type="radio" name="{idPrefix}-method" value="password" checked={method === "password"} onchange={() => choose("password")} aria-describedby={method === "password" ? undefined : `${idPrefix}-password-line`} />
-        <svg class="i i-20 micon" aria-hidden="true"><use href="#i-password" /></svg>
+        <svg class="i micon" aria-hidden="true"><use href="#i-password" /></svg>
         <!-- The card's line is the rule the first field states under it
              (PASSWORD_RULE): while the card is open the line folds away
              as the fields open, so the requirement is said once, in the

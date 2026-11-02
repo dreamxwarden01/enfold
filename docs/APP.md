@@ -1714,7 +1714,7 @@ at last; the three full-height cards side by side, two of them dim placeholders,
 had taken from the mockup's storyboard and the rulings of 2026-09-07/08 then described, are
 gone, and so is their wording). One centred panel, `min(440px, 100%)` wide, 28 px in, the
 card's radius, and **a floating frosted card** (the user's ask for fork D, ruled 2026-11-01:
-"a little is enough"): the surface at 92 % over a 24 px blur of the ground behind it, so
+"a little is enough"): the surface at 86 % over a 24 px blur of the ground behind it, so
 the ground's colour just touches it (where the panel stands, the glow from the window's
 top-left corner has all but faded, and the card reads a level or two from opaque in either
 theme), a hairline 1 px stroke, and a soft shadow, tight at its edge and wide below, a little
@@ -3288,7 +3288,7 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     item is);
   - *Archives*, then **a row for each open archive** under it — those `VaultStatus.Opened` names,
     in its order, and the page's own before a status names it, so several stand after a lock
-    left more than one open: indented, 32 px, the archive glyph at 20 px, the name cut by an
+    left more than one open: indented, 32 px, the archive glyph at 16 px, the name cut by an
     ellipsis with the app's tooltip while it is cut, the row drawn current (the fill, the pill,
     the glyph in the accent) while its page shows. A click shows that page as it was left, or
     opens another archive's, leaving the one shown (§2.3). At its right a 20 px × titled "Close
@@ -3525,10 +3525,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   the Archives pane's *Edit name and description* — and *Compact* a glyph of its own, two arrows
   pressing onto a line, so the box is an archive's alone. A glyph is 16 px beside words, in a
   button, a menu, a bar or a list's row (buttons and menus drew 14, which no grid lands on at
-  125 %); the few that stand larger keep their 20 — the rail's open archives, a first way in's
-  methods and the touch's glyph where a touch stopped waiting — while the sort chevron and a
-  step disc's tick (10), the crumbs' separator (12) and a preview's type icon (48, and 96 in the
-  viewer) keep their own sizes. The shield and the floppy disk, which nothing drew, are gone
+  125 %), and 16 for the rail's open archives, a first way in's methods and the touch's glyph
+  where a touch stopped waiting, which stood at 20 until 2026-11-02 (25 device pixels at 125 %,
+  off the grid and softer than the 16 px glyphs beside them); the sort chevron and a step disc's
+  tick (10), the crumbs' separator (12) and a preview's type icon (48, and 96 in the viewer)
+  keep their own sizes. The shield and the floppy disk, which nothing drew, are gone
   from the sprite. The fixed heights stay as ruled — the 40 px
   locked line, the 34 px foot (the 42 px op row went with the operation strip, ruled
   2026-10-18), the 44/64 panel, the file list's 36 px rows and the Archives list's 52 px

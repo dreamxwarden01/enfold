@@ -5722,3 +5722,12 @@ change; the figure sits half a pixel high at 16, 20, 30 and 32 px, and the 48 an
 rows have no solid pixel; the caption's icon — Wails sets only the large icon, 40 px at 125 %,
 and no small one — is for the real window (B.5), as are the taskbars, Alt+Tab, Start, the
 installer and `.efd` in Explorer.
+
+**The frost at 86 %; every glyph at 16** (2026-11-02). Two of the three calls left open above,
+by the user from the shots: the lock panel's frost is 86 %, not 92 — the two differ by a level
+at the real tokens, and 86 is the one the user chose from the pair; and the glyphs that had
+kept their ruled 20 px — the rail's open archives (direction 3, 2026-10-18), a first way in's
+methods and the touch's glyph where a touch stopped waiting — come down to 16 with the rest of
+the sprite, since at the user's 125 % a 20 px glyph is 25 device pixels, off the grid and
+visibly softer than the 16 px glyphs beside it; the `.i-20` size is gone from the stylesheet.
+The third call, the first run's mark when a ceremony begins there, stays open.

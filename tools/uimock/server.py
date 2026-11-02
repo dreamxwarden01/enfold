@@ -10,6 +10,27 @@ this server on a port the tour owns (never the default 8125 below), and
 reads the device pixels back. tools/uimock/shoot.mjs is a small tour on
 it, and README.md beside them says how to run one.
 
+The window's material (APP.md 6, Controls). The shell opens the page at
+/?backdrop=mica when it has made the window over Mica, and the page then
+sets data-backdrop="mica" on its root (main.ts): the body, the rail and
+the layer's foot go transparent and the layer semi-opaque (app.css). A
+browser has nothing behind the page, so for that same query the mock
+draws a stand-in under it, the phase-5 window study's: a wallpaper
+blurred at 100 px, put through a luminosity blend with the theme's tint
+and then the tint itself, after WinUI's MicaController defaults as
+recalled (light #F3F3F3 at 0.5, dark #202020 at 0.8), the tint following
+the page's theme. Windows 11's bloom blues by default; wp=warm is the
+study's warm wallpaper:
+
+    http://127.0.0.1:<port>/?backdrop=mica
+    http://127.0.0.1:<port>/?backdrop=mica&wp=warm
+
+It is not drawn under forced colours, where the page's ground is the
+Canvas again: a stand-in placed under the page's boxes would paint over
+that Canvas, which the material, behind the whole page, never can. Only
+the real window shows the material. Without the query nothing is added,
+and the page is served as before.
+
 Events. The runtime has no socket here, so the mock queues what the core
 would emit and the page drains it. GET /mock/events returns the queue and
 empties it; paste this into the page once to have it dispatch them:
@@ -398,6 +419,7 @@ unlocked is staged with {"vault": {"locksAt": <now + 45>}} and undone by
 any press the page reports, as in the app."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "frontend", "dist")
 NOW = int(time.time())
@@ -3458,6 +3480,38 @@ SHIM = (b'<script>window.chrome = window.chrome || {};'
         b' fetch("/mock/secret", { method: "POST", headers: { "Content-Type": "text/plain" }, body: m });'
         b'} };</script>')
 
+# The stand-in for the window's material (the module docstring, "The
+# window's material"): the desk of the phase-5 window study's frame
+# (scratchpad p5-study/mocks/window/_base/frame.css), placed under the
+# page's boxes rather than under an iframe. It is drawn only for
+# ?backdrop=mica, read as the page reads it (the first value), so that
+# without the query the page is served byte for byte as before.
+STANDIN_CSS = b"""<style id="mock-standin-css">
+#mock-standin { position: fixed; inset: 0; overflow: hidden; z-index: -1; isolation: isolate; pointer-events: none;
+  --tint: #f3f3f3; --tint-op: 0.5; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) #mock-standin { --tint: #202020; --tint-op: 0.8; } }
+:root[data-theme="dark"] #mock-standin { --tint: #202020; --tint-op: 0.8; }
+@media (forced-colors: active) { #mock-standin { display: none; } }
+#mock-standin .wp { position: absolute; inset: -200px; filter: blur(100px); }
+#mock-standin .lum { position: absolute; inset: 0; background: var(--tint); mix-blend-mode: luminosity; }
+#mock-standin .tint { position: absolute; inset: 0; background: var(--tint); opacity: var(--tint-op); }
+#mock-standin[data-wp="bloom"] .wp {
+  background:
+    radial-gradient(28% 40% at 32% 58%, #8fd0ff 0%, transparent 70%),
+    radial-gradient(36% 48% at 44% 44%, #2b7bff 0%, transparent 72%),
+    radial-gradient(50% 60% at 82% 24%, #0d3b9c 0%, transparent 70%),
+    linear-gradient(135deg, #04163a 0%, #0a2f72 50%, #030a20 100%);
+}
+#mock-standin[data-wp="warm"] .wp {
+  background:
+    radial-gradient(40% 50% at 22% 28%, #ffc76b 0%, transparent 70%),
+    radial-gradient(42% 52% at 70% 62%, #e2466a 0%, transparent 70%),
+    linear-gradient(160deg, #ff8a3d 0%, #b8326a 60%, #3b1640 100%);
+}
+</style>"""
+STANDIN = (b'<div id="mock-standin" data-wp="%s" aria-hidden="true">'
+           b'<div class="wp"></div><div class="lum"></div><div class="tint"></div></div>')
+
 
 def handle(method_id, args):
     v = state["vault"]
@@ -3586,6 +3640,13 @@ class H(SimpleHTTPRequestHandler):
         if self.path.split("?")[0] in ("/", "/index.html"):
             with open(os.path.join(DIST, "index.html"), "rb") as f:
                 data = f.read().replace(b"<head>", b"<head>" + SHIM, 1)
+            # The material's stand-in, for the page told it stands on Mica
+            # (STANDIN, above).
+            query = parse_qs(urlsplit(self.path).query)
+            if (query.get("backdrop") or [""])[0] == "mica":
+                wp = b"warm" if (query.get("wp") or [""])[0] == "warm" else b"bloom"
+                data = data.replace(b"</head>", STANDIN_CSS + b"</head>", 1)
+                data = data.replace(b"<body>", b"<body>" + STANDIN % wp, 1)
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))

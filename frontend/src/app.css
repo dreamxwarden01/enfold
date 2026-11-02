@@ -318,9 +318,10 @@ html, body, #app { height: 100%; }
    --ground-tint from above the rail's top-left corner, gone 58 % of the
    way out, over the solid ground. It shows where the body shows — the
    rail and the lock scene — while the layer, its foot and every card
-   paint over it, as when it was first drawn. It stands where Mica will
-   be, a still of the material, until the window has the material itself
-   (APP.md §6, Controls). */
+   paint over it, as when it was first drawn. It is a still of the
+   material, the window's ground wherever the window is not made over Mica;
+   where it is, the Mica block (just before the contrast themes') takes it
+   away (APP.md §6, Controls). */
 body {
   margin: 0;
   background: radial-gradient(140% 100% at 8% -10%, var(--ground-tint) 0%, transparent 58%), var(--ground);
@@ -2005,6 +2006,39 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
   .print-sheet p { font: var(--t-cap); margin: 0 0 var(--s1); max-width: 60ch; }
   .print-digits { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s2); margin: var(--s4) 0; max-width: 480px; }
   .print-digits span { font: var(--t-sub); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; border: 1px solid #000; padding: var(--s1) 0; }
+}
+
+/* ---------- Mica (APP.md §6, Controls; phase 5, group B) ---------- */
+/* The window's material. The shell makes the window over Mica only behind
+   its switch and on a Windows that draws it (ENFOLD_BACKDROP=mica, build
+   22621 and later), and then opens the page at /?backdrop=mica, from which
+   main.ts sets data-backdrop="mica" on the root before the first mount. So
+   every rule here names the attribute, and without it nothing changes: the
+   ground is the glow above, the material's still. With it the material is
+   the ground: the body, the rail (which paints nothing of its own) and the
+   layer's foot are transparent, and the layer is semi-opaque over it,
+   white at 50 % in light and #3A3A3A at 30 % in dark (WinUI's
+   LayerFillColorDefault as recalled; the phase-5 window study's mica-50,
+   measured to keep every ink's floor on its stand-in). Cards, menus and
+   dialogs keep their opaque fills, and the lock stage's frosted panel and
+   its wash band stand over the material as they are: the panel's blur
+   reaches only the page, the material behind the window being blurred
+   already. None of it applies in a contrast theme, where the ground is the
+   Canvas: this block's body rule, (0,2,1), would beat the contrast block's
+   (0,0,1) wherever the two stood, and leave the page's ground to whatever
+   the window shows behind it. */
+@media not (forced-colors: active) {
+  :root[data-backdrop="mica"] { --layer-mica: rgba(255, 255, 255, 0.5); }
+  @media (prefers-color-scheme: dark) {
+    :root[data-backdrop="mica"]:not([data-theme="light"]) { --layer-mica: rgba(58, 58, 58, 0.3); }
+  }
+  :root[data-backdrop="mica"][data-theme="dark"] { --layer-mica: rgba(58, 58, 58, 0.3); }
+  :root[data-backdrop="mica"] body { background: transparent; }
+  :root[data-backdrop="mica"] .layer { background: var(--layer-mica); }
+  /* The foot is the status bar on the layer: its own fill was --ground,
+     which is the material now, so it takes the layer's and keeps its top
+     stroke. */
+  :root[data-backdrop="mica"] .layer-foot { background: transparent; }
 }
 
 /* ---------- contrast themes (APP.md §6, Controls; ruled 2026-11-01) ---------- */

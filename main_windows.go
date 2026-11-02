@@ -21,6 +21,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/w32"
 	"golang.org/x/sys/windows"
 
 	"github.com/dreamxwarden01/enfold/internal/app"
@@ -85,7 +86,33 @@ type shell struct {
 	// without asking (APP.md §2.4). It is set before the close and taken
 	// by the gate, one close each.
 	ours atomic.Bool
+	// themeMu orders the caption's updates (syncTheme, themeLoaded): a
+	// saved theme, a flip of Windows' own mode and a page's load each read
+	// the setting and the mode afresh under it, so the update applied last
+	// has read the newest of both. It guards caption.
+	themeMu sync.Mutex
+	// caption is what the shell knows of the window's caption: the one
+	// window it may touch, whose page has loaded, and the theme that
+	// window wears, so that a save which leaves the resolved theme as it
+	// was repaints nothing (captionState).
+	caption captionState
+	// made is the theme ensureWindow makes a window in, handed to that
+	// window's load listener by the OnCreate hook in main. The hook runs
+	// inside NewWithOptions, on ensureWindow's goroutine and under winMu,
+	// so what it reads is what was stored for that window.
+	made atomic.Int32
+	// backdrop is what every window of this process is made over, Solid
+	// or Mica (backdropFor), decided once in main before anything can make
+	// a window and never written again.
+	backdrop backdrop
 }
+
+// The caption's theme, as captionState records it.
+const (
+	captionUnknown int32 = iota
+	captionLight
+	captionDark
+)
 
 // secretRefused tells the page that a submitted secret was not accepted
 // (a stale prompt, no ceremony); the value itself is not echoed.
@@ -120,6 +147,15 @@ func main() {
 	}
 	s.core = core
 	s.settings = core.GetSettings
+
+	// The window's backdrop (APP.md §6, Controls: the ground), read once
+	// for every window this process makes, before anything can make one:
+	// the developer's switch and whether this Windows draws the material.
+	// It is decided here, before application.New, since the single-instance
+	// listener New starts can make a window, but logged only once New has
+	// returned (below).
+	asked := os.Getenv("ENFOLD_BACKDROP")
+	s.backdrop = backdropFor(asked, w32.SupportsBackdropTypes())
 
 	vault, archives, archive, keys, settings := api.Services(core)
 	shellSvc := api.NewShell(api.Hooks{
@@ -193,6 +229,27 @@ func main() {
 	// below touches the profile or the vault.
 	s.app = application.New(opts)
 	logger.printf("start: application created")
+	// The backdrop is logged here and not where it is decided, so that a
+	// run tried with the switch says what it got: a second launch, which
+	// exits inside New (beta.20, application.go 207-216) while the running
+	// process brings its own window forward, never writes the line.
+	logger.printf("start: backdrop %s (ENFOLD_BACKDROP %q)", s.backdrop, asked)
+	// A window's caption is the shell's to set only once its page has
+	// loaded (captionState says why). The load listener is attached
+	// through OnCreate, which Wails runs as it adds a window and before the
+	// window runs (beta.20, window_manager.go 60-72), so no window's first
+	// load can come before it; that load then catches up a window made in
+	// a theme that has moved since. It is registered here, before anything
+	// can make a window, a second launch's ensureWindow included.
+	s.app.Window.OnCreate(func(w application.Window) {
+		if w.Name() != windowName {
+			return
+		}
+		id, made := w.ID(), s.made.Load()
+		w.OnWindowEvent(events.Windows.WebViewNavigationCompleted, func(*application.WindowEvent) {
+			s.themeLoaded(id, made)
+		})
+	})
 
 	// The launch's own argument, staged before the window is asked for:
 	// there is no page to emit to until one has drawn, so this waits for
@@ -224,6 +281,16 @@ func main() {
 	logger.printf("start: lock watch ready (wts=%v)", s.lock.wtsOK)
 	s.app.Event.OnApplicationEvent(events.Windows.APMSuspend, func(*application.ApplicationEvent) {
 		core.LockNow(app.ReasonSuspend)
+	})
+	// While the Theme setting is "system" the caption follows Windows' own
+	// app mode (APP.md §2.4). The window is never made with Wails'
+	// SystemDefault, whose per-window listener re-applies the system's
+	// theme on every flip and would put the caption back on it after the
+	// user had chosen Light or Dark (beta.20, webview_window_windows.go
+	// 573-577). This one resolves the setting each time, so an explicit
+	// choice stands through a flip and costs nothing.
+	s.app.Event.OnApplicationEvent(events.Windows.SystemThemeChanged, func(*application.ApplicationEvent) {
+		s.syncTheme()
 	})
 	// The window is created before Run, as Wails expects; a second launch
 	// and the tray recreate it through the same ensureWindow.
@@ -302,6 +369,13 @@ func (s *shell) Emit(name string, payload any) {
 	if s.app != nil {
 		s.app.Event.Emit(name, payload)
 	}
+	if name == app.EventSettingsChanged {
+		// The caption follows a saved theme at once (APP.md §2.4): Wails
+		// sets it only when it makes the window, so without this it kept
+		// the old theme until the window was made again.
+		s.syncTheme()
+		return
+	}
 	if s.tray == nil {
 		return
 	}
@@ -373,18 +447,31 @@ func (s *shell) ensureWindow() {
 	for k := application.CoreWebView2PermissionKindUnknownPermission; k <= application.CoreWebView2PermissionKindClipboardRead; k++ {
 		denyWV2[k] = application.CoreWebView2PermissionStateDeny
 	}
-	theme := application.SystemDefault
-	bg := application.NewRGB(0xF1, 0xF1, 0xF4)
-	switch s.settings().Theme {
-	case "dark":
-		theme, bg = application.Dark, application.NewRGB(0x1C, 0x1C, 0x20)
-	case "light":
-		theme = application.Light
-	default:
-		if s.app.Env.IsDarkMode() {
-			bg = application.NewRGB(0x1C, 0x1C, 0x20)
-		}
+	// The window is made in the theme the setting resolves to now, Light or
+	// Dark and never SystemDefault (the listener in main says why); every
+	// change after this one is the shell's own (syncTheme), once the
+	// window's page has loaded. Windows' own mode is read from the
+	// registry itself: Wails' Env.IsDarkMode answers false until the
+	// application runs (beta.20, environment_manager.go 36-41, its impl
+	// set only in Run, application.go 667), and the first window is made
+	// before it does. What the window is made in goes to its load listener
+	// through made; under a contrast theme Wails sets no theme at all
+	// (webview_window_windows.go 1476-1478), so the window wears none
+	// known, and its load applies one.
+	dark := themeDark(s.settings().Theme, w32.IsCurrentlyDarkMode())
+	theme := application.Light
+	if dark {
+		theme = application.Dark
 	}
+	made := captionOf(dark)
+	if w32.IsCurrentlyHighContrastMode() {
+		made = captionUnknown
+	}
+	s.made.Store(made)
+	// The backdrop decided in main: the URL that tells the page, the
+	// background and the backdrop Wails is asked for, and the colour the
+	// window holds (backdrop.look).
+	look := s.backdrop.look(dark)
 	w := s.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:                       windowName,
 		Title:                      appName,
@@ -392,13 +479,15 @@ func (s *shell) ensureWindow() {
 		Height:                     700,
 		MinWidth:                   880,
 		MinHeight:                  560,
-		URL:                        "/",
-		BackgroundColour:           bg,
+		URL:                        look.url,
+		BackgroundType:             look.background,
+		BackgroundColour:           look.colour,
 		EnableFileDrop:             true,
 		DefaultContextMenuDisabled: true,
 		Permissions:                deny,
 		Windows: application.WindowsWindow{
 			Theme:                   theme,
+			BackdropType:            look.backdrop,
 			Permissions:             denyWV2,
 			GeneralAutofillEnabled:  false,
 			PasswordAutosaveEnabled: false,
@@ -537,6 +626,255 @@ func (s *shell) closeDecided(action string, remember bool) *app.Error {
 func (s *shell) window() application.Window {
 	w, _ := s.app.Window.GetByName(windowName)
 	return w
+}
+
+// syncTheme sets the window's caption, and the ground behind its page, to
+// the theme the setting resolves to now (APP.md §2.4). It runs on a saved
+// setting (settings.changed) and on a flip of Windows' own mode
+// (SystemThemeChanged), reading both afresh under themeMu, so whichever
+// runs last has read the newest of each. It touches only a window whose
+// page has loaded (captionState); one still being made is caught up by
+// its load (themeLoaded).
+//
+// Wails sets a window's theme only when it makes the window (beta.20 has
+// no SetTheme on a window), so the shell calls the same exported
+// w32.SetTheme on the window's HWND — DWMWA_USE_IMMERSIVE_DARK_MODE,
+// attribute 20 (19 before build 18985) — and then has DWM re-read the
+// frame: SetTheme invalidates the client area alone (pkg/w32/theme.go
+// 231), and a caption no message repaints keeps its old colours.
+// SetWindowPos with SWP_FRAMECHANGED is how Wails itself has DWM re-read a
+// frame (webview_window_windows.go 1360-1368); SWP_NOACTIVATE is added
+// because a flip of Windows' mode lands while Windows' own Settings is in
+// front, and a repaint must not bring Enfold forward.
+func (s *shell) syncTheme() {
+	if s.app == nil {
+		return
+	}
+	s.themeMu.Lock()
+	defer s.themeMu.Unlock()
+	s.syncThemeLocked()
+}
+
+// themeLoaded is the window's WebViewNavigationCompleted (the listener
+// the OnCreate hook in main attaches): from its first load the window is
+// syncTheme's to touch, wearing made, and a save or a flip that came while
+// it was being made — which touched nothing — is applied now. It runs on a
+// listener's goroutine, never the main thread (Wails starts each window
+// listener on its own, webview_window.go 1010-1017).
+func (s *shell) themeLoaded(id uint, made int32) {
+	s.themeMu.Lock()
+	defer s.themeMu.Unlock()
+	s.caption.loaded(id, made)
+	s.syncThemeLocked()
+}
+
+// syncThemeLocked is syncTheme's work, with themeMu held. It is never
+// called on the main thread, which it waits for.
+func (s *shell) syncThemeLocked() {
+	dark := themeDark(s.settings().Theme, w32.IsCurrentlyDarkMode())
+	want := captionOf(dark)
+	w := s.window()
+	if w == nil || !s.caption.touch(w.ID(), want) {
+		// In the tray, the next window is made from the setting; a window
+		// whose page has not loaded is caught up by its load; and one that
+		// wears want already has nothing to repaint.
+		return
+	}
+	set := application.InvokeSyncWithResult(func() bool {
+		hwnd := uintptr(w.NativeWindow())
+		// A window destroyed since, or a contrast theme: Windows draws that
+		// caption in the system's colours, and Wails' own updateTheme leaves
+		// it alone there (webview_window_windows.go 1476-1478), as this
+		// does.
+		if hwnd == 0 || w32.IsCurrentlyHighContrastMode() {
+			return false
+		}
+		w32.SetTheme(hwnd, dark)
+		w32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+			w32.SWP_FRAMECHANGED|w32.SWP_NOMOVE|w32.SWP_NOSIZE|w32.SWP_NOZORDER|w32.SWP_NOACTIVATE)
+		// The solid colour behind the page before it paints and the one a
+		// resize uncovers: Wails paints it on WM_ERASEBKGND and hands it to
+		// WebView2 as its default background, and it stays the creation's
+		// unless it is set again. Over Mica it is the same colour held
+		// transparent, as the window was made with it (backdrop.ground).
+		w.SetBackgroundColour(s.backdrop.ground(dark))
+		return true
+	})
+	if set {
+		s.caption.wears = want
+	}
+}
+
+// themeDark resolves the Theme setting to the window's theme: "dark" and
+// "light" are themselves, and "system" — or anything else, which the core
+// never stores — is Windows' own app mode, osDark (AppsUseLightTheme 0, as
+// w32.IsCurrentlyDarkMode reads it, beta.20 w32/theme.go 267-279).
+func themeDark(theme string, osDark bool) bool {
+	switch theme {
+	case "dark":
+		return true
+	case "light":
+		return false
+	}
+	return osDark
+}
+
+// groundOf is the window's BackgroundColour in a theme, the stylesheet's
+// --ground: the solid colour behind the page before it first paints, and
+// the one a resize uncovers before WebView2 has caught up.
+func groundOf(dark bool) application.RGBA {
+	if dark {
+		return application.NewRGB(0x1C, 0x1C, 0x20)
+	}
+	return application.NewRGB(0xF1, 0xF1, 0xF4)
+}
+
+// captionOf is a resolved theme as captionState records it.
+func captionOf(dark bool) int32 {
+	if dark {
+		return captionDark
+	}
+	return captionLight
+}
+
+// backdrop is what the window is made over (APP.md §6, Controls: the
+// ground): the Solid window, whose page paints its own ground, the glow
+// that stands in for the material, or Windows' Mica, with the page's
+// ground transparent over it. The phase-5 study's judge (§4) and its
+// window designer (§1.5) chose it; Solid stays the default until the user
+// has judged the material in the real window.
+type backdrop uint8
+
+const (
+	backdropSolid backdrop = iota
+	backdropMica
+)
+
+func (b backdrop) String() string {
+	if b == backdropMica {
+		return "mica"
+	}
+	return "solid"
+}
+
+// backdropFor is the backdrop rule. asked is ENFOLD_BACKDROP, the switch
+// the shell reads once before it makes a window: "mica" asks for the
+// material (in any case, with the trailing space a .cmd's set line leaves
+// trimmed), and anything else, "solid", nothing at all or a word it does
+// not know, keeps the Solid window. supported is w32.SupportsBackdropTypes,
+// Windows build 22621 or later (beta.20, pkg/w32/theme.go 190-192, the
+// build read once from HKLM's CurrentBuildNumber, consts.go 31 and 62-74).
+// Below it Wails does not fall back to a solid window: a translucent one
+// gets the undocumented Windows 10 blur behind it (ACCENT_ENABLE_BLURBEHIND,
+// webview_window_windows.go 1418-1432), so the shell chooses Solid itself
+// there. Neither Wails nor w32 says whether Windows' transparency effects
+// are on, so that is no input here: where the material cannot draw, DWM
+// draws in its place (backdrop.ground says why none of the window's own
+// colour shows there).
+func backdropFor(asked string, supported bool) backdrop {
+	if supported && strings.EqualFold(strings.TrimSpace(asked), "mica") {
+		return backdropMica
+	}
+	return backdropSolid
+}
+
+// windowLook is what a backdrop sets of the window's options.
+type windowLook struct {
+	// url is the page's: "/?backdrop=mica" only over Mica, which is how
+	// the page learns the backdrop the shell applied, never the one asked
+	// for (main.ts sets data-backdrop="mica" on its root from it, and
+	// app.css's Mica block reads that attribute alone).
+	url        string
+	background application.BackgroundType
+	backdrop   application.BackdropType
+	colour     application.RGBA
+}
+
+// look is the window's options under b: over Mica, Wails' translucent
+// background with the Mica backdrop and the URL that tells the page; under
+// Solid, the window exactly as it was before the switch — the solid
+// background, no backdrop (Auto, the zero value, which Wails reads only
+// for a translucent window, webview_window_windows.go 588-590) and the
+// page at "/".
+func (b backdrop) look(dark bool) windowLook {
+	if b == backdropMica {
+		return windowLook{
+			url:        "/?backdrop=mica",
+			background: application.BackgroundTypeTranslucent,
+			backdrop:   application.Mica,
+			colour:     b.ground(dark),
+		}
+	}
+	return windowLook{
+		url:        "/",
+		background: application.BackgroundTypeSolid,
+		backdrop:   application.Auto,
+		colour:     b.ground(dark),
+	}
+}
+
+// ground is the BackgroundColour the window holds under b: the
+// stylesheet's ground in the theme (groundOf), which under Solid is what
+// shows before the page paints and where a resize uncovers the window, as
+// before. Over Mica the colour has no effect (beta.20): a translucent
+// window's setBackgroundColour gives the window class no brush and sets
+// WebView2's default background transparent whatever it is given
+// (webview_window_windows.go 357-365), its WM_ERASEBKGND fills only a
+// Solid window (1714-1732), and it has no redirection surface to fill
+// (WS_EX_NOREDIRECTIONBITMAP, 402-415); setupChromium hands WebView2 the
+// colour as given (2590-2597), but run() sets it transparent again at
+// 587, before the window is first shown. The ground's RGB is kept there at
+// alpha 0 so that nothing can ever hand WebView2 an opaque ground under
+// the material. Where the material cannot draw (transparency effects off,
+// battery saver, Remote Desktop), what shows behind the page is what DWM
+// draws in its place, never this colour.
+func (b backdrop) ground(dark bool) application.RGBA {
+	c := groundOf(dark)
+	if b == backdropMica {
+		c.Alpha = 0
+	}
+	return c
+}
+
+// captionState is what the shell knows of the window's caption (APP.md
+// §2.4), kept under shell.themeMu: the window it may touch and the theme
+// that window wears. It holds the rule apart from Wails, where a test can
+// reach it: no window is touched before its page has loaded, and its
+// first load is when a window made in a theme that has moved since is
+// caught up.
+//
+// Not before then, because Wails pumps the main thread's messages while it
+// creates a window's WebView2 (chromium.Embed, beta.20
+// internal/webview2/pkg/edge/chromium.go 225-283), after the window has
+// its HWND and can be found by name (webview_window_windows.go 477, 509;
+// window_manager.go 60-72). A background colour set from inside that pump
+// reaches a controller that is nil — a panic recovered inside a nested
+// InvokeSync whose wait is then never released, so the main thread stops
+// (mainthread.go 23-32) — or one not yet ready, whose refusal ends the
+// process (chromium.go 163-166, 676-696). And a change that lands before
+// the HWND exists would find nothing to set, while the window is then made
+// in the theme read before it: its load is what catches that up.
+type captionState struct {
+	win   uint  // the id of the window whose page has loaded; 0 while none has
+	wears int32 // the theme win wears; captionUnknown while that is not known
+}
+
+// loaded is window id's WebViewNavigationCompleted: from its first load it
+// is the window to touch, wearing made, the theme ensureWindow made it in.
+// A later load of the same window (a reload) changes nothing of what it
+// wears, which is what the shell has set since. Wails numbers windows
+// upward from 1 and never reuses a number (webview_window.go 265-270), so
+// a window made again from the tray is a new id.
+func (c *captionState) loaded(id uint, made int32) {
+	if c.win != id {
+		c.win, c.wears = id, made
+	}
+}
+
+// touch reports whether window id is to be set to want: it is the window
+// whose page has loaded, and it does not wear want already.
+func (c *captionState) touch(id uint, want int32) bool {
+	return id != 0 && id == c.win && c.wears != want
 }
 
 // The native dialogs report a cancelled dialog as an error (the common

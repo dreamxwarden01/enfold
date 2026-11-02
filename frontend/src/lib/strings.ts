@@ -2370,7 +2370,7 @@ export const settingsCopy = {
   dictionaryOff: "Off",
   appearance: "Appearance",
   theme: "Theme",
-  themeLine: "The window's own theme follows at the next open.",
+  themeLine: "The title bar follows it at once.",
   themeChoices: [
     ["system", "Follow Windows"],
     ["light", "Light"],

@@ -814,6 +814,35 @@ archives* went 2026-09-13: the window's close already closes, or drains, every o
 is up the page closes archives; a tray item that changed the core under a page that did not
 refresh was worse than none).
 
+**The window's theme** (ruled 2026-11-01, phase 5). The window is made in the theme the setting
+resolves to at that moment — *Light*, *Dark*, or for *Follow Windows* Windows' own app mode —
+and never in Wails' `SystemDefault`, whose own listener would put the caption back on Windows'
+theme at its next flip, over an explicit choice; every change after that is the shell's.
+Windows' own app mode is read from the registry itself (`AppsUseLightTheme`, Wails'
+`w32.IsCurrentlyDarkMode`): Wails' `Env.IsDarkMode` answers false until the application runs,
+and the first window is made before it does. A saved theme reaches the caption at once:
+`SetSettings`, once the file is written, emits `settings.changed {Theme}` (the theme alone,
+nothing of the registry), and the shell sets the window's dark mode
+(`DWMWA_USE_IMMERSIVE_DARK_MODE`, 20, through Wails' `w32.SetTheme`), has DWM redraw the frame
+(`SetWindowPos` with `SWP_FRAMECHANGED`, since that call repaints only the client area) and
+moves the window's background colour with it — the ground shown before the page paints and where
+a resize uncovers the window, the stylesheet's `--ground`, #F1F1F4 light and #1C1C20 dark. Over
+Mica (§6) the colour has no effect, and the window holds it at alpha 0 so that
+nothing can ever hand WebView2 an opaque ground: under a translucent window
+Wails paints none of it and leaves WebView2's default background transparent, so
+where the material cannot draw (transparency effects off, battery saver, Remote
+Desktop) what shows behind the page is what DWM draws in its place. While
+the setting is *Follow Windows*, a flip of Windows' own mode (`SystemThemeChanged`) is followed
+the same way, the page following it through `prefers-color-scheme`; *Light* and *Dark* stand
+through it. A change that comes while the window is being made waits for its page to load
+(`WebViewNavigationCompleted`, its listener attached as Wails adds the window) and is applied
+then, never while WebView2 is still being created: Wails pumps the main thread's messages
+meanwhile, and a background colour set from there reaches a WebView2 that is not ready, which
+stops the main thread or ends the process. A save that leaves the resolved theme as it was
+repaints nothing, and under a contrast theme the caption is Windows' own and is left alone, as
+Wails leaves it. (It was set only when the window was made, so a saved theme left the caption
+stale until the window was made again.)
+
 **Boot order in the frontend:** subscribe to every event at module scope, before the first
 `await`; then `Vault.Status()`. `VaultStatus` and every `vault.*` payload carry one `Seq`
 incremented under the state mutex; the frontend applies a payload only when its `Seq` is
@@ -1501,7 +1530,9 @@ the vault among others — follows a rename at once: `SetSettings`, once the fil
 moves the open vault's name with the setting and emits `vault.state` (one status when the lock
 times change in the same save), so the tray's header and tooltip never name the vault
 otherwise than the window does. The page reads the setting first and the status after, which
-covers only the moment between the write and that status. Nothing of the registry — an archive's name or id —
+covers only the moment between the write and that status. Every written save also emits
+`settings.changed {Theme}`, which the window's caption follows (§2.4): it carries the theme
+alone, and a refused save emits nothing. Nothing of the registry — an archive's name or id —
 is ever written here: the archive opened last is remembered in the page's memory alone (§6, the
 Archives page). **Every choice is one ordered write.** `Set` takes the whole struct, so a choice
 the page applies at once (§6, *Settings*, the Vault page's lock times and name, *Preview pane*)
@@ -1718,7 +1749,8 @@ card's radius, and **a floating frosted card** (the user's ask for fork D, ruled
 "a little is enough"): the surface at 86 % over a 24 px blur of the ground behind it, so
 the ground's colour just touches it (where the panel stands, the glow from the window's
 top-left corner has all but faded, and the card reads a level or two from opaque in either
-theme), a hairline 1 px stroke, and a soft shadow, tight at its edge and wide below, a little
+theme; over Mica, *Controls* below, the material shows through it, out of reach of the page's
+blur), a hairline 1 px stroke, and a soft shadow, tight at its edge and wide below, a little
 stronger in dark; opaque, unblurred and unshadowed where Windows asks for less transparency
 (`prefers-reduced-transparency`), and Canvas in a CanvasText stroke in a contrast theme. A wash
 runs across its top 64 px, the accent's wash fading into the fill, with the lead on it: the
@@ -2484,9 +2516,11 @@ it held the lock times and the vault's name under the save bar, beside this PC's
 banner, then the InfoBars in flow), then four sections: **Window** — *When the window closes* as three radios, *Ask each time*,
 *Keep running in the tray*, *Quit* (§2.3; it was a select), under the line "In the tray the
 vault stays unlocked until it locks. Open archives close with the window."; **Appearance** —
-*Theme*, *Follow Windows* · *Light* · *Dark*; **Compression** — *Dictionary for small files* (the
-section is named for it while the recovery record's row is hidden, its setting still stored,
-until volume exports ship and it returns as *Repair data*; ruled 2026-10-17, it was *Exports*);
+*Theme*, *Follow Windows* · *Light* · *Dark*, which the window's caption takes with the page, at
+once, and under *Follow Windows* at each flip of Windows' own mode (§2.4); **Compression** —
+*Dictionary for small files* (the section is named for it while the recovery record's row is
+hidden, its setting still stored, until volume exports ship and it returns as *Repair data*;
+ruled 2026-10-17, it was *Exports*);
 **About** — the version and the data folder, a path under its label. Every control stands in a
 220 px column and every description is at most 52 characters wide; the *Look* row is gone until
 a second look exists. **Every choice applies the moment it is made**, as Windows applies one
@@ -3723,11 +3757,26 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   unlock are separate cards the same 4 px apart (ruled 2026-10-17; they stood 12 apart). A
   text box has no resize grip — the description's box is two lines, scrolling past them — a
   search box has no clear button of Chromium's own, and selected text wears the accent's line
-  under the ink, never the engine's blue (ruled 2026-10-17). The window's ground wears the
-  lookbook's green radial glow, a still of Mica until the window has the material itself (ruled
-  2026-11-01, reversing 2026-10-17's solid ground): `--ground-tint` from above the rail's
-  top-left corner, gone 58 % of the way out over the solid ground, and seen on the rail and the
-  lock scene, the layer and its foot painting over it. In a Windows contrast theme
+  under the ink, never the engine's blue (ruled 2026-10-17). The window's ground is the material
+  where the shell makes the window over Mica, and its still, the lookbook's green radial glow,
+  everywhere else (ruled 2026-11-01, reversing 2026-10-17's solid ground; the material behind a
+  switch since phase 5's group B). The shell asks for Mica (Wails' `BackgroundTypeTranslucent`
+  with `BackdropType: Mica`) only when `ENFOLD_BACKDROP` is `mica` as it starts and Windows is
+  build 22621 or later (Wails' `w32.SupportsBackdropTypes`), and then opens the page at
+  `/?backdrop=mica`, from which the page sets `data-backdrop="mica"` on its root before it
+  mounts: the page is told the backdrop the shell applied, never the one asked for. Below 22621
+  Wails would lay a Windows 10 blur, not a solid, under a translucent window, so there, and
+  whenever the switch is unset or anything but `mica` (Solid stays the default until the user
+  has judged the material in the real window), the window is Solid and the page wears the glow:
+  `--ground-tint` from above the rail's top-left corner, gone 58 % of the way out over the solid
+  ground, and seen on the rail and the lock scene, the layer and its foot painting over it. Over
+  Mica the body, the rail and the foot are transparent, the material their ground; the layer is
+  semi-opaque over it, white at 50 % in light and #3A3A3A at 30 % in dark (direction 5's
+  values), its stroke kept; cards, menus and dialogs keep their opaque fills; and the lock
+  stage's frosted panel and its wash stand over the material as they are, the panel's blur
+  reaching only the page, since the material behind the window is blurred already. Every rule of
+  it names the attribute, so without it nothing changes, and none of it applies in a contrast
+  theme, where the ground is the Canvas. In a Windows contrast theme
   (`forced-colors: active`) the page is drawn in the system's colours alone, by one block at the
   stylesheet's end (ruled 2026-11-01): the selected row, the command or menu item under the
   pointer, the accent and filled danger buttons, a ticked box and the chosen segment are

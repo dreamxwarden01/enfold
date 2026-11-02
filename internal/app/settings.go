@@ -54,6 +54,22 @@ type settingsFile struct {
 	LastExport *lastExport `json:"lastExportAt,omitempty"`
 }
 
+// EventSettingsChanged is emitted by SetSettings once a save is written and
+// applied (APP.md §2.4): the shell sets the window's caption to the theme
+// from it, which Wails sets only when it makes the window. It stands here,
+// beside the one call that emits it, rather than with the others in
+// types.go.
+const EventSettingsChanged = "settings.changed"
+
+// SettingsChanged is the payload of EventSettingsChanged: what a listener
+// outside the page needs of a save, which is the theme, and no more. The
+// page made the save and holds the rest; and Settings carries the vault's
+// lock times while unlocked, which are the registry's and stay off this
+// event.
+type SettingsChanged struct {
+	Theme string `json:"theme"`
+}
+
 func defaultSettings() settingsFile {
 	return settingsFile{CloseAction: CloseAsk, Theme: "system", Look: "native", RecoveryRecordPct: 3, DictionaryBelow: 256 << 10, PreviewPane: true}
 }
@@ -276,6 +292,11 @@ func (c *Core) SetSettings(s Settings) *Error {
 		c.vault.displayName = file.DisplayName
 	}
 	c.mu.Unlock()
+	// Written and applied: the machine-local part has moved whatever the
+	// lock times do below, so the event goes now, outside the mutex as
+	// every emit does — a registry write refused below must not leave the
+	// caption on the old theme while the file holds the new one.
+	c.emit(EventSettingsChanged, SettingsChanged{Theme: file.Theme})
 	changed := false
 	if s.TimeoutsFromVault && unlocked && sess != nil {
 		if g := sess.Registry(); g != nil {

@@ -695,7 +695,8 @@ const (
 // archive is clean between operations, so nothing was ever asked before a
 // close — and nothing to expire at all since 2026-09-10: an open archive has
 // no timeout of its own, and archives.changed is what says one has closed
-// (APP.md §2.3, DESIGN.md §10).
+// (APP.md §2.3, DESIGN.md §10). settings.changed, the Theme alone after a written
+// save, is EventSettingsChanged beside SetSettings in settings.go.
 const (
 	EventVaultState      = "vault.state"
 	EventVaultCeremony   = "vault.ceremony"

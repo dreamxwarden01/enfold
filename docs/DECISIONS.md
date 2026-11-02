@@ -5763,3 +5763,74 @@ the stage's 96 px mark, since nothing yet says whether a vault exists, so the ma
 128 when the first card arrives — outside the ruling's scene, for the user's eye; the mock's
 `cancel_unlock` ends only an unlock's staged ceremony, not a backup's test, against its own
 docstring (the mock, not the app).
+
+## 2026-11-02 — Phase 5, group B: the caption follows the theme, Mica behind a switch
+
+**Group B opened by the user** (2026-11-02). After the real-window look at group A ("基本都
+OK"), the user said to go on with group B. Built in the mock and the compiler, since the agents
+never run the window: B.2 the caption's theme and B.3 Mica behind a switch, below. B.4, the
+scrollbars, waits for the user's screenshot of a scrolled list at 125 % (the CSS route only if
+the bar is the classic one); B.5, the app icon in the shell, and B.6, Windows 11's four contrast
+themes, are the user's checks on this build and the installer packaged from it.
+
+**The caption follows the theme at once** (2026-11-02). The judge's section 5, part 1. Wails
+sets a window's theme only when it makes the window, so a theme saved in Settings left the
+caption stale until the next launch. Built: the core emits `settings.changed {Theme}` after
+every written save (the theme alone — nothing of the registry rides on it, and a refused save
+emits nothing); the shell catches it, and `SystemThemeChanged` while the setting is *Follow
+Windows*, and sets the window's dark mode through Wails' exported `w32.SetTheme`
+(`DWMWA_USE_IMMERSIVE_DARK_MODE`, 20), then has DWM re-read the frame with `SetWindowPos` and
+`SWP_FRAMECHANGED` (the Wails call invalidates the client area alone), with `SWP_NOACTIVATE` so a
+flip made in Windows' own Settings does not bring Enfold forward, and moves the window's
+background colour with it. The window is always made in the resolved Light or Dark and never
+Wails' `SystemDefault`, whose per-window listener would put the caption back on Windows' theme
+over an explicit choice; the setting is resolved afresh on each change, so Light and Dark stand
+through a flip of Windows' mode. Two findings of the review, both from the Wails source: Windows'
+mode is read from the registry itself (`w32.IsCurrentlyDarkMode`), since `Env.IsDarkMode`
+answers false until the application runs and the first window is made before it does — with
+the first draft, every cold start on a dark Windows with *Follow Windows* made a light window,
+which the user's light-mode machine would not have shown; and the shell touches a window only
+once its page has loaded (`WebViewNavigationCompleted`, its listener attached through
+`Window.OnCreate` so no first load is missed), because Wails pumps the main thread's messages
+while WebView2 is made, and a background colour set from there reaches a controller that does
+not exist, which freezes the main thread or ends the process. A save that leaves the resolved
+theme as it was repaints nothing. Under a contrast theme the caption is Windows' own and is left
+alone, as Wails leaves it; when a contrast theme ends without a mode change no event fires, so
+the caption may stay stale until the next save or flip (B.6). The Settings page's line "The
+window's own theme follows at the next open" became "The title bar follows it at once". For the
+user's eye (the exact steps are in the batch notes and were sent in chat): Light, Dark and
+Follow Windows with the window open; Windows' own mode flipped behind Windows Settings; the
+inactive caption; a cold start on a dark Windows; a resize right after a flip; the tray reopen.
+
+**Mica behind a switch, Solid the default** (2026-11-02). The judge's section 4 and the window
+designer's 1.5, mica-50. The shell reads `ENFOLD_BACKDROP` once as it starts: `mica` asks for
+the material, and the window is made with `BackgroundTypeTranslucent` and `BackdropType: Mica`
+only when `w32.SupportsBackdropTypes()`, build 22621 or later — below it Wails lays a Windows 10
+blur under a translucent window rather than a solid, so the shell chooses Solid itself; unset,
+`solid` or anything else keeps today's Solid window with the painted glow, the default until the
+user has judged the material in the real window. The page is told what the shell applied, never
+what was asked: the window opens at `/?backdrop=mica` and main.ts sets `data-backdrop="mica"`
+on the root before the mount, in the same task, so the first frame is the material's. The CSS
+is the designer's block, additive under the attribute: the body, the rail and the foot
+transparent, the layer at white 50 % in light and #3A3A3A 30 % in dark, cards, menus and
+dialogs opaque as they are, the lock stage's frosted panel and its wash over the material as
+they are (the panel's blur reaches only the page; 14 % of the material shows through it as it
+is, which is itself a blur). The block sits inside `@media not (forced-colors: active)`: its
+body rule outweighs the contrast block's `body { background: Canvas }` by specificity although
+it comes earlier, and over a transparent base the material would show through a contrast theme
+— measured, and held by a test. Measured in the mock: without the attribute every pixel equals
+HEAD's in 24 shots; under both forced palettes the attribute changes nothing; on the designer's
+stand-in ground ink-2 keeps its floor (6.61 light, 7.99 dark). Found in the Wails source and
+recorded: under a translucent window Wails paints none of the BackgroundColour (no class brush,
+no erase fill, no redirection surface), so the window holds it at alpha 0 and, where the material
+cannot draw — transparency effects off, battery saver, Remote Desktop — what shows behind the
+page is what DWM draws in its place, which only the real window can show. Seen in the mock and
+left for the user's judgement: over a transparent base Edge 156 draws all of the page's text in
+greyscale antialiasing rather than ClearType, the opaque cards' text included (the judge
+expected only the rail's and the layer's to change); the real window decides whether that is
+acceptable. The log line `start: backdrop mica|solid` is written after `application.New`, so a
+second launch, which exits inside New, never writes it. Not done: whether Mica fills a framed,
+HWND-hosted WebView2 window without `DwmExtendFrameIntoClientArea` is the user's first check
+(the remedy, if not, is `w32.ExtendFrameIntoClientAreaWithMargins` with -1 margins);
+prefers-reduced-transparency does not switch the Mica ground back to the glow; making Mica the
+default on 22621 and later is the user's call after the checks.

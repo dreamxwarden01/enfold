@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/w32"
 
 	"github.com/dreamxwarden01/enfold/internal/app"
 	"github.com/dreamxwarden01/enfold/internal/brand"
@@ -62,9 +63,19 @@ const eventShellUnlock = "shell.unlock"
 
 func newTray(s *shell) *tray {
 	t := &tray{s: s, t: s.app.SystemTray.New(), ended: map[string]bool{}, kick: make(chan struct{}, 1)}
+	// The icons are drawn at the size the tray shows them, the system's
+	// small icon (SM_CXSMICON: 20 px at 125 %). Wails makes the tray's
+	// HICON at that size from the same metric (w32.CreateSmallHIconFromImage),
+	// so the bitmap goes in as drawn; drawn at 32, as it was, it was scaled
+	// down and its rings blurred. GetSystemMetrics answers for the system
+	// DPI (as recalled), here and in Wails' call alike, so the sizes agree.
+	size := w32.GetSystemMetrics(w32.SM_CXSMICON)
+	if size < 16 {
+		size = 16 // the metric failed; 16 is its value at 100 %
+	}
 	for st := brand.TrayLocked; st <= brand.TrayUnlocked; st++ {
-		t.icons[st][0] = brand.PNG(brand.Tray(32, st, false))
-		t.icons[st][1] = brand.PNG(brand.Tray(32, st, true))
+		t.icons[st][0] = brand.PNG(brand.Tray(size, st, false))
+		t.icons[st][1] = brand.PNG(brand.Tray(size, st, true))
 	}
 	// Tray and menu callbacks run on the Wails main thread; anything that
 	// waits on the window mutex (which other callers hold across main-

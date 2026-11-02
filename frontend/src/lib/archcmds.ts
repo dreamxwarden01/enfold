@@ -97,7 +97,7 @@ export function archCommands(f: ArchFacts | null): ArchGroups {
   const verbWhy = lockWhy ?? rowWhy;
   const verbs: ArchItem[] = [
     { cmd: "refreshFingerprint", label: commandCopy.refreshFingerprint, icon: "i-check", ...off(verbWhy) },
-    { cmd: "compact", label: commandCopy.compact, icon: "i-box", ...off(verbWhy) },
+    { cmd: "compact", label: commandCopy.compact, icon: "i-compact", ...off(verbWhy) },
     { cmd: "rekey", label: commandCopy.rekeyArchive, icon: "i-rotate", ...off(verbWhy) },
   ];
 

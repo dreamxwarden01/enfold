@@ -579,7 +579,7 @@
   });
 </script>
 
-<div class="layer-head"><h1 class="t-title">{vaultCopy.title}</h1>{#if !unlocked}<span class="chip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}</div>
+<div class="layer-head"><h1 class="t-title">{vaultCopy.title}</h1>{#if !unlocked}<span class="chip"><svg class="i"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}</div>
 
 <div class="layer-body">
   <!-- One column, the sections in the order they are read (direction 10):
@@ -608,20 +608,20 @@
            2026-10-27): named until closed or until the next replacement
            begins, across a lock, since an ID is not secret. -->
       {@const rn = store.replaceNotice}
-      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{rn.known ? replaceCopy.notAdded(rn.ids) : replaceCopy.unknown(rn.ids)}</span><button type="button" class="x20" title={noticeCopy.close} aria-label={noticeCopy.close} onclick={() => store.dismissReplaceNotice()}><svg class="i i-14" aria-hidden="true"><use href="#i-x" /></svg></button></div></div>
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow">{rn.known ? replaceCopy.notAdded(rn.ids) : replaceCopy.unknown(rn.ids)}</span><button type="button" class="x20" title={noticeCopy.close} aria-label={noticeCopy.close} onclick={() => store.dismissReplaceNotice()}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button></div></div>
     {/if}
     {#if heldShown}
       <!-- A recovery key's enrolment's next step, said once its dialog has
            closed; it says what the setup line would, and more. -->
       {@const hf = heldShown}
-      <div class="fold" transition:unfold><div class="bar"><svg class="i i-14"><use href="#i-info" /></svg><span class="grow">{hf.f.text}</span><button type="button" class="btn sm" onclick={() => openFollow(hf.f, hf.after)}>{followLabel(hf.f)}</button><button type="button" class="x20" title={noticeCopy.close} aria-label={noticeCopy.close} onclick={() => (heldFollow = null)}><svg class="i i-14" aria-hidden="true"><use href="#i-x" /></svg></button></div></div>
+      <div class="fold" transition:unfold><div class="bar"><svg class="i"><use href="#i-info" /></svg><span class="grow">{hf.f.text}</span><button type="button" class="btn sm" onclick={() => openFollow(hf.f, hf.after)}>{followLabel(hf.f)}</button><button type="button" class="x20" title={noticeCopy.close} aria-label={noticeCopy.close} onclick={() => (heldFollow = null)}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button></div></div>
     {:else if st?.setupNeeded && unlocked}
-      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine(recoveryKeys)}</span></div></div>
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow">{vaultCopy.setupLine(recoveryKeys)}</span></div></div>
     {/if}
     {#if !unlocked}
       <!-- Locked is the safe state: the plain bar, no tier's colour
            (direction 9, ruled 2026-10-18). -->
-      <div class="fold" transition:unfold><div class="bar line"><svg class="i i-14"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button></div></div>
+      <div class="fold" transition:unfold><div class="bar line"><svg class="i"><use href="#i-lock" /></svg><span class="grow">{vaultCopy.lockedLine}</span><button type="button" class="btn sm accent" onclick={() => store.unlock()}>{commandCopy.unlock}</button></div></div>
     {/if}
   </NoticeSlot>
     <section class="vsec" aria-labelledby="vs-methods">
@@ -636,11 +636,11 @@
                line's *Unlock* or an owed backup's *Export backup…* takes
                it, and this one is standard then (the final shoot of
                phase 4a counted two). -->
-          <button type="button" class="btn sm" class:accent={addAccent} disabled={!unlocked || tampered} title={greyed} onclick={() => openAdd()}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.addUnlockMethod}</button>
-          <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={openRotate}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyVault}</button>
+          <button type="button" class="btn sm" class:accent={addAccent} disabled={!unlocked || tampered} title={greyed} onclick={() => openAdd()}><svg class="i"><use href="#i-plus" /></svg>{commandCopy.addUnlockMethod}</button>
+          <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={openRotate}><svg class="i"><use href="#i-rotate" /></svg>{commandCopy.rekeyVault}</button>
           <!-- Every recovery key at once, so here and not on a card, whose
                button would promise to replace that one (ruled 2026-10-27). -->
-          <button type="button" class="btn sm" disabled={!!replaceWhy} title={replaceWhy} onclick={() => openReplace()}><svg class="i i-14"><use href="#i-recovery" /></svg>{commandCopy.replaceRecoveryKeys}</button>
+          <button type="button" class="btn sm" disabled={!!replaceWhy} title={replaceWhy} onclick={() => openReplace()}><svg class="i"><use href="#i-recovery" /></svg>{commandCopy.replaceRecoveryKeys}</button>
         </span>
       </div>
       <!-- One card per way in, 4 px from the next: Windows Settings' list
@@ -669,7 +669,7 @@
           </li>
         {/each}
       </ul>
-      <div class="rule"><svg class="i i-14"><use href="#i-info" /></svg>{vaultCopy.rule}</div>
+      <div class="rule"><svg class="i"><use href="#i-info" /></svg>{vaultCopy.rule}</div>
       <div class="setcard">
         <!-- One switch for the whole vault (FORMAT.md §3.1, APP.md §13):
              every YubiKey asks for it, the standalone password and the
@@ -690,7 +690,7 @@
         </div>
         {#if entangleBlocked}
           <div class="bar attention">
-            <svg class="i i-14"><use href="#i-warn" /></svg>
+            <svg class="i"><use href="#i-warn" /></svg>
             <span class="grow">{ent?.reason && ent.reason !== "vault.invariant" ? codeText(ent.reason) : vaultCopy.passwordBlocked}</span>
             <!-- The cure is a command, so a button (APP.md §6, Controls). -->
             <button type="button" class="btn sm" onclick={addRecoveryKey}>{commandCopy.addRecoveryKey}</button>
@@ -767,9 +767,9 @@
         {#if bline.tone}
           <div class="status">
             {#if bline.tone === "attention"}
-              <div class="bar attention"><svg class="i i-14"><use href="#i-backup" /></svg><span><strong>{bline.head}</strong>{bline.rest ? ` ${bline.rest}` : ""}</span></div>
+              <div class="bar attention"><svg class="i"><use href="#i-backup" /></svg><span><strong>{bline.head}</strong>{bline.rest ? ` ${bline.rest}` : ""}</span></div>
             {:else}
-              <p class="current"><svg class="i i-14" class:quiet={!bline.checked}><use href={bline.checked ? "#i-check" : "#i-backup"} /></svg><span>{bline.head}{bline.rest ? ` ${bline.rest}` : ""}</span></p>
+              <p class="current"><svg class="i" class:quiet={!bline.checked}><use href={bline.checked ? "#i-check" : "#i-backup"} /></svg><span>{bline.head}{bline.rest ? ` ${bline.rest}` : ""}</span></p>
             {/if}
             {#if bline.caveat}<p class="t-quiet">{bline.caveat}</p>{/if}
           </div>
@@ -783,7 +783,7 @@
           <div class="ks-actions">
             <!-- The accent while a backup is owed; it suggests and never
                  gates (lastExportAt is local and unauthenticated). -->
-            <button type="button" class="btn" class:accent={bline.suggestExport} disabled={!unlocked || tampered} title={greyed} onclick={() => void exportBackup()}><svg class="i i-14"><use href="#i-backup" /></svg>{commandCopy.exportBackup}</button>
+            <button type="button" class="btn" class:accent={bline.suggestExport} disabled={!unlocked || tampered} title={greyed} onclick={() => void exportBackup()}><svg class="i"><use href="#i-backup" /></svg>{commandCopy.exportBackup}</button>
             <button type="button" class="btn" onclick={inspectBackup}>{commandCopy.inspectBackup}</button>
             <button type="button" class="btn" onclick={() => void testBackup()}>{commandCopy.testBackup}</button>
             <button type="button" class="btn" disabled={!unlocked || tampered} title={greyed} onclick={() => void importArchives()}>{commandCopy.importArchives}</button>
@@ -804,9 +804,9 @@
             <dt>{vaultCopy.inspected.methods}</dt><dd class="num">{backup.slotCount}</dd>
           </dl>
           {#if backup.vaultMatches && !backup.newer && st}
-            <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{vaultCopy.inspected.older(dateTime(st.modifiedAt))}</span></div>
+            <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{vaultCopy.inspected.older(dateTime(st.modifiedAt))}</span></div>
           {:else if backup.vaultMatches && backup.newer}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-info" /></svg><span>{vaultCopy.inspected.newer}</span></div>
+            <div class="bar accent"><svg class="i"><use href="#i-info" /></svg><span>{vaultCopy.inspected.newer}</span></div>
           {/if}
         {/if}
       </div>
@@ -870,7 +870,7 @@
     <RekeyQuestion legend={q.legend} rekey={q.rekey} keep={q.keep} bind:answer={removeAnswer} />
     <!-- The limit of a re-key and what is left to do, whichever the answer:
          a sentence, not a gate. -->
-    <p class="infoline"><svg class="i i-14" aria-hidden="true"><use href="#i-info" /></svg><span>{rekeyLimitOf({ act: "remove", type: target.type, passwordOn: !!ent?.on, otherLeft: otherRecovery(target) })}</span></p>
+    <p class="infoline"><svg class="i" aria-hidden="true"><use href="#i-info" /></svg><span>{rekeyLimitOf({ act: "remove", type: target.type, passwordOn: !!ent?.on, otherLeft: otherRecovery(target) })}</span></p>
     <BackupChoice act="remove" rekey={removeAnswer === "rekey"} removing={target.type} label={target.label} bind:ticked={removeTicked} />
     <details class="how"><summary>{dialogCopy.howThisWorks}</summary><p>{dialogCopy.removeUnlockMethod.how(target.label, target.type)}</p></details>
     {#snippet actions()}
@@ -944,7 +944,7 @@
   /* A current backup is a fact, not a notice: no box, the check in the
      accent's ink before the sentence. */
   .current { display: flex; align-items: flex-start; gap: var(--s2); color: var(--ink); }
-  .current .i { flex: none; margin-top: 3px; color: var(--accent-ink); }
+  .current .i { flex: none; margin-top: 2px; color: var(--accent-ink); }
   /* The date alone, with nothing counted (Locked, Tampered): no receipt,
      so the quiet backup icon instead of the check. */
   .current .i.quiet { color: var(--ink-3); }

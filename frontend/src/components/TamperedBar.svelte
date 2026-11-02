@@ -29,7 +29,7 @@
 </script>
 
 <div class="bar danger tampered-bar">
-  <svg class="i i-14"><use href="#{tierIcon('danger')}" /></svg>
+  <svg class="i"><use href="#{tierIcon('danger')}" /></svg>
   <!-- The sentence, then its fix and its Why? on a row under it, 8 apart
        as a bar's parts are: the sentence is three, and a row beside it
        would leave it a word per line in the lock screen's 440 px. -->

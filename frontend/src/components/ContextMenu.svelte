@@ -172,7 +172,7 @@
       aria-disabled={item.disabled || undefined} title={item.disabled ? undefined : item.title}
       onclick={() => choose(i)}
     >
-      {#if item.icon}<svg class="i i-14" aria-hidden="true"><use href="#{item.icon}" /></svg>{:else if icons}<span class="i i-14" aria-hidden="true"></span>{/if}
+      {#if item.icon}<svg class="i" aria-hidden="true"><use href="#{item.icon}" /></svg>{:else if icons}<span class="i" aria-hidden="true"></span>{/if}
       {#if secondLine(item)}
         <span class="mlabel"><span>{item.label}</span><span class="mwhy">{secondLine(item)}</span></span>
       {:else}

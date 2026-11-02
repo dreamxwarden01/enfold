@@ -1,6 +1,9 @@
 # Build output
 /bin/
 /build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+# The application's icon, drawn by tools/appicon before every build
+/build/appicon.png
+/build/windows/icon.ico
 .task/
 *.exe
 *.exe~

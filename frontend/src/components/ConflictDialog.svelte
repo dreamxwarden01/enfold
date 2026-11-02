@@ -56,7 +56,7 @@
       <li>
         <label class="side">
           <input type="checkbox" checked={t.left} onchange={() => hit(r.path, "left")} />
-          <svg class="i i-14"><use href="#{fileIcon(r.name)}" /></svg>
+          <svg class="i"><use href="#{fileIcon(r.name)}" /></svg>
           <span class="two-line who">
             <b title={r.path}>{r.name}</b>
             <small>{bytes(r.size)} · {dateTime(r.modifiedAt)}</small>
@@ -64,7 +64,7 @@
         </label>
         <label class="side">
           <input type="checkbox" checked={t.right} onchange={() => hit(r.path, "right")} />
-          <svg class="i i-14"><use href="#{fileIcon(r.name)}" /></svg>
+          <svg class="i"><use href="#{fileIcon(r.name)}" /></svg>
           <span class="two-line who">
             <b title={r.dest}>{r.name}</b>
             <small>{bytes(r.existingSize)} · {dateTime(r.existingModifiedAt)}</small>

@@ -1,7 +1,8 @@
-// Package brand draws Enfold's mark and tray icons: no binary assets in the
-// repository, the same shapes at every size, both themes. Sheet (sheet.go)
-// is the mark's one geometry, the folded sheet: the window's mark is drawn
-// from it, and the app icon is to be.
+// Package brand draws Enfold's application icon and its tray icons: no
+// binary assets in the repository, the same shapes at every size, both
+// themes. Sheet (sheet.go) is the mark's one geometry, the folded sheet: the
+// window's mark and drawings are drawn from it, and so is the application's
+// icon (icon.go), which tools/appicon writes into the .ico before each build.
 package brand
 
 import (
@@ -18,8 +19,6 @@ var (
 	AccentDark  = color.NRGBA{0x54, 0xD2, 0xB9, 0xFF}
 	InkLight    = color.NRGBA{0x19, 0x1A, 0x1D, 0xFF}
 	InkDark     = color.NRGBA{0xF3, 0xF3, 0xF6, 0xFF}
-	GroundLight = color.NRGBA{0xF1, 0xF1, 0xF4, 0xFF}
-	GroundDark  = color.NRGBA{0x1C, 0x1C, 0x20, 0xFF}
 )
 
 // TrayState is what the tray icon says.
@@ -45,24 +44,38 @@ func newCanvas(w, h int) *canvas { return &canvas{w: w, h: h, px: make([]color.N
 
 // fill paints c wherever inside says so, with coverage-weighted blending.
 func (cv *canvas) fill(c color.NRGBA, inside func(x, y float64) bool) {
+	cv.shade(func(x, y float64) (color.NRGBA, bool) { return c, inside(x, y) })
+}
+
+// shade paints each pixel with the mean of the colours paint gives its
+// samples, at the share of the samples it paints at all. A figure of
+// several regions is painted in one pass, each sample taking the colour of
+// the region it falls in: where two regions meet, a pixel is part one and
+// part the other, with nothing of what lies under them showing through.
+// Filling the regions one over another, each at its own coverage, would
+// let a seam of the ground through along every shared edge.
+func (cv *canvas) shade(paint func(x, y float64) (color.NRGBA, bool)) {
 	const n = supersample
 	for py := 0; py < cv.h; py++ {
 		for px := 0; px < cv.w; px++ {
-			hits := 0
+			var r, g, b, a float64
 			for sy := 0; sy < n; sy++ {
 				for sx := 0; sx < n; sx++ {
 					x := float64(px) + (float64(sx)+0.5)/n
 					y := float64(py) + (float64(sy)+0.5)/n
-					if inside(x, y) {
-						hits++
+					c, ok := paint(x, y)
+					if !ok {
+						continue
 					}
+					ca := float64(c.A) / 255
+					r, g, b, a = r+float64(c.R)*ca, g+float64(c.G)*ca, b+float64(c.B)*ca, a+ca
 				}
 			}
-			if hits == 0 {
+			if a == 0 {
 				continue
 			}
-			a := float64(hits) / (n * n) * float64(c.A) / 255
-			cv.px[py*cv.w+px] = over(cv.px[py*cv.w+px], c, a)
+			c := color.NRGBA{uint8(math.Round(r / a)), uint8(math.Round(g / a)), uint8(math.Round(b / a)), 0xFF}
+			cv.px[py*cv.w+px] = over(cv.px[py*cv.w+px], c, a/(n*n))
 		}
 	}
 }
@@ -89,15 +102,27 @@ func (cv *canvas) image() *image.NRGBA {
 	return img
 }
 
-// hexagon is the mark's outline: a regular hexagon, flat sides left and
-// right, of circumradius r around (cx, cy).
-func hexagon(cx, cy, r float64) func(x, y float64) bool {
+// polygon is the inside of the closed polygon through pts, by the even-odd
+// rule: a point is inside when a ray from it crosses the outline an odd
+// number of times. The icon's facets are drawn with it, and so is anything
+// with straight sides that the discs and rings below cannot draw.
+func polygon(pts ...Point) func(x, y float64) bool {
+	x0, y0, x1, y1 := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
+	for _, p := range pts {
+		x0, y0, x1, y1 = math.Min(x0, p.X), math.Min(y0, p.Y), math.Max(x1, p.X), math.Max(y1, p.Y)
+	}
 	return func(x, y float64) bool {
-		dx, dy := math.Abs(x-cx), math.Abs(y-cy)
-		if dx > r*math.Sqrt(3)/2 || dy > r {
+		if x < x0 || x > x1 || y < y0 || y > y1 {
 			return false
 		}
-		return dy <= r-dx/math.Sqrt(3)
+		in := false
+		for i, j := 0, len(pts)-1; i < len(pts); j, i = i, i+1 {
+			a, b := pts[i], pts[j]
+			if (a.Y > y) != (b.Y > y) && x < a.X+(y-a.Y)*(b.X-a.X)/(b.Y-a.Y) {
+				in = !in
+			}
+		}
+		return in
 	}
 }
 
@@ -113,60 +138,11 @@ func ring(cx, cy, r, width float64) func(x, y float64) bool {
 	return func(x, y float64) bool { return outer(x, y) && !inner(x, y) }
 }
 
-// thickLine is a segment with round caps.
-func thickLine(x1, y1, x2, y2, width float64) func(x, y float64) bool {
-	dx, dy := x2-x1, y2-y1
-	l2 := dx*dx + dy*dy
-	return func(x, y float64) bool {
-		t := 0.0
-		if l2 > 0 {
-			t = ((x-x1)*dx + (y-y1)*dy) / l2
-			t = math.Max(0, math.Min(1, t))
-		}
-		px, py := x1+t*dx, y1+t*dy
-		ex, ey := x-px, y-py
-		return ex*ex+ey*ey <= width*width/4
-	}
-}
-
-// Mark draws the application icon as it stands today: a hexagonal box with
-// its top face suggested by two edges, on a rounded ground, the accent on
-// it. It is not the mark's geometry: that is Sheet, the folded sheet, which
-// the window's mark and drawings come from. The app icon is to be redrawn
-// from Sheet in facets (phase 5) and this figure to go; until then the
-// window's icon (main_windows.go) and tools/appicon, which the .ico is made
-// from, still draw it.
-func Mark(size int, dark bool) *image.NRGBA {
-	cv := newCanvas(size, size)
-	s := float64(size)
-	ground, accent, ink := GroundLight, AccentLight, InkLight
-	if dark {
-		ground, accent, ink = GroundDark, AccentDark, InkDark
-	}
-	// Ground: a squircle-ish rounded square.
-	radius := s * 0.22
-	cv.fill(ground, func(x, y float64) bool {
-		x, y = x-s/2, y-s/2
-		hx, hy := s/2-radius, s/2-radius
-		qx, qy := math.Max(math.Abs(x)-hx, 0), math.Max(math.Abs(y)-hy, 0)
-		return qx*qx+qy*qy <= radius*radius
-	})
-	cx, cy, r := s/2, s/2, s*0.30
-	stroke := s * 0.055
-	// Box outline.
-	outer, inner := hexagon(cx, cy, r), hexagon(cx, cy, r-stroke*1.15)
-	cv.fill(accent, func(x, y float64) bool { return outer(x, y) && !inner(x, y) })
-	// The two edges that make it a box.
-	cv.fill(accent, thickLine(cx, cy-r, cx, cy, stroke))
-	cv.fill(accent, thickLine(cx, cy, cx-r*math.Sqrt(3)/2, cy+r/2, stroke))
-	cv.fill(accent, thickLine(cx, cy, cx+r*math.Sqrt(3)/2, cy+r/2, stroke))
-	// A small dot at the vertex: the key.
-	cv.fill(ink, disc(cx, cy, stroke*0.9))
-	return cv.image()
-}
-
 // Tray draws a tray icon of the given state; dark is for a dark taskbar,
-// where the ink is light.
+// where the ink is light. It is drawn at the size the tray shows it
+// (tray_windows.go asks for the system's small icon size), so nothing
+// scales it. The figure is rings and discs, not the mark: the mark's tray
+// states are fork C's, still open.
 func Tray(size int, state TrayState, dark bool) *image.NRGBA {
 	cv := newCanvas(size, size)
 	s := float64(size)

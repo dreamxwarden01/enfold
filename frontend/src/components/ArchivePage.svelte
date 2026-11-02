@@ -1665,7 +1665,7 @@
     <span class="crumb-measure t-title" aria-hidden="true" bind:this={measureEl}>
       {#each crumbs as c, i (c.id)}<span class="crumb" class:root={i === 0} data-m="crumb"><span class="ellipsis">{c.name}</span></span>{/each}
       <span class="crumb-sep" data-m="sep"><svg class="i"><use href="#i-chevron" /></svg></span>
-      <span class="btn subtle sm icon-only" data-m="more"><svg class="i i-14"><use href="#i-more" /></svg></span>
+      <span class="btn subtle sm icon-only" data-m="more"><svg class="i"><use href="#i-more" /></svg></span>
     </span>
   </nav>
   <!-- One exit (APP.md §2.3, ruled 2026-10-18): Close is the graceful
@@ -1697,9 +1697,9 @@
          thing that can say whether the tree holds anything, since a
          folder occupies no data region and an archive of folders alone
          reports 0 files while holding real records (APP.md §3). -->
-    <button type="button" class="btn subtle" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
-    <button type="button" class="btn subtle" disabled={draining || !one} title={closingWhy ?? (one ? keyTitles.rename : archivePageCopy.renameNeedsOne)} onclick={() => { if (one) askRename(one); }}><svg class="i i-14"><use href="#i-rename" /></svg>{commandCopy.rename}</button>
-    <button type="button" class="btn subtle danger" disabled={draining || selected.size === 0} title={closingWhy ?? (selected.size === 0 ? archivePageCopy.deleteNeedsSome : keyTitles.delete)} onclick={() => void askDelete()}><svg class="i i-14"><use href="#i-trash" /></svg>{commandCopy.delete}</button>
+    <button type="button" class="btn subtle" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+    <button type="button" class="btn subtle" disabled={draining || !one} title={closingWhy ?? (one ? keyTitles.rename : archivePageCopy.renameNeedsOne)} onclick={() => { if (one) askRename(one); }}><svg class="i"><use href="#i-rename" /></svg>{commandCopy.rename}</button>
+    <button type="button" class="btn subtle danger" disabled={draining || selected.size === 0} title={closingWhy ?? (selected.size === 0 ? archivePageCopy.deleteNeedsSome : keyTitles.delete)} onclick={() => void askDelete()}><svg class="i"><use href="#i-trash" /></svg>{commandCopy.delete}</button>
     <div class="grow"></div>
     <!-- [⋯ More] [View ▾] at the right (direction 3): the archive's own
          command, and how the page is laid out. -->
@@ -1726,7 +1726,7 @@
            2026-09-11): .bar.line. -->
       <div class="fold" transition:unfold>
         <div class="bar line attention">
-          <svg class="i i-14"><use href="#i-lock" /></svg>
+          <svg class="i"><use href="#i-lock" /></svg>
           <!-- What the lock left (direction 9, ruled 2026-10-18): this archive
                is still decrypted and still saves (APP.md §2.3), so the banner
                is attention and carries the way out beside the unlock — the
@@ -1752,14 +1752,14 @@
            ruled 2026-10-17). While it drains after that leave, the same
            button is the head's *Force close* (ruled 2026-10-19: one meaning
            for Close, lib/leave.ts). -->
-      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span>{#if !reopenClose.force}<button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{reopenClose.label}</button>{/if}</div></div>
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.needs_reopen")}</span>{#if !reopenClose.force}<button type="button" class="btn sm" onclick={() => void store.closeArchive(id)}>{reopenClose.label}</button>{/if}</div></div>
     {/if}
     {#if stat?.copyMismatch}
       <!-- The note names *Refresh fingerprint*, so the command stands in the
            note: the Archives page's command bar, where it otherwise lives,
            is not on this page (direction 9; APP.md §2.3 Verify). It is a
            registry write, greyed while Locked or Tampered as there. -->
-      <div class="fold" transition:unfold><div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div></div>
+      <div class="fold" transition:unfold><div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div></div>
     {/if}
   </NoticeSlot>
   <!-- View › Preview pane off gives the list the whole width (direction 3). -->
@@ -1820,7 +1820,7 @@
                 ondragleave={() => leave(upTarget, "up")}
                 ondrop={(e) => dropOn(e, upTarget, "up")}
               >
-                <td class="chk"><span class="chk-slot"><svg class="i i-14 glyph" aria-hidden="true"><use href="#i-folder" /></svg></span></td>
+                <td class="chk"><span class="chk-slot"><svg class="i glyph" aria-hidden="true"><use href="#i-folder" /></svg></span></td>
                 <td class="sel-mark">
                   <div class="fname"><span>{listCopy.up}</span></div>
                   {#if moveError && refusedAt(upTarget.id, "up")}<span class="move-note">Not moved: {moveError.text}</span>{/if}
@@ -1848,7 +1848,7 @@
                 ondragleave={() => leave({ id: r.id, isDir: r.isDir }, "row")}
                 ondrop={(e) => dropOn(e, { id: r.id, isDir: r.isDir }, "row")}
               >
-                <td class="chk"><span class="chk-slot"><input type="checkbox" checked={selected.has(r.id)} tabindex="-1" aria-label={listCopy.tickRow(r.name)} onclick={(e) => tick1(e, r)} ondblclick={(e) => e.stopPropagation()} /><svg class="i i-14 glyph" aria-hidden="true"><use href="#{rowIcon(r)}" /></svg></span></td>
+                <td class="chk"><span class="chk-slot"><input type="checkbox" checked={selected.has(r.id)} tabindex="-1" aria-label={listCopy.tickRow(r.name)} onclick={(e) => tick1(e, r)} ondblclick={(e) => e.stopPropagation()} /><svg class="i glyph" aria-hidden="true"><use href="#{rowIcon(r)}" /></svg></span></td>
                 <td class="sel-mark">
                   <div class="fname">
                     <span>{r.name}</span>
@@ -1901,7 +1901,7 @@
             </dl>
           </div>
           <div class="preview-actions">
-            <button type="button" class="btn" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractEverything}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+            <button type="button" class="btn" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractEverything}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
           </div>
         {:else if shape === "several"}
           <!-- Several selected: how many and how much — the bytes once every
@@ -1916,7 +1916,7 @@
             <!-- One accent per surface (ruled 2026-10-19): while the locked
                  line shows, its *Unlock* is the page's, and this is a
                  standard button. -->
-            <button type="button" class="btn" class:accent={store.unlocked} disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{paneCopy.extractSome(selected.size)}</button>
+            <button type="button" class="btn" class:accent={store.unlocked} disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{paneCopy.extractSome(selected.size)}</button>
           </div>
         {:else if one}
           {@const size = bytes(one.size)}
@@ -1955,7 +1955,7 @@
                 {/key}
               {/if}
             </div>
-            <div class="pname"><svg class="i i-14"><use href="#{rowIcon(one)}" /></svg><span>{one.name}</span></div>
+            <div class="pname"><svg class="i"><use href="#{rowIcon(one)}" /></svg><span>{one.name}</span></div>
           {/if}
           <!-- The facts are the one label · value list (APP.md §6, Type and
                spacing; ruled 2026-10-17): each value beside its label,
@@ -1974,7 +1974,7 @@
             <dl class="kv stk"><dt>Path</dt><dd>{one.path}</dd></dl>
           </div>
           <div class="preview-actions">
-            <button type="button" class="btn" disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i i-14"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+            <button type="button" class="btn" disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
           </div>
         {/if}
       </aside>
@@ -2106,7 +2106,7 @@
     <ul class="collide">
       {#each collisions.list.slice(0, 6) as c (c.name)}
         <li>
-          <svg class="i i-14" aria-hidden="true"><use href="#{fileIcon(c.name, c.existingIsDir)}" /></svg>
+          <svg class="i" aria-hidden="true"><use href="#{fileIcon(c.name, c.existingIsDir)}" /></svg>
           <span class="nm">{shownName(c.name)}</span>
           <span class="kd" class:clash={c.isDir !== c.existingIsDir}>{collisionCopy.kind(c.isDir, c.existingIsDir)}</span>
         </li>
@@ -2171,8 +2171,8 @@
   <div class="empty-folder">
     <h2 class="t-section">{archivePageCopy.emptyTitle(folderName)}</h2>
     <div class="row">
-      <button type="button" class="btn" disabled={draining} onclick={() => void pickFiles()}><svg class="i i-14"><use href="#i-file" /></svg>{commandCopy.addFiles}</button>
-      <button type="button" class="btn" disabled={draining} onclick={() => void pickFolder()}><svg class="i i-14"><use href="#i-folder" /></svg>{commandCopy.addFolder}</button>
+      <button type="button" class="btn" disabled={draining} onclick={() => void pickFiles()}><svg class="i"><use href="#i-file" /></svg>{commandCopy.addFiles}</button>
+      <button type="button" class="btn" disabled={draining} onclick={() => void pickFolder()}><svg class="i"><use href="#i-folder" /></svg>{commandCopy.addFolder}</button>
     </div>
     <span class="t-quiet">{archivePageCopy.emptyDrop}</span>
   </div>

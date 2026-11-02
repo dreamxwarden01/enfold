@@ -213,7 +213,7 @@
       <!-- A record with no path yet still reads as a sentence. -->
       <p class="path-body">{dialogCopy.deleteArchive.body(here || "its file")}</p>
     {/if}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
+    <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
     <!-- The name to type stands once, as the label's hint; a placeholder
          saying it again read as a value already filled in (ruled
          2026-10-17). -->
@@ -237,7 +237,7 @@
     <p class="t-sub">{dialogCopy.notThisArchive.next}</p>
   {:else if phase === "mismatch-confirm"}
     <p>{dialogCopy.forgetOnly.body}</p>
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
+    <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
   {:else if phase === "unreachable"}
     <p>{dialogCopy.unreachable}</p>
     <dl class="kv stk"><dt>{archivesCopy.facts.file}</dt><dd>{here || "—"}</dd></dl>
@@ -249,7 +249,7 @@
   {:else if phase === "failed"}
     <p>{dialogCopy.deleteFailed}</p>
   {:else}
-    <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(problem)}</span></div>
+    <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{codeText(problem)}</span></div>
   {/if}
 
   {#snippet actions()}

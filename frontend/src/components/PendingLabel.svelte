@@ -18,4 +18,4 @@
   let { armed, rest, busy, icon }: Props = $props();
 </script>
 
-<span class="swap"><span class:off={armed}>{#if icon}<svg class="i i-14"><use href="#{icon}" /></svg>{/if}{rest}</span><span class="busy" class:off={!armed}>{busy}</span></span>
+<span class="swap"><span class:off={armed}>{#if icon}<svg class="i"><use href="#{icon}" /></svg>{/if}{rest}</span><span class="busy" class:off={!armed}>{busy}</span></span>

@@ -119,7 +119,7 @@
   <!-- What an extract makes, said every time (direction 9, ruled
        2026-10-18): an info line in the second ink, no box — a sentence,
        not a gate. -->
-  <p class="infoline"><svg class="i i-14" aria-hidden="true"><use href="#i-info" /></svg><span>{extractCopy.ordinaryFiles}</span></p>
+  <p class="infoline"><svg class="i" aria-hidden="true"><use href="#i-info" /></svg><span>{extractCopy.ordinaryFiles}</span></p>
 
   {#snippet actions()}
     <button type="submit" class="btn accent">Extract</button>
@@ -141,7 +141,7 @@
   .two { display: flex; flex-direction: column; }
   .two small { font: var(--t-cap); color: var(--ink-2); }
   /* The icon 8 from its words, centred on the first 20 px line as a
-     bar's is (app.css .bar .i.i-14). */
+     bar's is (app.css .bar .i). */
   .infoline { display: flex; align-items: flex-start; gap: var(--s2); color: var(--ink-2); }
-  .infoline .i { margin-top: 3px; }
+  .infoline .i { margin-top: 2px; }
 </style>

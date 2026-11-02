@@ -641,6 +641,9 @@ Section
     # makensis builds a 32-bit installer.
     SetRegView 64
     !insertmacro enfold.associateFiles
+    # Tell the shell the association changed, or Explorer keeps the old icon
+    # on .efd files and the Start shortcut (SHCNE_ASSOCCHANGED).
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
     !insertmacro wails.associateCustomProtocols
 
     !insertmacro wails.writeUninstaller
@@ -667,6 +670,9 @@ Section "uninstall"
     # The association, given back to whatever held .efd before (14, decision 3).
     SetRegView 64
     !insertmacro enfold.unassociateFiles
+    # Tell the shell the association changed, or Explorer keeps the old icon
+    # on .efd files and the Start shortcut (SHCNE_ASSOCCHANGED).
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
     !insertmacro wails.unassociateCustomProtocols
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"

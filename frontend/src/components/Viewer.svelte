@@ -159,7 +159,7 @@
     {#if pos.at > 0}<span class="vcap num">{viewerCopy.counter(pos.at, pos.of)}</span>{/if}
     <span class="vcap vfacts num">{facts}</span>
     <span class="grow"></span>
-    <button type="button" class="vbtn" disabled={!!extractWhy} title={extractWhy ?? keyTitles.extract} onclick={extract}><svg class="i i-14" aria-hidden="true"><use href="#i-extract" /></svg>{commandCopy.extract}<span class="vkey" aria-hidden="true">{keyNames.extract}</span></button>
+    <button type="button" class="vbtn" disabled={!!extractWhy} title={extractWhy ?? keyTitles.extract} onclick={extract}><svg class="i" aria-hidden="true"><use href="#i-extract" /></svg>{commandCopy.extract}<span class="vkey" aria-hidden="true">{keyNames.extract}</span></button>
     <button type="button" class="vbtn icon" title={viewerCopy.close} aria-label={viewerCopy.close} onclick={onclose}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button>
   </div>
   <div class="vstage">

@@ -12,9 +12,10 @@
   import { dialogIsUp } from "../lib/dialogs";
 
   // The rail (APP.md §6, Rail; directions 3, 6 and 10, ruled 2026-10-18).
-  // Expanded at a window of 1008 px and more: the brand row (direction 5's
-  // caption is phase 5's), the vault head, *Archives* with a row for each
-  // open archive under it, *Vault*, the gap, *Settings*. Compact below
+  // Expanded at a window of 1008 px and more: the vault head (the brand row
+  // above it went with fork D, ruled 2026-11-01: the window's caption names
+  // the app), *Archives* with a row for each open archive under it,
+  // *Vault*, the gap, *Settings*. Compact below
   // that: 48 px of icons with the app's tooltips, a padlock for the vault
   // head, and the labels back in a flyout from the toggle at the top.
   // The widths are app.css's tokens (--rail-w, --rail-w-compact), read by
@@ -134,7 +135,8 @@
       use:tip={{ text: flyOpen ? railCopy.closeNav : railCopy.openNav, side: "end" }}
       onclick={() => (flyOpen = !flyOpen)}
     ><svg class="i"><use href="#i-menu" /></svg></button>
-    <div class="brand" aria-hidden="true"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg></div>
+    <!-- No brand mark under the toggle (direction 6's compact rail, "no
+         brand"; ruled 2026-11-01): the window's caption names the app. -->
     <!-- The vault head as a state button (direction 6): the padlock open
          while unlocked, closed otherwise; its name says the vault, the
          state and what a press does. -->
@@ -195,10 +197,11 @@
       </div>
     {/if}
   {:else}
-    <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
     <!-- The vault head (direction 10): the vault's name over its state in
          the lock header's words, a quiet way to the Vault page — the Vault
-         item below stays the one drawn current there. -->
+         item below stays the one drawn current there. It heads the rail:
+         the brand row above it went with fork D (ruled 2026-11-01), since
+         the window's caption names the app. -->
     <button type="button" class="vault-head" title={railCopy.vaultPage} onclick={() => store.go("keys")}>
       <span class="t-strong ellipsis">{head.name}</span><span class="vault-word">{head.word}</span>
     </button>
@@ -226,7 +229,7 @@
                  2026-10-18). -->
             {#if !store.leftHeld(c.id)}
               <button type="button" class="rail-x" aria-label={railCopy.closeArchive(name)} use:tip={{ text: railCopy.closeArchive(name), side: "end" }} onclick={() => void store.closeArchive(c.id)}>
-                <svg class="i i-14"><use href="#i-x" /></svg>
+                <svg class="i"><use href="#i-x" /></svg>
               </button>
             {/if}
           </div>

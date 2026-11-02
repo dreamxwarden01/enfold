@@ -98,7 +98,7 @@
   {@const parts = unknownCodeParts(n.text)}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="ibar {n.kind}" role={n.kind === "error" ? "alert" : "status"} onpointerenter={() => hover(n.id)} onpointerleave={() => leave(n.id)}>
-    <svg class="i i-14" aria-hidden="true"><use href="#{noticeIcon(n.kind)}" /></svg>
+    <svg class="i" aria-hidden="true"><use href="#{noticeIcon(n.kind)}" /></svg>
     <!-- A code with no words of its own (strings.ts codeText) is there
          for the log, not for reading: muted and in mono, so the sentence
          around it reads first (ruled 2026-10-14). -->

@@ -773,7 +773,12 @@ destroy/hide setting is gone) — its destruction closing, or draining, every op
 `ensureWindow()` in the shell (`app.Window.GetByName` then `NewWithOptions`); the tray's
 `AttachWindow`/`ShowWindow`/`ToggleWindow` helpers are not used — they assume a window that
 exists at tray creation and that close only hides. Tray: three states — Locked, Locked with
-archives open, Unlocked — each with a light and a dark icon set together. The tray names the vault (ruled 2026-10-14; the name is
+archives open, Unlocked — each with a light and a dark icon set together, drawn by
+`internal/brand` at the system's small-icon size (`SM_CXSMICON`, 20 px at 125 %), the size Wails
+makes the tray's icon at, so that nothing scales them (they were drawn at 32 and scaled down,
+which blurred them); the figure is still a ring for Locked, the ring round an accent dot while
+archives are open, and an accent disc with an ink dot for Unlocked, not the mark (the mark's
+tray states, fork C, are left open). The tray names the vault (ruled 2026-10-14; the name is
 `VaultStatus.DisplayName`, which follows a *Rename…* at once, §3): one line — the display name,
 its state and, while unlocked, the nearer deadline in the foot's words that never tick (§6):
 "Personal vault — Unlocked · locks after 10 min idle", "… · session ends 16:42", "Personal
@@ -829,13 +834,17 @@ newer `op.progress` may already have landed (a status the page asked for — its
 — replaces them; ruled 2026-09-12).
 Until that first `Status()` call has answered — a reply or a failure; an event that lands
 first is applied but does not open the gate — the page draws **nothing of the vault's**: the
-brand mark alone, not the lock scene, not the list; and then the scene the newest accepted
+lock stage's mark alone, at the lock stage's place, over the app's name (ruled 2026-11-01, so
+the lock scene arrives under a mark that does not move; it was the 20 px mark and the name,
+centred), not the lock scene, not the list; and then the scene the newest accepted
 status names, with no crossfade out of a scene that was never
 right: a window opened from the tray while the vault is unlocked shows the list at once (ruled 2026-09-10, after the lock scene flashed there). A first
 `Status()` that fails draws **the boot failure's page**, never the lock scene (ruled 2026-10-18;
-it was one plain line with *Retry*): a panel where the lock screen's stands — `min(440px, 100%)`
-wide, its top at 14vh, 28 px in, the flat stroke — holding the brand, "Enfold could not start" as
-its title, the code's sentence (§7) in the second ink, and three buttons on a row that wraps:
+it was one plain line with *Retry*): a panel where the lock screen's stands, under the
+same mark — `min(440px, 100%)` wide, its top 172 px down, 28 px in, the lock panel's
+floating card (§6) — holding "Enfold could not start" as its title (ruled 2026-11-01:
+the brand it began with went with fork D, the window's caption naming the app),
+the code's sentence (§7) in the second ink, and three buttons on a row that wraps:
 *Retry* (accent, focused as it arrives, its ring drawn only once the keyboard is used), which asks
 `Status()` again; *Open the data folder*, `Shell.OpenDataFolder` (§3) — the log the sentence
 points to is there — whose failure is the code's toast; and *Copy details*, which puts "Enfold
@@ -1664,16 +1673,70 @@ during which no program can reach the card anyway.
 
 ## 6. Screens (the Native look)
 
+**Identity** (fork D of the design review, ruled 2026-11-01) is drawn only where Enfold is
+waiting for the user or has nothing yet to show. The lock stage carries the mark — the folded
+sheet, `internal/brand`'s one geometry, 96 px wide in a box cropped to the figure's 72 px of
+height — above its panel in every view but the touch's green, where it gives way; the first run
+carries it at 128 px; the splash and the boot failure carry the lock stage's, at its place; a
+vault with no archives carries a 72 px line drawing of the open box, the archive's own glyph,
+above its sentence. Every working surface stays plain — a list with rows, an empty folder among
+them, the preview pane, the viewer, the Vault page, Settings, every dialog (the first unlock
+method's cards too), menu, InfoBar and bar, the foot and the rail — and no state that reports a
+problem gains a drawing of its own: the stage's mark stays above one only because it is the
+stage's. The drawings are line art in the tokens: the outline and the folds in the accent at 1.6
+px, two whole device pixels at 125 %; the crease in the accent and the lines of writing (and the
+box's inside corner) in the third ink, at 1.2; the body in the accent's wash and the sheet's
+flap in `--mark-flap`; no gradient but the lock panel's wash band, no motion of their own and no
+binary — `Art.svelte` holds them as markup that `internal/brand`'s tests hold to the geometry.
+In a contrast theme their outline, folds and crease are CanvasText, the lines of writing and the
+box's inside corner GrayText, and their fills the Canvas. No scene draws a brand row: the
+window's caption names the app (ruled 2026-11-01; the rail, the lock stage's header and the
+compact rail each drew one, and the boot failure's panel began with one).
+
+**The application's icon** (phase 5, ruled 2026-11-01) is the mark outside the window — the
+caption, the taskbar, Alt+Tab, Start, the installer and an `.efd` file in Explorer — drawn by
+`internal/brand` from the same geometry, the folded sheet, in solid facets and with no tile, as
+Windows 11's icons are unplated. The light falls from the top left: the face it falls on is a
+lighter tint of the accent, the front the accent, the face beside the flap a darker tint, and
+the flap the sheet's white back with its outer edge in the accent; a fold is drawn only as the
+edge where two facets meet. An `.ico` cannot follow the theme, so the one drawing stands on both
+taskbars, with at least two facets above 3:1 on each. Every size the `.ico` holds — 16, 20, 24,
+30, 32, 40, 48, 64, 128 and 256 px — is drawn for its own pixels, never scaled from a larger
+one, with both sides and the top fold on whole pixels and, below 48 px, the two points placed in
+their rows so that no row is a smear; from 48 px the corners are eased (the icon it replaces, a
+box on a light tile scaled down from 1024 px, was a blur at 16). `tools/appicon` writes
+`build/windows/icon.ico`, every entry a PNG, and `build/appicon.png` before every build, and
+neither file is in the repository: the icon is code, as the drawings are.
+
 Lock screen (**one panel changing in place**, ruled 2026-10-17: the ruling of 2026-09-06 — "the
 ceremony is one panel changing in place … the touch moment is a full-surface takeover" — built
 at last; the three full-height cards side by side, two of them dim placeholders, which the build
 had taken from the mockup's storyboard and the rulings of 2026-09-07/08 then described, are
-gone, and so is their wording). One centred panel, `min(440px, 100%)` wide, 28 px in, a flat
-1 px stroke and the card's radius, its top at 14vh in every state (the header keeps its 20 px
-line whatever it holds, so nothing above the panel moves); the header's state word at the top
-right, and beside it, at rest and at first run, a gear that opens Settings, which needs no vault
-— the lock scene steps aside for the Settings page until the route moves on or the vault's state
-changes (ruled 2026-10-17); the brand where Motion's *Lock* anchors it; the notices — the warnings, the
+gone, and so is their wording). One centred panel, `min(440px, 100%)` wide, 28 px in, the
+card's radius, and **a floating frosted card** (the user's ask for fork D, ruled 2026-11-01:
+"a little is enough"): the surface at 92 % over a 24 px blur of the ground behind it, so
+the ground's colour just touches it (where the panel stands, the glow from the window's
+top-left corner has all but faded, and the card reads a level or two from opaque in either
+theme), a hairline 1 px stroke, and a soft shadow, tight at its edge and wide below, a little
+stronger in dark; opaque, unblurred and unshadowed where Windows asks for less transparency
+(`prefers-reduced-transparency`), and Canvas in a CanvasText stroke in a contrast theme. A wash
+runs across its top 64 px, the accent's wash fading into the fill, with the lead on it: the
+panel's, not the window's, so it never meets the ground's glow or Mica. **The stage's mark**
+stands first in the stage's column (*Identity*, above): the 96 px sheet in its 72 px box, 64
+px down under the header's line (which keeps its 20 px whatever it holds, so nothing above the
+panel moves) and 8 px clear of what follows; then the InfoBars, the notices and the step line's
+28 px, so the panel's top stands 172 px down in every state and window height (228 at first run,
+under the 128 px mark) and a notice arriving moves the panel, never the mark (ruled 2026-11-01;
+the panel's top was at 14vh, under the brand row the header drew until the window's caption
+named the app). A window too short for the column scrolls the stage, and the column stays
+centred on the window, not on the scroller, so that the scroller's bar, when it shows, moves
+neither the mark nor the panel: at the smallest window (880 × 560) the last try scrolls it by 47
+px, a touch still pending at rest by 16 and a refused recovery key by 13, and so does any notice
+over the PIN's, the touch's or the recovery key's step, and one more than about 100 px tall over
+the YubiKey's step or 112 px over the rest panel (the Tampered notice is 114). The header's
+state word stands at the top right, and beside it, at rest and at first run, a gear that opens
+Settings, which needs no vault — the lock scene steps aside for the Settings page until the
+route moves on or the vault's state changes (ruled 2026-10-17); the notices — the warnings, the
 "workstation-lock detection unavailable" one among them (the BitLocker warnings went with §9's
 checks, 2026-09-13), the archives still open — above the panel at its width, never below its
 buttons, ranked by tier, danger first (*Notices and their tiers*, below; ruled 2026-10-18), and
@@ -1704,7 +1767,9 @@ after another step of the same ceremony, whatever method the core has named — 
 for the YubiKey to add to this vault." Only the opening instant of a typed way in, which the core
 leaves at once, keeps what the panel showed (ruled 2026-10-17).
 
-**At rest**: the padlock, the vault's name (the sub size), "Locked · last unlocked yesterday,
+**At rest**: the vault's name (the sub size; the padlock over it went with
+fork D, ruled 2026-11-01, since the mark above the panel, the header's
+padlock and the caption say it), "Locked · last unlocked yesterday,
 03:24" (relative — "today, 03:24", "22 days ago" — since recency is the point), *Unlock with
 YubiKey* (accent, the panel's width, focused as it arrives so Enter begins, its ring drawn only
 once the keyboard is used) and *Unlock with recovery key* (standard, the panel's width); the
@@ -1727,7 +1792,7 @@ unlock, begun or not, is the user's to finish or cancel. Such an open begins the
 and at rest once that unlock is cancelled (on the rest panel alone it was seen only after a
 cancel). A vault whose one everyday way in is a password reads "Unlock <vault>" over *Unlock with
 password*, and pressing it, or Enter, turns the panel into the password's field in place: one
-step, no step line, the padlock and the lead where they were, *Unlock* with *Cancel* beside it and
+step, no step line, the lead where it was, *Unlock* with *Cancel* beside it and
 *Unlock with recovery key* beneath, under the form rule. The maintenance commands leave the daily
 unlock (ruled 2026-10-17): one quiet subtle button, *Backups and copies…*, opens them as a menu —
 *Test that a backup opens…* and *Replace this vault with a copy…* — never a second vault. A test
@@ -1736,7 +1801,7 @@ at rest takes it once and starts `Keys.VerifyBackup` on it, and a route away bef
 withdraws the ask. A test names its file in the panel's lead, "Testing backup-2026-10-13.eks",
 the header saying *Testing a backup* (ruled 2026-10-18). Quiet
 lines under the name carry what the status says: while it says `pendingTouch` from a cancelled
-unlock, the key art stands in for the padlock with its LED breathing — the YubiKey really is
+unlock, the key art stands over the name with its LED breathing — the YubiKey really is
 still waiting — the line says "The YubiKey is still blinking from the unlock you cancelled.
 Continue, or touch it or pull it out to end it.", and the primary reads *Continue unlocking*,
 since pressing it picks that touch up (§2.2; ruled 2026-10-17); that line is the lock screen's
@@ -1748,7 +1813,7 @@ and the status's note when the five minutes from the touch ran out (§2.2). The 
 not a way in say their own lead, never the rest panel's (ruled 2026-10-17): *Open elsewhere* (the
 header's word; it read *Open in another Enfold*, which the lead now says) reads "<vault> is open in
 another Enfold" and "Close it there, then try again." over *Try again* (accent); a broken vault
-(§2.1) keeps the padlock and the name with the caption naming the header's state, "Needs attention ·
+(§2.1) keeps the name with the caption naming the header's state, "Needs attention ·
 last unlocked yesterday, 17:10" — never the rest's *Locked* — then the code's sentence on an
 attention line (the icon and the words in the attention ink, no box) over *Reopen the vault*
 (accent) (ruled 2026-10-17); a vault that needs setting up — an adopted backup's first way in,
@@ -1838,8 +1903,10 @@ reads *Recovery key · Unlock*. Finishing setup asks the same cells first, with 
 *Continue*, since its first way in follows.
 
 **The touch takes the stage**: the touch's green over the whole scene — however far a short
-window scrolls — the panel's fill and stroke fading into it, the header's state and the brand,
-its mark outlined, in the touch's soft ink in both themes, the 160 px rings pulsing, the hero "Touch your YubiKey now", "Touch it
+window scrolls — the panel's fill, stroke, shadow and wash band fading into it,
+the stage's mark giving way (its opacity to 0 with the wash, its room kept, so
+nothing moves; ruled 2026-11-01), the header's state in the touch's soft ink in
+both themes, the 160 px rings pulsing, the hero "Touch your YubiKey now", "Touch it
 while it blinks. If it stops blinking, start again." in the touch's soft ink (no number: DESIGN.md
 trap 23) and the receipt "PIN accepted · <the YubiKey's name>". The derivation and the release
 keep the green and the layout — the rings held still at half, "Opening the vault…", "Touched ·
@@ -1863,9 +1930,12 @@ vault* (*Restoring a vault* at first run, where there is none to replace), *Crea
 *Setting up*, *Testing a backup*, *Needs attention*, *Needs setting up* — and its padlock agrees
 with its word: open on arrival, shut at rest, open again with *Unlocked* (ruled 2026-10-17). First run, an absent and
 a damaged vault use the same panel, with no step line, sized to its content (ruled 2026-10-17).
-**First run** reads "Create your vault" and the one sentence — "A vault is one file: the keys to
+**First run** reads, under the stage's mark at 128 px, "Create your vault"
+and the one sentence — "A vault is one file: the keys to
 your archives, opened by a YubiKey, a password or a recovery key." — over *Create a vault…*,
-*Restore from a vault or backup…* and the subtle *Test that a backup opens…*; what a restore needs
+*Restore from a vault or backup…* and the subtle *Test that a backup opens…*; a
+ceremony begun from one runs under the stage's 96 px mark, so the panel rises 56 px
+as it begins and comes back down if it ends at the first run; what a restore needs
 (a backup's recovery key) is said in the restore dialog, where it applies. **An absent vault**
 reads "<vault> is not where Enfold left it" over its path in mono, then *Try again*, *Find it…* —
 a picker, then the import dialog with "use the file where it is" already taken, the route that
@@ -1985,7 +2055,8 @@ does nothing; on an archive being compacted Close, Forget archive… and Delete 
 too, with the same words, since the close they need is refused while a compaction runs; a
 menu says each reason in a few words under its item (§6, *Menus*); the bar's Open is the one
 accent and the pane has no second Open (ruled 2026-10-18);
-a vault with no records at all, hidden and forgotten ones included, shows "No archives in
+a vault with no records at all, hidden and forgotten ones included, shows the 72 px open box
+(*Identity*, above; ruled 2026-11-01, it was the 20 px Archives glyph) over "No archives in
 this vault yet" with *New archive…* (the accent) and *Open file…* under it and a small subtle
 *Import archives from a backup…* under them, in place of the empty table, the last a command,
 not a link (ruled 2026-10-17), and no command bar, no filter and no pane (ruled 2026-10-18:
@@ -2068,9 +2139,10 @@ column — Name and Type ascending on the first click, Modified descending (newe
 ascending, the second click the other way, the cell wearing the one sort glyph of both lists,
 a 10 px chevron in the third ink, turned for ascending (ruled 2026-10-17; it was an arrow
 character here and a chevron on the Archives list) — and the choice stays while the
-archive is open; **a checkbox heads every row** and the header row — a row's, 14 px, in one
-16 px slot that it shares with the row's 14 px type icon, the two centred on one footprint
-(ruled 2026-11-01; the box was 16, a size larger than the icon), 16 px in from the card's edge
+archive is open; **a checkbox heads every row** and the header row — a row's, 16 px, on one
+square with the row's 16 px type icon, whose 16 px slot it shares (ruled 2026-11-01 with the
+phase-5 glyphs, which draw the icon at 16; earlier that day the box had been made 14, the
+icon's size then), 16 px in from the card's edge
 with the header's 16 px box over it, the name starting 8 px after the slot and the header's
 *Name* over the names, as on
 the Archives list (ruled 2026-10-26; the icon stood in the name's cell after the box's column,
@@ -3126,7 +3198,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     moves.
   - *The PIN accepted, the touch*: an overlay with the touch's gradient fades in over the whole
     stage, 220 ms on the entering curve — its opacity moves, since a gradient cannot transition —
-    the panel's fill and stroke fade out with it, and the rings start their 2.4 s pulse.
+    the panel's fill, stroke, shadow and wash band and the stage's mark fade out with it, the
+    mark's room kept, and the rings start their 2.4 s pulse.
   - *Touched, opening*: the rings stop and hold at half; the lead and the receipt cross-fade,
     140 ms. No colour changes: the green stays through the derivation and the release.
   - *Done*: the check disc pops where the rings' core was (from 60% with a little overshoot,
@@ -3139,17 +3212,17 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     milliseconds before the ceremony's Done, and without the hold the screen fell back to rest
     for that instant and the check was never seen.
   - *The touch timed out*: the rings stop, the overlay fades out over 160 ms on the exit's curve,
-    the stage's ink returning with it over the same 160 ms — dark words never stand on the green
-    — and the neutral message arrives on the panel, on the touch's step.
+    the stage's ink and its mark returning with it over the same 160 ms — dark words never stand
+    on the green — and the neutral message arrives on the panel, on the touch's step.
   - *In a dialog* the same beats play inside the box (Controls, below): the found LED's hold, the
     views crossing in one place, and the touch's wash filling the body with the box's stroke
     fading — in over 220 ms, out over 160 — while the foot band stays (ruled 2026-10-17).
 - *Lock.* The reverse: the shell sinks 6 px and fades fast-first (120 ms) and, a gap later,
   the lock screen rises in (220 ms); the lock screen's header shows the open padlock and closes it over the first 160 ms.
-  While unlocked the status chips show the open padlock. The brand — the mark and "Enfold" —
-  rests at the same point in both scenes, the rail's top-left corner, so it travels only with
-  its scene's own entrance (ruled 2026-10-14; the lock screen's sat at its centred strip's corner),
-  until the window has a caption that carries the name and neither scene draws one.
+  While unlocked the status chips show the open padlock. Neither scene draws the brand: the
+  window's caption names the app (ruled 2026-11-01; until then the mark and "Enfold" rested at
+  the same point in both scenes, the rail's top-left corner, so it travelled only with its
+  scene's own entrance).
 - *Pages.* The outgoing page fades in place, fast first (80 ms); a gap later the incoming
   fades and travels 160 ms — from the right 10 px going into an archive, from the left 10 px
   coming back, up 6 px for a rail switch — in the old one's place, the layer being a grid so
@@ -3206,10 +3279,10 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   of the design review's directions 3, 6 and 10; `lib/rail.ts` decides what it shows,
   `Rail.svelte` draws it). **Expanded**, at a window of 1008 px and more, it is 212 px
   (`--rail-w`), and holds from the top:
-  - the brand row, the mark and "Enfold", until the window's caption carries the name (direction
-    5, phase 5);
-  - **the vault head**: the vault's name in the strong weight (the setting first, §3; "Vault"
-    with no vault yet) over its state in the lock header's own words — *Unlocked*, *Locked*,
+  - **the vault head**, first since the brand row above it went (ruled
+    2026-11-01: the window's caption names the app): the vault's name in
+    the strong weight (the setting first, §3; "Vault" with no vault yet)
+    over its state in the lock header's own words — *Unlocked*, *Locked*,
     *Unlocking*, *Needs setting up*, … — in the caption's second ink: a quiet button with the
     items' hover and press that goes to the Vault page, never itself drawn current (the *Vault*
     item is);
@@ -3233,8 +3306,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   wears the dot or the ring of *The foot* (above; ruled 2026-10-18) at its right edge, whose
   ring moves to its percentage over the fast duration. **Compact**, below a 1008 px window
   (NavigationView's LeftCompact; `--rail-w-compact`, 48 px; the same query on `.shell`), it is a
-  column of icons on its middle line: a 32 px toggle (the hamburger, "Open navigation"), the brand
-  mark alone, **the vault's state button** — a 32 px padlock, open while unlocked and closed
+  column of icons on its middle line, with no brand (ruled 2026-11-01; the mark
+  stood alone under the toggle): a 32 px toggle (the hamburger, "Open navigation"),
+  **the vault's state button** — a 32 px padlock, open while unlocked and closed
   otherwise, whose press is the foot's own act (*Lock now* while unlocked, *Unlock* while locked,
   in any other state the lock scene, which says what comes first) and whose name and tooltip say
   the vault, its state and that act, "Personal vault · Unlocked · Lock now" — then the items as
@@ -3443,7 +3517,19 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   it is a caption, never a step larger than its own words. Every inset and gap is on a 4 px grid (4, 8, 12, 16, 20, 24): a card's inset
   is 16 and a strip's (a bar, an InfoBar) 12 — and 12 for the compact cards of a first
   way in, which must fit a dialog (ruled 2026-10-17); an icon stands 8 from its label, 12
-  beside a 20 px icon; the layer's gutter is 24. The fixed heights stay as ruled — the 40 px
+  beside a 20 px icon; the layer's gutter is 24. **The glyphs** are one hand (option A of the
+  phase-5 study, ruled 2026-11-01): drawn for 16 px on a 20-unit grid, so that at 125 % a unit
+  is one device pixel and a vertical or horizontal stroke, centred on a pixel, draws one solid
+  pixel; one 1.5 weight and one corner radius; Windows' metaphor where Windows has one — a gear
+  for Settings (it drew two sliders), Explorer's Rename, Move to and View, and Edit's pencil for
+  the Archives pane's *Edit name and description* — and *Compact* a glyph of its own, two arrows
+  pressing onto a line, so the box is an archive's alone. A glyph is 16 px beside words, in a
+  button, a menu, a bar or a list's row (buttons and menus drew 14, which no grid lands on at
+  125 %); the few that stand larger keep their 20 — the rail's open archives, a first way in's
+  methods and the touch's glyph where a touch stopped waiting — while the sort chevron and a
+  step disc's tick (10), the crumbs' separator (12) and a preview's type icon (48, and 96 in the
+  viewer) keep their own sizes. The shield and the floppy disk, which nothing drew, are gone
+  from the sprite. The fixed heights stay as ruled — the 40 px
   locked line, the 34 px foot (the 42 px op row went with the operation strip, ruled
   2026-10-18), the 44/64 panel, the file list's 36 px rows and the Archives list's 52 px
   two-line ones (ruled 2026-10-18), the 62 px head, and the foot's flyout rows of 40. A fact is
@@ -3608,13 +3694,14 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   under the pointer, and the 2 px accent underline over the surface only while it has the
   focus — that underline is its focus cue, and it was on every field at rest, so every field
   looked focused; a field marked wrong has the same 2 px in the danger colour, focused or not.
-  Checkboxes and radios are 20 px (16 for a list's tick-all box and 14 in its rows, the size of
-  the type icon a row's box shares its slot with; ruled 2026-11-01, the rows' were 16), the
-  accent filled when on — a radio
+  Checkboxes and radios are 20 px (16 in a list, its tick-all box and a row's alike, a row's on
+  the square of the 16 px type icon whose slot it shares; ruled 2026-11-01 with the phase-5
+  glyphs, reversing that day's 14 px row box), the accent filled when on — a radio
   an accent ring round a dot; a slider is a 4 px track, the accent up to the value, under a
   20 px thumb with a 12 px accent core; progress is a 3 px accent line over a 1 px track. A
   card is flat, a 1 px stroke and no shadow: a shadow says a thing floats — a menu, a floating
-  InfoBar, the save bar, the bottom panel over the list, a dialog. The Settings page and the Vault page's
+  InfoBar, the save bar, the bottom panel over the list, a dialog, the lock stage's panel (*Lock
+  screen*, above; ruled 2026-11-01). The Settings page and the Vault page's
   *This vault* are Windows Settings' list: each setting a card of its own, 4 px from the next
   (ruled 2026-10-17; they were rows ruled off inside one card); the Vault page's ways to
   unlock are separate cards the same 4 px apart (ruled 2026-10-17; they stood 12 apart). A
@@ -3637,9 +3724,12 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   words still GrayText and its reason in the text's colour; a focused text field is framed in
   Highlight, and every other focus ring is CanvasText; the borders that only space things — a
   row's 4 px ends, the rail's items, the subtle buttons — are painted the Canvas, so they do not
-  show as boxes; the icons take the colour of the text they stand by, and the mark and the key
-  art, whose SVG paint the system does not force, are drawn in CanvasText on the Canvas, the key
-  art's port in GrayText and its LED in Highlight. Nothing opts out of the system's forcing but
+  show as boxes; the icons take the colour of the text they stand by, and the mark, the
+  identity drawings and the key art, whose SVG paint the system does not force, are
+  drawn in CanvasText on the Canvas, the drawings' lines of writing, the box's inside
+  corner and the key art's port in GrayText, and the key art's LED in Highlight; the lock
+  stage's floating panel and the boot failure's are opaque Canvas in a CanvasText stroke,
+  with no blur, no shadow and no wash band. Nothing opts out of the system's forcing but
   what puts Highlight behind text and the rail's progress ring, whose measure is a gradient; the
   touch does not: its green gives way to Highlight rings round a CanvasText glyph, so the
   palette the user chose to read by wins. A

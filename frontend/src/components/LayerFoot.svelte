@@ -240,7 +240,7 @@
         {#if slot.startsWith("done:") && store.done}
           {@const d = store.done}
           <span class="done" class:neutral={d.tone === "neutral"}>
-            <svg class="i i-14"><use href={d.tone === "ok" ? "#i-check" : "#i-info"} /></svg>
+            <svg class="i"><use href={d.tone === "ok" ? "#i-check" : "#i-info"} /></svg>
             <span class="ellipsis" title={d.text}>{d.text}</span>
             {#if d.action}
               {@const a = d.action}
@@ -283,14 +283,14 @@
            the attention colour. Stay unlocked is the idle minute's alone:
            it sends Activity at once, not through the page's throttle, and
            nothing extends the cap (lib/foot.ts staysUnlocked). -->
-      <span class="lockchip" class:urgent={line?.urgent}><svg class="i i-14"><use href="#i-unlock" /></svg>{line?.text}</span>
+      <span class="lockchip" class:urgent={line?.urgent}><svg class="i"><use href="#i-unlock" /></svg>{line?.text}</span>
       {#if stay}<button type="button" class="btn subtle xs" onclick={() => Vault.Activity().catch((e) => store.notice(codeText(errorOf(e).code), "error"))}>{footCopy.stayUnlocked}</button>{/if}
       <button type="button" class="btn subtle xs" title={keyTitles.lockNow} onclick={lockNow}>{commandCopy.lockNow}</button>
     </span>
   {:else}
     <!-- *Locked*, the lock header's own word (ruled 2026-10-17: it read
          "Keystore locked", a format word; APP.md §7). -->
-    <span class="lockchip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}<button type="button" class="btn subtle xs" onclick={() => store.unlock()}>{commandCopy.unlock}</button></span>
+    <span class="lockchip"><svg class="i"><use href="#i-lock" /></svg>{chipCopy.locked}<button type="button" class="btn subtle xs" onclick={() => store.unlock()}>{commandCopy.unlock}</button></span>
   {/if}
 
   {#if open === "ops"}
@@ -314,7 +314,7 @@
   {:else if open === "notices"}
     <div class="foot-pop notice-pop" role="group" aria-label={footCopy.noticesLabel} transition:fly={motion(FAST, { y: 4, easing: enter })}>
       {#each notices as code (code)}
-        <div class="nrow {tier(code)}"><svg class="i i-14"><use href="#{tierIcon(tier(code))}" /></svg><span>{warningCopy(code)}</span></div>
+        <div class="nrow {tier(code)}"><svg class="i"><use href="#{tierIcon(tier(code))}" /></svg><span>{warningCopy(code)}</span></div>
       {/each}
     </div>
   {/if}
@@ -358,7 +358,6 @@
   .frow-main :global(.fprog) { width: 100%; margin-top: 2px; }
   .runs { flex: none; color: var(--ink-2); }
   .nrow { display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s2); color: var(--ink); font: var(--t-cap); }
-  .nrow .i { margin-top: 1px; }
   .nrow.attention .i { color: var(--attention); }
   .nrow.info .i { color: var(--ink-2); }
   .nrow.danger .i { color: var(--danger); }

@@ -336,7 +336,7 @@
             <!-- A cancelled touch still pending is a note, not a fault; the
                  Smart Card service not running is said in the attention ink
                  (APP.md §6, ruled 2026-10-17). -->
-            <div class="infoline" class:att={c.error !== Code.CodeTokenPending}><svg class="i i-14"><use href={c.error === Code.CodeTokenPending ? "#i-info" : "#i-warn"} /></svg><span>{codeText(c.error)}</span></div>
+            <div class="infoline" class:att={c.error !== Code.CodeTokenPending}><svg class="i"><use href={c.error === Code.CodeTokenPending ? "#i-info" : "#i-warn"} /></svg><span>{codeText(c.error)}</span></div>
           {/if}
         {:else if shown === "swap"}
           <!-- The YubiKey that proved it is you comes out first, so the same
@@ -362,12 +362,12 @@
                  and why (APP.md §13, ruled 2026-10-17). -->
             <div class="lead"><h3 class="t-section">{ceremonyCopy.typeProve}</h3><div class="cap">{ceremonyCopy.typeProveLine(c.kind === "enroll")}</div></div>
           {/if}
-          {#if c.slotLabel && c.step !== CeremonyStep.StepManagementKey && form.shows !== "password"}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
+          {#if c.slotLabel && c.step !== CeremonyStep.StepManagementKey && form.shows !== "password"}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           {#if c.promptId && form.shows !== "none"}
             {#if (form.shows === "pin" || form.shows === "both") && lastTry(c)}
               <!-- The last try, before it is typed: the consequence. The
                    dialog offers no recovery key, so no way out is named. -->
-              <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow"><strong>{lockCopy.lastTryHead}</strong> {ceremonyCopy.lastTryHere}</span></div>
+              <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow"><strong>{lockCopy.lastTryHead}</strong> {ceremonyCopy.lastTryHere}</span></div>
             {/if}
             <SecretInput
               kind={form.shows === "pin" ? "pin" : "password"}
@@ -409,7 +409,7 @@
           <div class="xf">{#key touchSub}<div class="touch-sub" in:fade={xin()} out:fade={xout()}>{touchSub}</div>{/key}</div>
           <div class="xf">
             {#key touchReceipt}
-              <div class="touch-slot" in:fade={xin()} out:fade={xout()}><svg class="i i-14"><use href="#i-yubi" /></svg>{touchReceipt}</div>
+              <div class="touch-slot" in:fade={xin()} out:fade={xout()}><svg class="i"><use href="#i-yubi" /></svg>{touchReceipt}</div>
             {/key}
           </div>
         {:else if shown === "opening"}
@@ -445,18 +445,18 @@
               {/if}
               {#each ends as item, i (i)}
                 {#if item.tone === "attention"}
-                  <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{item.text}</span></div>
+                  <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{item.text}</span></div>
                 {:else}
                   <p>{item.text}</p>
                 {/if}
               {/each}
-              {#if retire}<div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{retire}</span></div>{/if}
-              {#if backupNotSaved}<div class="bar attention"><svg class="i i-14"><use href="#i-backup" /></svg><span>{backupNotSaved}</span></div>{/if}
+              {#if retire}<div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{retire}</span></div>{/if}
+              {#if backupNotSaved}<div class="bar attention"><svg class="i"><use href="#i-backup" /></svg><span>{backupNotSaved}</span></div>{/if}
               {#if follow}
                 <!-- The cure is a command, so a button (APP.md §6, Controls),
                      beside the sentence that says when it is needed. -->
                 <div class="infoline follow">
-                  <svg class="i i-14"><use href="#i-info" /></svg>
+                  <svg class="i"><use href="#i-info" /></svg>
                   <div class="said"><span>{follow.text}</span><button type="button" class="btn sm" onclick={follow.onpress}>{follow.label}</button></div>
                 </div>
               {/if}
@@ -471,7 +471,7 @@
             <div class="lead"><h3 class="t-section">{lockCopy.stoppedWaiting}</h3><div class="cap">{lockCopy.stoppedLine}</div></div>
           {:else}
             <div class="lead"><h3 class="t-section">{stepText(c.step).title}</h3></div>
-            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error ?? "")}</span></div>
+            <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{codeText(c.error ?? "")}</span></div>
             <!-- That nothing was changed, for the acts whose failure before
                  the change leaves the file as it was, and what is known of
                  the keys a replacement showed (lib/rekey.ts failedNotes). -->
@@ -480,9 +480,9 @@
         {:else if shown === "blocked"}
           <!-- On the PIN's step, where it arises: whose PIN, then what it
                means on a danger bar (APP.md §6, ruled 2026-10-17). -->
-          {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
+          {#if c.slotLabel}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           <div class="lead"><h3 class="t-section">{ceremonyCopy.blockedLead}</h3></div>
-          <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{ceremonyCopy.blockedMeans}</span></div>
+          <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{ceremonyCopy.blockedMeans}</span></div>
         {:else if c.step !== CeremonyStep.StepWaitingForKey}
           <!-- A step that asks nothing here (the records found, a recovery
                key being shown). The opening wait of a typed proof draws

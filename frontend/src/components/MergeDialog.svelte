@@ -193,7 +193,7 @@
     {#if tamperedBar}
       <!-- Danger, as the Tampered banner is: the file may have been changed
            outside Enfold (APP.md §6, Notices and their tiers; ruled 2026-10-18). -->
-      <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{tamperedBar}</span></div>
+      <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{tamperedBar}</span></div>
     {/if}
     <div class="merge-list" role="group" aria-label="Archives in that file">
       {#each rows as r (r.archiveId)}
@@ -234,7 +234,7 @@
     </dl>
     {#if recoveryLines.length > 0}
       <div class="bar">
-        <svg class="i i-14"><use href="#i-recovery" /></svg>
+        <svg class="i"><use href="#i-recovery" /></svg>
         <div class="grow">
           <span>If no unlock method of this vault opens it, its own recovery key is asked for. That file has {plural(recoveryLines.length, "recovery key")}:</span>
           <ul class="slotlist">

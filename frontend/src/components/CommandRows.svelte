@@ -27,7 +27,7 @@
 <div class="cmdrows" role="group">
   {#each rows as r, i (i)}
     <button type="button" class="btn cmdrow" disabled={r.disabled} title={r.disabled ? r.reason : undefined} onclick={r.run}>
-      <svg class="i i-14" aria-hidden="true"><use href="#i-chevron" /></svg>
+      <svg class="i" aria-hidden="true"><use href="#i-chevron" /></svg>
       <span class="cmdrow-text">
         <b>{r.label}</b>
         <small>{r.disabled && r.reason ? r.reason : r.says}</small>
@@ -42,7 +42,7 @@
      centred on the first 20 px line (APP.md §6, Type and spacing). */
   .cmdrows { display: flex; flex-direction: column; gap: var(--s2); }
   .cmdrow { width: 100%; height: auto; min-height: 32px; padding: var(--s2) var(--s3); align-items: flex-start; gap: var(--s2); white-space: normal; text-align: left; }
-  .cmdrow > .i { margin-top: 3px; color: var(--accent-ink); }
+  .cmdrow > .i { margin-top: 2px; color: var(--accent-ink); }
   .cmdrow:disabled > .i { color: inherit; }
   .cmdrow-text { display: flex; flex-direction: column; min-width: 0; }
   .cmdrow-text b { font: var(--t-strong); overflow-wrap: anywhere; }

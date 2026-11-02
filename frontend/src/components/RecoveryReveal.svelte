@@ -233,7 +233,7 @@
   {/snippet}
   {#if failed && !keep}
     <p>{revealCopy.gone}</p>
-    <div class="bar"><svg class="i i-14"><use href="#i-info" /></svg><span>{revealCopy.goneHow}</span></div>
+    <div class="bar"><svg class="i"><use href="#i-info" /></svg><span>{revealCopy.goneHow}</span></div>
   {:else}
     <!-- Keep mode names the key this one replaces first, so the new sheet
          goes where the old one is. -->
@@ -247,7 +247,7 @@
     {#if keep && gone}
       <!-- In place of the digits: nothing has changed, and the way on is
            to cancel and start again. -->
-      <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{revealCopy.keepGone}</span></div>
+      <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{revealCopy.keepGone}</span></div>
     {:else if !digits}
       <p>{revealCopy.loading}</p>
     {:else}
@@ -260,7 +260,7 @@
            button beside them. -->
       <div class="row ways">
         {#each row as b (b.act)}
-          <button type="button" class="btn" class:accent={b.accent} onclick={acts[b.act]}>{#if b.act === "print" && b.accent}<svg class="i i-14" aria-hidden="true"><use href="#i-doc" /></svg>{/if}{b.label}</button>
+          <button type="button" class="btn" class:accent={b.accent} onclick={acts[b.act]}>{#if b.act === "print" && b.accent}<svg class="i" aria-hidden="true"><use href="#i-doc" /></svg>{/if}{b.label}</button>
         {/each}
         {#if !checking}<button type="button" class="btn subtle sm" onclick={() => (checking = true)}>{revealCopy.check}</button>{/if}
       </div>
@@ -299,13 +299,13 @@
       <p class="t-quiet">{digitsCaption}</p>
       <p class="t-quiet">{revealCopy.textFile}</p>
       {#if savedTo}
-        <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{revealCopy.savedTo(savedTo)}</span></div>
+        <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{revealCopy.savedTo(savedTo)}</span></div>
       {/if}
       {#if printed}
-        <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{revealCopy.sentToPrint(title)}</span></div>
+        <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{revealCopy.sentToPrint(title)}</span></div>
       {/if}
       {#if wroteDown}
-        <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{revealCopy.writtenDown}</span></div>
+        <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{revealCopy.writtenDown}</span></div>
       {/if}
     {/if}
   {/if}

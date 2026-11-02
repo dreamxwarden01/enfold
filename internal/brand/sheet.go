@@ -7,11 +7,12 @@ import (
 )
 
 // The mark's one geometry, the folded sheet (phase 5, ruled 2026-11-01).
-// Every rendering of the mark is to come from Sheet, so that no two of them
-// can drift apart: today the sprite's 20 px i-mark (frontend/src/components/
-// Icons.svelte, held to Sheet(20) by sheet_test.go); next the 96 and 128 px
-// drawings of the lock stage and the first run, and the app icon once it is
-// redrawn in the sheet's facets.
+// Every rendering of the mark comes from Sheet, so that no two of them can
+// drift apart: the sprite's 20 px i-mark (frontend/src/components/
+// Icons.svelte, held to Sheet(20) by sheet_test.go), the 96 and 128 px
+// drawings of the lock stage and the first run and the no-archives open box
+// (Art.svelte, held to Sheet by art_test.go), and the application's icon,
+// which icon.go draws from Sheet in facets.
 //
 // The figure is a regular pointy-top hexagon, the sheet, with its top corner
 // folded down to the centre F. Two folds show: from the top vertex down to

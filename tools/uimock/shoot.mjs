@@ -8,11 +8,11 @@
 //
 //   - the page lays SVG out on whole device pixels (Page.snapCheck: strokes
 //     in boxes at fractional device positions stay two full columns), which
-//     only the native scale gives; and the lock stage's 20 px mark (i-mark)
-//     has its left vertical on whole device pixels. That is measured against
-//     the colour the stroke is painted with: full columns side by side and no
-//     partial one, and ink as wide as the geometry gives, centred where it
-//     gives;
+//     only the native scale gives; and the lock stage's 96 px mark (fork D's
+//     drawing, Art.svelte) has its left vertical on whole device pixels.
+//     That is measured against the colour the stroke is painted with: full
+//     columns side by side and no partial one, and ink as wide as the
+//     geometry gives, centred where it gives;
 //   - the scrolled file list draws a scrollbar: a bar thicker than 0 and a
 //     thumb found in its pixels, which --hide-scrollbars would take away.
 //
@@ -54,7 +54,10 @@ const [W, H] = (A.size || "1086x694").split("x").map(Number);
 const now = Math.floor(Date.now() / 1000);
 const ROW = `tbody tr[data-id="${"a1".repeat(16)}"]`; // Photos 2024 on the Archives page
 const LIST = ".file-split .tablewrap"; // the archive's file list, beside the preview pane
-const MARK = ".unlock .u-head .brand .mark"; // the lock stage's 20 px i-mark
+// The lock stage's mark: fork D's 96 px folded sheet, Sheet(96) cropped to
+// 96 x 72 (Art.svelte, held to internal/brand by art_test.go). It replaced
+// the header's 20 px i-mark, which went with the brand row (2026-11-01).
+const MARK = ".unlock .stage-mark .idart";
 // How far the mark's drawn ink may stray from the geometry's width and
 // centre, in device px: a quarter pixel, well over the rasteriser's own
 // error (within 0.01 in every look here) and half the half pixel a box off
@@ -160,29 +163,32 @@ try {
     const mark = await p.measure(MARK);
     const img = await p.pixels();
     r.capture = [img.w, img.h];
-    // i-mark's left side is the .mark-line path, stroked with var(--accent)
-    // (Icons.svelte, held to brand.Sheet(20) by sheet_test.go), and in a
-    // contrast theme with CanvasText (app.css's forced-colours block). It is
-    // drawn in a <use>'s shadow tree, so its colour is resolved in the
-    // mark's own context. The side runs at x 3.2 of the mark's 20 units,
-    // from y 6.305 to 13.695, 1.5 units wide. Rows at 10.4-12.8 units miss
-    // both folds, and columns 0-5.6 units hold the ground on the left and
-    // the wash on the right.
+    // The mark's left side is in the .art-line path, stroked with
+    // var(--accent) (app.css, the identity drawings), and in a contrast
+    // theme with CanvasText (the forced-colours block); its colour is
+    // resolved in the drawing's own context. The side runs at x 17.6 of the
+    // box's 96 units, from y 18.449 to 53.551 of its 72, 1.6 units wide.
+    // Rows at 26-50 units miss the diagonal and the lowest edges, and
+    // columns 0-24 units hold the ground on the left and the wash on the
+    // right, short of the lines of writing at 25.6. A box that layout puts
+    // at a half device pixel (a window an odd number of device pixels
+    // narrower than this one) still paints on whole ones, half a pixel to
+    // the right, so the box's origin is read rounded.
     const ink = await p.resolveColor(MARK, look.palette ? "CanvasText" : "var(--accent)");
-    const u = mark.device.width / 20;
-    const x0 = Math.floor(mark.device.x), y0 = Math.floor(mark.device.y);
-    const expected = { centre: +(mark.device.x + 3.2 * u).toFixed(3), width: +(1.5 * u).toFixed(3) };
+    const u = mark.device.width / 96;
+    const x0 = Math.round(mark.device.x), y0 = Math.round(mark.device.y);
+    const expected = { centre: +(x0 + 17.6 * u).toFixed(3), width: +(1.6 * u).toFixed(3) };
     r.mark = { box: mark, ink, expected };
     if (!ink || ink[3] !== 1) {
       problems.push(`${look.name}: the mark's stroke colour is not an opaque colour (${JSON.stringify(ink)}), so its columns cannot be scored`);
     } else {
-      const s = strokeProfile(img, { x0, x1: x0 + Math.ceil(5.6 * u) + 1, y0: y0 + Math.ceil(10.4 * u), y1: y0 + Math.floor(12.8 * u), ink });
+      const s = strokeProfile(img, { x0, x1: x0 + Math.ceil(24 * u), y0: y0 + Math.ceil(26 * u), y1: y0 + Math.floor(50 * u), ink });
       r.mark.stroke = s;
       if (s.whole !== true) problems.push(`${look.name}: the mark's left side is not on whole device pixels: full ${s.full.join(" ") || "none"}, partial ${s.partial.join(" ") || "none"}`);
       if (Math.abs(s.sum - expected.width) > TOL) problems.push(`${look.name}: the mark's left side draws ${s.sum} device px of ink, not ${expected.width}`);
       if (s.centre === null || Math.abs(s.centre - expected.centre) > TOL) problems.push(`${look.name}: the mark's left side is centred at ${s.centre}, not ${expected.centre}`);
     }
-    await p.screenshot(path.join(OUT, `mark-zoom-${look.name}.png`), MARK, { pad: 2, zoom: 12 });
+    await p.screenshot(path.join(OUT, `mark-zoom-${look.name}.png`), MARK, { pad: 2, zoom: 6 });
     r.snap = await p.snapCheck();
     if (r.snap.whole === false) problems.push(`${look.name}: SVG boxes do not land on whole device pixels: ${JSON.stringify(r.snap.boxes)}`);
     if (look.lockOnly) continue;

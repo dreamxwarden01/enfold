@@ -249,11 +249,11 @@
           ondblclick={() => { if (l.expandable) void toggle(l.id); }}
         >
           {#if l.expandable}
-            <button type="button" class="chev" class:open={l.open} tabindex="-1" aria-label={moveToCopy.open(l.name)} onclick={(e) => { e.stopPropagation(); pick(l.id); void toggle(l.id); }}><svg class="i i-14" aria-hidden="true"><use href="#i-chevron" /></svg></button>
+            <button type="button" class="chev" class:open={l.open} tabindex="-1" aria-label={moveToCopy.open(l.name)} onclick={(e) => { e.stopPropagation(); pick(l.id); void toggle(l.id); }}><svg class="i" aria-hidden="true"><use href="#i-chevron" /></svg></button>
           {:else}
             <span class="chev" aria-hidden="true"></span>
           {/if}
-          <svg class="i i-14 kind" aria-hidden="true"><use href={l.depth === 0 ? "#i-box" : "#i-folder"} /></svg>
+          <svg class="i kind" aria-hidden="true"><use href={l.depth === 0 ? "#i-box" : "#i-folder"} /></svg>
           <span class="nm">{l.name}</span>
           <!-- Every greyed row says why at its right, the folders beneath a
                moved one included (the brief: the moved folders and their
@@ -284,7 +284,7 @@
       <button type="button" class="btn" disabled={busy} onclick={() => void create()}>{moveToCopy.create}</button>
     </div>
   {:else}
-    <button type="button" class="btn subtle sm mt-create" disabled={busy} onclick={() => void askCreate()}><svg class="i i-14" aria-hidden="true"><use href="#i-folder-add" /></svg>{commandCopy.createFolder}</button>
+    <button type="button" class="btn subtle sm mt-create" disabled={busy} onclick={() => void askCreate()}><svg class="i" aria-hidden="true"><use href="#i-folder-add" /></svg>{commandCopy.createFolder}</button>
   {/if}
 
   {#if refusal}
@@ -320,7 +320,8 @@
   .tn .why { flex: none; font: var(--t-cap); color: var(--ink-2); white-space: nowrap; }
   .tn.note .nm { font: var(--t-cap); color: var(--ink-2); }
   .tn.note.bad .nm { color: var(--danger); }
-  .tn .wait { display: inline-flex; width: 14px; height: 14px; }
+  /* The 14 px pending ring on the middle of the 16 px glyph it stands for. */
+  .tn .wait { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; }
   .chev {
     flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0;
     border: none; background: transparent; color: var(--ink-2); border-radius: var(--r-sm);

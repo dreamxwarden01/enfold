@@ -404,7 +404,7 @@ export class Page {
   // the native path every box snaps to a whole device pixel and every
   // stroke is two full columns; on the emulated path the boxes keep their
   // fractions and the strokes smear into partial columns. A mark at a whole
-  // CSS position, such as the lock stage's at 20 px, is crisp either way
+  // CSS position, as the old brand row's was at 20 px, is crisp either way
   // and proves nothing about the path, which is why this probe exists. At a
   // whole factor (1, 2) every whole CSS offset is a whole device offset on
   // both paths, so the probe cannot tell them apart: whole is then null,

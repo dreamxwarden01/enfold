@@ -1122,7 +1122,7 @@ export const listCopy = {
 };
 
 // The boot (APP.md §2.4): a first Status() that failed is a panel of its
-// own (direction 9, ruled 2026-10-18) — the brand, this heading, the
+// own (direction 9, ruled 2026-10-18) — the stage's mark, this heading, the
 // code's own words, and three ways on: Retry, the data folder that holds
 // the log, and the details copied for a report. The lock scene is never
 // drawn on no evidence, and nothing of the vault is.

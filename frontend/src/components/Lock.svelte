@@ -32,6 +32,7 @@
   import TextField from "./TextField.svelte";
   import MenuButton from "./MenuButton.svelte";
   import KeyArt from "./KeyArt.svelte";
+  import Art from "./Art.svelte";
   import TamperedBar from "./TamperedBar.svelte";
   import NoticeSlot from "./NoticeSlot.svelte";
 
@@ -231,6 +232,15 @@
   const line = $derived(lineKind(c?.kind, way));
   const steps = $derived(line === "token" ? [lockCopy.stepKey, pinStep, lockCopy.stepTouch] : line === "recovery" ? [ceremonyCopy.recoveryKey, lockCopy.stepUnlock] : []);
   const lineShown = $derived(steps.length > 0 && shown !== "rest" && shown !== "firstrun");
+  // The stage's mark (fork D; APP.md §6, ruled 2026-11-01): 96 px in every
+  // view, 128 on the first run's own panel, the vault yet to be made. An
+  // absent or a damaged vault reports a problem, so it keeps the stage's
+  // 96 rather than take a drawing of its own; and a ceremony begun at the
+  // first run (a create, a restore, a backup's test) runs under the 96,
+  // whose touch view fits the smallest window. So its panel rises 56 px as
+  // it begins and comes back down if it ends at the first run (APP.md §6,
+  // First run).
+  const markKind = $derived(shown === "firstrun" && card === "fresh" ? "first" : "stage");
   let phased = $state(NO_PHASE);
   $effect(() => {
     const next = phaseAfter(untrack(() => phased), line, c);
@@ -549,7 +559,7 @@
 {#snippet pendingOpen()}
   {#if store.openWhenUnlocked}
     {@const pendingFile = leaf(store.openWhenUnlocked)}
-    <div class="infoline pending-open"><svg class="i i-14"><use href="#i-file" /></svg><span class="grow">{lockCopy.unlockToOpen} <strong>{pendingFile}</strong></span><button type="button" class="x20" title={lockCopy.forgetOpen(pendingFile)} aria-label={lockCopy.forgetOpen(pendingFile)} onclick={() => store.forgetOpenWhenUnlocked()}><svg class="i i-14"><use href="#i-x" /></svg></button></div>
+    <div class="infoline pending-open"><svg class="i"><use href="#i-file" /></svg><span class="grow">{lockCopy.unlockToOpen} <strong>{pendingFile}</strong></span><button type="button" class="x20" title={lockCopy.forgetOpen(pendingFile)} aria-label={lockCopy.forgetOpen(pendingFile)} onclick={() => store.forgetOpenWhenUnlocked()}><svg class="i"><use href="#i-x" /></svg></button></div>
   {/if}
 {/snippet}
 
@@ -560,11 +570,12 @@
   <!-- The stage scrolls inside the section, so the wash under it covers
        the whole window however far a short one scrolls. -->
   <div class="u-scroll">
+  <!-- No brand on the header: the window's caption names the app (APP.md
+       §6; ruled 2026-11-01). -->
   <div class="u-head">
-    <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
     <div class="state">
       <span class="lockbox" aria-hidden="true">
-        {#key padlockOpen}<svg class="i i-14 padlock" in:fade={motion()} out:fade={motion(LEAVE)}><use href={padlockOpen ? "#i-unlock" : "#i-lock"} /></svg>{/key}
+        {#key padlockOpen}<svg class="i padlock" in:fade={motion()} out:fade={motion(LEAVE)}><use href={padlockOpen ? "#i-unlock" : "#i-lock"} /></svg>{/key}
       </span>
       {#if shown === "failed" && c?.kind === "unlock"}{lockCopy.header.failed}{:else if running}{unlockedNow ? lockCopy.header.unlocked : c?.kind === "import" ? importHeader : c?.kind === "create" ? lockCopy.header.creating : c?.kind === "setup" ? lockCopy.header.settingUp : c?.kind === "verify" ? lockCopy.header.testing : lockCopy.header.unlocking}{:else if card === "damaged"}{lockCopy.header.damaged}{:else if card === "absent"}{lockCopy.header.absent}{:else if firstRun}{lockCopy.header.none}{:else if busy}{lockCopy.header.busy}{:else if broken}{lockCopy.header.broken}{:else if setupNeeded}{lockCopy.header.setupNeeded}{:else}{lockCopy.header.locked}{/if}
       <!-- Settings needs no vault (APP.md §6, ruled 2026-10-17): the gear
@@ -572,16 +583,21 @@
            runs or its failure is on the panel, which the scene is there to
            show. -->
       {#if shown === "rest" || shown === "firstrun"}
-        <button type="button" class="btn subtle xs gear" aria-label={lockCopy.settings} title={lockCopy.settings} onclick={() => store.openSettingsLocked()}><svg class="i i-14"><use href="#i-settings" /></svg></button>
+        <button type="button" class="btn subtle xs gear" aria-label={lockCopy.settings} title={lockCopy.settings} onclick={() => store.openSettingsLocked()}><svg class="i"><use href="#i-settings" /></svg></button>
       {/if}
     </div>
   </div>
 
   <div class="u-stage">
-    <!-- The InfoBars (direction 4, phase 4b; NoticeSlot): at the top of the
-         stage, above the notices, the panel's width — in flow, each opening
-         its height, since a bar floating here would cover the panel's
-         heading, and an error stays until it is closed. -->
+    <!-- The stage's face (fork D; APP.md §6, ruled 2026-11-01): the folded
+         sheet, first in the column, so a notice or an InfoBar arriving
+         moves the panel and never the mark. It gives way on the touch's
+         green and keeps its room (app.css .stage-mark). -->
+    <div class="stage-mark"><Art kind={markKind} /></div>
+    <!-- The InfoBars (direction 4, phase 4b; NoticeSlot): under the mark,
+         above the notices, the panel's width — in flow, each opening its
+         height, since a bar floating here would cover the panel's heading,
+         and an error stays until it is closed. -->
     <NoticeSlot flow />
     {#if !firstRun && noticeList.length > 0}
       <!-- Notices stand above the panel, its width, so nothing warns from
@@ -603,7 +619,7 @@
                  ones. Show goes there, then the close, as the mock draws
                  them; the sentence over the row, as in the tampered bar. -->
             <div class="bar attention">
-              <svg class="i i-14"><use href="#i-lock" /></svg>
+              <svg class="i"><use href="#i-lock" /></svg>
               <div class="grow notice-body">
                 <span class="num"><strong>{openedLead.head}</strong> {openedLead.rest}</span>
                 <div class="row">
@@ -613,7 +629,7 @@
               </div>
             </div>
           {:else}
-            <div class="bar {t}"><svg class="i i-14"><use href="#{tierIcon(t)}" /></svg><span>{warningCopy(n, st?.tamperedReason)}</span></div>
+            <div class="bar {t}"><svg class="i"><use href="#{tierIcon(t)}" /></svg><span>{warningCopy(n, st?.tamperedReason)}</span></div>
           {/if}
         {/each}
       </div>
@@ -644,7 +660,7 @@
             <div class="lead"><h2 class="t-title">{lockCopy.damagedLead(missingName)}</h2><div class="cap"><span class="mono">{st.missingPath}</span></div></div>
             {#if keptCopy}
               <div class="bar attention">
-                <svg class="i i-14"><use href="#i-warn" /></svg>
+                <svg class="i"><use href="#i-warn" /></svg>
                 <span class="grow">{lockCopy.keptCopy(keptDate)}</span>
                 <button type="button" class="btn sm" onclick={() => openImport(st?.retiredPath ?? "")} use:takeFocus>{lockCopy.useThatCopy}</button>
               </div>
@@ -668,31 +684,31 @@
                  went, restore, and last a new vault (ruled 2026-10-17). -->
             <div class="lead"><h2 class="t-title">{lockCopy.absentLead(missingName)}</h2><div class="cap"><span class="mono">{st.missingPath}</span></div></div>
             <button type="button" class="btn accent wide" onclick={retryMissing} use:takeFocus>{lockCopy.tryAgain}</button>
-            <button type="button" class="btn wide" onclick={findIt}><svg class="i i-14"><use href="#i-folder" /></svg>{lockCopy.findIt}</button>
-            <button type="button" class="btn wide" onclick={() => openImport()}><svg class="i i-14"><use href="#i-open" /></svg>{commandCopy.restoreFrom}</button>
+            <button type="button" class="btn wide" onclick={findIt}><svg class="i"><use href="#i-folder" /></svg>{lockCopy.findIt}</button>
+            <button type="button" class="btn wide" onclick={() => openImport()}><svg class="i"><use href="#i-open" /></svg>{commandCopy.restoreFrom}</button>
             <button type="button" class="btn subtle sm start" onclick={openCreate}>{lockCopy.createInstead}</button>
           {:else}
             <!-- The panel is its content's height; what a restore needs is
                  said in the restore dialog, where it applies. -->
             <div class="lead"><h2 class="t-title">{lockCopy.firstRunLead}</h2><div class="cap">{lockCopy.firstRunLine}</div></div>
-            <button type="button" class="btn accent wide" onclick={openCreate} use:takeFocus><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.createVault}</button>
-            <button type="button" class="btn wide" onclick={() => openImport()}><svg class="i i-14"><use href="#i-open" /></svg>{commandCopy.restoreFrom}</button>
+            <button type="button" class="btn accent wide" onclick={openCreate} use:takeFocus><svg class="i"><use href="#i-plus" /></svg>{commandCopy.createVault}</button>
+            <button type="button" class="btn wide" onclick={() => openImport()}><svg class="i"><use href="#i-open" /></svg>{commandCopy.restoreFrom}</button>
             <button type="button" class="btn subtle sm start" onclick={testBackup}>{commandCopy.testBackup}</button>
           {/if}
           {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
-            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
+            <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
           {:else if outcome?.kind === "verify"}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{ceremonyCopy.verified(outcome.archives)}</span></div>
+            <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{ceremonyCopy.verified(outcome.archives)}</span></div>
           {:else if outcome?.kind === "import"}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{lockCopy.restoredUnopened}</span></div>
+            <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{lockCopy.restoredUnopened}</span></div>
           {:else if outcome?.kind === "create"}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{lockCopy.createdUnopened}</span></div>
+            <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{lockCopy.createdUnopened}</span></div>
           {/if}
           {#if !rebuild && (st?.retiredCopies ?? 0) > 0 && st?.retiredPath}
             <!-- Restoring is a command, so a button, on the 40 px line a bar
                  with a small button takes (APP.md §6, Controls). -->
             <div class="bar line">
-              <svg class="i i-14"><use href="#i-info" /></svg>
+              <svg class="i"><use href="#i-info" /></svg>
               <span class="grow">A replaced copy of a vault is in Enfold's folder: {leaf(st.retiredPath)}.</span>
               <button type="button" class="btn sm" onclick={() => openImport(st?.retiredPath ?? "")}>{lockCopy.restoreIt}</button>
             </div>
@@ -702,11 +718,10 @@
             <!-- The YubiKey really is still waiting for a touch: its LED
                  keeps breathing (APP.md §6, ruled 2026-10-17). -->
             <KeyArt led="listen" />
-          {:else if !setupNeeded}
-            <!-- Finishing setup is first run's shape, not the locked
-                 vault's: no padlock (APP.md §6, ruled 2026-10-17). -->
-            <svg class="i i-20 restlock" aria-hidden="true"><use href="#i-lock" /></svg>
           {/if}
+          <!-- No padlock over the lead (fork D, ruled 2026-11-01): the mark
+               above the panel, the header's padlock and the caption's
+               *Locked* already say it. -->
           <!-- Each state says its own lead; Open elsewhere never
                borrows the rest panel's (ruled 2026-10-17). -->
           <div class="lead">
@@ -719,20 +734,20 @@
                  key where a removal always leaves two or more. -->
             <div class="cap">{setupNeeded ? (finishWhy ?? lockCopy.setupLine) : busy ? lockCopy.busyLine : broken ? brokenLine : restLine}</div>
           </div>
-          {#if st?.pendingTouch}<div class="infoline"><svg class="i i-14"><use href="#i-info" /></svg><span>{lockCopy.pendingTouch}</span></div>{/if}
+          {#if st?.pendingTouch}<div class="infoline"><svg class="i"><use href="#i-info" /></svg><span>{lockCopy.pendingTouch}</span></div>{/if}
           <!-- The status's own note: the five minutes from the touch ran
                out with the vault's password not given, and the ceremony
                ended where a cancel ends it (APP.md §2.2). The next
                ceremony clears it, so it needs no dismissal. -->
-          {#if st?.note}<div class="infoline"><svg class="i i-14"><use href="#i-info" /></svg><span>{codeText(st.note)}</span></div>{/if}
+          {#if st?.note}<div class="infoline"><svg class="i"><use href="#i-info" /></svg><span>{codeText(st.note)}</span></div>{/if}
           {#if c && c.step === CeremonyStep.StepFailed && c.error !== "ceremony.cancelled"}
-            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
+            <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
           {:else if outcome?.kind === "import"}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{restoring ? lockCopy.restored : lockCopy.replaced}</span></div>
+            <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{restoring ? lockCopy.restored : lockCopy.replaced}</span></div>
           {:else if outcome?.kind === "verify"}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{ceremonyCopy.verified(outcome.archives)}</span></div>
+            <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{ceremonyCopy.verified(outcome.archives)}</span></div>
           {:else if outcome?.kind === "create"}
-            <div class="bar accent"><svg class="i i-14"><use href="#i-check" /></svg><span>{lockCopy.created}</span></div>
+            <div class="bar accent"><svg class="i"><use href="#i-check" /></svg><span>{lockCopy.created}</span></div>
           {/if}
           {@render pendingOpen()}
           {#if busy}
@@ -740,15 +755,15 @@
           {:else if broken}
             <!-- An attention line, not a bar: the boxed bar is kept for the
                  last try and the kept copy (APP.md §6, ruled 2026-10-17). -->
-            <div class="infoline att"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText("vault.broken")}</span></div>
+            <div class="infoline att"><svg class="i"><use href="#i-warn" /></svg><span>{codeText("vault.broken")}</span></div>
             <button type="button" class="btn accent wide" onclick={() => void Vault.Reopen()} use:takeFocus>{lockCopy.reopen}</button>
           {:else if setupNeeded && finishWhy}
             <!-- A greyed control keeps the pointer for its reason (APP.md §6,
                  Controls). -->
-            <button type="button" class="btn wide" disabled title={finishWhy}><svg class="i i-14"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
+            <button type="button" class="btn wide" disabled title={finishWhy}><svg class="i"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
             <button type="button" class="btn accent wide" onclick={() => begin("recovery")} use:takeFocus>{lockCopy.unlockWithRecovery}</button>
           {:else if setupNeeded}
-            <button type="button" class="btn accent wide" onclick={openSetup} use:takeFocus><svg class="i i-14"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
+            <button type="button" class="btn accent wide" onclick={openSetup} use:takeFocus><svg class="i"><use href="#i-plus" /></svg>{lockCopy.finishTitle}…</button>
             <button type="button" class="btn wide" onclick={() => begin("recovery")}>{lockCopy.unlockWithRecovery}</button>
           {:else}
             {#if st?.hasHardwareSlot}
@@ -756,13 +771,13 @@
                    PIN's step says which secrets it asks for. With a touch
                    still pending, pressing it picks that touch up (APP.md
                    §2.2), and it says so. -->
-              <button type="button" class="btn accent wide" onclick={() => begin("token")} use:takeFocus><svg class="i i-14"><use href="#i-yubi" /></svg>{st?.pendingTouch ? lockCopy.continueUnlocking : lockCopy.unlockWithYubiKey}</button>
+              <button type="button" class="btn accent wide" onclick={() => begin("token")} use:takeFocus><svg class="i"><use href="#i-yubi" /></svg>{st?.pendingTouch ? lockCopy.continueUnlocking : lockCopy.unlockWithYubiKey}</button>
             {/if}
             {#if st?.hasPasswordSlot}
               {#if passwordOnly}
-                <button type="button" class="btn accent wide" onclick={() => begin("password")} use:takeFocus><svg class="i i-14"><use href="#i-password" /></svg>{lockCopy.unlockWithPassword}</button>
+                <button type="button" class="btn accent wide" onclick={() => begin("password")} use:takeFocus><svg class="i"><use href="#i-password" /></svg>{lockCopy.unlockWithPassword}</button>
               {:else}
-                <button type="button" class="btn wide" onclick={() => begin("password")}><svg class="i i-14"><use href="#i-password" /></svg>{lockCopy.unlockWithPassword}</button>
+                <button type="button" class="btn wide" onclick={() => begin("password")}><svg class="i"><use href="#i-password" /></svg>{lockCopy.unlockWithPassword}</button>
               {/if}
             {/if}
             <button type="button" class="btn wide" onclick={() => begin("recovery")}>{lockCopy.unlockWithRecovery}</button>
@@ -795,7 +810,7 @@
           </div>
           {#if c.error && c.step === CeremonyStep.StepWaitingForKey}
             <!-- An attention line under the lead, as the broken vault's. -->
-            <div class="infoline att"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
+            <div class="infoline att"><svg class="i"><use href="#i-warn" /></svg><span>{codeText(c.error)}</span></div>
           {/if}
           {#if c.kind === "unlock"}{@render pendingOpen()}{/if}
           <div class="row">
@@ -830,10 +845,9 @@
           </div>
         {:else if shown === "secret" && c}
           {#if oneStep}
-            <!-- The password-only vault's one step: the rest panel's padlock
-                 and lead stay where they were, the field arrives under
-                 them (APP.md §6, ruled 2026-10-17). -->
-            <svg class="i i-20 restlock" aria-hidden="true"><use href="#i-lock" /></svg>
+            <!-- The password-only vault's one step: the rest panel's lead
+                 stays where it was, the field arrives under it (APP.md §6,
+                 ruled 2026-10-17). -->
             <div class="lead"><h2 class="t-title">{lockCopy.unlockVault(vaultName)}</h2><div class="cap">{restLine}</div></div>
           {:else if c.kind !== "unlock"}
             <!-- With no step line, the PIN's step heads with its own
@@ -842,7 +856,7 @@
                  no PIN keeps the act's name. -->
             <div class="lead"><h2 class="t-title">{pinLeads(c.kind, form.shows) ? lockCopy.pinLead : actLead}</h2></div>
           {/if}
-          {#if c.slotLabel && c.step !== CeremonyStep.StepManagementKey}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
+          {#if c.slotLabel && c.step !== CeremonyStep.StepManagementKey}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           {#if c.kind === "unlock"}{@render pendingOpen()}{/if}
           {#if store.chosenSent && store.chosenSent === c.promptId}
             <!-- The Choose prompt the dialog's password answered (APP.md
@@ -854,7 +868,7 @@
               <!-- The last try, before it is typed: the consequence and the
                    way out (ruled 2026-10-17). -->
               <div class="bar attention">
-                <svg class="i i-14"><use href="#i-warn" /></svg>
+                <svg class="i"><use href="#i-warn" /></svg>
                 <span class="grow"><strong>{lockCopy.lastTryHead}</strong> {lockCopy.lastTry}</span>
                 {#if offersRecovery}<button type="button" class="btn sm" onclick={() => begin("recovery")}>{lockCopy.useRecoveryKey}</button>{/if}
               </div>
@@ -923,7 +937,7 @@
           <div class="xf">
             {#key touchReceipt}
               <div class="touch-slot" in:fade={xin()} out:fade={xout()}>
-                <svg class="i i-14"><use href={touchStep === CeremonyStep.StepDone ? "#i-unlock" : "#i-yubi"} /></svg>{touchReceipt}
+                <svg class="i"><use href={touchStep === CeremonyStep.StepDone ? "#i-unlock" : "#i-yubi"} /></svg>{touchReceipt}
               </div>
             {/key}
           </div>
@@ -947,7 +961,7 @@
             <div class="lead"><h2 class="t-title">{lockCopy.stoppedWaiting}</h2><div class="cap">{lockCopy.stoppedLine}</div></div>
           {:else}
             <div class="lead"><h2 class="t-title">{stepText(c.step).title}</h2></div>
-            <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
+            <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{codeText(c.error)}</span></div>
           {/if}
           <div class="row">
             {#if restartable && againWay}
@@ -963,9 +977,9 @@
                then one sentence on a danger bar — what it means and, in an
                unlock, the way out — and that way out as the accent (APP.md
                §6, ruled 2026-10-17). -->
-          {#if c.slotLabel}<span class="slotchip"><svg class="i i-14"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
+          {#if c.slotLabel}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           <div class="lead"><h2 class="t-title">{ceremonyCopy.blockedLead}</h2></div>
-          <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{offersRecovery ? ceremonyCopy.blockedMeansWayOut : ceremonyCopy.blockedMeans}</span></div>
+          <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{offersRecovery ? ceremonyCopy.blockedMeansWayOut : ceremonyCopy.blockedMeans}</span></div>
           <div class="row">
             {#if offersRecovery}
               <button type="button" class="btn accent grow" onclick={() => begin("recovery")} use:takeFocus>{lockCopy.useRecoveryKey}</button>
@@ -1012,10 +1026,10 @@
     </div>
     <FirstWayIn bind:this={createFirst} heading={firstMethodCopy.headCreate} attempt={createAttempt} idPrefix="cv" />
     {#if openArchives > 0}
-      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{lockCopy.stillOpen(openArchives)}</span></div>
+      <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{lockCopy.stillOpen(openArchives)}</span></div>
     {:else if rebuild && st}
       <div class="bar attention">
-        <svg class="i i-14"><use href="#i-warn" /></svg>
+        <svg class="i"><use href="#i-warn" /></svg>
         <span>{lockCopy.rebuildFileAt} <span class="mono">{st.missingPath}</span> {lockCopy.rebuildKept}</span>
       </div>
       <label class="check"><input type="checkbox" bind:checked={createConfirm} />{lockCopy.rebuildConsent}</label>
@@ -1063,9 +1077,9 @@
   .path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
   /* The gear beside the state word: a quiet icon button in the header's
      ink. Its 24 px overhang the header's 20 px line by 2 above and below,
-     so the line, and the panel's 14vh under it, do not move. */
+     so the line, and the stage under it, do not move. */
   .gear { margin: -2px 0 -2px var(--s1); padding: 0 var(--s1); color: inherit; }
-  .lockbox { position: relative; width: 14px; height: 14px; display: inline-block; }
+  .lockbox { position: relative; width: 16px; height: 16px; display: inline-block; }
   .lockbox .padlock { position: absolute; inset: 0; }
   /* The open-archives notice: the sentence, then its close and its Show
      on a row under it, 8 apart, as the tampered bar's (TamperedBar). */

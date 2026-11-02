@@ -66,7 +66,7 @@
   <p>{copy.body(n)}</p>
   <!-- When it is needed, said every time: an info line, a sentence and
        not a gate (APP.md §6). -->
-  <p class="infoline"><svg class="i i-14" aria-hidden="true"><use href="#i-info" /></svg><span>{copy.when(n)}{passwordToo ? copy.whenOn : ""}</span></p>
+  <p class="infoline"><svg class="i" aria-hidden="true"><use href="#i-info" /></svg><span>{copy.when(n)}{passwordToo ? copy.whenOn : ""}</span></p>
   <!-- What to be ready for: the idle lock counts real input only, and 48
        digits written by hand is minutes without any. -->
   <p>{copy.ready(minutes, n)}</p>

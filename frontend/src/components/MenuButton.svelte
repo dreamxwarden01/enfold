@@ -194,10 +194,10 @@
     aria-haspopup="menu" aria-expanded={open} aria-controls="{id}-menu"
     onclick={toggle} onkeydown={key} use:tip={tipText}
   >
-    {#if icon}<svg class="i i-14" aria-hidden="true"><use href="#{icon}" /></svg>{/if}
+    {#if icon}<svg class="i" aria-hidden="true"><use href="#{icon}" /></svg>{/if}
     {#if !iconOnly}
       {label}
-      <svg class="i i-14 caret" class:up={open} aria-hidden="true"><use href="#i-chevdown" /></svg>
+      <svg class="i caret" class:up={open} aria-hidden="true"><use href="#i-chevdown" /></svg>
     {/if}
   </button>
   {#if open}
@@ -214,8 +214,8 @@
           tabindex={i === active ? 0 : -1} bind:this={itemEls[i]} onclick={() => choose(i)}
           use:tip={item.cut ? { text: item.label, cut: true } : ""}
         >
-          {#if ticks}<svg class="i i-14 tick" class:on={item.checked} aria-hidden="true"><use href="#i-tick" /></svg>{/if}
-          {#if item.icon}<svg class="i i-14" aria-hidden="true"><use href="#{item.icon}" /></svg>{:else if icons}<span class="i i-14" aria-hidden="true"></span>{/if}
+          {#if ticks}<svg class="i tick" class:on={item.checked} aria-hidden="true"><use href="#i-tick" /></svg>{/if}
+          {#if item.icon}<svg class="i" aria-hidden="true"><use href="#{item.icon}" /></svg>{:else if icons}<span class="i" aria-hidden="true"></span>{/if}
           {#if item.cut}
             <span class="ellipsis cut">{item.label}</span>
           {:else if secondLine(item)}

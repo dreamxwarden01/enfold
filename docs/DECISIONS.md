@@ -5624,3 +5624,101 @@ three. `brand.Mark`, the icon as it stands, is unchanged and its comment says it
 the 96 and 128 px drawings (A.4) and the app icon (A.6) come from Sheet and join the guard; the
 dark flap on the accent line reads 4.55:1 against the line and is for the user's eye in the real
 window.
+
+## 2026-11-02 — Phase 5, group A, part 2: fork D and the frosted panel, the glyphs at 16, the app icon in Go
+
+**Fork D built: the identity drawings, the stage, the floating frosted panel** (2026-11-02).
+`Art.svelte` draws the folded sheet from `brand.Sheet` as static markup — `Sheet(96).Cropped(72)`
+in a 96 × 72 box on the lock stage, `Sheet(128)` at the first run, and the 72 px open box of
+the no-archives state — and `art_test.go` reads it and fails when the data drifts from the
+geometry (six kinds of edit fail it; a whitespace reflow passes). The stage as the judge's
+section 8 and section 5 settle it: the mark first in the column, 64 px down and 8 px clear —
+the judge's "about 164" for the panel's top put the hexagon's bottom corner against the step
+line's words, so the panel's top is 172 (228 at the first run) — then the InfoBars, the notices
+and the step line, so a notice moves the panel and never the mark; the 64 px wash band on the
+panel with the lead on it; the rest panel's padlock gone, since the mark above, the header's
+padlock and the caption say it; on the touch's green the mark fades with the wash's 220 ms and
+keeps its room; the splash and the boot failure draw the mark where the stage does, measured
+identical in CSS and device px at both window sizes, so boot to lock does not jump; the three
+brand rows gone (the vault head rises; the compact rail has no brand); the open box above "No
+archives in this vault yet"; an empty folder kept plain. The user's addition, the panel as a
+floating frosted card: the surface at 92 % over a 24 px backdrop blur, a hairline stroke, a
+two-layer shadow, the band on top; opaque with no blur and no shadow under
+prefers-reduced-transparency, and in a contrast theme Canvas in a CanvasText stroke with no band.
+Found and recorded: where the panel stands the ground's glow from the window's corner has all
+but faded, so the frost lets the ground's colour through and not its glow — at the real tokens
+92 % and 86 % differ by one level (light 254 against 253, opaque 255; dark 42,42,48 against
+42,42,47, opaque 44,44,49) and the mechanism shows only with a loud tint; the sentence now says
+the ground's colour touches the card; 92 % stays, and over real Mica the material may show more
+(group B). The boot failure's panel took the same card, since a Retry that succeeds would
+otherwise change the material under the user. At the 866 × 554 minimum the column is centred on
+the window, not on the scroller (`margin-left: calc(100vw - 2 * var(--s6) - 100%)`, which equals
+the scrollbar's width when one shows), so the states that scroll there — the last try by 47 px,
+a pending touch at rest by 16, a refused recovery key by 13, the Tampered notice at rest by 1 —
+move neither the mark nor the panel; the record says which states scroll. Left for the user: a
+ceremony begun from the first run swaps the 128 px mark for the 96 and the panel rises 56 px as
+it begins (the options: the 96 px mark at the first run too; `Sheet(128).Cropped(96)` for a 24
+px rise; the 128 kept through such a ceremony, whose touch view then scrolls about 40 px at the
+minimum; a transition) — APP records the jump meanwhile; in a contrast theme the mark also
+fades on the touch, where there is no green; the dark shadow reads weaker on screen than the
+light one (1.08:1 against 1.24:1) though its tokens are stronger — the real window decides; the
+sprite's 20 px i-mark has no use left on the page and stays, held by sheet_test.go, for the
+glyph step's or the tray's use.
+
+**The chrome glyphs as option A, built; the row box back to 16** (2026-11-02). The sprite is
+43 symbols drawn by hand on the 20-unit grid for 16 px, one unit a device pixel at 125 %, every
+vertical and horizontal stroke centred on a half unit so a 1.5 px stroke draws one solid pixel
+with a quarter either side (a stroke centred on a grid line, as the brief had it, would draw two
+75 % columns and no solid pixel); one 1.5 weight and one corner radius; Windows' metaphor where
+Windows has one — the gear for Settings (straight teeth, since the icon designer's put the
+cardinal flats off the grid), Explorer's Rename, Move to and View, the folders, and Edit's
+pencil (E70F) as a new `i-edit` for the Archives pane's icon-only *Edit name and description*,
+the review's one major: `i-rename` had been that button's pencil and became Windows' field and
+I-beam, against 2026-10-26's "the edit behind a pencil" and five APP sentences, so the symbol
+was split as `i-box` was; *Compact* has its own glyph, two arrows pressing onto a line, so the
+box means an archive alone (its arrow tips on half units for a 0.64 solid share; the review's
+longer arrows measured 0.49); `i-shield` and `i-save`, which nothing drew, are gone; the 14 px
+size is retired, out of 145 class lists in 25 components, with every margin the 2 px moved
+re-centred; `i-mark` is untouched. The file list's row box is 16 × 16 on the 16 px type glyph's
+rect again, reversing 2026-11-01's 14 as the user ruled with the judge's picks; the header's box
+stays 16. Measured at the native scale: a solid share of 0.60 on the judge's fourteen glyphs
+(option A's mock 0.56, HEAD 0.41) and 0.597 over the set; ClearType fringes greyscale (|R−B|
+4.7); sixteen strokes in place read 0.25/1/0.25 and 1.50 device px in four looks at both window
+sizes; no 14 px glyph, no wrapped label, no button past its kind. Left for the user: the glyphs
+that keep their ruled 20 px — the rail's open archives under the 16 px Archives glyph, a first
+way in's methods, the touch's glyph where a touch stopped waiting — are 25 device px, off the
+grid and visibly softer (the rail shows the two sizes one under the other); NavigationView's
+child size is 16, and the edits for a ruling of 16 are in the notes; the new shapes want the
+real window, with Segoe Fluent beside them as the judge's B.7 asks; an HEIC row wears the plain
+file glyph because the icon's kind is the preview's kind and Chromium cannot show HEIC — a kind
+of the icon's own is a follow-up; the tiers' dots are r 1 and More's and the password's r 1.25,
+disclosed and harmless.
+
+**The application icon drawn in Go from Sheet; the binaries leave the tree** (2026-11-02).
+`brand.Icon(n)` paints the folded sheet in solid facets with no tile, Windows 11's unplated
+idiom: the lit face a lighter tint of the accent, the front shading down to the accent, the face
+beside the flap a darker tint, the flap the sheet's white back shading to a pale tint toward F
+with its outer edge in the accent, clipped to the flap (the study's butt-capped stroke put an
+accent sliver across the top fold), and a fold drawn only as the edge where two facets meet.
+Ten sizes — 16, 20, 24, 30, 32, 40, 48, 64, 128 and 256 — each drawn for its own pixels, the
+sides and the top fold on whole pixels, and below 48 px the figure raised half a pixel where
+that puts its points nearer the middle of their rows, so the 16 px apex is a solid pixel and not
+a smear; the rasteriser gains a polygon fill and a one-pass shade so no seam of the ground shows
+between facets. `brand.ICO` writes the ICONDIR with PNG entries, which Windows reads at every
+size since Vista; `tools/appicon` writes `build/windows/icon.ico` and `build/appicon.png`, and
+`generate:icons` runs only it (`wails3 generate icons`, which scaled one 1024 px PNG down to
+each entry, is no longer used); both files are gitignored and left the index at this landing,
+so brand's "no binary assets in the repository" is true of the tree; the window's fallback icon
+is `Icon(256)`; the tray draws at `SM_CXSMICON` unscaled, today's rings pixel for pixel as at
+HEAD; `brand.Mark`, the Y-cube on a tile, is gone. Tests hold the icon to Sheet, the sides to
+whole pixels, the 16 px solid share (0.85 against 0.17 for the old icon), two facets above 3:1
+on both taskbars, and the .ico's parse; the generator is deterministic. The installer never
+told the shell of the `.efd` association, so Explorer could keep the old icon after an install:
+`SHChangeNotify(SHCNE_ASSOCCHANGED)` now follows both the association and its removal in
+project.nsi, untested until the next package build (makensis is not run here; the .ico was
+PNG-only before as well). Left: sizes 36, 60, 72, 80 and 96 are not drawn, and Windows scales
+the next larger entry there; the tray is drawn once at the system DPI and not redrawn on a DPI
+change; the figure sits half a pixel high at 16, 20, 30 and 32 px, and the 48 and 64 px apex
+rows have no solid pixel; the caption's icon — Wails sets only the large icon, 40 px at 125 %,
+and no small one — is for the real window (B.5), as are the taskbars, Alt+Tab, Start, the
+installer and `.efd` in Explorer.

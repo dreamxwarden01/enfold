@@ -4,9 +4,14 @@
 
 :root {
   color-scheme: light;
-  /* The stage: the lock screen's panel width and top, which the boot
-     failure's panel shares (APP.md §6, §2.4). */
-  --stage-w: 440px; --stage-top: 14vh;
+  /* The stage (APP.md §6, §2.4): the lock screen's column, which the
+     boot failure and the splash share. Its width; where it starts, the
+     mark's top, under the lock header's line (20 of padding, the line's 20
+     and 24 under it); and the surface's share of its floating panel's
+     fill, the rest the blurred ground behind it (the user's ask for fork
+     D, ruled 2026-11-01: "a little is enough", so the ground's colour just
+     touches it). */
+  --stage-w: 440px; --stage-top: 64px; --stage-frost: 92%;
   /* The rail's two widths (APP.md §6, Rail; direction 6, ruled
      2026-10-18): expanded at a window of 1008 px and more, the 48 px
      compact rail of icons below it — 164 px given back to the layer.
@@ -95,6 +100,11 @@
   --shadow-card: 0 1px 2px rgba(16, 17, 20, 0.06), 0 2px 8px rgba(16, 17, 20, 0.05);
   --shadow-pop: 0 8px 24px rgba(16, 17, 20, 0.13);
   --shadow-window: 0 12px 40px rgba(16, 17, 20, 0.16), 0 2px 6px rgba(16, 17, 20, 0.1);
+  /* The lock stage's floating panel (ruled 2026-11-01): a tight shadow at
+     its edge and a wide soft one under it, a little stronger in dark,
+     where a shadow on a dark ground reads less. Two layers in both, so the
+     green can take them to none in one transition. */
+  --shadow-stage: 0 1px 2px rgba(16, 17, 20, 0.08), 0 8px 32px rgba(16, 17, 20, 0.1);
   --r-card: 8px;
   --r-ctl: 4px;
   --r-sm: 3px;
@@ -228,6 +238,7 @@
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
     --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
     --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+    --shadow-stage: 0 1px 2px rgba(0, 0, 0, 0.36), 0 10px 36px rgba(0, 0, 0, 0.36);
   }
 }
 
@@ -292,6 +303,7 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
   --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
   --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-stage: 0 1px 2px rgba(0, 0, 0, 0.36), 0 10px 36px rgba(0, 0, 0, 0.36);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -326,9 +338,14 @@ input, textarea { user-select: text; cursor: text; }
    7.5:1 dark. */
 ::selection { background: var(--accent-line); color: var(--ink); }
 svg { display: block; }
+/* A glyph is 16 px wherever it stands beside words, in a button, a menu,
+   a bar or a row (the phase-5 glyphs, ruled 2026-11-01; buttons and
+   menus drew 14): the sprite is drawn on a 20-unit grid for that size,
+   one unit to a device pixel at 125 %, and 14 px is 17.5 device pixels,
+   which no grid lands on. The few that stand larger keep their 20: the
+   rail's open archives, a first way in's methods, the stopped touch. */
 .i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .i-20 { width: 20px; height: 20px; }
-.i-14 { width: 14px; height: 14px; }
 .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 /* A column of magnitudes is right-aligned, so the digits line up (APP.md
    §6): its header says so with .num, and the cells follow in that table.
@@ -423,9 +440,9 @@ details.how > p { margin: var(--s2) 0 0; color: var(--ink-2); }
    dialog's, ruled 2026-10-18). One rule here for the dialogs that re-key
    (ruled 2026-10-27): the limit of a re-key under the question, and when
    Replace recovery keys… is needed. The icon stands on the first 20 px
-   line, as a bar's does (.bar .i.i-14). */
+   line, as a bar's does (.bar .i). */
 .dialog-body > .infoline { display: flex; align-items: flex-start; gap: var(--s2); color: var(--ink-2); }
-.dialog-body > .infoline .i { flex: none; margin-top: 3px; }
+.dialog-body > .infoline .i { flex: none; margin-top: 2px; }
 .btn.wide { width: 100%; justify-content: center; }
 /* A button that grows to share a row centres its label, as a wide one
    does (APP.md §6, Controls): Continue, Unlock, Start again. */
@@ -571,7 +588,7 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
   display: grid; grid-template-columns: auto auto 1fr auto; align-items: start; gap: 0;
   padding-top: var(--s1); padding-bottom: var(--s1);
 }
-.menu button.two > .i { grid-row: 1; margin-top: 3px; margin-right: var(--s2); }
+.menu button.two > .i { grid-row: 1; margin-top: 2px; margin-right: var(--s2); }
 .menu button.two > .tick { grid-column: 1; }
 .menu button.two > .i:not(.tick) { grid-column: 2; }
 .menu button.two .mlabel { display: contents; }
@@ -646,20 +663,14 @@ input[type="checkbox"]:checked::after { opacity: 1; }
 input[type="checkbox"]:hover:not(:disabled):not(:checked), input[type="radio"]:hover:not(:disabled):not(:checked) { background: var(--ctl-hover); transition-duration: var(--dur-hover); }
 input[type="checkbox"]:active:not(:disabled):not(:checked), input[type="radio"]:active:not(:disabled):not(:checked) { background: var(--ctl-press); transition-duration: 0s; }
 input[type="checkbox"]:checked:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); transition-duration: var(--dur-hover); }
-/* The list's tick-all box is 16 px, so it sits in the header's caption
-   line with the room WinUI gives a checkbox in a list. A row's box is 14
-   (ruled 2026-11-01; it was 16): it shares its 16 px slot with the
-   row's 14 px type icon (.chk-slot, below) and crossfades with it, and at
-   16 it stood a size larger than the icon whose place it takes, so now
-   the two have one footprint. Its tick is the 16 px box's scaled by 14/16
-   about the box's middle, so the arms, the stroke and the lift keep their
-   proportions and the tick its centre. Its corners take the small radius,
-   which keeps them near the 16 px box's share of its side; 4 px would
-   round the smaller box further. */
+/* A checkbox in a list is 16 px, the header's tick-all box and a row's
+   alike, so it sits in the caption line with the room WinUI gives a
+   checkbox in a list. A row's shares its 16 px slot with the row's 16 px
+   type glyph (.chk-slot, below) and crossfades with it, the two on one
+   square (ruled 2026-11-01 with the phase-5 glyphs, which retired the
+   14 px icon that the row's box had shrunk to match the same day). */
 table input[type="checkbox"] { width: 16px; height: 16px; }
 table input[type="checkbox"]::after { width: 7px; height: 4px; }
-tbody input[type="checkbox"] { width: 14px; height: 14px; border-radius: var(--r-sm); }
-tbody input[type="checkbox"]::after { transform: translateY(-0.875px) rotate(-45deg) scale(0.875); }
 /* The radio: when on, an accent ring round a dot of the accent's ink —
    12 px at rest, 14 under the pointer, 10 while pressed. */
 input[type="radio"] { border-radius: 50%; }
@@ -710,9 +721,8 @@ progress:indeterminate { background: var(--accent-line); }
   border: 1px solid var(--stroke); border-radius: var(--r-card);
   background: var(--surface-alt); color: var(--ink-2); font: var(--t-body);
 }
-/* The icon centred on the first 20 px line, whichever of the two sizes. */
+/* The 16 px icon centred on the first 20 px line. */
 .bar .i { margin-top: 2px; color: var(--ink-3); }
-.bar .i.i-14 { margin-top: 3px; }
 .bar.attention { background: var(--attention-wash); border-color: var(--attention-line); color: var(--ink); }
 .bar.attention .i { color: var(--attention); }
 .bar.accent { background: var(--accent-wash); border-color: var(--accent-line); color: var(--ink); }
@@ -727,7 +737,7 @@ progress:indeterminate { background: var(--accent-line); }
    included, which is the 40. It is a minimum, not a cap: a window narrow
    enough to wrap the sentence grows the line rather than cutting it. */
 .bar.line { align-items: center; min-height: 40px; padding: 5px var(--s3); }
-.bar.line .i, .bar.line .i.i-14 { margin-top: 0; }
+.bar.line .i { margin-top: 0; }
 .chip {
   display: inline-flex; align-items: center; gap: var(--s1); height: 22px; padding: 0 var(--s2); border-radius: 11px;
   background: var(--surface-alt); border: 1px solid var(--stroke); font: var(--t-cap); color: var(--ink-2);
@@ -758,13 +768,10 @@ progress:indeterminate { background: var(--accent-line); }
 .scene { position: absolute; inset: 0; }
 .shell { display: grid; grid-template-columns: var(--rail-w) 1fr; height: 100%; }
 @media (width < 1008px) { .shell { grid-template-columns: var(--rail-w-compact) 1fr; } }
-/* The rail's padding and the brand's put the mark's middle on the item
-   icons' line, give or take the item's border pixel (APP.md §6), and the
-   first item stays where it stood: 12 + 8 + 20 + 12. The brand is the
-   strong weight in the display face — a name, not a heading. */
+/* The rail starts with the vault head, 12 px down: the brand row that
+   stood above it went with fork D (APP.md §6, Rail; ruled 2026-11-01),
+   since the window's caption names the app. */
 .rail { position: relative; display: flex; flex-direction: column; padding: var(--s3) var(--s2); gap: 2px; min-width: 0; }
-.brand { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) var(--s3); font: var(--t-strong); font-family: var(--font-display); }
-.brand .mark { width: 20px; height: 20px; flex: none; }
 .rail-item {
   display: flex; align-items: center; gap: var(--s3); height: 36px; padding: 0 var(--s3); border-radius: var(--r-ctl);
   color: var(--ink-2); position: relative; border: 1px solid transparent; background: none;
@@ -843,12 +850,11 @@ progress:indeterminate { background: var(--accent-line); }
 .rail-x:hover, .x20:hover { background: var(--fill-1); color: var(--ink); transition-duration: var(--dur-hover); }
 .rail-x:active, .x20:active { background: var(--fill-2); color: var(--ink-2); transition-duration: 0s; }
 /* The compact rail (direction 6): 48 px, everything on its middle line —
-   the toggle and the padlock as 32 px buttons, the brand mark alone, the
-   items 40 px wide with the app's tooltip for their labels, the op mark on
-   the Archives icon's top-right corner, the open archive's glyph indented
-   4 px under it. */
+   the toggle and the padlock as 32 px buttons, the items 40 px wide with
+   the app's tooltip for their labels, the op mark on the Archives icon's
+   top-right corner, the open archive's glyph indented 4 px under it. No
+   brand (polish-directions.md, direction 6; ruled 2026-11-01). */
 .rail.compact { padding: var(--s2) var(--s1); align-items: center; }
-.rail.compact .brand { padding: var(--s2) 0; }
 .rail.compact .rail-item { width: 40px; padding: 0; justify-content: center; }
 .rail.compact .rail-child { padding-left: var(--s2); }
 .rail.compact .rail-foot { align-self: stretch; display: flex; justify-content: center; }
@@ -861,10 +867,11 @@ progress:indeterminate { background: var(--accent-line); }
 .rail-btn:active { background: var(--fill-2); color: var(--ink-2); transition-duration: 0s; }
 .rail-btn.vault-state { margin-bottom: var(--s2); }
 .rail-ico { position: relative; display: grid; place-items: center; }
-/* On the compact rail's 20 px icon the mark sits off its top-right corner,
-   not on it: the 14 px ring over the glyph's lid read as a clipped icon
-   (the final shoot of phase 4a), so the compact ring is 10 px, still 2 px
-   thick, and stands out past the corner by most of its size. */
+/* On the compact rail's 16 px Archives glyph the mark sits off its
+   top-right corner, not on it: the 14 px ring over the glyph's lid read
+   as a clipped icon (the final shoot of phase 4a), so the compact ring is
+   10 px, still 2 px thick, and stands out past the corner by most of its
+   size. */
 .rail.compact .rail-mark { right: -6px; top: -5px; margin-top: 0; width: 7px; height: 7px; }
 .rail.compact .rail-mark.ring { right: -9px; top: -8px; width: 10px; height: 10px; }
 /* The flyout the toggle opens (NavigationView's labels): the menu's
@@ -1034,19 +1041,36 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .two-line small { font: var(--t-cap); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
 .empty { padding: calc(2 * var(--s5)) var(--s5); text-align: center; color: var(--ink-2); }
 
+/* ---------- the identity drawings (Art.svelte; APP.md §6) ---------- */
+/* Fork D's line drawings (ruled 2026-11-01): the folded sheet on the lock
+   stage and the first run, the open box of a vault with no archives. In
+   the tokens alone: the outline and the folds in the accent, the crease in
+   the accent too, the lines of writing and the box's inside corner in the
+   third ink, the body in the accent's wash, the sheet's flap in its own
+   token, the box's flaps in the surface and its inside in the surface's
+   alternate. The strokes' widths are the drawings' own (1.6 and 1.2, from
+   internal/brand), so nothing here may set one. No gradient and no motion
+   of their own. */
+.idart { display: block; flex: none; overflow: visible; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.idart .art-fill { fill: var(--accent-wash); }
+.idart .art-flap { fill: var(--mark-flap); }
+.idart .art-paper { fill: var(--surface); }
+.idart .art-inside { fill: var(--surface-alt); }
+.idart :is(.art-line, .art-crease) { stroke: var(--accent); }
+.idart .art-thin { stroke: var(--ink-3); }
+
 /* ---------- lock screen ---------------------------------------- */
 /* One stage (APP.md §6, ruled 2026-10-17; the ruling of 2026-09-06 built
-   at last): the header, the notices, the step line and one panel that
-   changes in place, centred, its top at about 14vh. The section is its
-   own stacking context, so the touch's wash sits under everything in it
-   without a z-index on each child. The stage scrolls inside it
-   (.u-scroll), so the wash, pinned to the section, covers the window
-   however far a short one scrolls. Its sizes are named here: what stands
-   above the panel and the rings (the step disc is the line's own, below);
-   the panel's width and top are :root's, shared with the boot failure's
-   panel. */
+   at last; fork D's face, ruled 2026-11-01): the header, then the stage's
+   column, centred: the mark, the InfoBars, the notices, the step line and
+   one panel that changes in place. The section is its own stacking
+   context, so the touch's wash sits under everything in it without a
+   z-index on each child. The stage scrolls inside it (.u-scroll), so the
+   wash, pinned to the section, covers the window however far a short one
+   scrolls. The rings' size is named here; the column's width and start
+   are :root's, shared with the boot failure and the splash. */
 .unlock {
-  --stage-above: 92px; --rings-big: 160px;
+  --rings-big: 160px;
   position: relative; isolation: isolate; height: 100%; overflow: hidden;
 }
 .u-scroll { display: flex; flex-direction: column; padding: var(--s5) var(--s6) var(--s6); height: 100%; overflow: auto; }
@@ -1065,34 +1089,40 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .unlock { color: var(--ink); transition: color var(--dur-out) var(--ease-exit); }
 .unlock.green { color: var(--touch-ink); transition: color var(--dur-move) var(--ease-enter); }
 .unlock.green .wash { opacity: 1; transition: opacity var(--dur-move) var(--ease-enter); }
-/* The header's line is centred on the brand's (30 px from the top: the
-   rail's 12, the brand's 8, half its 20 px line) and the stage starts
-   24 px under it. */
-/* Its line is the brand's 20 px whatever it holds — the state word's 16,
-   or the gear's 24 overhanging it — so the stage starts at 64 px in every
-   state and the panel never moves (the min-height counts the padding:
-   border-box). */
+/* The header's line: the state word at the right, on a 20 px line
+   whatever it holds — the word's 16, or the gear's 24 overhanging it — so
+   the stage starts 64 px down in every state (20 of padding, the line's 20
+   and its 24: :root's --stage-top, where the splash and the boot failure
+   start too) and nothing under it moves (the min-height counts the
+   padding: border-box). No brand: the window's caption names the app
+   (APP.md §6; ruled 2026-11-01). */
 .u-head { display: flex; align-items: center; gap: var(--s2); flex: none; min-height: calc(20px + var(--s6)); padding: 0 0 var(--s6); }
-/* The brand sits where the rail's does, to the pixel — the scene's corner,
-   the rail's padding, then the brand's own — so it stays put across every
-   lock and unlock (APP.md §6, Motion). The section is the scene's full
-   width, so its corner is the scene's. Until the window has a caption to
-   carry the name, and then neither scene draws one. */
-.u-head .brand { position: absolute; top: var(--s3); left: var(--s2); }
-.u-head .state { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); }
-.u-head .brand, .u-head .state { transition: color var(--dur-out) var(--ease-exit); }
-.unlock.green .u-head .brand, .unlock.green .u-head .state { color: var(--touch-soft); transition: color var(--dur-move) var(--ease-enter); }
-/* The mark draws in the accent, its wash and its flap (Icons.svelte), which
-   on the green read as a white tile in light and an outline in dark: there
-   it takes the brand's ink and no fill, alike in both themes. */
-.unlock.green .u-head .brand .mark { --accent: currentColor; --accent-wash: transparent; --mark-flap: transparent; }
-/* The panel's top lands at 14vh: the stage starts 64 px down (20 of
-   padding, the header's 20 and its 24) and the step line takes 28 of
-   the rest. */
+.u-head .state { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-2); font: var(--t-cap); transition: color var(--dur-out) var(--ease-exit); }
+.unlock.green .u-head .state { color: var(--touch-soft); transition: color var(--dur-move) var(--ease-enter); }
 /* .u-stage, not .stage: the scene's own .stage (above) is the window's
    full height, and the lock's stage must be its content's, or an empty
-   rest panel scrolls. */
-.u-stage { display: flex; flex-direction: column; align-items: center; flex: none; padding-top: max(0px, calc(var(--stage-top) - var(--stage-above))); }
+   rest panel scrolls. Its column is centred on the window, not on the
+   scroller: in a window too short for the column the scroller's bar takes
+   its width from the content's right, and would move the column, the mark
+   with it, half that to the left. So a left margin of the bar's width
+   mirrors it: the window's width less the two sides and the content's
+   width, 0 while nothing scrolls, since the lock scene is the window's
+   full width (APP.md §6). */
+.u-stage { display: flex; flex-direction: column; align-items: center; flex: none; margin-left: calc(100vw - 2 * var(--s6) - 100%); }
+/* The stage's mark (fork D; Art.svelte): the first thing in the column,
+   above the InfoBars, the notices and the step line, so a notice arriving
+   moves the panel and never the mark. The 96 px sheet stands in its box
+   cropped to 72, and 8 px under it: the crop leaves no air below the
+   hexagon's bottom corner, which touched the step line's words. So the
+   panel's top lands at 64 + 72 + 8 + the step line's 28 = 172 px in every
+   window height; the first run's 128 px one puts it at 228. On the touch's
+   green the mark gives way: its opacity goes to 0 with the wash, over the
+   same 220 ms in and 160 ms out, and its room is kept, so nothing moves
+   and the touch stays exactly as direction 1 draws it. The splash and the
+   boot failure draw it at the same place (App.svelte). */
+.stage-mark { display: flex; justify-content: center; flex: none; width: 100%; margin-bottom: var(--s2); }
+.unlock .stage-mark { transition: opacity var(--dur-out) var(--ease-exit); }
+.unlock.green .stage-mark { opacity: 0; transition: opacity var(--dur-move) var(--ease-enter); }
 .notices { width: min(var(--stage-w), 100%); display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s3); }
 /* The step line: a caption, the done steps in the second ink behind an
    accent disc with a check, the live one in ink at 600, the rest in the
@@ -1122,18 +1152,52 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .unlock.green .steps .live, .dialog.green .steps .live { color: var(--touch-ink); }
 .unlock.green .steps .disc, .dialog.green .steps .disc { border-color: var(--touch-ring); }
 .unlock.green .steps .done .disc, .dialog.green .steps .done .disc { background: var(--touch-ink); border-color: transparent; color: var(--touch-bg-2); }
-/* The panel: 440 px, 28 px in, a flat 1 px stroke. Its views share one
-   grid cell, so the old one leaves where the new one arrives. On the
-   green its fill and stroke fade, and it dissolves into the stage. Every
-   rule is under .unlock: the dialogs' CeremonyPanel is a .panel too, and
-   keeps its own frame (APP.md §13). */
-.unlock .panel {
-  width: min(var(--stage-w), 100%); box-sizing: border-box; padding: calc(var(--s6) + var(--s1));
-  display: grid; background-color: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card);
-  transition: background-color var(--dur-out) var(--ease-exit), border-color var(--dur-out) var(--ease-exit);
+/* The panel: 440 px, 28 px in, and a floating frosted card (the user's
+   ask for fork D, ruled 2026-11-01): the surface at --stage-frost over a
+   24 px blur of what is behind it, so the ground's colour just touches
+   it. Not its glow, which rises from the window's top-left corner and has
+   all but faded where the panel stands: the card reads a level or two
+   from opaque in either theme, with no hue of the glow's. It has a
+   hairline 1 px stroke and --shadow-stage under it. The boot failure's
+   panel stands where this one does and is made the same (App.svelte).
+   Opaque, unblurred and unshadowed where the user asks for less
+   transparency (below) and in a contrast theme (the block at the end).
+   Its views share one grid cell, so the old one leaves where the new one
+   arrives. On the green its fill, stroke, shadow and blur go, and it
+   dissolves into the stage. Every rule is under .unlock: the dialogs'
+   CeremonyPanel is a .panel too, and keeps its own frame (APP.md §13). */
+.unlock .panel, .boot-failed {
+  position: relative; border: 1px solid var(--stroke); border-radius: var(--r-card);
+  background-color: color-mix(in srgb, var(--surface) var(--stage-frost), transparent);
+  backdrop-filter: blur(24px);
+  box-shadow: var(--shadow-stage);
 }
-.unlock.green .panel { background-color: transparent; border-color: transparent; transition-duration: var(--dur-move); transition-timing-function: var(--ease-enter); }
-.unlock .views { display: grid; min-width: 0; }
+.unlock .panel {
+  width: min(var(--stage-w), 100%); box-sizing: border-box; padding: calc(var(--s6) + var(--s1)); display: grid;
+  transition: background-color var(--dur-out) var(--ease-exit), border-color var(--dur-out) var(--ease-exit),
+    box-shadow var(--dur-out) var(--ease-exit), backdrop-filter var(--dur-out) var(--ease-exit);
+}
+.unlock.green .panel {
+  background-color: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none;
+  transition-duration: var(--dur-move); transition-timing-function: var(--ease-enter);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .unlock .panel, .boot-failed { background-color: var(--surface); backdrop-filter: none; box-shadow: none; }
+}
+/* The wash across the panel's top 64 px (fork D): the accent's wash fading
+   into the panel's fill, the lead standing on it. It is the panel's, not
+   the window's, so it never meets the ground's glow (or Mica). A
+   pseudo-element, absolutely placed, so it takes no cell of the panel's
+   grid; the views are placed too, so they paint over it. It goes with the
+   panel's fill on the green. */
+.unlock .panel::before {
+  content: ""; position: absolute; inset: 0 0 auto; height: 64px; pointer-events: none;
+  border-radius: calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0 0;
+  background: linear-gradient(var(--accent-wash), transparent);
+  transition: opacity var(--dur-out) var(--ease-exit);
+}
+.unlock.green .panel::before { opacity: 0; transition: opacity var(--dur-move) var(--ease-enter); }
+.unlock .views { position: relative; display: grid; min-width: 0; }
 /* While a view crosses in, the panel's height eases from the old view's to
    the new one's (Lock.svelte sized; APP.md §6, Motion: Unlock), and what
    overhangs it is clipped at the panel's stroke, not at the views' box, so
@@ -1155,7 +1219,7 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .unlock .panel .then { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s1); }
 .unlock .panel .restlock, .cer-panel .restlock { color: var(--ink-3); }
 .unlock .panel .infoline, .cer-panel .infoline { display: flex; align-items: flex-start; gap: var(--s2); font: var(--t-cap); color: var(--ink-2); }
-.unlock .panel .infoline .i, .cer-panel .infoline .i { flex: none; margin-top: 1px; color: var(--ink-3); }
+.unlock .panel .infoline .i, .cer-panel .infoline .i { flex: none; color: var(--ink-3); }
 /* An attention line: the icon and the words in the attention ink, with no
    box — the boxed bar is kept for the last try and the kept copy (the
    Smart Card service not running, a broken vault; ruled 2026-10-17). */
@@ -1164,7 +1228,6 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
    4a): the file's name in the ink, and the 20 px × that forgets it on the
    line's middle. */
 .unlock .panel .infoline.pending-open { align-items: center; }
-.unlock .panel .infoline.pending-open .i { margin-top: 0; }
 .unlock .panel .infoline.pending-open strong { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 /* Words that cross-fade in one place: both in one cell, a gap apart. */
 .xf { display: grid; justify-items: center; width: 100%; }
@@ -1388,8 +1451,8 @@ tbody tr.refused td.sel-mark { padding-top: var(--s2); }
 .arch-split tbody tr[aria-selected="true"] > td:first-child::before { top: 18px; }
 /* The header's word stands over the names, as on the file list (ruled
    2026-10-26), not over the archive glyph: the row's 4 px end and 12 px
-   padding, the 14 px glyph and its 8 px gap, 38 px from the card's edge. */
-.arch-split thead th:first-child { padding-left: calc(var(--s3) + var(--s1) + 14px + var(--s2)); }
+   padding, the 16 px glyph and its 8 px gap, 40 px from the card's edge. */
+.arch-split thead th:first-child { padding-left: calc(var(--s3) + var(--s1) + 16px + var(--s2)); }
 tbody tr.refused td.sel-mark { white-space: normal; overflow: visible; }
 /* The note starts under the name's first letter, which is the cell's own
    edge since the type icon moved into the check column's slot (ruled
@@ -1428,7 +1491,7 @@ p.dim { color: var(--ink-2); }
    2026-10-17). */
 .file-split .chk input, .arch-split .chk input { display: grid; cursor: default; }
 /* The slot: one 16 × 16 grid cell, the box and the icon after it stacked
-   in it, the 14 px box and the 14 px icon centred on one footprint. It
+   in it, the 16 px box and the 16 px icon on its one square. It
    is block-level like the box it wraps, so it stands where the box
    stood, 10 px under the row's top, and in a refused row on the name's
    first line (above). The icon keeps the third ink it had beside the
@@ -1705,7 +1768,7 @@ tbody tr.up .fname { color: var(--ink-2); }
      drawn inside it: the panel clips its own box. */
   .details-head .head-tap { position: absolute; inset: 0; }
   .details-head .head-tap:focus-visible { outline-offset: -2px; box-shadow: none; }
-  .details-head .head-acts { display: flex; align-items: center; gap: var(--s2); position: absolute; right: 38px; top: var(--s2); z-index: 1; }
+  .details-head .head-acts { display: flex; align-items: center; gap: var(--s2); position: absolute; right: 40px; top: var(--s2); z-index: 1; }
   /* The cross-fade is the script's, not a transition of its own: the two
      opacities are a function of the card's height, written from the same
      frame as the height and the scroll (APP.md §6, one frame clock), so a
@@ -1714,10 +1777,10 @@ tbody tr.up .fname { color: var(--ink-2); }
      card's, which is what the panel starts and ends at. */
   /* Both shapes start at the card's inset; the stack — a 16 px caption
      over a 22 px name — sits 12 px down the 64. */
-  .details-head .head-stack { position: absolute; left: var(--s4); right: calc(42px + var(--acts, 0px)); top: var(--s3); opacity: 0; will-change: opacity; }
+  .details-head .head-stack { position: absolute; left: var(--s4); right: calc(44px + var(--acts, 0px)); top: var(--s3); opacity: 0; will-change: opacity; }
   .details-head .head-stack h3 { margin-top: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .details-head .head-line {
-    position: absolute; left: var(--s4); right: calc(38px + var(--acts, 0px)); top: 0; height: var(--panel-line);
+    position: absolute; left: var(--s4); right: calc(40px + var(--acts, 0px)); top: 0; height: var(--panel-line);
     display: flex; align-items: center; gap: var(--s2); min-width: 0; will-change: opacity;
   }
   .details-head .head-line .eyebrow { flex: none; }
@@ -1727,7 +1790,7 @@ tbody tr.up .fname { color: var(--ink-2); }
      middle in both shapes, so the growth never moves it. Its turn stays a
      transition — a transform the compositor runs, which reverses on
      itself and lands where the class says whatever the motion did. */
-  .details-head .chev { display: block; position: absolute; right: var(--s3); top: 15px; color: var(--ink-3); transition: transform var(--dur-move) var(--ease-enter); }
+  .details-head .chev { display: block; position: absolute; right: var(--s3); top: 14px; color: var(--ink-3); transition: transform var(--dur-move) var(--ease-enter); }
   .details-head .chev.up { transform: rotate(180deg); }
   .details.no-row .head-line .eyebrow { opacity: 0.5; }
   /* With nothing selected the line cannot open, so it offers no chevron
@@ -1904,7 +1967,7 @@ tbody tr.up .fname { color: var(--ink-2); }
   border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface); box-shadow: var(--shadow-pop);
   font: var(--t-body); color: var(--ink); text-align: left;
 }
-.ibar > .i { margin-top: 7px; color: var(--ink-2); }
+.ibar > .i { margin-top: 6px; color: var(--ink-2); }
 .ibar.success > .i { color: var(--accent-ink); }
 .ibar.error { background: var(--danger-wash); border-color: var(--danger-line); }
 .ibar.error > .i { color: var(--danger); }
@@ -1984,6 +2047,19 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
      contrast theme. */
   #i-mark .mark-fill, #i-mark .mark-flap { fill: Canvas; }
   #i-mark .mark-line { stroke: CanvasText; }
+  /* The identity drawings (Art.svelte) the same way, line drawings in the
+     system's two inks: the outline, the folds and the crease in
+     CanvasText, the lines of writing and the box's inside corner in
+     GrayText, and every fill the Canvas. */
+  .idart :is(.art-line, .art-crease) { stroke: CanvasText; }
+  .idart .art-thin { stroke: GrayText; }
+  .idart :is(.art-fill, .art-flap, .art-paper, .art-inside) { fill: Canvas; }
+  /* The lock stage's floating panel, and the boot failure's: opaque Canvas
+     in a CanvasText stroke, with no blur, no shadow and no wash band (a
+     gradient is not a system colour, and the engine would drop it). On the
+     touch the panel's own green rule still takes its fill away. */
+  .unlock .panel, .boot-failed { background-color: Canvas; backdrop-filter: none; box-shadow: none; border-color: CanvasText; }
+  .unlock .panel::before { display: none; }
   /* The key art (KeyArt.svelte) in fork D's two weights: the YubiKey's
      lines in CanvasText, the port it goes into in GrayText, every fill the
      Canvas, and the LED, which is what the art signals, in Highlight. */

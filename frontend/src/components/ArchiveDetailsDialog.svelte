@@ -115,7 +115,7 @@
 <Dialog title={technicalCopy.titleOf(d.name)} wide onclose={onclose} dismissable>
   {#if d.description}<p class="t-sub">{d.description}</p>{/if}
   {#if purge}
-    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{chipCopy.forgottenOn(date(d.forgottenAt))}. Its key is dropped at the first unlock after {date(purge)}.</span></div>
+    <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{chipCopy.forgottenOn(date(d.forgottenAt))}. Its key is dropped at the first unlock after {date(purge)}.</span></div>
   {/if}
 
   <!-- The record's values in the one label · value list (APP.md §6, Type

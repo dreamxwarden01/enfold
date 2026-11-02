@@ -3,6 +3,7 @@
   import { store } from "./lib/state.svelte";
   import { bootCopy, codeText } from "./lib/strings";
   import Icons from "./components/Icons.svelte";
+  import Art from "./components/Art.svelte";
   import NoticeSlot from "./components/NoticeSlot.svelte";
   import Rail from "./components/Rail.svelte";
   import Lock from "./components/Lock.svelte";
@@ -131,30 +132,33 @@
 <Icons />
 <!-- Nothing is drawn until the first status is accepted (APP.md §2.4):
      the splash, then the scene that status names — never the lock scene
-     on no evidence. A first status that failed is a panel where the lock
-     screen's stands (direction 9): the brand, the heading, the code's
-     sentence and three ways on — and nothing of the vault. -->
+     on no evidence. The splash is the lock stage's mark at the stage's
+     place, over the app's name, so the lock scene arrives under a mark
+     that does not move (fork D, ruled 2026-11-01). A first status that
+     failed is a panel where the lock screen's stands (direction 9), under
+     the same mark: the heading, the code's sentence and three ways on —
+     and nothing of the vault. -->
 {#if !store.booted}
   <div class="splash">
-    {#if store.bootFailed}
-      <!-- Its InfoBars (Copy details, Open data folder) stand where the lock
-           screen's do: at the top of the panel's column, above it. -->
-      <div class="boot-stack">
-      <NoticeSlot flow />
-      <div class="boot-failed" role="alert">
-        <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
-        <h1 class="t-title">{bootCopy.title}</h1>
-        <p>{store.bootFailed}</p>
-        <div class="row">
-          <button type="button" class="btn accent" onclick={() => void store.refreshAll()} use:focusFirst>{bootCopy.retry}</button>
-          <button type="button" class="btn" onclick={() => void openDataFolder()}>{bootCopy.openFolder}</button>
-          <button type="button" class="btn" onclick={() => void copyDetails()}>{bootCopy.copyDetails}</button>
+    <div class="boot-stack">
+      <div class="stage-mark"><Art kind="stage" /></div>
+      {#if store.bootFailed}
+        <!-- Its InfoBars (Copy details, Open data folder) stand where the
+             lock screen's do: under the mark, above the panel. -->
+        <NoticeSlot flow />
+        <div class="boot-failed" role="alert">
+          <h1 class="t-title">{bootCopy.title}</h1>
+          <p>{store.bootFailed}</p>
+          <div class="row">
+            <button type="button" class="btn accent" onclick={() => void store.refreshAll()} use:focusFirst>{bootCopy.retry}</button>
+            <button type="button" class="btn" onclick={() => void openDataFolder()}>{bootCopy.openFolder}</button>
+            <button type="button" class="btn" onclick={() => void copyDetails()}>{bootCopy.copyDetails}</button>
+          </div>
         </div>
-      </div>
-      </div>
-    {:else}
-      <div class="brand"><svg class="mark i" viewBox="0 0 20 20"><use href="#i-mark" /></svg>Enfold</div>
-    {/if}
+      {:else}
+        <div class="splash-name">Enfold</div>
+      {/if}
+    </div>
   </div>
 {:else}
   <div class="stage">
@@ -225,22 +229,31 @@
 {/if}
 
 <style>
-  .splash { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ink-2); }
-  /* The boot failure's panel stands where the lock screen's does: 440 px,
-     its top at 14vh, 28 px in, a flat 1 px stroke (app.css .unlock .panel;
-     APP.md §6). The splash's centring gives way to it. */
-  .splash:has(.boot-failed) { align-items: flex-start; padding: 0 var(--s6); }
-  /* The panel's column, its top at 14vh: the notice slot first, empty but
-     for the InfoBars, in flow above the panel (app.css .nslot.flow). */
-  .boot-stack { width: min(var(--stage-w), 100%); margin-top: var(--stage-top); display: flex; flex-direction: column; }
+  /* The splash and the boot failure are the lock stage's column (APP.md
+     §2.4, §6): 440 px, centred between the lock scene's 24 px sides, from
+     the stage's start (--stage-top, the lock header's 64 px) — the mark
+     there, where the lock stage draws it, so neither a boot that goes on
+     to the lock scene nor a Retry that does moves it. Scrolls, as the lock
+     stage does, in a window too short for it. */
+  .splash { height: 100%; display: flex; justify-content: center; align-items: flex-start; padding: var(--stage-top) var(--s6) var(--s6); overflow: auto; color: var(--ink-2); }
+  /* The column: the mark, then the notice slot, empty but for the
+     InfoBars, in flow above the panel (app.css .nslot.flow). Centred on
+     the window, not on the scroller, as the lock stage's is (app.css
+     .u-stage): a left margin of the scroller's bar's width, 0 while
+     nothing scrolls, so a bar that shows does not move the mark. */
+  .boot-stack { width: min(var(--stage-w), 100%); display: flex; flex-direction: column; flex: none; margin-left: calc(100vw - 2 * var(--s6) - 100%); }
+  /* The app's name under the mark, the strong weight in the display face —
+     a name, not a heading. With the brand rows gone, the splash and the
+     window's caption are where the name is written (ruled 2026-11-01). */
+  .splash-name { align-self: center; font: var(--t-strong); font-family: var(--font-display); }
+  /* The boot failure's panel stands where the lock screen's does: 28 px
+     under the mark's room (the room of the lock stage's step line, 16 and
+     12 under it), 440 px, 28 px in, the same floating frosted card (app.css
+     .unlock .panel, .boot-failed; APP.md §6). */
   .boot-failed {
-    width: 100%; box-sizing: border-box; padding: calc(var(--s6) + var(--s1));
+    width: 100%; box-sizing: border-box; margin-top: calc(16px + var(--s3)); padding: calc(var(--s6) + var(--s1));
     display: flex; flex-direction: column; gap: var(--s3); color: var(--ink);
-    background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card);
   }
-  /* The brand as the lock scene's header draws it, without the rail's
-     inset: it heads the panel. */
-  .boot-failed .brand { padding: 0 0 var(--s1); }
   .boot-failed p { margin: 0; color: var(--ink-2); }
   .boot-failed .row { flex-wrap: wrap; margin-top: var(--s1); }
 </style>

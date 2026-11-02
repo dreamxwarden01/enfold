@@ -170,7 +170,7 @@
   {#if inspecting}
     <p>Reading the file…</p>
   {:else if problem}
-    <div class="bar danger"><svg class="i i-14"><use href="#i-error" /></svg><span>{problem}</span></div>
+    <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{problem}</span></div>
   {:else if info}
     <dl class="kv">
       <dt>{vaultCopy.inspected.kind}</dt><dd>{isBackup ? vaultCopy.inspected.backup : vaultCopy.inspected.vault}</dd>
@@ -194,14 +194,14 @@
          does to this vault and before the choice of how it unlocks (the
          dialog's comment, above). -->
     {#if openArchives > 0}
-      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{openArchives} archive{openArchives === 1 ? " is" : "s are"} still open. Close them first: their saves would land in the wrong vault.</span></div>
+      <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{openArchives} archive{openArchives === 1 ? " is" : "s are"} still open. Close them first: their saves would land in the wrong vault.</span></div>
     {:else if kept && st}
       <!-- The vault this replaces may still hold its state from before its
            last change (VaultStatus.retireOwed): the copy kept of it then
            opens with what that change removed, so the bar says so after its
            own unlock methods (ruled 2026-10-27). -->
       <div class="bar attention">
-        <svg class="i i-14"><use href="#i-warn" /></svg>
+        <svg class="i"><use href="#i-warn" /></svg>
         <span>{eff === "inplace" ? "Enfold switches to this file from" : "This replaces"} <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {eff === "inplace" || st.keptElsewhere ? `It stays where it is${st.keptElsewhere ? ", at " + st.path : ""}, untouched` : "It is kept as a dated copy in Enfold's folder, never deleted"}: its own unlock methods still open it, and archives only it holds open only with it.{st.retireOwed ? ` ${importCopy.replacedOwes}` : ""}</span>
       </div>
       <label class="check"><input type="checkbox" bind:checked={confirm} />{eff === "inplace" ? "Switch to this file" : "Replace this vault"} ({st.displayName})</label>

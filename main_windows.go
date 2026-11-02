@@ -145,7 +145,10 @@ func main() {
 	opts := application.Options{
 		Name:        appName,
 		Description: "Compression and encryption archives, unlocked by a YubiKey.",
-		Icon:        brand.PNG(brand.Mark(256, false)),
+		// The window takes its icon from the executable's resources, the
+		// .ico through the .syso; Wails falls back to this one, the .ico's
+		// 256 px drawing, when a build carries none.
+		Icon: brand.PNG(brand.Icon(256)),
 		Services: []application.Service{
 			application.NewService(vault),
 			application.NewService(archives),

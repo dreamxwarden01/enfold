@@ -79,7 +79,7 @@
   <p>{copy.body}</p>
   {#if asks}
     <RekeyQuestion legend={q.legend} rekey={q.rekey} keep={q.keep} bind:answer />
-    <p class="infoline"><svg class="i i-14" aria-hidden="true"><use href="#i-info" /></svg><span>{limit}</span></p>
+    <p class="infoline"><svg class="i" aria-hidden="true"><use href="#i-info" /></svg><span>{limit}</span></p>
     <BackupChoice {act} rekey={answer === "rekey"} bind:ticked />
   {/if}
   <!-- The body keeps to 2 sentences; that the password is chosen next

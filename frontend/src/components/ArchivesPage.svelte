@@ -58,6 +58,7 @@
   import MenuButton from "./MenuButton.svelte";
   import type { MenuItem } from "./MenuButton.svelte";
   import ContextMenu from "./ContextMenu.svelte";
+  import Art from "./Art.svelte";
 
   // The selection (direction 6, phase 4a): one archive, by id — a click
   // selects it, the arrows move it, and Shift and Ctrl add nothing here.
@@ -1696,10 +1697,10 @@
        button, pressed while the view is shown. -->
   {#if unlocked && (forgottenAll.length > 0 || view === "forgotten")}
     <button type="button" class="chip fchip" class:on={view === "forgotten"} aria-pressed={view === "forgotten"} title={view === "forgotten" ? archivesCopy.forgottenChipClose : archivesCopy.forgottenChipOpen} onclick={toggleForgotten}>
-      {#if view === "forgotten"}<svg class="i i-14" aria-hidden="true"><use href="#i-x" /></svg>{/if}{archivesCopy.forgottenChip(forgottenAll.length)}
+      {#if view === "forgotten"}<svg class="i" aria-hidden="true"><use href="#i-x" /></svg>{/if}{archivesCopy.forgottenChip(forgottenAll.length)}
     </button>
   {/if}
-  {#if !unlocked}<span class="chip"><svg class="i i-14"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}
+  {#if !unlocked}<span class="chip"><svg class="i"><use href="#i-lock" /></svg>{chipCopy.locked}</span>{/if}
 </div>
 
 <!-- The page is a drop target with no data-archive-id: Wails emits a drop
@@ -1721,15 +1722,15 @@
          operation and closes it again. -->
     <div class="cmdbar oneline" bind:this={barEl}>
       <button type="button" class="btn accent" data-bar="fixed" disabled={!one || (!unlocked && !one.open) || !!rowStop} title={!one ? archivesCopy.selectFirst : rowWhy} onclick={() => one && openArchive(one.id)} use:waiting={{ on: opening?.p ?? null, armed: (b) => (openArmed = b) }}><PendingLabel armed={openArmed} icon="i-open" rest={commandCopy.open} busy={pendingCopy.opening} /></button>
-      <button type="button" class="btn" data-bar="fixed" disabled={!unlocked || tampered} title={opReason ?? keyTitles.newArchive} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
+      <button type="button" class="btn" data-bar="fixed" disabled={!unlocked || tampered} title={opReason ?? keyTitles.newArchive} onclick={openCreate}><svg class="i"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
       <!-- Never greyed: the chain answers a locked vault with the lock
            scene, and a file whose key is not here with its own dialog, as
            for a double-click in Explorer (APP.md §14). -->
-      <button type="button" class="btn subtle" data-bar="fixed" title={keyTitles.openFile} onclick={() => void openFile()}><svg class="i i-14"><use href="#i-file" /></svg>{archivesCopy.openFile}</button>
+      <button type="button" class="btn subtle" data-bar="fixed" title={keyTitles.openFile} onclick={() => void openFile()}><svg class="i"><use href="#i-file" /></svg>{archivesCopy.openFile}</button>
       {#if kept > 0}<div class="sep"></div>{/if}
-      {#if kept > 0}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={refreshFingerprint}><svg class="i i-14"><use href="#i-check" /></svg>{commandCopy.refreshFingerprint}</button>{/if}
-      {#if kept > 1}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={askCompact}><svg class="i i-14"><use href="#i-box" /></svg>{commandCopy.compact}</button>{/if}
-      {#if kept > 2}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={askRekey}><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</button>{/if}
+      {#if kept > 0}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={refreshFingerprint}><svg class="i"><use href="#i-check" /></svg>{commandCopy.refreshFingerprint}</button>{/if}
+      {#if kept > 1}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={askCompact}><svg class="i"><use href="#i-compact" /></svg>{commandCopy.compact}</button>{/if}
+      {#if kept > 2}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={askRekey}><svg class="i"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</button>{/if}
       <div class="barslot" data-bar="fixed"><MenuButton id="arch-more" label={archivesCopy.more} title={one ? archivesCopy.more : archivesCopy.selectFirst} icon="i-more" iconOnly disabled={!one} items={barMore} /></div>
       <div class="grow"></div>
       <label class="filterbox" data-bar="fixed"><span class="vh">{archivesCopy.filter}</span><input class="input" type="search" placeholder={archivesCopy.filter} title={keyTitles.filter} bind:this={filterEl} bind:value={filter} use:fieldMenu /></label>
@@ -1739,9 +1740,9 @@
          measured (lib/cmdbar.ts). -->
     <div class="cmdbar verb-probe" aria-hidden="true" inert bind:this={verbProbe}>
       <div class="sep"></div>
-      <span class="btn subtle"><svg class="i i-14"><use href="#i-check" /></svg>{commandCopy.refreshFingerprint}</span>
-      <span class="btn subtle"><svg class="i i-14"><use href="#i-box" /></svg>{commandCopy.compact}</span>
-      <span class="btn subtle"><svg class="i i-14"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</span>
+      <span class="btn subtle"><svg class="i"><use href="#i-check" /></svg>{commandCopy.refreshFingerprint}</span>
+      <span class="btn subtle"><svg class="i"><use href="#i-compact" /></svg>{commandCopy.compact}</span>
+      <span class="btn subtle"><svg class="i"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</span>
     </div>
   {/if}
 
@@ -1765,7 +1766,7 @@
            switch once a leave has left them held (ruled 2026-10-19). -->
       <div class="fold" transition:unfold>
         <div class="bar line attention">
-          <svg class="i i-14"><use href="#i-lock" /></svg>
+          <svg class="i"><use href="#i-lock" /></svg>
           <span class="grow"><strong>{lockedLead.head}</strong> {lockedLead.rest}</span>
           {#if openedNames.length > 0}
             <button type="button" class="btn sm" onclick={closeLocked}>{lockedClose.label}</button>
@@ -1802,11 +1803,17 @@
                a button, so it is a small subtle one, not a hyperlink
                (APP.md §6, Controls; ruled 2026-10-17). -->
           <div class="empty first">
-            <svg class="i i-20" aria-hidden="true"><use href="#i-archives" /></svg>
+            <!-- The open box over the sentence (fork D, ruled 2026-11-01):
+                 the archive's own glyph drawn large and empty, for what is
+                 missing. The one drawing on a working page, since the page
+                 has nothing yet to show; the other empty lines of the list,
+                 a filter's or a view's, stay grey sentences, and so does an
+                 empty folder. -->
+            <Art kind="box" />
             <h2 class="t-section">{archivesCopy.emptyVault}</h2>
             <div class="row">
-              <button type="button" class="btn accent" disabled={tampered} onclick={openCreate}><svg class="i i-14"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
-              <button type="button" class="btn" onclick={() => void openFile()}><svg class="i i-14"><use href="#i-file" /></svg>{archivesCopy.openFile}</button>
+              <button type="button" class="btn accent" disabled={tampered} onclick={openCreate}><svg class="i"><use href="#i-plus" /></svg>{commandCopy.newArchive}</button>
+              <button type="button" class="btn" onclick={() => void openFile()}><svg class="i"><use href="#i-file" /></svg>{archivesCopy.openFile}</button>
             </div>
             <button type="button" class="btn subtle sm" disabled={tampered} onclick={importRecords}>{commandCopy.importArchives}</button>
           </div>
@@ -1839,7 +1846,7 @@
                 <tr data-id={a.id} tabindex={selId === a.id || (!paneId && i === 0) ? 0 : -1} aria-selected={selId === a.id} class:forgotten={a.forgottenAt > 0} onclick={() => click(a.id)} oncontextmenu={(e) => rowCtx(e, a)} ondblclick={() => openRow(a.id)}>
                   <td class="sel-mark">
                     <div class="aname">
-                      <svg class="i i-14"><use href="#i-box" /></svg>
+                      <svg class="i"><use href="#i-box" /></svg>
                       <div class="two-line">
                         <!-- Line 1: the name, cut before its chips are. -->
                         <div class="nline">
@@ -1955,7 +1962,7 @@
                    of phase 4a: below the threshold it was an empty
                    "Selected" line and the summary was nowhere). -->
               <div class="head-line" aria-hidden={pane ? "true" : undefined} bind:this={lineEl}>{#if pane || !narrow}<span class="eyebrow">{archivesCopy.panelEyebrow}</span><span class="hname">{pane?.name ?? ""}</span>{:else}<span class="hsum">{@render sumHead()}</span>{/if}</div>
-              <svg class="i i-14 chev" class:up={!bar.open}><use href="#i-chevdown" /></svg>
+              <svg class="i chev" class:up={!bar.open}><use href="#i-chevdown" /></svg>
             </div>
             {#if narrow && pane}
               <div class="head-acts" bind:clientWidth={actsW}>
@@ -1980,7 +1987,7 @@
               {#if purge}
                 <div class="pad" bind:this={padEl}>
                   <div class="bar attention">
-                    <svg class="i i-14"><use href="#i-warn" /></svg>
+                    <svg class="i"><use href="#i-warn" /></svg>
                     <div class="why">
                       <!-- What it means, then the undo, which the bar carries
                            (the dialog template, ruled 2026-10-17). -->
@@ -2009,7 +2016,7 @@
                        §2.3). Drawn only from the record read whole: "Not
                        taken yet" in the third ink when no hash was ever
                        taken, no tick unless it matches. -->
-                  {#if fp}<div><dt>{archivesCopy.facts.fingerprint}</dt><dd class="num">{#if fp.kind === "current"}<span class="fp"><svg class="i i-14" aria-hidden="true"><use href="#i-check" /></svg>{archivesCopy.fingerprint(fp)}</span>{:else}<span class:none={fp.kind === "none"}>{archivesCopy.fingerprint(fp)}</span>{/if}</dd></div>{/if}
+                  {#if fp}<div><dt>{archivesCopy.facts.fingerprint}</dt><dd class="num">{#if fp.kind === "current"}<span class="fp"><svg class="i" aria-hidden="true"><use href="#i-check" /></svg>{archivesCopy.fingerprint(fp)}</span>{:else}<span class:none={fp.kind === "none"}>{archivesCopy.fingerprint(fp)}</span>{/if}</dd></div>{/if}
                 </dl>
 
                 <div class="pside">
@@ -2024,7 +2031,7 @@
                   </div>
 
                   {#if pane.note === "archive.file_missing"}
-                    <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span class="grow">{codeText(pane.note)}</span></div>
+                    <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow">{codeText(pane.note)}</span></div>
                   {/if}
 
                   <!-- Name and description, behind the pencil (direction
@@ -2037,7 +2044,7 @@
                     <section class="namedesc" aria-label={archivesCopy.nameAndDescription}>
                       <div class="nd-head">
                         <span class="nd-label">{archivesCopy.nameAndDescription}</span>
-                        <button type="button" class="btn subtle sm icon-only" aria-label={archivesCopy.editNameDescription} aria-expanded={fieldsShown} aria-controls="ar-fields" disabled={!editable} title={editReason ?? keyHint(archivesCopy.editNameDescription, "F2")} onclick={pencil}><svg class="i i-14"><use href="#i-rename" /></svg></button>
+                        <button type="button" class="btn subtle sm icon-only" aria-label={archivesCopy.editNameDescription} aria-expanded={fieldsShown} aria-controls="ar-fields" disabled={!editable} title={editReason ?? keyHint(archivesCopy.editNameDescription, "F2")} onclick={pencil}><svg class="i"><use href="#i-edit" /></svg></button>
                       </div>
                       {#if fieldsShown}
                         <div class="fields" id="ar-fields">
@@ -2079,7 +2086,7 @@
                 {@render backupRow()}
                 {#each missingRows as a (a.id)}
                   <div class="sum-row">
-                    <svg class="i i-14 warn" aria-hidden="true"><use href="#i-warn" /></svg>
+                    <svg class="i warn" aria-hidden="true"><use href="#i-warn" /></svg>
                     <span class="grow ellipsis" title={archivesCopy.missingRow(a.name)}>{archivesCopy.missingRow(a.name)}</span>
                     <button type="button" class="btn link" disabled={!unlocked} title={!unlocked ? codeText(Code.CodeVaultLocked) : undefined} onclick={() => { if (rows.some((r) => r.id === a.id)) pick(a.id); void locate(a); }}>{commandCopy.locate}</button>
                   </div>
@@ -2120,7 +2127,7 @@
      tinted attention while a backup is owed. -->
 {#snippet backupRow()}
   <div class="sum-row" class:owed={backupOwed}>
-    <svg class="i i-14" aria-hidden="true"><use href="#i-backup" /></svg>
+    <svg class="i" aria-hidden="true"><use href="#i-backup" /></svg>
     <span class="grow ellipsis">{backupAt ? archivesCopy.lastBackup(sinceText(backupAt, store.now)) : vaultCopy.backupNeverHead}</span>
     <button type="button" class="btn link" disabled={!unlocked || tampered} title={!unlocked ? codeText(Code.CodeVaultLocked) : undefined} onclick={toBackups}>{archivesCopy.exportLink}</button>
   </div>
@@ -2146,7 +2153,7 @@
       <div class="pin-note">{METHOD_NOTE}</div>
     </div>
     {#if existsShown}
-      <div class="bar attention"><svg class="i i-14"><use href="#i-warn" /></svg><span>{codeText(Code.CodeArchiveExists)}</span></div>
+      <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{codeText(Code.CodeArchiveExists)}</span></div>
     {/if}
     <p>{dialogCopy.newArchive.body}</p>
     {#snippet actions()}
@@ -2247,10 +2254,11 @@
   /* A forgotten row's own buttons, at its right, on the name's line. */
   td.act { overflow: visible; }
   .rbtns { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: -4px; }
-  /* The empty vault's block: centred, the two buttons on one line and the
+  /* The empty vault's block: centred, the drawing 4 px further from the
+     sentence than the block's own 12, the two buttons on one line and the
      import a small subtle button under them. */
   .empty.first { display: flex; flex-direction: column; align-items: center; gap: var(--s3); }
-  .empty.first > .i { color: var(--ink-3); }
+  .empty.first > :global(.idart) { margin-bottom: var(--s1); }
   .empty.first h2 { color: var(--ink); }
   /* The pane's banner at its inset. */
   .pad { padding: var(--s3) var(--s4) 0; }

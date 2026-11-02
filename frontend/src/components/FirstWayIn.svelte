@@ -254,7 +254,7 @@
        the cards as they are under each other (ruled 2026-10-17; the third
        card it was pushed the dialog past an 820 px window with a card
        open). -->
-  <p class="fixed"><svg class="i i-14" aria-hidden="true"><use href="#i-recovery" /></svg><span>{fixedLine(context)}</span></p>
+  <p class="fixed"><svg class="i" aria-hidden="true"><use href="#i-recovery" /></svg><span>{fixedLine(context)}</span></p>
   </div>
   <!-- What comes after Continue, by the choice, in a caption; empty until
        one is made and one caption line tall then, so filling it moves

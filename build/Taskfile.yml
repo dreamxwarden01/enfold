@@ -62,19 +62,21 @@ tasks:
       - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true -ts -i
 
   generate:icons:
-    summary: Renders build/appicon.png from internal/brand and the Windows .ico from it
+    summary: Draws the application's icon from internal/brand into build/windows/icon.ico and build/appicon.png
+    # Both files are generated and ignored, never kept in the repository: a
+    # fresh clone makes them on its first build. tools/appicon writes the .ico
+    # itself, every size drawn for its own pixels, so `wails3 generate icons`
+    # (which scaled one 1024 px PNG down to each entry) is no longer used.
     run: once
     sources:
-      - internal/brand/brand.go
-      - tools/appicon/main.go
+      - internal/brand/*.go
+      - exclude: internal/brand/*_test.go
+      - tools/appicon/*.go
     generates:
       - build/appicon.png
       - build/windows/icon.ico
     cmds:
-      - go run ./tools/appicon -o build/appicon.png
-      - mkdir -p bin
-      # The generator always writes a macOS bundle too; it goes to the ignored bin/.
-      - wails3 generate icons -input build/appicon.png -windowsfilename build/windows/icon.ico -macfilename bin/icon.icns
+      - go run ./tools/appicon -ico build/windows/icon.ico -png build/appicon.png
 
   dev:frontend:
     summary: Runs Vite in development mode

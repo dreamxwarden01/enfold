@@ -2475,16 +2475,23 @@ line's *Unlock* while locked. Three sections, in the order they are read:
   be renamed: no call does it. Then the rule line, then the *Password with every YubiKey* row
   (§13; it read *Entangled password*).
 - **This vault**: *Name*, with *Rename…* beside it, a hyperlink button — the only place the name
-  is edited — opening *Rename the vault*, a one-field form under the form rule (its *Rename*
-  stays enabled, and an empty, unchanged or over-60-character name marks the field), whose line
-  reads "The name this PC gives the vault. The file keeps its own name.", and which writes
-  `Settings.DisplayName` (§3); *Last changed* and *File*, read only; **the lock times**, *Lock
-  when idle* and *Always lock after*, a 220 px select each that applies the moment a value is
-  chosen, one write per choice (§3) — the pending ring on the select while it saves and, refused,
-  the code's line under it in the danger ink with the old value back — greyed with "Unlock to
-  change" while the vault is locked or the times are not adjustable; while it is locked each
-  select holds one disabled placeholder, "Unlock to see", never "10 minutes (default)", since the
-  core reads the times from the vault and answers 0 while Locked (ruled 2026-10-19); then the replaced and the
+  is edited — opening *Rename the vault*, a one-field form whose line reads "The name this PC
+  gives the vault. The file keeps its own name." and which writes `Settings.DisplayName` (§3).
+  The form leaves the form rule by the user's call (ruled 2026-11-02; under the rule its
+  *Rename* stayed enabled, and an unchanged name, left or pressed, was marked "This is the
+  vault's name already."): *Rename* is greyed until the name, compared trimmed, is changed and
+  can be saved, so Enter sends nothing until then; the name the vault has is never said to be
+  wrong; and an empty or over-60-character name is said under the field ("This field is
+  required.", "Up to 60 characters.") once the field is left or Enter is pressed in it, and from
+  then on while the typing keeps it wrong — never as the dialog opens. A refused write is the
+  code's line under the dialog's line in the danger ink, and the dialog stays. Then *Last
+  changed* and *File*, read only; **the lock times**, *Lock when idle* and *Always lock after*,
+  a 220 px select each that applies the moment a value is chosen, one write per choice (§3) —
+  the pending ring on the select while it saves and, refused, the code's line under it in the
+  danger ink with the old value back — greyed with "Unlock to change" while the vault is locked
+  or the times are not adjustable; while it is locked each select holds one disabled
+  placeholder, "Unlock to see", never "10 minutes (default)", since the core reads the times
+  from the vault and answers 0 while Locked (ruled 2026-10-19); then the replaced and the
   damaged copies' rows when there are any.
 - **Backups and copies** (was *Backups*): the backups card's status and consequence (*The
   backups card*, below), then one wrapping row of its five commands — *Export backup…* (the
@@ -3188,8 +3195,11 @@ the core's refusal under the new prompt ("Wrong PIN.", a wrong password) is said
 a password the page would refuse when the accepted PIN would send it is marked as if the button
 had been pressed, and waits for *Continue* (ruled 2026-10-13). The button is never disabled for
 an empty field, only for a consent not yet given (a replacement's tick) or a state that forbids
-the action (archives open). The lines fade in and out like everything else. Every typed secret
-is judged before it is sent — a chosen password's
+the action (archives open) — except in *Rename the vault*, which leaves this rule by the user's
+call (ruled 2026-11-02; *This vault*, above): its *Rename* is greyed while the name is
+unchanged, empty or over 60 characters, Enter in its field is still the press and marks an empty
+or too long name, and the name the vault has is never said to be wrong. The lines fade in and
+out like everything else. Every typed secret is judged before it is sent — a chosen password's
 minimum of 8 characters (BitLocker's rule; the core refuses a shorter one at submit with
 `vault.password_short` and keeps the prompt), the recovery key's 48 digits with any whitespace or
 dash between them (the set the core ignores), the management key's hex with the whitespace the

@@ -5834,3 +5834,27 @@ HWND-hosted WebView2 window without `DwmExtendFrameIntoClientArea` is the user's
 (the remedy, if not, is `w32.ExtendFrameIntoClientAreaWithMargins` with -1 margins);
 prefers-reduced-transparency does not switch the Mica ground back to the glow; making Mica the
 default on 22621 and later is the user's call after the checks.
+
+**Rename the vault: the button greyed while the name is unchanged, a problem said only for an
+empty or invalid name** (2026-11-02). The user's finding in the real window: leaving the field
+with the vault's own name in it marked the field red and said "This is the vault's name
+already", which is noise — the user asked that *Rename* simply grey while the name is unchanged,
+with nothing said, and that a problem be said only when the name is empty or invalid, the button
+greyed then too. Built, leaving the form rule (APP §6, Forms: the primary stays enabled and a
+press marks the field) for this one dialog by the user's call: *Rename* is greyed until the
+name, compared trimmed, differs from the one the dialog opened with and can be saved — judged
+against the opening name, not the live one, since the store takes the typed name as soon as a
+save starts and the button greyed and dropped the focus during its own save (the review's
+first finding); the name the vault has is never said to be wrong, and `sameName` is gone from
+the strings; an empty or over-60-character name is said under the field ("This field is
+required.", "Up to 60 characters.") once the field is left or Enter is pressed in it — a form
+whose default button is disabled has no implicit submission, so Enter had done and said nothing
+(the review's second finding); a keydown on the field's wrapper now counts it as the press — and
+from then on while the typing keeps it wrong, never as the dialog opens; the rule is a pure
+pair in lib/validate.ts (`vaultNameProblem`, `vaultNameReady`) with tests, and the dialog's
+wiring is held by a source-reading test. Taken along the way: the dialog's refusal line was a
+`<p>` that the dialog's own paragraph rule coloured grey, so a refused save read in the second
+ink rather than the danger ink; it is a div like every other field error now. Left to the user:
+typing a 61st character greys *Rename* at once but says why only when the field is left or Enter
+is pressed, since the form rule holds that typing never marks; a click on the greyed button
+counts as leaving the field and so says the reason (Chromium moves the focus to the dialog).

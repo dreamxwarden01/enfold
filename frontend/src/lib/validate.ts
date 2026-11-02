@@ -1,5 +1,7 @@
 // Field validation (APP.md §6, Forms): what a value is missing, said the
 // way the user reads it. Empty strings mean the value is fine.
+import { vaultCopy } from "./strings";
+
 export type SecretKind = "pin" | "password" | "recovery" | "mgmtkey";
 
 export const MIN_PASSWORD = 8;
@@ -100,6 +102,37 @@ export const NAME_RULE = "A name is required, at most 1 024 bytes.";
 export function nameProblem(text: string): string {
   if (!text.trim()) return REQUIRED;
   return new TextEncoder().encode(text).length > NAME_MAX ? NAME_RULE : "";
+}
+
+// The vault's name (APP.md §6, the Vault page): a setting of this PC
+// (Settings.displayName), edited in *Rename the vault* alone, which leaves
+// the form rule by the user's call (ruled 2026-11-02): its Rename is
+// greyed for a name it cannot send, where the rule keeps the button
+// enabled and lets a press mark the field. Spaces at the ends are allowed
+// while typing and stripped when saved, so the name is judged trimmed and
+// spaces alone are never a change. The length is the one the Settings
+// field held it to (60), counted in characters, not bytes.
+export const VAULT_NAME_MAX = 60;
+
+// vaultNameProblem is what the field says under it, once it is left: an
+// empty name, and one over the limit. The name the vault already has is
+// no problem to be said — it only keeps Rename greyed (vaultNameReady) —
+// so leaving the field unchanged, or pressing Enter in it, marks nothing.
+// Empty is judged first, so a vault with no name at all is still asked
+// for one; the vault's own name is judged before the limit, so a name
+// the user did not type is never called too long.
+export function vaultNameProblem(typed: string, name: string): string {
+  const t = typed.trim();
+  if (!t) return REQUIRED;
+  if (t === name.trim()) return "";
+  return [...t].length > VAULT_NAME_MAX ? vaultCopy.nameLong(VAULT_NAME_MAX) : "";
+}
+
+// vaultNameReady is whether Rename is enabled: only for a name the field
+// has nothing to say about that is not the vault's own, so the dialog never
+// sends a name the field refuses, nor one that would change nothing.
+export function vaultNameReady(typed: string, name: string): boolean {
+  return !vaultNameProblem(typed, name) && typed.trim() !== name.trim();
 }
 
 // A name inside an archive — a file renamed, a folder created, a refused

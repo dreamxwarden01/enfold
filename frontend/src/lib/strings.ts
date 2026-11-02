@@ -2027,15 +2027,19 @@ export const vaultCopy = {
   thisVault: "This vault",
   name: "Name",
   // The vault's name is edited here only, through its one-field dialog
-  // (direction 10): the form rule — the primary stays enabled, and an
-  // empty or unchanged name is marked in the field.
+  // (direction 10), which leaves the form rule by the user's call (ruled
+  // 2026-11-02): Rename is greyed until the name is changed and can be
+  // saved; the vault's own name is never said to be wrong, and an empty
+  // or too long one is said under the field once it is left or Enter is
+  // pressed in it (lib/validate.ts, vaultNameProblem).
   renameTitle: "Rename the vault",
   // A setting of this PC's (Settings.displayName), which the core's status,
   // and so the tray, follows at once (APP.md §3, Settings); the line says
   // what the name is, not where it is shown.
   renameLine: "The name this PC gives the vault. The file keeps its own name.",
   renamePrimary: "Rename",
-  sameName: "This is the vault's name already.",
+  // A name over the limit (validate.ts, VAULT_NAME_MAX); an empty one is
+  // the form's own "This field is required.".
   nameLong: (max: number): string => `Up to ${max} characters.`,
   // The lock times are the vault's policy, written into it (direction
   // 10): each applies the moment it is chosen, one write per choice.

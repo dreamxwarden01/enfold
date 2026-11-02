@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, recoveryGroupMarks, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem, NAME_TAKEN, newNameProblem, NAME_LONG, NAME_CONTROL, NAME_TRAILING, NAME_RESERVED } from "./validate";
+import { MGMT_RULE, PASSWORD_RULE, PIN_RULE, RECOVERY_RULE, REQUIRED, autoSendable, requiredProblem, secretProblem, secretRule, GROUP_MISTYPED, recoveryGroupProblem, recoveryGroupMarks, CONFIRM_NAME, CONFIRM_SECRET, DESCRIPTION_MAX, DESCRIPTION_RULE, confirmNameProblem, confirmSecretProblem, descriptionProblem, NAME_MAX, NAME_RULE, nameProblem, LEAF_RULE, fileNameProblem, NAME_TAKEN, newNameProblem, NAME_LONG, NAME_CONTROL, NAME_TRAILING, NAME_RESERVED, VAULT_NAME_MAX, vaultNameProblem, vaultNameReady } from "./validate";
+import { vaultCopy } from "./strings";
 
 describe("secretProblem", () => {
   it("requires every secret", () => {
@@ -106,6 +107,53 @@ describe("nameProblem", () => {
     expect(nameProblem("a".repeat(NAME_MAX))).toBe("");
     expect(nameProblem("a".repeat(NAME_MAX + 1))).toBe(NAME_RULE);
     expect(nameProblem("\u{1F600}".repeat(300))).toBe(NAME_RULE); // 300 characters, 1 200 bytes
+  });
+});
+
+describe("the vault's name (ruled 2026-11-02)", () => {
+  const long = vaultCopy.nameLong(VAULT_NAME_MAX);
+  it("says nothing of the name the vault has, and keeps Rename greyed for it", () => {
+    expect(vaultNameProblem("Mine", "Mine")).toBe("");
+    expect(vaultNameReady("Mine", "Mine")).toBe(false);
+  });
+  it("compares trimmed, so spaces at the ends are never a change", () => {
+    expect(vaultNameProblem("  Mine ", "Mine")).toBe("");
+    expect(vaultNameReady("  Mine ", "Mine")).toBe(false);
+    expect(vaultNameReady("Mine", " Mine  ")).toBe(false);
+  });
+  it("takes a change of case as a change", () => {
+    expect(vaultNameReady("mine", "Mine")).toBe(true);
+  });
+  it("says an empty name and greys Rename for it", () => {
+    for (const typed of ["", "   ", "\t"]) {
+      expect(vaultNameProblem(typed, "Mine")).toBe(REQUIRED);
+      expect(vaultNameReady(typed, "Mine")).toBe(false);
+    }
+  });
+  it("asks a vault with no name for one, rather than taking the empty field as its own", () => {
+    expect(vaultNameProblem("", "")).toBe(REQUIRED);
+    expect(vaultNameReady("", "")).toBe(false);
+  });
+  it("holds a name to 60 characters, counted as characters, not bytes or code units", () => {
+    expect(VAULT_NAME_MAX).toBe(60);
+    expect(long).toBe("Up to 60 characters.");
+    expect(vaultNameProblem("a".repeat(60), "Mine")).toBe("");
+    expect(vaultNameReady("a".repeat(60), "Mine")).toBe(true);
+    expect(vaultNameProblem("a".repeat(61), "Mine")).toBe(long);
+    expect(vaultNameReady("a".repeat(61), "Mine")).toBe(false);
+    expect(vaultNameProblem(` ${"a".repeat(60)} `, "Mine")).toBe(""); // the ends are stripped first
+    expect(vaultNameProblem("é".repeat(60), "Mine")).toBe(""); // 120 bytes, 60 characters
+    expect(vaultNameProblem("\u{1F512}".repeat(60), "Mine")).toBe(""); // 120 code units, 60 characters
+    expect(vaultNameProblem("\u{1F512}".repeat(61), "Mine")).toBe(long);
+  });
+  it("never calls the vault's own name too long: the user did not type it", () => {
+    const old = "b".repeat(61);
+    expect(vaultNameProblem(old, old)).toBe("");
+    expect(vaultNameReady(old, old)).toBe(false);
+  });
+  it("enables Rename only for a changed name the field has nothing to say about", () => {
+    expect(vaultNameReady("Work", "Mine")).toBe(true);
+    expect(vaultNameReady(" Work ", "Mine")).toBe(true);
   });
 });
 

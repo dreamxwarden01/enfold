@@ -5,27 +5,38 @@
 :root {
   color-scheme: light;
   /* The stage (APP.md §6, §2.4): the lock screen's column, which the
-     boot failure and the splash share. Its width; where it starts, the
-     mark's top, under the lock header's line (20 of padding, the line's 20
-     and 24 under it); and the surface's share of its floating panel's
-     fill, the rest the blurred ground behind it (the user's ask for fork
-     D, ruled 2026-11-01: "a little is enough", so the ground's colour just
-     touches it). */
-  --stage-w: 440px; --stage-top: 64px; --stage-frost: 86%;
+     boot failure and the splash share. Its width, and where it starts,
+     the mark's top, under the lock header's line (20 of padding, the
+     line's 20 and 24 under it). */
+  --stage-w: 440px; --stage-top: 64px;
   /* The rail's two widths (APP.md §6, Rail; direction 6, ruled
      2026-10-18): expanded at a window of 1008 px and more, the 48 px
      compact rail of icons below it — 164 px given back to the layer.
      .shell reads them under the one query (lib/rail.ts
      RAIL_COMPACT_QUERY says the same width to Rail.svelte). */
   --rail-w: 212px; --rail-w-compact: 48px;
+  /* --ground is the solid ground, the page's until the painted ground
+     below took its place (2026-11-02); the key art's slot is still filled
+     with it. --layer is the layer's opaque fill, where Windows asks for
+     less transparency. */
   --ground: #f1f1f4;
   --layer: #fbfbfd;
+  /* The painted ground (APP.md §6, Controls; the phase-5 aurora study,
+     ruled 2026-11-02): its plain top row, which the window's caption
+     takes from build 22000 (APP.md §2.4); the veil over the hues; the
+     paint of the layer and the stage's card; the inks for what stands on
+     the ground. */
+  --ground-paint: #d5d3d5;
+  --ground-paint-0: rgba(213, 211, 213, 0);
+  --ground-veil: rgba(243, 243, 243, 0.82);
+  --layer-paint: rgba(255, 255, 255, 0.5);
+  --ink-2-ground: #47484e;
+  --ink-3-ground: #6e6f76;
   --ink: #191a1d;
   --accent: #0e6f63;
   --stroke: #e2e2e7;
   --attention: #8a5300;
   --page: #e6e6eb;
-  --ground-tint: #e3eeeb;
   --surface: #ffffff;
   --surface-alt: #f4f4f7;
   --stroke-strong: #c9c9d0;
@@ -100,11 +111,13 @@
   --shadow-card: 0 1px 2px rgba(16, 17, 20, 0.06), 0 2px 8px rgba(16, 17, 20, 0.05);
   --shadow-pop: 0 8px 24px rgba(16, 17, 20, 0.13);
   --shadow-window: 0 12px 40px rgba(16, 17, 20, 0.16), 0 2px 6px rgba(16, 17, 20, 0.1);
-  /* The lock stage's floating panel (ruled 2026-11-01): a tight shadow at
-     its edge and a wide soft one under it, a little stronger in dark,
-     where a shadow on a dark ground reads less. Two layers in both, so the
-     green can take them to none in one transition. */
-  --shadow-stage: 0 1px 2px rgba(16, 17, 20, 0.08), 0 8px 32px rgba(16, 17, 20, 0.1);
+  /* The lock stage's card (ruled 2026-11-01; halved 2026-11-02, when the
+     card took the layer's paint over the painted ground, where a little
+     lift is enough): a tight shadow at its edge and a wide soft one under
+     it, a little stronger in dark, where a shadow on a dark ground reads
+     less. Two layers in both, so the green can take them to none in one
+     transition. */
+  --shadow-stage: 0 1px 2px rgba(16, 17, 20, 0.04), 0 8px 32px rgba(16, 17, 20, 0.05);
   --r-card: 8px;
   --r-ctl: 4px;
   --r-sm: 3px;
@@ -178,12 +191,17 @@
     color-scheme: dark;
     --ground: #1c1c20;
     --layer: #252529;
+    --ground-paint: #262526;
+    --ground-paint-0: rgba(38, 37, 38, 0);
+    --ground-veil: rgba(32, 32, 32, 0.86);
+    --layer-paint: rgba(58, 58, 58, 0.3);
+    --ink-2-ground: #b5b6be;
+    --ink-3-ground: #898a93;
     --ink: #f3f3f6;
     --accent: #54d2b9;
     --stroke: #37373d;
     --attention: #efc079;
     --page: #101012;
-    --ground-tint: #20302d;
     --surface: #2c2c31;
     --surface-alt: #33333a;
     --stroke-strong: #4a4a52;
@@ -238,7 +256,7 @@
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
     --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
     --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
-    --shadow-stage: 0 1px 2px rgba(0, 0, 0, 0.36), 0 10px 36px rgba(0, 0, 0, 0.36);
+    --shadow-stage: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 36px rgba(0, 0, 0, 0.18);
   }
 }
 
@@ -246,12 +264,17 @@
   color-scheme: dark;
   --ground: #1c1c20;
   --layer: #252529;
+  --ground-paint: #262526;
+  --ground-paint-0: rgba(38, 37, 38, 0);
+  --ground-veil: rgba(32, 32, 32, 0.86);
+  --layer-paint: rgba(58, 58, 58, 0.3);
+  --ink-2-ground: #b5b6be;
+  --ink-3-ground: #898a93;
   --ink: #f3f3f6;
   --accent: #54d2b9;
   --stroke: #37373d;
   --attention: #efc079;
   --page: #101012;
-  --ground-tint: #20302d;
   --surface: #2c2c31;
   --surface-alt: #33333a;
   --stroke-strong: #4a4a52;
@@ -303,7 +326,7 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.26);
   --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.48);
   --shadow-window: 0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
-  --shadow-stage: 0 1px 2px rgba(0, 0, 0, 0.36), 0 10px 36px rgba(0, 0, 0, 0.36);
+  --shadow-stage: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 36px rgba(0, 0, 0, 0.18);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -313,18 +336,8 @@
 /* ---------- page ---------------------------------------- */
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; }
-/* The ground's green glow, back by the user's call (ruled 2026-11-01,
-   reversing 2026-10-17's solid ground): the lookbook's radial wash of
-   --ground-tint from above the rail's top-left corner, gone 58 % of the
-   way out, over the solid ground. It shows where the body shows — the
-   rail and the lock scene — while the layer, its foot and every card
-   paint over it, as when it was first drawn. It is a still of the
-   material, the window's ground wherever the window is not made over Mica;
-   where it is, the Mica block (just before the contrast themes') takes it
-   away (APP.md §6, Controls). */
 body {
   margin: 0;
-  background: radial-gradient(140% 100% at 8% -10%, var(--ground-tint) 0%, transparent 58%), var(--ground);
   color: var(--ink);
   font: var(--t-body);
   -webkit-font-smoothing: antialiased;
@@ -332,6 +345,51 @@ body {
   user-select: none;
   cursor: default;
 }
+/* The painted ground (APP.md §6, Controls; the phase-5 aurora study,
+   ruled 2026-11-02, replacing the green glow of 2026-11-01 and the Mica
+   switch): the demo's ground, three hues (blue at the top left, amber at
+   the right, green at the foot) over a diagonal base, under a veil of
+   near-white in light and near-black in dark, and over all of it a fade
+   from the plain first-row colour, --ground-paint, to nothing 96 px down,
+   so that the top row is one flat colour, which the shell gives the
+   window's caption from build 22000 (APP.md §2.4), and there the two meet
+   with no seam. The hues' layers are 160 px larger than the window and
+   set 80 px out, so their edges never show. It is the body's own
+   background, which the canvas takes: the same layers on html::before or
+   ::after turn every line of the page's text greyscale (ClearType gone,
+   in headless Edge 156), and a blur on them posterises the dark theme
+   into rings, so there is no filter. The root never scrolls (the body
+   hides its overflow and every scroller is inside it), so the ground
+   stays put while a list scrolls. It shows on the rail, the lock stage
+   and the splash; the layer and the stage's card are the layer's paint
+   over it, and cards, menus and dialogs keep their opaque fills. It is
+   one plain body rule, its colours tokens in all three theme states, and
+   it stands outside a contrast theme, where the ground is the Canvas (the
+   block at the end): a rule under :root[...] would outweigh that block's
+   body rule and leave the hues under the system's colours. */
+@media not (forced-colors: active) {
+  body {
+    background:
+      linear-gradient(var(--ground-paint), var(--ground-paint-0) 96px) 0 0 / 100% 100% no-repeat,
+      linear-gradient(var(--ground-veil), var(--ground-veil)) 0 0 / 100% 100% no-repeat,
+      radial-gradient(40% 50% at 15% 20%, #3c78c8 0%, transparent 70%) -80px -80px / calc(100% + 160px) calc(100% + 160px) no-repeat,
+      radial-gradient(45% 55% at 85% 30%, #e08a3c 0%, transparent 70%) -80px -80px / calc(100% + 160px) calc(100% + 160px) no-repeat,
+      radial-gradient(50% 60% at 60% 90%, #4aa37a 0%, transparent 70%) -80px -80px / calc(100% + 160px) calc(100% + 160px) no-repeat,
+      linear-gradient(135deg, #2a3a5a, #6a4a3a) -80px -80px / calc(100% + 160px) calc(100% + 160px) no-repeat,
+      #4a424a;
+  }
+}
+/* What stands on the painted ground reads in its own inks (the aurora
+   study): in light the second ink a step darker, which keeps 6:1 on the
+   ground, where the plain one reads 4.9 to 5.3, and the third ink a step
+   darker too, 3.1:1 for the rail's close x, a control whose only mark is
+   its glyph (2.3:1 in the plain one). Scoped to the rail, the lock stage
+   and the splash, so the cards and tables keep the ink to second-ink step
+   they were ruled with; the third ink only on the rail's x, the step line
+   and the stage's card, so the stage mark's thin lines keep theirs. In
+   dark the ground's inks are the plain ones. */
+.rail, .unlock, .splash { --ink-2: var(--ink-2-ground); }
+.rail-x, .unlock .steps, .unlock .panel { --ink-3: var(--ink-3-ground); }
 input, textarea { user-select: text; cursor: text; }
 /* Selected text wears the accent's line under the ink, not Chromium's own
    blue (APP.md §6, Controls; ruled 2026-10-17). The token has its own
@@ -902,10 +960,16 @@ progress:indeterminate { background: var(--accent-line); }
 }
 .app-tip.on { opacity: 1; }
 .app-tip[hidden] { display: none; }
+/* The layer is the painted ground's paint (the aurora study, ruled
+   2026-11-02): white at 50 % in light and #3A3A3A at 30 % in dark (WinUI's
+   LayerFillColorDefault as recalled; the phase-5 window study's mica-50),
+   so the ground's hues show through it faintly and it stands a step off
+   the rail. Opaque, --layer, where Windows asks for less transparency. */
 .layer {
-  background: var(--layer); border-top: 1px solid var(--stroke); border-left: 1px solid var(--stroke);
+  background: var(--layer-paint); border-top: 1px solid var(--stroke); border-left: 1px solid var(--stroke);
   border-top-left-radius: var(--r-card); display: grid; grid-template-rows: 1fr auto; min-width: 0; overflow: hidden;
 }
+@media (prefers-reduced-transparency: reduce) { .layer { background: var(--layer); } }
 /* Pages share the layer's first row, so an outgoing page fades under the incoming one; the foot
    is the second row, outside the crossfade (LayerFoot). */
 /* position: relative holds the viewer (Viewer.svelte), which stands over
@@ -920,11 +984,13 @@ progress:indeterminate { background: var(--accent-line); }
 .layer-head { display: flex; align-items: center; gap: var(--s3); padding: 18px var(--s6) var(--s3); min-height: 62px; flex: none; }
 .layer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 var(--s6); gap: var(--s3); overflow: auto; }
 /* The foot is the status bar (direction 4, phase 3): 34 px whatever it
-   says, so nothing above it ever moves; its popovers stand on it. */
+   says, so nothing above it ever moves; its popovers stand on it. It has
+   no fill of its own, so the layer shows under its top stroke: it was a
+   band of the solid ground until the painted ground (2026-11-02). */
 .layer-foot {
   position: relative;
   display: flex; align-items: center; justify-content: space-between; gap: var(--s3); height: 34px; flex: none; padding: 0 var(--s6);
-  border-top: 1px solid var(--stroke); background: var(--ground); color: var(--ink-2); font: var(--t-cap);
+  border-top: 1px solid var(--stroke); background: transparent; color: var(--ink-2); font: var(--t-cap);
 }
 .cmdbar { display: flex; align-items: center; gap: var(--s1); flex: none; flex-wrap: wrap; }
 /* The Archives page's bar is one line that never wraps (direction 6): what
@@ -1153,51 +1219,39 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .unlock.green .steps .live, .dialog.green .steps .live { color: var(--touch-ink); }
 .unlock.green .steps .disc, .dialog.green .steps .disc { border-color: var(--touch-ring); }
 .unlock.green .steps .done .disc, .dialog.green .steps .done .disc { background: var(--touch-ink); border-color: transparent; color: var(--touch-bg-2); }
-/* The panel: 440 px, 28 px in, and a floating frosted card (the user's
-   ask for fork D, ruled 2026-11-01): the surface at --stage-frost over a
-   24 px blur of what is behind it, so the ground's colour just touches
-   it. Not its glow, which rises from the window's top-left corner and has
-   all but faded where the panel stands: the card reads a level or two
-   from opaque in either theme, with no hue of the glow's. It has a
-   hairline 1 px stroke and --shadow-stage under it. The boot failure's
-   panel stands where this one does and is made the same (App.svelte).
-   Opaque, unblurred and unshadowed where the user asks for less
-   transparency (below) and in a contrast theme (the block at the end).
-   Its views share one grid cell, so the old one leaves where the new one
-   arrives. On the green its fill, stroke, shadow and blur go, and it
-   dissolves into the stage. Every rule is under .unlock: the dialogs'
-   CeremonyPanel is a .panel too, and keeps its own frame (APP.md §13). */
+/* The panel: 440 px, 28 px in, and a card of the layer's paint (the
+   phase-5 aurora study, ruled 2026-11-02, replacing fork D's frosted card
+   and its wash band of 2026-11-01): white at 50 % in light and #3A3A3A at
+   30 % in dark over the painted ground, so that it belongs to the ground
+   (1.24:1 from it in light, where the frosted card stood at 1.4 and read
+   as a white card on it) and the ground's hues show through it faintly.
+   No backdrop blur: it would draw the card's text in greyscale, and the
+   ground behind the card is soft already. It has a hairline 1 px stroke
+   and --shadow-stage under it. The boot failure's panel stands where this
+   one does and is made the same (App.svelte). Opaque and unshadowed where
+   the user asks for less transparency (below) and in a contrast theme
+   (the block at the end). Its views share one grid cell, so the old one
+   leaves where the new one arrives. On the green its fill, stroke and
+   shadow go, and it dissolves into the stage. Every rule is under
+   .unlock: the dialogs' CeremonyPanel is a .panel too, and keeps its own
+   frame (APP.md §13). */
 .unlock .panel, .boot-failed {
   position: relative; border: 1px solid var(--stroke); border-radius: var(--r-card);
-  background-color: color-mix(in srgb, var(--surface) var(--stage-frost), transparent);
-  backdrop-filter: blur(24px);
+  background-color: var(--layer-paint);
   box-shadow: var(--shadow-stage);
 }
 .unlock .panel {
   width: min(var(--stage-w), 100%); box-sizing: border-box; padding: calc(var(--s6) + var(--s1)); display: grid;
   transition: background-color var(--dur-out) var(--ease-exit), border-color var(--dur-out) var(--ease-exit),
-    box-shadow var(--dur-out) var(--ease-exit), backdrop-filter var(--dur-out) var(--ease-exit);
+    box-shadow var(--dur-out) var(--ease-exit);
 }
 .unlock.green .panel {
-  background-color: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none;
+  background-color: transparent; border-color: transparent; box-shadow: none;
   transition-duration: var(--dur-move); transition-timing-function: var(--ease-enter);
 }
 @media (prefers-reduced-transparency: reduce) {
-  .unlock .panel, .boot-failed { background-color: var(--surface); backdrop-filter: none; box-shadow: none; }
+  .unlock .panel, .boot-failed { background-color: var(--surface); box-shadow: none; }
 }
-/* The wash across the panel's top 64 px (fork D): the accent's wash fading
-   into the panel's fill, the lead standing on it. It is the panel's, not
-   the window's, so it never meets the ground's glow (or Mica). A
-   pseudo-element, absolutely placed, so it takes no cell of the panel's
-   grid; the views are placed too, so they paint over it. It goes with the
-   panel's fill on the green. */
-.unlock .panel::before {
-  content: ""; position: absolute; inset: 0 0 auto; height: 64px; pointer-events: none;
-  border-radius: calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0 0;
-  background: linear-gradient(var(--accent-wash), transparent);
-  transition: opacity var(--dur-out) var(--ease-exit);
-}
-.unlock.green .panel::before { opacity: 0; transition: opacity var(--dur-move) var(--ease-enter); }
 .unlock .views { position: relative; display: grid; min-width: 0; }
 /* While a view crosses in, the panel's height eases from the old view's to
    the new one's (Lock.svelte sized; APP.md §6, Motion: Unlock), and what
@@ -2008,39 +2062,6 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
   .print-digits span { font: var(--t-sub); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0.08em; text-align: center; border: 1px solid #000; padding: var(--s1) 0; }
 }
 
-/* ---------- Mica (APP.md §6, Controls; phase 5, group B) ---------- */
-/* The window's material. The shell makes the window over Mica only behind
-   its switch and on a Windows that draws it (ENFOLD_BACKDROP=mica, build
-   22621 and later), and then opens the page at /?backdrop=mica, from which
-   main.ts sets data-backdrop="mica" on the root before the first mount. So
-   every rule here names the attribute, and without it nothing changes: the
-   ground is the glow above, the material's still. With it the material is
-   the ground: the body, the rail (which paints nothing of its own) and the
-   layer's foot are transparent, and the layer is semi-opaque over it,
-   white at 50 % in light and #3A3A3A at 30 % in dark (WinUI's
-   LayerFillColorDefault as recalled; the phase-5 window study's mica-50,
-   measured to keep every ink's floor on its stand-in). Cards, menus and
-   dialogs keep their opaque fills, and the lock stage's frosted panel and
-   its wash band stand over the material as they are: the panel's blur
-   reaches only the page, the material behind the window being blurred
-   already. None of it applies in a contrast theme, where the ground is the
-   Canvas: this block's body rule, (0,2,1), would beat the contrast block's
-   (0,0,1) wherever the two stood, and leave the page's ground to whatever
-   the window shows behind it. */
-@media not (forced-colors: active) {
-  :root[data-backdrop="mica"] { --layer-mica: rgba(255, 255, 255, 0.5); }
-  @media (prefers-color-scheme: dark) {
-    :root[data-backdrop="mica"]:not([data-theme="light"]) { --layer-mica: rgba(58, 58, 58, 0.3); }
-  }
-  :root[data-backdrop="mica"][data-theme="dark"] { --layer-mica: rgba(58, 58, 58, 0.3); }
-  :root[data-backdrop="mica"] body { background: transparent; }
-  :root[data-backdrop="mica"] .layer { background: var(--layer-mica); }
-  /* The foot is the status bar on the layer: its own fill was --ground,
-     which is the material now, so it takes the layer's and keeps its top
-     stroke. */
-  :root[data-backdrop="mica"] .layer-foot { background: transparent; }
-}
-
 /* ---------- contrast themes (APP.md §6, Controls; ruled 2026-11-01) ---------- */
 /* A Windows contrast theme is forced-colors: active. Measured in headless
    Edge (the phase-5 study's probe), the engine then replaces every author
@@ -2062,8 +2083,9 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
    specific (a parent or an element type), or !important where the
    theme's own rules reach the same property at depths that vary. */
 @media (forced-colors: active) {
-  /* No material in a contrast theme (DWM draws none), so the ground is the
-     Canvas, not the glow over the ground. */
+  /* The ground is the Canvas: the painted ground's rule stands outside
+     this theme (not (forced-colors: active), at the page's head), and a
+     gradient is no system colour. */
   body { background: Canvas; }
   /* The focus ring in the text's colour, and no inner ring: an element
      that opts out of forcing would otherwise show the theme's own two. */
@@ -2088,12 +2110,13 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
   .idart :is(.art-line, .art-crease) { stroke: CanvasText; }
   .idart .art-thin { stroke: GrayText; }
   .idart :is(.art-fill, .art-flap, .art-paper, .art-inside) { fill: Canvas; }
-  /* The lock stage's floating panel, and the boot failure's: opaque Canvas
-     in a CanvasText stroke, with no blur, no shadow and no wash band (a
-     gradient is not a system colour, and the engine would drop it). On the
-     touch the panel's own green rule still takes its fill away. */
-  .unlock .panel, .boot-failed { background-color: Canvas; backdrop-filter: none; box-shadow: none; border-color: CanvasText; }
-  .unlock .panel::before { display: none; }
+  /* The lock stage's card, and the boot failure's, and the layer: opaque
+     Canvas, the card in a CanvasText stroke with no shadow. Named, since
+     the engine keeps a fill's alpha, and the layer's paint would be the
+     Canvas at half. On the touch the panel's own green rule still takes
+     its fill away. */
+  .unlock .panel, .boot-failed { background-color: Canvas; box-shadow: none; border-color: CanvasText; }
+  .layer { background: Canvas; }
   /* The key art (KeyArt.svelte) in fork D's two weights: the YubiKey's
      lines in CanvasText, the port it goes into in GrayText, every fill the
      Canvas, and the LED, which is what the art signals, in Highlight. */

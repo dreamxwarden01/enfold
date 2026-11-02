@@ -248,8 +248,8 @@
   .splash-name { align-self: center; font: var(--t-strong); font-family: var(--font-display); }
   /* The boot failure's panel stands where the lock screen's does: 28 px
      under the mark's room (the room of the lock stage's step line, 16 and
-     12 under it), 440 px, 28 px in, the same floating frosted card (app.css
-     .unlock .panel, .boot-failed; APP.md §6). */
+     12 under it), 440 px, 28 px in, the same card of the layer's paint
+     (app.css .unlock .panel, .boot-failed; APP.md §6). */
   .boot-failed {
     width: 100%; box-sizing: border-box; margin-top: calc(16px + var(--s3)); padding: calc(var(--s6) + var(--s1));
     display: flex; flex-direction: column; gap: var(--s3); color: var(--ink);

@@ -823,25 +823,38 @@ Windows' own app mode is read from the registry itself (`AppsUseLightTheme`, Wai
 and the first window is made before it does. A saved theme reaches the caption at once:
 `SetSettings`, once the file is written, emits `settings.changed {Theme}` (the theme alone,
 nothing of the registry), and the shell sets the window's dark mode
-(`DWMWA_USE_IMMERSIVE_DARK_MODE`, 20, through Wails' `w32.SetTheme`), has DWM redraw the frame
-(`SetWindowPos` with `SWP_FRAMECHANGED`, since that call repaints only the client area) and
-moves the window's background colour with it — the ground shown before the page paints and where
-a resize uncovers the window, the stylesheet's `--ground`, #F1F1F4 light and #1C1C20 dark. Over
-Mica (§6) the colour has no effect, and the window holds it at alpha 0 so that
-nothing can ever hand WebView2 an opaque ground: under a translucent window
-Wails paints none of it and leaves WebView2's default background transparent, so
-where the material cannot draw (transparency effects off, battery saver, Remote
-Desktop) what shows behind the page is what DWM draws in its place. While
+(`DWMWA_USE_IMMERSIVE_DARK_MODE`, 20, through Wails' `w32.SetTheme`) and the caption's colour
+(below), has DWM redraw the frame (`SetWindowPos` with `SWP_FRAMECHANGED`, since that call
+repaints only the client area) and moves the window's background colour with it — the ground
+shown before the page paints and where a resize uncovers the window, the painted ground's first
+row (§6, *Controls*), the stylesheet's `--ground-paint`, #D5D3D5 light and #262526 dark. The
+window is Solid and opened at the app's root (Mica and its switch went with the painted ground,
+ruled 2026-11-02). **The caption's colour** is that same first row (`DWMWA_CAPTION_COLOR`, 35,
+through Wails' `w32.SetTitleBarColour`), so that the caption and the page's top row meet with no
+line (ruled 2026-11-02). The window is made with it, as Wails' `CustomTheme`, which Wails
+applies only as it makes a window, so the caption is never DWM's own while the page loads; the
+shell sets it again with each theme it sets. DWM draws its own caption in three cases: on
+Windows 10 (before build 22000), which ignores the attribute, so there a line shows where the
+caption meets the page; under a contrast theme; and where the user has asked for the accent
+colour on title bars (`ColorPrevalence` 1 under `HKCU\SOFTWARE\Microsoft\Windows\DWM`, a missing
+value read as 0), so that choice stands. In the last two the shell gives a caption it had
+painted back to DWM (`DWMWA_COLOR_DEFAULT`), and it reads both afresh whenever Windows says its
+colours may have changed (`WM_SETTINGCHANGE`, `WM_SYSCOLORCHANGE` or
+`WM_DWMCOLORIZATIONCOLORCHANGED`, seen through Wails' `WndProcInterceptor`), since Wails' own
+`SystemThemeChanged` comes only when the light or dark mode moves. The window's border
+(`DWMWA_BORDER_COLOR`, 34) stays DWM's: it is the window's edge against the desktop and the
+windows beside it, and it carries the accent setting too. While
 the setting is *Follow Windows*, a flip of Windows' own mode (`SystemThemeChanged`) is followed
 the same way, the page following it through `prefers-color-scheme`; *Light* and *Dark* stand
 through it. A change that comes while the window is being made waits for its page to load
 (`WebViewNavigationCompleted`, its listener attached as Wails adds the window) and is applied
 then, never while WebView2 is still being created: Wails pumps the main thread's messages
 meanwhile, and a background colour set from there reaches a WebView2 that is not ready, which
-stops the main thread or ends the process. A save that leaves the resolved theme as it was
-repaints nothing, and under a contrast theme the caption is Windows' own and is left alone, as
-Wails leaves it. (It was set only when the window was made, so a saved theme left the caption
-stale until the window was made again.)
+stops the main thread or ends the process. A save that leaves the resolved theme and the
+caption's colour as they were repaints nothing, and under a contrast theme the caption is
+Windows' own: its dark mode is left alone, as Wails leaves it, and its colour is DWM's (above).
+(It was set only when the window was made, so a saved theme left the caption stale until the
+window was made again.)
 
 **Boot order in the frontend:** subscribe to every event at module scope, before the first
 `await`; then `Vault.Status()`. `VaultStatus` and every `vault.*` payload carry one `Seq`
@@ -1718,8 +1731,9 @@ problem gains a drawing of its own: the stage's mark stays above one only becaus
 stage's. The drawings are line art in the tokens: the outline and the folds in the accent at 1.6
 px, two whole device pixels at 125 %; the crease in the accent and the lines of writing (and the
 box's inside corner) in the third ink, at 1.2; the body in the accent's wash and the sheet's
-flap in `--mark-flap`; no gradient but the lock panel's wash band, no motion of their own and no
-binary — `Art.svelte` holds them as markup that `internal/brand`'s tests hold to the geometry.
+flap in `--mark-flap`; no gradient (the lock panel's wash band went with the painted ground,
+2026-11-02), no motion of their own and no binary — `Art.svelte` holds them as markup that
+`internal/brand`'s tests hold to the geometry.
 In a contrast theme their outline, folds and crease are CanvasText, the lines of writing and the
 box's inside corner GrayText, and their fills the Canvas. No scene draws a brand row: the
 window's caption names the app (ruled 2026-11-01; the rail, the lock stage's header and the
@@ -1745,16 +1759,16 @@ ceremony is one panel changing in place … the touch moment is a full-surface t
 at last; the three full-height cards side by side, two of them dim placeholders, which the build
 had taken from the mockup's storyboard and the rulings of 2026-09-07/08 then described, are
 gone, and so is their wording). One centred panel, `min(440px, 100%)` wide, 28 px in, the
-card's radius, and **a floating frosted card** (the user's ask for fork D, ruled 2026-11-01:
-"a little is enough"): the surface at 86 % over a 24 px blur of the ground behind it, so
-the ground's colour just touches it (where the panel stands, the glow from the window's
-top-left corner has all but faded, and the card reads a level or two from opaque in either
-theme; over Mica, *Controls* below, the material shows through it, out of reach of the page's
-blur), a hairline 1 px stroke, and a soft shadow, tight at its edge and wide below, a little
-stronger in dark; opaque, unblurred and unshadowed where Windows asks for less transparency
-(`prefers-reduced-transparency`), and Canvas in a CanvasText stroke in a contrast theme. A wash
-runs across its top 64 px, the accent's wash fading into the fill, with the lead on it: the
-panel's, not the window's, so it never meets the ground's glow or Mica. **The stage's mark**
+card's radius, and **a card of the layer's paint** (the phase-5 aurora study, ruled 2026-11-02,
+replacing fork D's floating frosted card and its wash band, ruled 2026-11-01): white at 50 % in
+light and #3A3A3A at 30 % in dark over the painted ground (*Controls*, below), so that the card
+belongs to the ground, 1.24:1 from it in light, where the frosted card stood at 1.4 and read as
+a white card on it, and the ground's hues show through it faintly; no backdrop blur, which would
+draw its text in greyscale, and no wash band; a hairline 1 px stroke; and a soft shadow, tight
+at its edge and wide below, a little stronger in dark, at half the frosted card's alphas. It is
+opaque (the surface) and unshadowed where Windows asks for less transparency
+(`prefers-reduced-transparency`), and Canvas in a CanvasText stroke in a contrast theme; the
+boot failure's panel is made the same. **The stage's mark**
 stands first in the stage's column (*Identity*, above): the 96 px sheet in its 72 px box, 64
 px down under the header's line (which keeps its 20 px whatever it holds, so nothing above the
 panel moves) and 8 px clear of what follows; then the InfoBars, the notices and the step line's
@@ -1944,7 +1958,7 @@ reads *Recovery key · Unlock*. Finishing setup asks the same cells first, with 
 *Continue*, since its first way in follows.
 
 **The touch takes the stage**: the touch's green over the whole scene — however far a short
-window scrolls — the panel's fill, stroke, shadow and wash band fading into it,
+window scrolls — the panel's fill, stroke and shadow fading into it,
 the stage's mark giving way (its opacity to 0 with the wash, its room kept, so
 nothing moves; ruled 2026-11-01), the header's state in the touch's soft ink in
 both themes, the 160 px rings pulsing, the hero "Touch your YubiKey now", "Touch it
@@ -3257,7 +3271,7 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     moves.
   - *The PIN accepted, the touch*: an overlay with the touch's gradient fades in over the whole
     stage, 220 ms on the entering curve — its opacity moves, since a gradient cannot transition —
-    the panel's fill, stroke, shadow and wash band and the stage's mark fade out with it, the
+    the panel's fill, stroke and shadow and the stage's mark fade out with it, the
     mark's room kept, and the rings start their 2.4 s pulse.
   - *Touched, opening*: the rings stop and hold at half; the lead and the receipt cross-fade,
     140 ms. No colour changes: the green stays through the derivation and the release.
@@ -3571,6 +3585,13 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   line's size, in the second ink. Text that is meant to be read is the second ink at the
   least (`--ink-2`, 6:1 or better on every ground and wash in both themes); the third (`--ink-3`) is
   for what is not read — a placeholder, a disabled label, the "—" of an empty cell, an icon.
+  On the painted ground (*Controls*, below) the rail, the lock stage and the splash take the
+  ground's inks (ruled 2026-11-02): in light the second ink a step darker, #47484E for #55565D,
+  which keeps 6:1 there (6.1 to 6.6, where the plain one read 4.9 to 5.3), and the third
+  #6E6F76 for #83848C on the rail's close x, the step line and the stage's card alone, so that
+  the close x, a control whose only mark is its glyph, stands at 3.1:1; in dark both are the
+  plain inks, #B5B6BE and #898A93. The cards and tables keep the plain second ink, and with it
+  its step under the ink; the stage mark's thin lines keep the plain third.
   No capitals and no tracking: an eyebrow or a step label is a caption as written, in
   sentence case. A link that runs in a sentence takes that sentence's type: in a caption line
   it is a caption, never a step larger than its own words. Every inset and gap is on a 4 px grid (4, 8, 12, 16, 20, 24): a card's inset
@@ -3767,26 +3788,30 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   unlock are separate cards the same 4 px apart (ruled 2026-10-17; they stood 12 apart). A
   text box has no resize grip — the description's box is two lines, scrolling past them — a
   search box has no clear button of Chromium's own, and selected text wears the accent's line
-  under the ink, never the engine's blue (ruled 2026-10-17). The window's ground is the material
-  where the shell makes the window over Mica, and its still, the lookbook's green radial glow,
-  everywhere else (ruled 2026-11-01, reversing 2026-10-17's solid ground; the material behind a
-  switch since phase 5's group B). The shell asks for Mica (Wails' `BackgroundTypeTranslucent`
-  with `BackdropType: Mica`) only when `ENFOLD_BACKDROP` is `mica` as it starts and Windows is
-  build 22621 or later (Wails' `w32.SupportsBackdropTypes`), and then opens the page at
-  `/?backdrop=mica`, from which the page sets `data-backdrop="mica"` on its root before it
-  mounts: the page is told the backdrop the shell applied, never the one asked for. Below 22621
-  Wails would lay a Windows 10 blur, not a solid, under a translucent window, so there, and
-  whenever the switch is unset or anything but `mica` (Solid stays the default until the user
-  has judged the material in the real window), the window is Solid and the page wears the glow:
-  `--ground-tint` from above the rail's top-left corner, gone 58 % of the way out over the solid
-  ground, and seen on the rail and the lock scene, the layer and its foot painting over it. Over
-  Mica the body, the rail and the foot are transparent, the material their ground; the layer is
-  semi-opaque over it, white at 50 % in light and #3A3A3A at 30 % in dark (direction 5's
-  values), its stroke kept; cards, menus and dialogs keep their opaque fills; and the lock
-  stage's frosted panel and its wash stand over the material as they are, the panel's blur
-  reaching only the page, since the material behind the window is blurred already. Every rule of
-  it names the attribute, so without it nothing changes, and none of it applies in a contrast
-  theme, where the ground is the Canvas. In a Windows contrast theme
+  under the ink, never the engine's blue (ruled 2026-10-17). **The window's ground is painted**
+  (the phase-5 aurora study, ruled 2026-11-02, replacing the lookbook's green radial glow of
+  2026-11-01 and the Mica material, retired with its switch): the demo's ground, three hues —
+  blue at the top left, amber at the right, green at the foot — over a diagonal base, under a
+  veil of near-white (#F3F3F3 at 82 %) in light and near-black (#202020 at 86 %) in dark, and
+  over all of it a fade from the plain first-row colour, #D5D3D5 in light and #262526 in dark,
+  to nothing 96 px down, so that the page's top row is one flat colour, which the shell gives
+  the window's caption on Windows 11 (build 22000 and later; §2.4 says where Windows' own
+  caption stands instead), and there the caption and the page meet with no line. The ground
+  itself looks the same on every machine, Windows 10 included, which Mica could not promise: it
+  followed the wallpaper, and it drew only from build 22621. It is the body's own background,
+  unblurred: the same layers on a pseudo-element of the root turn all of the page's text
+  greyscale, and blurred they band into rings in dark, while on the body the ground costs no
+  line its ClearType (headless Edge 156; the real window is to confirm it). The root never
+  scrolls, so the ground stays put while a list scrolls. It shows on the rail, the lock stage
+  and the splash. The layer is semi-opaque over it, white at 50 % in light and #3A3A3A at 30 %
+  in dark (direction 5's values), its stroke kept, so the hues show through it faintly, and the
+  layer's foot, a flat band of the solid ground until then, has no fill of its own; the lock
+  stage's card is the layer's paint too (*Lock screen*, above); cards, menus and dialogs keep
+  their opaque fills; and what stands on the ground takes the ground's inks (*Type and spacing*,
+  above). Where Windows asks for less transparency the layer is opaque again (`--layer`) and the
+  stage's card is the surface; in a contrast theme the ground is the Canvas and the layer and
+  the card are opaque Canvas, the painted ground's one rule standing outside the contrast
+  themes. In a Windows contrast theme
   (`forced-colors: active`) the page is drawn in the system's colours alone, by one block at the
   stylesheet's end (ruled 2026-11-01): the selected row, the command or menu item under the
   pointer, the accent and filled danger buttons, a ticked box and the chosen segment are
@@ -3803,8 +3828,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   identity drawings and the key art, whose SVG paint the system does not force, are
   drawn in CanvasText on the Canvas, the drawings' lines of writing, the box's inside
   corner and the key art's port in GrayText, and the key art's LED in Highlight; the lock
-  stage's floating panel and the boot failure's are opaque Canvas in a CanvasText stroke,
-  with no blur, no shadow and no wash band. Nothing opts out of the system's forcing but
+  stage's card and the boot failure's are opaque Canvas in a CanvasText stroke, with no
+  shadow, and the layer is opaque Canvas. Nothing opts out of the system's forcing but
   what puts Highlight behind text and the rail's progress ring, whose measure is a gradient; the
   touch does not: its green gives way to Highlight rings round a CanvasText glyph, so the
   palette the user chose to read by wins. A

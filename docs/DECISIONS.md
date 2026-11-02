@@ -5858,3 +5858,77 @@ ink rather than the danger ink; it is a div like every other field error now. Le
 typing a 61st character greys *Rename* at once but says why only when the field is left or Enter
 is pressed, since the form rule holds that typing never marks; a click on the greyed button
 counts as leaving the field and so says the reason (Chromium moves the focus to the dialog).
+
+## 2026-11-02 — The painted ground: the demo's ground on the body, the card of the layer's paint, the caption painted, Mica retired
+
+**The user's findings on group B in the real window** (2026-11-02). Three, from the Solid window
+in light: the ground's gradient looked odd and nothing like the demo's "D2-mica" — the cool
+lavender `--ground` meeting the green glow at the corner read as a two-hued gradient; the lock
+card did not blend, an opaque white card with a green band; and without Mica the caption and
+the page did not merge into one surface. Then the user ran the Mica switch: the caption and the
+client became one material and the glow was gone, but on the user's wallpaper the material was
+a flat pale pink, and the user said the demo's background was "much nicer, except the unlock
+card". Two studies followed on the real page in the mock, each with an independent judge, both
+published at https://claude.ai/artifact/NB8No6BimDxPS5eQATLqWC. What they settled: the demo's
+"D2-mica" had been drawn over the study's own stand-in — a dark wallpaper blurred under #F3F3F3
+at 82 %, a mid grey #D3D4D8 with faint hues, about 30 levels below the built ground, over which
+the white card stood 38 levels — and no Solid ground and no real Mica in light looks like it;
+under the glow the caption seam was 14 levels light and 12 dark, under a flat ground painted
+into the caption 0; over a flat ground a frosted card at p % is a plain mix of surface and
+ground, so 86 % to 70 % moved the fill two levels and only the band and the shadow showed; and a
+ground drawn on `html::before/::after`, the stand-in's own recipe, switches every line of text
+on the page to greyscale antialiasing, the opaque cards and tables included, while the same
+layers painted as the body's background keep ClearType and differ by at most 7 levels.
+
+**Ruled, taking the judge's picks** (2026-11-02, "推荐的看起来都不错，和我想的基本一样"): the page
+paints the demo's ground itself, on the body — the three hues (#3C78C8, #E08A3C, #4AA37A) over
+the diagonal base under the theme's veil (rgba(243,243,243,.82) light, rgba(32,32,32,.86) dark),
+no blur, in the demo's box 80 px past the viewport, with its top 96 px faded to one plain colour
+(#D5D3D5 light, #262526 dark) that the caption can take; the lock card, and the boot failure's,
+takes the layer's mica-50 paint (white at 50 % light, #3A3A3A at 30 % dark) with no backdrop
+blur and no wash band, the hairline kept and the shadow halved, so it belongs to the ground at
+1.24:1 and its text is ClearType again; the working pages' layer is mica-50 over the painted
+ground with the foot transparent, opaque again under reduced transparency; the inks on the
+ground are a step darker in light — `--ink-2` #47484E on the rail, the lock stage and the
+splash, `--ink-3` #6E6F76 on the rail's close x, the step line and the stage's card — so the
+ground's text keeps 6:1 while cards and tables keep the plain inks; the shell paints the caption
+the ground's first-row colour; and Mica is retired. This reverses 2026-11-01's "the ground's
+glow is back until Mica", fork D's wash band and the 86 % frost (2026-11-01 and 11-02), and
+closes group B's Mica switch (2026-11-02): the painted ground is the same on every machine and
+on Windows 10, keeps ClearType, and matches the caption on a wider range of builds than Mica.
+
+**Built** (2026-11-02): app.css carries the six tokens (`--ground-paint`, `--ground-paint-0`,
+`--ground-veil`, `--layer-paint`, `--ink-2-ground`, `--ink-3-ground`) in all three theme states,
+the body painted by one plain rule inside `@media not (forced-colors: active)` (never on the
+root's pseudo-elements, never under `:root[...] body`, which would outweigh the contrast
+block's Canvas), `--ground-tint`, `--stage-frost`, the wash band and the Mica block gone,
+`--ground` kept for KeyArt's slot and the window's colour, the contrast block given `.layer {
+background: Canvas }` since a forced palette keeps a fill's alpha; main.ts's backdrop line and
+the mock's stand-in gone. Measured against the judge's PICK shots: every pixel within 1 level
+outside the mock clock's text, the first row #D5D3D5 exactly in light and a one-level dither of
+#262526 in dark, ink-2 on the ground 6.1 to 6.6, the card #E9E9EB / #2C2C2D, ClearType on every
+run the change touches, the ground fixed while the list scrolls, both forced palettes a Canvas
+body with no image. The shell: `groundOf` is the ground's first row; the window is Solid at "/"
+over it; at creation `Windows.CustomTheme`'s four entries carry each theme's ground as the
+caption colour, since Wails applies the custom theme once, as it makes the window; on every
+sync the caption's colour is set with `w32.SetTitleBarColour` (`DWMWA_CAPTION_COLOR`, 35) after
+the dark-mode attribute and before the frame repaint — on Windows 11 build 22000 and later only,
+never under a contrast theme and never while the user has accent title bars on (`ColorPrevalence`
+1 under HKCU's DWM key), where a painted caption is reset to `DWMWA_COLOR_DEFAULT`; the border
+(34) is DWM's. Found in the Wails source and built beyond the judge's text: Wails raises
+`SystemThemeChanged` only when the light or dark mode moves, so a contrast theme or the accent
+setting toggled with the window open would not have reached the guards until the next theme
+flip — the shell hooks `WndProcInterceptor` and re-runs the sync on `WM_SETTINGCHANGE`,
+`WM_SYSCOLORCHANGE` and `WM_DWMCOLORIZATIONCOLORCHANGED` (always passing the message on), and the
+caption's record holds its colour as well as its theme so the touch guard answers per
+attribute. ENFOLD_BACKDROP, the backdrop rule and look, the `/?backdrop=mica` URL and their
+tests are gone. Left for the user's eye: the judge's `.rail` and `.unlock` scopes also give the
+darker ink-2 to the compact rail's flyout and the stage's InfoBars, opaque surfaces; in dark the
+tables and the preview pane sit 3 to 4 levels from the translucent layer, raised or recessed is
+the real window's to say; the light card's hairline all but vanishes on its fill, so the edge is
+the 23-level step and the halved shadow; which messages Windows sends for the accent and
+contrast toggles is recalled; the Archives details pane's head draws greyscale text for a reason
+older than this (its `will-change`), which a zoomed screenshot will show; the Vault page,
+Settings, the other lock views and the touch's dissolve on the new card were not shot. On
+Windows 10 and builds before 22000 the caption stays DWM's own, about 32 levels off the page in
+light.

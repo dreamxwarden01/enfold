@@ -258,6 +258,37 @@ export function green(v: View): boolean {
   return v === "touch";
 }
 
+// Mark is the stage's mark (fork D; APP.md §6, ruled 2026-11-01): the
+// 128 px sheet of the first run ("first") or the 96 px one in its 72 px
+// box ("stage").
+export type Mark = "first" | "stage";
+
+// markAfter is the stage's mark once the panel shows `shown`, `prev` the
+// one it stood under and `kind` the kind of the ceremony on the stage, if
+// any. It follows the view that began the stage's current sequence, not
+// the view on the panel (ruled 2026-11-02): the first run is one scene
+// from its first card to the unlocked app, so a ceremony begun from it (a
+// create, a restore, a backup's test) runs under its 128 px mark
+// throughout: the mark and the panel's top stay put as one begins and as
+// one cancelled or failed ends back at the first run. Only a view that
+// begins a sequence sets the mark: the first-run panel's (the 128 on its
+// own card; the 96 on an absent or a damaged vault's, which report a
+// problem and so take no drawing of their own) and the rest view's, a
+// vault that exists, under the 96. Every view of a ceremony keeps the mark
+// its sequence began under, and so does the first-run panel held while a
+// ceremony opens, when the status no longer says None and there is no card
+// to read; but an unlock's or a setup's view takes the 96 whatever came
+// before, since only a vault that exists runs either, so the rule does not
+// hang on the rest view being drawn between the two: a restore's landing
+// and the unlock begun at once can reach the page in one task, the rest
+// view never on the panel.
+export function markAfter(prev: Mark, shown: View, card: "fresh" | "absent" | "damaged" | null, kind: string | undefined): Mark {
+  if (shown === "rest") return "stage";
+  if (shown === "firstrun") return card ? (card === "fresh" ? "first" : "stage") : prev;
+  if (kind === "unlock" || kind === "setup") return "stage";
+  return prev;
+}
+
 // Phase is how far along the step line a ceremony is: the index of the
 // live step, or Past once every step is done.
 export const PAST = 99;

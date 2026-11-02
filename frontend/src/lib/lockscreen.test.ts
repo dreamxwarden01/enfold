@@ -6,9 +6,9 @@ import { samePath } from "./paths";
 import { firstRunCard, retiredAt } from "./firstrun";
 import type { VaultStatus } from "./api";
 import { VaultState } from "./api";
-import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, choosesVaultPassword, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, nothingChanged, offersRecoverySwitch, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
+import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, choosesVaultPassword, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, markAfter, nothingChanged, offersRecoverySwitch, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
 import { codeText } from "./strings";
-import type { Way } from "./lockscreen";
+import type { Mark, View, Way } from "./lockscreen";
 
 function ev(kind: string, step: CeremonyStep, promptId = "", archives = 0, method = ""): CeremonyState {
   return { seq: 1, kind, method, step, promptId, choose: false, slotLabel: "", recoveryId: "", retries: 0, retriesKnown: false, verified: false, readerCount: 0, n: 0, pinAsked: false, error: "" as never, removeLabel: "", insertLabel: "", archives, rekey: false, backedUp: false, keepIndex: 0, keepCount: 0 };
@@ -147,6 +147,81 @@ describe("the stage's views", () => {
     expect(holdBefore("insert", "rest")).toBe(0);
     expect(holdBefore("insert", "insert")).toBe(0);
     expect(holdBefore("secret", "touch")).toBe(0);
+  });
+});
+
+describe("the stage's mark", () => {
+  type Card = "fresh" | "absent" | "damaged" | null;
+  // The marks a sequence of panels stands under, from a stage that has
+  // shown nothing yet: each the view shown, the first-run card, and the
+  // kind of the ceremony on the stage ("" for none: a cancelled one is
+  // gone the moment it says so).
+  const marks = (seq: [View, Card, string][]): Mark[] => {
+    let m: Mark = "stage";
+    return seq.map(([v, card, kind]) => (m = markAfter(m, v, card, kind)));
+  };
+  const firstRunViews: View[] = ["insert", "edge", "secret", "recovery", "touch", "opening", "done", "failed", "blocked", "wait", "hold"];
+
+  it("keeps the first run's 128 through a ceremony begun there, and through a cancel back", () => {
+    // A create: the first-run panel held over the ceremony's opening
+    // instant (the status no longer None, so no card), its YubiKey's wait,
+    // the PIN, the last try, the touch, then a cancel.
+    expect(marks([["firstrun", "fresh", ""], ["firstrun", null, "create"], ["insert", null, "create"], ["secret", null, "create"], ["secret", null, "create"], ["touch", null, "create"], ["firstrun", "fresh", ""]])).toEqual(
+      ["first", "first", "first", "first", "first", "first", "first"],
+    );
+    // A restore's recovery key, refused and asked again, then a failure
+    // said on the panel, back to the first run.
+    expect(marks([["firstrun", "fresh", ""], ["recovery", null, "import"], ["recovery", null, "import"], ["opening", null, "import"], ["failed", null, "import"], ["firstrun", "fresh", "import"]])).toEqual(
+      ["first", "first", "first", "first", "first", "first"],
+    );
+    // Every view of a create, a restore or a backup's test, Done among
+    // them, and a view with no ceremony to read.
+    for (const kind of ["create", "import", "verify", ""]) {
+      for (const v of firstRunViews) expect(markAfter("first", v, null, kind)).toBe("first");
+    }
+  });
+  it("takes the 96 once the stage next shows the rest view, a vault that now exists", () => {
+    // A restore that lands the vault locked.
+    expect(marks([["firstrun", "fresh", ""], ["recovery", null, "import"], ["opening", null, "import"], ["rest", null, "import"]])).toEqual(["first", "first", "first", "stage"]);
+    // A create that did not open on its own, at rest.
+    expect(marks([["firstrun", "fresh", ""], ["touch", null, "create"], ["opening", null, "create"], ["rest", null, "create"]])).toEqual(["first", "first", "first", "stage"]);
+    // And an unlock from there runs under the 96.
+    expect(marks([["firstrun", "fresh", ""], ["rest", null, "import"], ["insert", null, "unlock"], ["touch", null, "unlock"]])).toEqual(["first", "stage", "stage", "stage"]);
+  });
+  it("takes the 96 at an unlock's or a setup's step whatever came before, since only a vault that exists runs either", () => {
+    // A restore's landing and the unlock begun at once, reaching the page
+    // in one task: the rest view is never on the panel.
+    expect(marks([["firstrun", "fresh", ""], ["recovery", null, "import"], ["opening", null, "import"], ["insert", null, "unlock"], ["secret", null, "unlock"], ["touch", null, "unlock"]])).toEqual(
+      ["first", "first", "first", "stage", "stage", "stage"],
+    );
+    for (const v of firstRunViews) {
+      expect(markAfter("first", v, null, "unlock")).toBe("stage");
+      expect(markAfter("first", v, null, "setup")).toBe("stage");
+    }
+    // Never on the first-run panel, which an unlock's kind left over from
+    // before does not turn: its card says which mark, and held over a
+    // ceremony's opening instant, with no card, it keeps the one it had.
+    expect(markAfter("stage", "firstrun", "fresh", "unlock")).toBe("first");
+    expect(markAfter("first", "firstrun", null, "unlock")).toBe("first");
+  });
+  it("stands the 96 over an absent or a damaged vault and over a ceremony begun from either", () => {
+    expect(marks([["firstrun", "absent", ""], ["firstrun", null, "create"], ["insert", null, "create"], ["touch", null, "create"], ["firstrun", "absent", ""]])).toEqual(
+      ["stage", "stage", "stage", "stage", "stage"],
+    );
+    expect(marks([["firstrun", "damaged", ""], ["secret", null, "create"], ["firstrun", "damaged", "create"]])).toEqual(["stage", "stage", "stage"]);
+    // A ceremony begun at the first run that ends at an absent vault's
+    // card (a reopen that fails after an install, APP.md §2.1).
+    expect(markAfter("first", "firstrun", "absent", "import")).toBe("stage");
+  });
+  it("runs an unlock begun at rest under the 96, and turns to the 128 when the first run comes", () => {
+    expect(marks([["rest", null, ""], ["insert", null, "unlock"], ["secret", null, "unlock"], ["touch", null, "unlock"], ["failed", null, "unlock"], ["rest", null, "unlock"]])).toEqual(
+      ["stage", "stage", "stage", "stage", "stage", "stage"],
+    );
+    expect(marks([["rest", null, ""], ["firstrun", "fresh", ""]])).toEqual(["stage", "first"]);
+  });
+  it("gives a page that joins a ceremony it did not see begin the 96", () => {
+    expect(markAfter("stage", "touch", null, "create")).toBe("stage");
+    expect(markAfter("stage", "firstrun", null, "create")).toBe("stage");
   });
 });
 

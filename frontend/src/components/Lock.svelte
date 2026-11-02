@@ -21,9 +21,9 @@
   import { middlePath, samePath } from "../lib/paths";
   import { firstRunCard, retiredAt } from "../lib/firstrun";
   import { wordedForToken } from "../lib/outcome";
-  import { NO_PHASE, derivingOf, discs, finishGreyed, green, insertLed, lastTry, lineKind, padlockOpen as padlockOpenOf, phaseAfter, pinLeads, retriesTone, viewOf, wayOf } from "../lib/lockscreen";
+  import { NO_PHASE, derivingOf, discs, finishGreyed, green, insertLed, lastTry, lineKind, markAfter, padlockOpen as padlockOpenOf, phaseAfter, pinLeads, retriesTone, viewOf, wayOf } from "../lib/lockscreen";
   import { HeldView } from "../lib/stage.svelte";
-  import type { View, Way } from "../lib/lockscreen";
+  import type { Mark, View, Way } from "../lib/lockscreen";
   import SecretInput from "./SecretInput.svelte";
   import RecoveryInput from "./RecoveryInput.svelte";
   import Dialog from "./Dialog.svelte";
@@ -232,15 +232,35 @@
   const line = $derived(lineKind(c?.kind, way));
   const steps = $derived(line === "token" ? [lockCopy.stepKey, pinStep, lockCopy.stepTouch] : line === "recovery" ? [ceremonyCopy.recoveryKey, lockCopy.stepUnlock] : []);
   const lineShown = $derived(steps.length > 0 && shown !== "rest" && shown !== "firstrun");
-  // The stage's mark (fork D; APP.md §6, ruled 2026-11-01): 96 px in every
-  // view, 128 on the first run's own panel, the vault yet to be made. An
-  // absent or a damaged vault reports a problem, so it keeps the stage's
-  // 96 rather than take a drawing of its own; and a ceremony begun at the
-  // first run (a create, a restore, a backup's test) runs under the 96,
-  // whose touch view fits the smallest window. So its panel rises 56 px as
-  // it begins and comes back down if it ends at the first run (APP.md §6,
-  // First run).
-  const markKind = $derived(shown === "firstrun" && card === "fresh" ? "first" : "stage");
+  // The stage's mark (fork D; APP.md §6, ruled 2026-11-01 and 2026-11-02):
+  // the 96 px sheet over a sequence begun at rest, the 128 from the first
+  // run's own panel, the vault yet to be made, through a ceremony begun
+  // there. The mark follows the view that began the stage's sequence, not
+  // the view shown (lib/lockscreen markAfter; APP.md §6, First run): the
+  // first run is one scene from its first card to the unlocked app, so a
+  // ceremony begun there (a create, a restore, a backup's test) runs under
+  // the 128 in every step, and a cancel or a failure back to the first run
+  // moves nothing. The 96 takes its place only when the stage next shows
+  // the rest view, a vault that now exists; an absent or a damaged vault's
+  // card, which reports a problem and so takes no drawing of its own; or
+  // an unlock's or a setup's step, which only a vault that exists runs (so
+  // the rule holds when the rest view is never drawn between a restore's
+  // landing and an unlock begun at once). A mark that followed the view
+  // shown raised the panel 56 px in the frame the ceremony's status
+  // arrived, and dropped it again on the way back. The price is the
+  // smallest window, which some of those views scroll under the 128 (the
+  // touch, the last try, a chosen password asked here, the recovery key of
+  // a backup's test; APP.md §6, Lock screen), the column still centred on
+  // the window (app.css .u-stage). A page that joins a ceremony it did not
+  // see begin, after a reload, has no sequence to follow and takes the 96.
+  // Turned in a pre-effect after the view's, so the mark and the view it
+  // follows change in the same pass.
+  let markKind = $state<Mark>(untrack(() => markAfter("stage", shown, card, c?.kind)));
+  $effect.pre(() => {
+    const prev = untrack(() => markKind);
+    const next = markAfter(prev, shown, card, c?.kind);
+    if (next !== prev) markKind = next;
+  });
   let phased = $state(NO_PHASE);
   $effect(() => {
     const next = phaseAfter(untrack(() => phased), line, c);

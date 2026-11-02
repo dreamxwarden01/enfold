@@ -5731,3 +5731,35 @@ methods and the touch's glyph where a touch stopped waiting — come down to 16 
 the sprite, since at the user's 125 % a 20 px glyph is 25 device pixels, off the grid and
 visibly softer than the 16 px glyphs beside it; the `.i-20` size is gone from the stylesheet.
 The third call, the first run's mark when a ceremony begins there, stays open.
+
+**The first run keeps its 128 px mark through a ceremony begun there** (2026-11-02). The third
+call, ruled by the user as option 3 ("按 3，效果不行再说"): the first run is one scene from its
+first card to the unlocked app, so a create, a restore or a backup's test begun from it runs
+under the first run's 128 px mark in every step, and neither the mark nor the panel's top moves
+as it begins or as it ends back at the first run, cancelled or failed. Built as a pure rule,
+`markAfter` in lib/lockscreen.ts, of the view that began the stage's current sequence rather
+than the view shown: the rest view sets the 96; the first-run panel sets the 128 on its fresh
+card and the 96 on an absent or a damaged vault's card, which report a problem and take no
+drawing; every ceremony view keeps the mark its sequence began under, and an unlock's or a
+setup's view takes the 96 whatever came before, since only a vault that exists runs either (so a
+restore's landing and an unlock begun at once, which can reach the page in one task with the
+rest view never drawn, still run under the 96 — the review's flush-timing finding); Lock.svelte
+turns the mark in a pre-effect, so no frame shows the mark and the view out of step. Measured
+with the driver at 1086 × 694 and 866 × 554 in both themes: one box for the mark through every
+step of a create driven from the page, its cancel, a restore (one swap, to the 96 with the
+panel at 172, in the frame the rest view arrives — the move the ruling names) and a test, and
+through every staged step with a notice over it. The cost, measured and written into APP's list
+of the states that scroll at the smallest window: under the 128 px mark a ceremony's touch,
+derivation and Done scroll the stage by 40 px, a chosen password asked on the panel by 48, the
+last try by 27, a backup's test's recovery key by 4 (32 refused), the first run's own panel
+with a failure said on it by 17 (as at HEAD), and one notice over most of those steps; in a
+1086 × 694 window two notices over the touch, the green after it, the last try, a chosen
+password or a refused recovery key scroll it by 22 to 43 px, where nothing scrolled under the
+96. The column stays centred on the window while any of it scrolls, so the mark keeps its x and
+its strokes stay on whole pixels with the bar shown. Left: a page that joins such a ceremony
+without seeing it begin (a reload mid-ceremony, which WebView2 does not do) draws the 96 and
+drops to the 128 if the ceremony ends back at the first run; on a first launch the splash draws
+the stage's 96 px mark, since nothing yet says whether a vault exists, so the mark swaps to the
+128 when the first card arrives — outside the ruling's scene, for the user's eye; the mock's
+`cancel_unlock` ends only an unlock's staged ceremony, not a backup's test, against its own
+docstring (the mock, not the app).

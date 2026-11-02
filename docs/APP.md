@@ -1676,8 +1676,9 @@ during which no program can reach the card anyway.
 **Identity** (fork D of the design review, ruled 2026-11-01) is drawn only where Enfold is
 waiting for the user or has nothing yet to show. The lock stage carries the mark — the folded
 sheet, `internal/brand`'s one geometry, 96 px wide in a box cropped to the figure's 72 px of
-height — above its panel in every view but the touch's green, where it gives way; the first run
-carries it at 128 px; the splash and the boot failure carry the lock stage's, at its place; a
+height — above its panel in every view but the touch's green, where it gives
+way; the first run carries it at 128 px, and so does a ceremony begun there;
+the splash and the boot failure carry the lock stage's, at its place; a
 vault with no archives carries a 72 px line drawing of the open box, the archive's own glyph,
 above its sentence. Every working surface stays plain — a list with rows, an empty folder among
 them, the preview pane, the viewer, the Vault page, Settings, every dialog (the first unlock
@@ -1725,15 +1726,23 @@ panel's, not the window's, so it never meets the ground's glow or Mica. **The st
 stands first in the stage's column (*Identity*, above): the 96 px sheet in its 72 px box, 64
 px down under the header's line (which keeps its 20 px whatever it holds, so nothing above the
 panel moves) and 8 px clear of what follows; then the InfoBars, the notices and the step line's
-28 px, so the panel's top stands 172 px down in every state and window height (228 at first run,
-under the 128 px mark) and a notice arriving moves the panel, never the mark (ruled 2026-11-01;
-the panel's top was at 14vh, under the brand row the header drew until the window's caption
-named the app). A window too short for the column scrolls the stage, and the column stays
-centred on the window, not on the scroller, so that the scroller's bar, when it shows, moves
-neither the mark nor the panel: at the smallest window (880 × 560) the last try scrolls it by 47
-px, a touch still pending at rest by 16 and a refused recovery key by 13, and so does any notice
-over the PIN's, the touch's or the recovery key's step, and one more than about 100 px tall over
-the YubiKey's step or 112 px over the rest panel (the Tampered notice is 114). The header's
+28 px, so the panel's top stands 172 px down in every state and window height (228 at first run
+and through a ceremony begun there, under the 128 px mark) and a notice arriving moves the
+panel, never the mark (ruled 2026-11-01; the panel's top was at 14vh, under the brand row the
+header drew until the window's caption named the app). A window too short for the column
+scrolls the stage, and the column stays centred on the window, not on the scroller, so that the
+scroller's bar, when it shows, moves neither the mark nor the panel: at the smallest window
+(880 × 560) the last try scrolls it by 47 px, a touch still pending at rest by 16 and a refused
+recovery key by 13, and so does any notice over the PIN's, the touch's or the recovery key's
+step, and one more than about 100 px tall over the YubiKey's step or 112 px over the rest panel
+(the Tampered notice is 114); under the first run's 128 px mark (*First run*, below), its
+own panel scrolls it by 17 px when a failure is said on it, and a ceremony begun there by 40
+at its touch and through the derivation and Done on its green, by 48 at a chosen password
+asked on the panel, by 27 at its last try and by 4 at a backup's test's recovery key (32
+refused), and so does one notice over any of its steps but the blocked PIN's, a failure said
+where it happened and the neutral panel's derivation and Done, which hold one, while in a
+1086 × 694 window two notices over its touch or the green after it, its last try, a chosen
+password or a backup's test's refused recovery key scroll it by 22 to 43 px. The header's
 state word stands at the top right, and beside it, at rest and at first run, a gear that opens
 Settings, which needs no vault — the lock scene steps aside for the Settings page until the
 route moves on or the vault's state changes (ruled 2026-10-17); the notices — the warnings, the
@@ -1933,9 +1942,15 @@ a damaged vault use the same panel, with no step line, sized to its content (rul
 **First run** reads, under the stage's mark at 128 px, "Create your vault"
 and the one sentence — "A vault is one file: the keys to
 your archives, opened by a YubiKey, a password or a recovery key." — over *Create a vault…*,
-*Restore from a vault or backup…* and the subtle *Test that a backup opens…*; a
-ceremony begun from one runs under the stage's 96 px mark, so the panel rises 56 px
-as it begins and comes back down if it ends at the first run; what a restore needs
+*Restore from a vault or backup…* and the subtle *Test that a backup opens…*; a ceremony
+begun from one runs under the same 128 px mark in every step (ruled 2026-11-02: the first
+run is one scene from its first card to the unlocked app), so neither the mark nor the
+panel's top moves as it begins or as it ends back at the first run, cancelled or failed,
+and the mark becomes the stage's 96 px one, the panel rising 56 px with it, only when the
+stage next shows a view that is neither that ceremony's nor the first run's: the rest view
+of the vault a restore has landed, or of a created vault that did not open on its own (a
+create otherwise ends in the unlocked app, and the stage gives way to it as after an
+unlock), or the card of a vault installed but not reopened (§2.1); what a restore needs
 (a backup's recovery key) is said in the restore dialog, where it applies. **An absent vault**
 reads "<vault> is not where Enfold left it" over its path in mono, then *Try again*, *Find it…* —
 a picker, then the import dialog with "use the file where it is" already taken, the route that

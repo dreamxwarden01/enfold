@@ -3847,7 +3847,26 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   unlock are separate cards the same 4 px apart (ruled 2026-10-17; they stood 12 apart). A
   text box has no resize grip — the description's box is two lines, scrolling past them — a
   search box has no clear button of Chromium's own, and selected text wears the accent's line
-  under the ink, never the engine's blue (ruled 2026-10-17). **The window's ground is painted**
+  under the ink, never the engine's blue (ruled 2026-10-17). **A scrollbar is WinUI's thin bar,
+  drawn in CSS** (ruled 2026-11-03, after the real window drew WebView2's own bar, a thick grey
+  gutter with an arrow at each end, in the file list and on Settings): a 12 px gutter with no
+  arrows, clear at rest but for a 2 px rounded line in the strong control stroke 3 px in from
+  its right edge, which grows to a 6 px thumb on a faint track while the pointer is over the
+  scroller, darker under the pointer and darker still while it is held. In the viewer, whose
+  ground is dark in both themes, the bar wears the dark theme's colours. Only the innermost
+  scroller under the pointer answers — a text box counts as one even while its text is too short
+  to scroll — so the Details dialog's body keeps its line while the pointer is in its versions
+  table. The gutter never changes width, so nothing moves under the pointer, and every
+  scroller's content gains what the system's bar took past it (3 px beside headless Edge's 15 px
+  bar; the real window's was not measured). It is `::-webkit-scrollbar` in the stylesheet, so it
+  looks the same on every machine, and `scrollbar-width` and `scrollbar-color` are set nowhere,
+  since either makes Chromium ignore it; Chromium floors the thumb's borders to whole device
+  pixels, so at 125 % the line is 3 device pixels and the thumb 8, the nearest crisp widths to
+  the design's 2.5 and 7.5. Windows' own overlay bars were not taken: WebView2's option for them
+  is out of Wails' reach, and the `OverlayScrollbar` feature flag is unverified in WebView2,
+  hides the bar at rest, so nothing says a list scrolls, and is a Chromium name a runtime update
+  can drop without a word. A contrast theme keeps the system's own bars, arrows and all, in its
+  palette. **The window's ground is painted**
   (the phase-5 aurora study, ruled 2026-11-02, replacing the lookbook's green radial glow of
   2026-11-01 and the Mica material, retired with its switch): the demo's ground, three hues —
   blue at the top left, amber at the right, green at the foot — over a diagonal base, under a

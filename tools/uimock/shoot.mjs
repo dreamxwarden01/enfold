@@ -13,8 +13,19 @@
 //     That is measured against the colour the stroke is painted with: full
 //     columns side by side and no partial one, and ink as wide as the
 //     geometry gives, centred where it gives;
-//   - the scrolled file list draws a scrollbar: a bar thicker than 0 and a
-//     thumb found in its pixels, which --hide-scrollbars would take away.
+//   - the scrolled file list draws a scrollbar, which --hide-scrollbars
+//     would take away, and it is the right one. In light and dark it is
+//     the app's own (app.css, the scrollbars): a 12 px gutter with no
+//     arrow at either end and nothing down its middle, and at rest a line
+//     on whole device pixels at its right, as wide and as far in from the
+//     edge as the thumb's borders give once Chromium floors them to device
+//     pixels (2 px and 3 px in the design, 3 and 3 device px at 125 %);
+//     with the pointer over the list the line grows to the thumb the
+//     borders give then (6 px, 8 device px at 125 %), which also proves
+//     the bar is redrawn when the pointer arrives. In a contrast palette it
+//     is the system's, which app.css leaves to the theme: not the app's
+//     12 px, an arrow at each end and a thumb between them (15 px, as
+//     headless Edge's own bar measured before the app drew its own).
 //
 // Usage, after npm run build in frontend/ (the mock serves frontend/dist):
 //
@@ -28,7 +39,8 @@
 // dark, forced-black and forced-white, and lock-<look>.png for
 // forced-black-light-setting and forced-white-dark-setting;
 // mark-zoom-<look>.png and scrollbar-zoom-<look>.png, enlarged so each
-// device pixel shows; and tour.json, the measurements.
+// device pixel shows, with scrollbar-zoom-<look>-hover.png in light and
+// dark; and tour.json, the measurements.
 import { writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { launch, startMock, strokeProfile, sleep, REPO } from "./cdp.mjs";
@@ -63,6 +75,16 @@ const MARK = ".unlock .stage-mark .idart";
 // error (within 0.01 in every look here) and half the half pixel a box off
 // the grid is out by.
 const TOL = 0.25;
+// The app's scrollbar (app.css, the scrollbars), in CSS px: the gutter, the
+// thumb's right border, and its left border at rest and with the pointer
+// over the scroller. Chromium floors each border to whole device pixels,
+// so the line's width in device px is the gutter's less the two floors:
+// at 125 %, 15 less 9 and 3 at rest, and 15 less 4 and 3 under the
+// pointer. The left borders are 7.4 and 3.4, clear of a device pixel's
+// edge at 125 % (9.25 and 4.25), so the floors here are not a matter of
+// rounding.
+const BAR = 12;
+const THUMB = { right: 3, restLeft: 7.4, hoverLeft: 3.4 };
 
 // setting is the app's Theme setting under a palette (setForcedColors'
 // theme): System for the first two forced looks, the other one for the
@@ -133,6 +155,58 @@ function barPixels(img, list, bar, dpr) {
     }
   });
   return { x, track, arrows, thumbs };
+}
+
+// The app's line in the pixels: the rows where the gutter holds anything
+// but its own ground (its first column, row by row), and across the middle
+// half of their longest run the columns read against the thumb's colour,
+// token ([r, g, b, a], --ctl-strong) laid over that ground (strokeProfile).
+// A line on whole device pixels is full columns side by side and no
+// partial one; its width and its gap to the gutter's right edge are held
+// to the borders' floors. right is the list's right border in CSS px.
+function linePixels(img, list, bar, right, dpr, token, left) {
+  const gx1 = Math.round((list.css.x + list.css.width - right) * dpr);
+  const gx0 = Math.round((list.css.x + list.css.width - right - bar) * dpr);
+  const y0 = Math.ceil(list.css.y * dpr), y1 = Math.floor((list.css.y + list.css.height) * dpr);
+  const off = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+  let best = [0, 0], start = -1;
+  for (let y = y0; y <= y1; y++) {
+    let ink = false;
+    if (y < y1) {
+      const g = img.at(gx0, y);
+      for (let x = gx0 + 1; x < gx1 && !ink; x++) ink = off(img.at(x, y), g) > 24;
+    }
+    if (ink && start < 0) start = y;
+    if (!ink && start >= 0) {
+      if (y - start > best[1] - best[0]) best = [start, y];
+      start = -1;
+    }
+  }
+  const floor = (v) => Math.floor(v * dpr + 1e-6);
+  const expected = { width: gx1 - gx0 - floor(left) - floor(THUMB.right), right: floor(THUMB.right) };
+  if (best[1] - best[0] < 8) return { gutter: [gx0, gx1], expected, found: false };
+  const len = best[1] - best[0];
+  const ya = best[0] + Math.floor(len / 4), yb = best[0] + Math.ceil((3 * len) / 4);
+  const ground = [0, 1, 2].map((i) => {
+    let t = 0;
+    for (let y = ya; y < yb; y++) t += img.at(gx0, y)[i];
+    return t / (yb - ya);
+  });
+  const ink = [0, 1, 2].map((i) => Math.round(token[i] * token[3] + ground[i] * (1 - token[3])));
+  const prof = strokeProfile(img, { x0: gx0, x1: gx1, y0: ya, y1: yb, ink });
+  const gap = prof.centre === null ? null : +(gx1 - (prof.centre + prof.sum / 2)).toFixed(3);
+  return { gutter: [gx0, gx1], expected, found: true, rows: [best[0], best[1]], ink, full: prof.full, partial: prof.partial,
+    sum: prof.sum, centre: prof.centre, gap, whole: prof.whole };
+}
+
+// Whether a line read by linePixels is the one the borders give.
+function lineProblems(name, what, l) {
+  if (!l.found) return [`${name}: no line found in the bar's gutter ${what}`];
+  const out = [];
+  if (l.whole !== true) out.push(`${name}: the bar's line ${what} is not on whole device pixels: full ${l.full.join(" ") || "none"}, partial ${l.partial.join(" ") || "none"}`);
+  if (Math.abs(l.sum - l.expected.width) > TOL) out.push(`${name}: the bar's line ${what} is ${l.sum} device px wide, not ${l.expected.width}`);
+  if (l.gap === null || Math.abs(l.gap - l.expected.right) > TOL) out.push(`${name}: the bar's line ${what} stands ${l.gap} device px in from the gutter's edge, not ${l.expected.right}`);
+  return out;
 }
 
 const mock = await startMock({ port: +A["mock-port"], root: ROOT });
@@ -215,12 +289,35 @@ try {
     await p.screenshot(path.join(OUT, `files-${look.name}.png`));
     const bar = Math.round(m.bar);
     r.list = { box: list, metrics: m, bar };
-    if (bar > 0) {
-      r.list.pixels = barPixels(await p.pixels(), list, bar, tour.dpr);
-      await p.screenshot(path.join(OUT, `scrollbar-zoom-${look.name}.png`), { x: list.css.x + list.css.width - bar - 6, y: list.css.y, width: bar + 6, height: list.css.height }, { zoom: 3 });
+    const zoom = { x: list.css.x + list.css.width - bar - 6, y: list.css.y, width: bar + 6, height: list.css.height };
+    if (bar <= 0) {
+      problems.push(`${look.name}: the file list draws no scrollbar (bar ${m.bar})`);
+    } else {
+      const img = await p.pixels();
+      r.list.pixels = barPixels(img, list, bar, tour.dpr);
+      await p.screenshot(path.join(OUT, `scrollbar-zoom-${look.name}.png`), zoom, { zoom: 3 });
+      const px = r.list.pixels;
+      if (look.palette) {
+        // The system's bar, which app.css leaves to a contrast theme.
+        if (bar === BAR) problems.push(`${look.name}: the file list wears the app's ${BAR} px bar under a contrast palette, where the system's belongs`);
+        if (px.arrows.length !== 2) problems.push(`${look.name}: the system's bar shows ${px.arrows.length} arrow runs, not one at each end`);
+        if (!px.thumbs.length) problems.push(`${look.name}: no thumb found in the system bar's pixels`);
+      } else {
+        // The app's bar, at rest and then with the pointer over the list.
+        if (bar !== BAR) problems.push(`${look.name}: the file list's bar is ${bar} px, not the app's ${BAR} (the system's is 15, with arrows)`);
+        if (px.arrows.length || px.thumbs.length) problems.push(`${look.name}: the gutter's middle column holds runs (arrows ${px.arrows.length}, others ${px.thumbs.length}), where the app's bar draws nothing at rest`);
+        const right = await p.ev(`parseFloat(getComputedStyle(document.querySelector(${JSON.stringify(LIST)})).borderRightWidth)`);
+        const token = await p.resolveColor(LIST, "var(--ctl-strong)", "color");
+        r.list.line = linePixels(img, list, bar, right, tour.dpr, token, THUMB.restLeft);
+        problems.push(...lineProblems(look.name, "at rest", r.list.line));
+        await p.mouse(list.css.x + list.css.width / 2, list.css.y + list.css.height / 2);
+        await sleep(500);
+        r.list.grown = linePixels(await p.pixels(), list, bar, right, tour.dpr, token, THUMB.hoverLeft);
+        problems.push(...lineProblems(look.name, "under the pointer", r.list.grown));
+        await p.screenshot(path.join(OUT, `scrollbar-zoom-${look.name}-hover.png`), zoom, { zoom: 3 });
+        await park(p);
+      }
     }
-    if (bar <= 0) problems.push(`${look.name}: the file list draws no scrollbar (bar ${m.bar})`);
-    else if (!r.list.pixels.thumbs.length) problems.push(`${look.name}: no thumb found in the bar's pixels`);
     if (m.scrollTop <= 0) problems.push(`${look.name}: the wheel did not scroll the list`);
   }
 } catch (e) {
@@ -238,7 +335,9 @@ for (const [name, r] of Object.entries(tour.looks)) {
   const s = r.mark && r.mark.stroke;
   const mark = s ? `mark full ${s.full.join(",") || "none"} partial ${s.partial.join(",") || "none"}, ink ${s.sum} px at ${s.centre}` : "mark not measured";
   const px = r.list && r.list.pixels;
-  const list = r.list ? `; list bar ${r.list.bar} px, scrollTop ${r.list.metrics.scrollTop}, thumb ${px ? runs(px.thumbs) : "none"}, arrows ${px ? runs(px.arrows) : "none"}` : "";
+  const line = (l) => !l ? "" : !l.found ? "none" : `${l.sum} px (${l.expected.width}) ${l.gap} in (${l.expected.right})`;
+  const own = r.list && r.list.line ? `, line ${line(r.list.line)}, under the pointer ${line(r.list.grown)}` : "";
+  const list = r.list ? `; list bar ${r.list.bar} px, scrollTop ${r.list.metrics.scrollTop}, thumb ${px ? runs(px.thumbs) : "none"}, arrows ${px ? runs(px.arrows) : "none"}${own}` : "";
   console.log(`${name}: snap ${snap}; ${mark}${list}`);
 }
 if (problems.length) {

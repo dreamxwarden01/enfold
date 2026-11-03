@@ -6009,3 +6009,48 @@ second ink again (`--ink-2-plain`, the theme's own value), the lock card keeping
 as the judge measured it. And the painted ground's top fade holds its plain colour for the first
 px, as the touch's band does, so the window's first row is exactly the caption's colour in dark
 too, where it had dithered one level.
+
+**A scrollbar is WinUI's thin bar, drawn in CSS** (2026-11-03, B.4). The user, in the real window
+at 125 %: the file list and Settings drew WebView2's own bar, a thick grey gutter with an arrow at
+each end, and asked for the Fluent thin bar; the phase-5 window study's CSS route is taken, with
+four measured departures from the study's block. Ruled and built: a 12 px gutter with no arrows
+that never changes width, clear at rest but for a 2 px rounded line in the strong control stroke
+3 px in from its edge, which grows to a 6 px thumb on a faint track while the pointer is over the
+scroller, the second ink under the pointer and the ink while held; `::-webkit-scrollbar` and never
+`scrollbar-width` or `scrollbar-color`, since either makes Chromium drop the pseudo-elements; the
+whole block inside `@media not (forced-colors: active)`, so a contrast theme keeps the system's
+bars, arrows and all, in its palette; Windows' overlay bars not taken (WebView2's option for them
+is out of Wails' reach, the `OverlayScrollbar` flag is unverified there, hides the bar at rest so
+nothing says a list scrolls, and is a Chromium name a runtime update can drop). The departures,
+each measured in headless Edge 156 on the native 125 % path: (1) a `:hover` on the bar's parts
+alone did not redraw most bars — Chromium restyles a custom scrollbar only when the scroller's
+own style changes — so the state is a registered, non-inherited `--scroll-over`, 1 on `:hover`,
+read by the parts with `inherit`; (2) Chromium floors a thumb's borders to whole device pixels, so
+the study's 7 and 3 px borders drew 4 and 9 device px at 125 %, and the left border is 7.4 px at
+rest and 3.4 under the pointer: 3 and 8 device px at 125 %, the nearest crisp widths to 2.5 and
+7.5, and the design's own 2 and 6 at 100, 150 and 200 % (not 7.2 and 3.2, which sit on a
+device-pixel edge at 125 % and draw 4 and 10 at 150 %); (3) an outer scroller is `:hover` too
+while the pointer is in an inner one, so a `:has()` list of the classes every one of whose boxes
+is a scroller (the table wrap, the preview's facts, the art's pre, a text box, the merge list, the
+compare list, the Move to tree, the sidebar's pop, a menu) holds the outer bar at rest — a list
+kept by hand, a scroller that can stand inside another joining it, taken over a pointer-tracking
+script, and a text box counting as a scroller even while its text is too short to scroll; (4) the
+viewer, dark in both themes, drew the light theme's near-black line on its dark panel (1.3:1,
+where the system's bar had 5.3:1), so the bar's colours are tokens of its own (`--bar-line`,
+`--bar-track`, `--bar-over`, `--bar-held`, falling back to the general ones) and the viewer sets
+them to the dark theme's (5.05:1 at rest and 4.70 under the pointer in light). Measured on every
+scroller in seven scenes, both sizes, both themes: the line 3 device px at rest and 8 under the
+pointer, 3 in from the edge, each colour within 1.2 of its token; content 3 px wider beside
+headless Edge's 15 px bar with nothing wrapping or clipping anew (the Details dialog's 32-digit
+key ids now fit); the Details dialog's body and its versions table, the preview's text and facts,
+and the Archives pane and panel each answer alone. The repo tour now asserts the app's bar in
+light and dark (12 px, no arrows, the line's width and its gap on whole device pixels at rest and
+grown under the pointer, which also proves the redraw) and the system's under a contrast palette,
+and exits 1 when the block, its hover rules or its guard is removed. For the user's eye in the
+real window: the thin line in the file list and on Settings at 125 %, growing under the pointer
+and shrinking back when it leaves (the redraw evidence is headless Edge's alone); a long text in
+the viewer under the light theme, its bar a light line on the dark panel; a real contrast theme,
+and Aquatic, Desert, Dusk or Night sky, which cannot be emulated, bringing the system's bars back.
+Left: the real window's classic bar was never measured, so the record names no width for it;
+175 % draws 4 and 11 device px against the design's 3.5 and 10.5, which no CSS value fixes; the
+tour stages only the file list, so the viewer's colours are not asserted by it.

@@ -30,7 +30,9 @@ the lock stage, the Archives page and an archive's file list, scrolled, in light
 the two contrast palettes Chromium can emulate, then the lock stage under each palette with
 the other Theme setting, at 1086 x 694 CSS px and 125 %. Beside the shots it writes enlarged
 crops of the mark and the scrollbar and a `tour.json` with the measurements, and it exits with 1
-if either lesson below has come undone.
+if either lesson below has come undone, or if the file list's bar is not the one its look draws:
+the app's own in light and dark (app.css: a 12 px gutter with no arrows, its line at rest and
+grown under the pointer, each on whole device pixels), the system's under a contrast palette.
 
 A copy of `cdp.mjs` outside the repository, such as the one each of the workflow's agents keeps
 in its own folder, cannot tell where the repository is. Pass `--repo <root>` to a copied

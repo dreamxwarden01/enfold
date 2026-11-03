@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"github.com/dreamxwarden01/enfold/internal/app"
 )
 
 // TestTheExitSweepsBeforeTheDragOutShutsDown is endDragOut's whole reason to
@@ -122,6 +126,48 @@ func TestTheGroundIsTheStylesheets(t *testing.T) {
 	}
 }
 
+// TestTheTouchIsTheStylesheets: the caption's colour while the touch's
+// green is up is the touch's plain top in each theme, the stylesheet's
+// --touch-top (APP.md §2.4, §6 Lock screen), and its transparent end is
+// the same colour, so that the caption and the wash's first row meet with
+// no line; a step that changes one changes both. Dark is declared twice,
+// for the System theme's dark and for Dark chosen. The wash paints it
+// over its gradient, held for the first px and gone 96 px down.
+func TestTheTouchIsTheStylesheets(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("frontend", "src", "app.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(b)
+	for _, dark := range []bool{false, true} {
+		g := touchOf(dark)
+		if g.Alpha != 255 {
+			t.Errorf("the touch's top (dark %v) has alpha %d, want opaque", dark, g.Alpha)
+		}
+		want := 1
+		if dark {
+			want = 2
+		}
+		for _, decl := range []string{
+			fmt.Sprintf("--touch-top: #%02x%02x%02x;", g.Red, g.Green, g.Blue),
+			fmt.Sprintf("--touch-top-0: rgba(%d, %d, %d, 0);", g.Red, g.Green, g.Blue),
+		} {
+			if n := strings.Count(css, decl); n < want {
+				t.Errorf("app.css declares %q %d times, want %d at least (dark %v)", decl, n, want, dark)
+			}
+		}
+		if touchOf(dark) == groundOf(dark) {
+			t.Errorf("the touch's top is the ground's (dark %v)", dark)
+		}
+	}
+	if touchOf(true) == touchOf(false) {
+		t.Fatal("one touch top for both themes")
+	}
+	if !strings.Contains(css, "linear-gradient(var(--touch-top) 1px, var(--touch-top-0) 96px) 0 0 / 100% 100% no-repeat,") {
+		t.Error("the wash does not paint its plain top, held for its first px and gone 96 px down")
+	}
+}
+
 // TestColorref: a colour reaches DWM as a COLORREF, 0x00BBGGRR (the RGB
 // macro, wingdi.h), as Wails' own NewRGBPtr builds it. The grounds read
 // the same either way round, so a channel order swapped would not show in
@@ -146,14 +192,21 @@ func TestColorref(t *testing.T) {
 	if got := colorref(groundOf(true)); got != 0x262526 {
 		t.Errorf("the dark ground's COLORREF is %#08x, want 0x262526", got)
 	}
+	if got := colorref(touchOf(false)); got != 0x5E690D {
+		t.Errorf("the light touch's COLORREF is %#08x, want 0x5e690d", got)
+	}
+	if got := colorref(touchOf(true)); got != 0x434B0B {
+		t.Errorf("the dark touch's COLORREF is %#08x, want 0x434b0b", got)
+	}
 }
 
 // TestTheCaptionColourRule is the caption's colour (APP.md §2.4): the
-// ground's first row in the theme, on Windows 11 (build 22000 and later)
-// with no contrast theme and no accent title bars; DWM's own everywhere
-// else — on Windows 10, which ignores the attribute; under a contrast
-// theme, whose caption is the system's; and where the user has asked for
-// the accent colour on title bars (ColorPrevalence 1).
+// ground's first row in the theme, or the touch's plain top while the
+// touch's green is up, on Windows 11 (build 22000 and later) with no
+// contrast theme and no accent title bars; DWM's own everywhere else, the
+// green or not — on Windows 10, which ignores the attribute; under a
+// contrast theme, whose caption is the system's; and where the user has
+// asked for the accent colour on title bars (ColorPrevalence 1).
 func TestTheCaptionColourRule(t *testing.T) {
 	if dwmColourDefault != 0xFFFFFFFF {
 		t.Fatalf("DWMWA_COLOR_DEFAULT is %#x, want 0xffffffff (dwmapi.h)", dwmColourDefault)
@@ -162,28 +215,84 @@ func TestTheCaptionColourRule(t *testing.T) {
 		t.Fatalf("the caption's colour starts at build %d, want 22000, Windows 11's first", captionColourBuild)
 	}
 	for _, dark := range []bool{false, true} {
-		ground := colorref(groundOf(dark))
-		for _, c := range []struct {
-			paints, contrast bool
-			prevalence       uint64
-			want             uint32
-		}{
-			{true, false, 0, ground},
-			{false, false, 0, dwmColourDefault}, // Windows 10
-			{true, true, 0, dwmColourDefault},   // a contrast theme
-			{true, false, 1, dwmColourDefault},  // accent title bars
-			{false, true, 1, dwmColourDefault},
-			{false, false, 1, dwmColourDefault},
-			{true, true, 1, dwmColourDefault},
-		} {
-			if got := captionColour(dark, c.paints, c.contrast, c.prevalence); got != c.want {
-				t.Errorf("captionColour(dark %v, build 22000+ %v, contrast %v, ColorPrevalence %d) = %#08x, want %#08x",
-					dark, c.paints, c.contrast, c.prevalence, got, c.want)
+		for _, green := range []bool{false, true} {
+			painted := colorref(groundOf(dark))
+			if green {
+				painted = colorref(touchOf(dark))
+			}
+			for _, c := range []struct {
+				paints, contrast bool
+				prevalence       uint64
+				want             uint32
+			}{
+				{true, false, 0, painted},
+				{false, false, 0, dwmColourDefault}, // Windows 10
+				{true, true, 0, dwmColourDefault},   // a contrast theme
+				{true, false, 1, dwmColourDefault},  // accent title bars
+				{false, true, 1, dwmColourDefault},
+				{false, false, 1, dwmColourDefault},
+				{true, true, 1, dwmColourDefault},
+			} {
+				if got := captionColour(dark, c.paints, c.contrast, c.prevalence, green); got != c.want {
+					t.Errorf("captionColour(dark %v, build 22000+ %v, contrast %v, ColorPrevalence %d, green %v) = %#08x, want %#08x",
+						dark, c.paints, c.contrast, c.prevalence, green, got, c.want)
+				}
 			}
 		}
 	}
-	if captionColour(false, true, false, 0) == captionColour(true, true, false, 0) {
+	if captionColour(false, true, false, 0, false) == captionColour(true, true, false, 0, false) {
 		t.Fatal("one caption colour for both themes")
+	}
+	if captionColour(false, true, false, 0, true) == captionColour(true, true, false, 0, true) {
+		t.Fatal("one touch colour for both themes")
+	}
+	for _, dark := range []bool{false, true} {
+		if captionColour(dark, true, false, 0, true) == captionColour(dark, true, false, 0, false) {
+			t.Errorf("the green caption is the ground's (dark %v)", dark)
+		}
+	}
+}
+
+// TestTheCaptionTextRule is the caption's text (APP.md §2.4): white while
+// the touch's green is up and the caption is the shell's to paint, so the
+// window's name reads on the green in both themes; DWM's own, which DWM
+// picks by the window's dark mode, while the ground is up and under every
+// guard, green or not: white text on DWM's own caption, a contrast
+// theme's or the accent's, could be white on white.
+func TestTheCaptionTextRule(t *testing.T) {
+	if captionInk != 0x00FFFFFF || captionInk == dwmColourDefault {
+		t.Fatalf("the caption's ink is %#08x, want white as a COLORREF, 0x00ffffff, which is not DWMWA_COLOR_DEFAULT", captionInk)
+	}
+	if got := colorref(application.NewRGB(0xFF, 0xFF, 0xFF)); got != captionInk {
+		t.Fatalf("white's COLORREF is %#08x, the ink %#08x", got, captionInk)
+	}
+	for _, c := range []struct {
+		paints, contrast bool
+		prevalence       uint64
+		green            bool
+		want             uint32
+	}{
+		{true, false, 0, true, captionInk},
+		{true, false, 0, false, dwmColourDefault},
+		{false, false, 0, true, dwmColourDefault}, // Windows 10
+		{true, true, 0, true, dwmColourDefault},   // a contrast theme
+		{true, false, 1, true, dwmColourDefault},  // accent title bars
+		{false, true, 1, true, dwmColourDefault},
+		{true, true, 1, true, dwmColourDefault},
+		{false, false, 1, true, dwmColourDefault},
+		{true, true, 0, false, dwmColourDefault},
+		{true, false, 1, false, dwmColourDefault},
+	} {
+		if got := captionText(c.paints, c.contrast, c.prevalence, c.green); got != c.want {
+			t.Errorf("captionText(build 22000+ %v, contrast %v, ColorPrevalence %d, green %v) = %#08x, want %#08x",
+				c.paints, c.contrast, c.prevalence, c.green, got, c.want)
+		}
+		// The text is white only where the caption is the touch's green.
+		painted := captionColour(false, c.paints, c.contrast, c.prevalence, c.green) == colorref(touchOf(false))
+		if (captionText(c.paints, c.contrast, c.prevalence, c.green) == captionInk) != painted {
+			t.Errorf("white text and the green caption part (build 22000+ %v, contrast %v, ColorPrevalence %d, green %v)",
+				c.paints, c.contrast, c.prevalence, c.green)
+		}
 	}
 }
 
@@ -288,10 +397,14 @@ func TestWindowsModeIsReadWithoutTheApp(t *testing.T) {
 // reload keeps what the shell has set since; and a window made again from
 // the tray is a new window, untouched until its own load.
 func TestTheCaptionWaitsForThePage(t *testing.T) {
-	light := captionLook{theme: captionLight, colour: captionColour(false, true, false, 0)}
-	dark := captionLook{theme: captionDark, colour: captionColour(true, true, false, 0)}
+	light := captionLook{theme: captionLight, colour: captionColour(false, true, false, 0, false), text: dwmColourDefault}
+	dark := captionLook{theme: captionDark, colour: captionColour(true, true, false, 0, false), text: dwmColourDefault}
 	touched := func(c *captionState, id uint, want captionLook) (bool, bool) {
-		return c.touch(id, want, false)
+		th, co, tx := c.touch(id, want, false)
+		if tx {
+			t.Errorf("window %d's text was touched with no green (want %+v)", id, want)
+		}
+		return th, co
 	}
 	var c captionState
 	for _, want := range []captionLook{light, dark} {
@@ -313,7 +426,7 @@ func TestTheCaptionWaitsForThePage(t *testing.T) {
 	}
 
 	// The shell sets it dark; a reload says light again, as it was made.
-	c.applied(true, true, dark)
+	c.applied(true, true, false, dark)
 	c.loaded(1, light)
 	if c.wears != dark {
 		t.Error("a reload put back the caption the window was made with")
@@ -339,7 +452,7 @@ func TestTheCaptionWaitsForThePage(t *testing.T) {
 
 	// Made under a contrast theme, Wails sets no theme and no colour:
 	// whatever resolves is applied at the load once that theme has gone.
-	c.loaded(3, captionLook{theme: captionUnknown, colour: dwmColourDefault})
+	c.loaded(3, captionLook{theme: captionUnknown, colour: dwmColourDefault, text: dwmColourDefault})
 	for _, want := range []captionLook{light, dark} {
 		if th, co := touched(&c, 3, want); !th || !co {
 			t.Errorf("a window made under a contrast theme is not given %+v at its load", want)
@@ -354,44 +467,243 @@ func TestTheCaptionWaitsForThePage(t *testing.T) {
 // come back. Accent title bars take the colour back the same way, the
 // theme still the shell's.
 func TestTheCaptionUnderAContrastTheme(t *testing.T) {
-	light := captionLook{theme: captionLight, colour: captionColour(false, true, false, 0)}
+	look := func(dark, contrast bool, prevalence uint64) captionLook {
+		return captionLook{theme: captionOf(dark), colour: captionColour(dark, true, contrast, prevalence, false), text: captionText(true, contrast, prevalence, false)}
+	}
+	light := look(false, false, 0)
 	var c captionState
 	c.loaded(1, light)
 
 	// A contrast theme begins over the painted light caption.
-	hc := captionLook{theme: captionLight, colour: captionColour(false, true, true, 0)}
-	th, co := c.touch(1, hc, true)
-	if th || !co {
-		t.Fatalf("a contrast theme began: theme %v colour %v, want the colour alone, reset", th, co)
+	hc := look(false, true, 0)
+	th, co, tx := c.touch(1, hc, true)
+	if th || !co || tx {
+		t.Fatalf("a contrast theme began: theme %v colour %v text %v, want the colour alone, reset", th, co, tx)
 	}
-	c.applied(th, co, hc)
+	c.applied(th, co, tx, hc)
 	if c.wears.colour != dwmColourDefault || c.wears.theme != captionLight {
 		t.Fatalf("under the contrast theme the caption wears %+v, want light with DWM's own colour", c.wears)
 	}
 
 	// The setting flips to dark under it: nothing is touched.
-	hcDark := captionLook{theme: captionDark, colour: captionColour(true, true, true, 0)}
-	if th, co := c.touch(1, hcDark, true); th || co {
-		t.Errorf("under a contrast theme a flip set theme %v colour %v, want nothing", th, co)
+	hcDark := look(true, true, 0)
+	if th, co, tx := c.touch(1, hcDark, true); th || co || tx {
+		t.Errorf("under a contrast theme a flip set theme %v colour %v text %v, want nothing", th, co, tx)
 	}
 
 	// The contrast theme ends: dark and its ground.
-	dark := captionLook{theme: captionDark, colour: captionColour(true, true, false, 0)}
-	if th, co := c.touch(1, dark, false); !th || !co {
-		t.Errorf("after the contrast theme the caption is caught up in theme %v colour %v, want both", th, co)
+	dark := look(true, false, 0)
+	if th, co, tx := c.touch(1, dark, false); !th || !co || tx {
+		t.Errorf("after the contrast theme the caption is caught up in theme %v colour %v text %v, want the theme and the colour", th, co, tx)
 	}
 
 	// Accent title bars turned on over a painted caption: the colour
 	// alone goes back to DWM, and turned off again it comes back.
 	c.loaded(2, light)
-	accent := captionLook{theme: captionLight, colour: captionColour(false, true, false, 1)}
-	th, co = c.touch(2, accent, false)
-	if th || !co {
-		t.Fatalf("accent title bars: theme %v colour %v, want the colour alone", th, co)
+	accent := look(false, false, 1)
+	th, co, tx = c.touch(2, accent, false)
+	if th || !co || tx {
+		t.Fatalf("accent title bars: theme %v colour %v text %v, want the colour alone", th, co, tx)
 	}
-	c.applied(th, co, accent)
-	if th, co := c.touch(2, light, false); th || !co {
-		t.Errorf("accent title bars off: theme %v colour %v, want the colour alone", th, co)
+	c.applied(th, co, tx, accent)
+	if th, co, tx := c.touch(2, light, false); th || !co || tx {
+		t.Errorf("accent title bars off: theme %v colour %v text %v, want the colour alone", th, co, tx)
+	}
+}
+
+// greenLook is the caption the rule gives a window: its theme, its colour
+// and its text's, with the green up or not, on Windows 11.
+func greenLook(dark, contrast bool, prevalence uint64, green bool) captionLook {
+	return captionLook{
+		theme:  captionOf(dark),
+		colour: captionColour(dark, true, contrast, prevalence, green),
+		text:   captionText(true, contrast, prevalence, green),
+	}
+}
+
+// TestTheCaptionTakesTheGreen (APP.md §2.4, §6; ruled 2026-11-03): as the
+// touch's green comes up the caption's colour and its text's are set, its
+// theme left as it is; a repeat sets nothing; as the green goes both come
+// back, the ground and DWM's own text; a theme flipped under the green
+// keeps it, in the theme's own green; a contrast theme or accent title
+// bars arriving while the green is up give the colour and the text back
+// to DWM together, and the green is painted again when they go while it
+// is still up.
+func TestTheCaptionTakesTheGreen(t *testing.T) {
+	var c captionState
+	c.loaded(1, greenLook(false, false, 0, false))
+	step := func(name string, want captionLook, contrast, wantTh, wantCo, wantTx bool) {
+		t.Helper()
+		th, co, tx := c.touch(1, want, contrast)
+		if th != wantTh || co != wantCo || tx != wantTx {
+			t.Fatalf("%s: theme %v colour %v text %v, want %v %v %v", name, th, co, tx, wantTh, wantCo, wantTx)
+		}
+		c.applied(th, co, tx, want)
+		if contrast {
+			want.theme = c.wears.theme // a contrast theme leaves the theme alone
+		}
+		if c.wears != want {
+			t.Fatalf("%s: the caption wears %+v, want %+v", name, c.wears, want)
+		}
+	}
+	step("the green comes up", greenLook(false, false, 0, true), false, false, true, true)
+	if c.wears.colour != colorref(touchOf(false)) || c.wears.text != captionInk {
+		t.Fatalf("on the green the caption wears %+v", c.wears)
+	}
+	step("the green said again", greenLook(false, false, 0, true), false, false, false, false)
+	step("the green goes", greenLook(false, false, 0, false), false, false, true, true)
+	if c.wears.colour != colorref(groundOf(false)) || c.wears.text != dwmColourDefault {
+		t.Fatalf("after the green the caption wears %+v", c.wears)
+	}
+	step("the green again", greenLook(false, false, 0, true), false, false, true, true)
+	step("dark under the green", greenLook(true, false, 0, true), false, true, true, false)
+	step("a contrast theme under the green", greenLook(true, true, 0, true), true, false, true, true)
+	if c.wears.colour != dwmColourDefault || c.wears.text != dwmColourDefault {
+		t.Fatalf("under a contrast theme the caption wears %+v", c.wears)
+	}
+	step("the contrast theme ends, the green still up", greenLook(true, false, 0, true), false, false, true, true)
+	step("accent title bars under the green", greenLook(true, false, 1, true), false, false, true, true)
+	step("the green goes under accent title bars", greenLook(true, false, 1, false), false, false, false, false)
+	step("accent title bars off", greenLook(true, false, 0, false), false, false, true, false)
+}
+
+// TestTheGreenStaysWithItsWindow: the page's word is held for the window
+// it was said in (APP.md §2.4). A repeat moves nothing; a window made
+// again from the tray, a new id, wears no green until its own page says
+// so, and a caption on it is the ground's; the green said in it is its
+// own; a load does not take it down.
+func TestTheGreenStaysWithItsWindow(t *testing.T) {
+	var g touchGreen
+	if g.of(1) || g.of(0) {
+		t.Fatal("a green before any word")
+	}
+	if !g.say(true, 1) || !g.of(1) {
+		t.Fatal("the page's green did not reach its window")
+	}
+	if g.say(true, 1) {
+		t.Error("a repeat moved the look")
+	}
+	// Closed to the tray mid-touch and made again: window 2.
+	if g.of(2) {
+		t.Error("a window made again wears the green of the one closed under it")
+	}
+	if want := colorref(groundOf(false)); captionColour(false, true, false, 0, g.of(2)) != want || captionText(true, false, 0, g.of(2)) != dwmColourDefault {
+		t.Error("the window made again is not given the ground and DWM's text")
+	}
+	if !g.say(true, 2) || !g.of(2) || g.of(1) {
+		t.Error("the new window's own page did not move the green to it")
+	}
+	if !g.say(false, 2) || g.of(2) {
+		t.Error("the green did not go")
+	}
+	if g.say(false, 2) || g.say(false, 3) {
+		t.Error("a repeated no moved the look")
+	}
+	if g.of(0) {
+		t.Error("no window (id 0) wears the green")
+	}
+	// The window's page loaded again: the caption state is told, the
+	// green is not, since the new page may have spoken first.
+	g.say(true, 2)
+	var c captionState
+	c.loaded(2, greenLook(false, false, 0, false))
+	c.loaded(2, greenLook(false, false, 0, false))
+	if !g.of(2) {
+		t.Error("a load took the green down")
+	}
+}
+
+// TestTheGreenBackstop: a ceremony that leaves the stage while the green
+// is up arms the backstop, which takes the green down after greenGrace
+// unless the page has spoken since or a ceremony has come back; a state
+// older than one seen is ignored, and a state while the green is down, or
+// while a ceremony runs, arms nothing (APP.md §2.4).
+func TestTheGreenBackstop(t *testing.T) {
+	var g touchGreen
+	if arm, _ := g.state(1, app.StateLocked); arm {
+		t.Fatal("the backstop armed with no green")
+	}
+	g.state(2, app.StateUnlocking)
+	g.say(true, 1)
+	if arm, _ := g.state(3, app.StateUnlocking); arm {
+		t.Fatal("the backstop armed while the ceremony runs")
+	}
+	if arm, _ := g.state(4, app.StateReleasing); arm {
+		t.Fatal("the backstop armed while the ceremony releases the card")
+	}
+
+	// An unlock ends; the page takes the green down itself as the scene
+	// leaves: the timer stands down.
+	arm, said := g.state(5, app.StateUnlocked)
+	if !arm {
+		t.Fatal("an unlock's end did not arm the backstop")
+	}
+	g.say(false, 1)
+	if g.expire(said) || g.of(1) {
+		t.Fatal("the backstop moved a green the page had taken down")
+	}
+
+	// The page goes without a word (a reload that never reaches the
+	// stage): the timer takes the green down.
+	g.state(6, app.StateUnlocking)
+	g.say(true, 1)
+	arm, said = g.state(7, app.StateLocked)
+	if !arm {
+		t.Fatal("a ceremony's end did not arm the backstop")
+	}
+	if !g.expire(said) || g.of(1) {
+		t.Fatal("the backstop left the green up")
+	}
+	if g.expire(said) {
+		t.Error("the backstop fired twice")
+	}
+
+	// A page that speaks after the timer was armed keeps its green.
+	g.state(8, app.StateUnlocking)
+	g.say(true, 1)
+	_, said = g.state(9, app.StateLocked)
+	g.say(true, 1) // the page's lock stage mounted again, saying what it shows
+	if g.expire(said) || !g.of(1) {
+		t.Error("the backstop overrode a later word")
+	}
+
+	// A ceremony that comes back before the timer fires keeps the green.
+	_, said = g.state(10, app.StateLocked)
+	g.state(11, app.StateUnlocking)
+	if g.expire(said) || !g.of(1) {
+		t.Error("the backstop fired while a ceremony ran again")
+	}
+
+	// A state older than one seen is ignored.
+	if arm, _ := g.state(9, app.StateLocked); arm || !g.running {
+		t.Error("a late state was believed")
+	}
+
+	if greenGrace < time.Second {
+		t.Errorf("greenGrace is %v", greenGrace)
+	}
+}
+
+// TestTheGraceOutlastsTheSettle: the backstop waits longer than an
+// unlock's Done stands on the green after the state says Unlocked — the
+// settle and the scene's leave, frontend/src/lib/motion.ts's SETTLE and
+// OUT — and twice that, so a caption is never given back over a green
+// page that is about to take it down itself.
+func TestTheGraceOutlastsTheSettle(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("frontend", "src", "lib", "motion.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms := func(name string) time.Duration {
+		m := regexp.MustCompile(`export const ` + name + ` = (\d+);`).FindSubmatch(b)
+		if m == nil {
+			t.Fatalf("motion.ts declares no %s", name)
+		}
+		n, _ := strconv.Atoi(string(m[1]))
+		return time.Duration(n) * time.Millisecond
+	}
+	if leave := ms("SETTLE") + ms("OUT"); greenGrace < 2*leave {
+		t.Errorf("greenGrace %v is less than twice the settle and the leave, %v", greenGrace, leave)
 	}
 }
 

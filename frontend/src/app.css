@@ -89,6 +89,14 @@
   --smoke: rgba(0, 0, 0, 0.3);
   --touch-bg: #0e6f63;
   --touch-bg-2: #095047;
+  /* The touch's plain top (APP.md §6, Lock screen; §2.4): the wash's own
+     colour at the middle of its top edge, where the 160° gradient stands
+     about 18 % of the way, flat across the window's first row and fading
+     into the wash 96 px down, so that the first row is one colour, which
+     the shell gives the window's caption while the green is up; the
+     shell's touchOf (main_windows.go) holds the same values. */
+  --touch-top: #0d695e;
+  --touch-top-0: rgba(13, 105, 94, 0);
   --touch-ink: #ffffff;
   --touch-soft: rgba(255, 255, 255, 0.74);
   --touch-ring: rgba(255, 255, 255, 0.3);
@@ -240,6 +248,8 @@
     --dlg-foot: #212125;
     --touch-bg: #0c5048;
     --touch-bg-2: #073630;
+    --touch-top: #0b4b43;
+    --touch-top-0: rgba(11, 75, 67, 0);
     --touch-ink: #eafbf6;
     --touch-soft: rgba(234, 251, 246, 0.72);
     --touch-ring: rgba(84, 210, 185, 0.34);
@@ -310,6 +320,8 @@
   --dlg-foot: #212125;
   --touch-bg: #0c5048;
   --touch-bg-2: #073630;
+  --touch-top: #0b4b43;
+  --touch-top-0: rgba(11, 75, 67, 0);
   --touch-ink: #eafbf6;
   --touch-soft: rgba(234, 251, 246, 0.72);
   --touch-ring: rgba(84, 210, 185, 0.34);
@@ -1144,10 +1156,24 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 /* The touch's green over the whole stage, a full-surface takeover: an
    overlay whose opacity moves, since a gradient cannot transition — in
    over the scene change's 220 ms on the entering curve, out over 160 ms
-   on the exit's when a touch times out (APP.md §6, Motion: Unlock). */
+   on the exit's when a touch times out (APP.md §6, Motion: Unlock). Its
+   top is plain, as the painted ground's is (the body rule above): a fade
+   from one flat green, --touch-top, to nothing 96 px down, over the
+   gradient, so that the window's first row is one colour across its
+   width, which the shell gives the caption while the green is up (APP.md
+   §2.4; ruled 2026-11-03), and caption and page are one surface. The
+   flat green is the gradient's own colour at the middle of its top edge,
+   so the band moves the wash by a few levels at the corners and nothing
+   below it. The green holds for the first px before it fades: a fade
+   from the very top paints the first device row a level dark, dithered
+   across the width (headless Edge 156, at 125 %), where the held px
+   paints it the token exactly. The band fades with the wash, so the
+   220 ms in and the 160 ms out are as they were. */
 .wash {
   position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: 0;
-  background: linear-gradient(160deg, var(--touch-bg) 0%, var(--touch-bg-2) 100%);
+  background:
+    linear-gradient(var(--touch-top) 1px, var(--touch-top-0) 96px) 0 0 / 100% 100% no-repeat,
+    linear-gradient(160deg, var(--touch-bg) 0%, var(--touch-bg-2) 100%);
   transition: opacity var(--dur-out) var(--ease-exit);
 }
 /* The stage's ink travels with the wash: into the touch's ink over the

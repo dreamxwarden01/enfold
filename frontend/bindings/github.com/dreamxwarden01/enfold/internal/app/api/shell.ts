@@ -119,3 +119,17 @@ export function SaveFile(title: string, filename: string, dir: string): $Cancell
 export function ShowWindow(): $CancellablePromise<void> {
     return $Call.ByID(3130426784);
 }
+
+/**
+ * StageGreen is the lock stage saying that the touch's green has come up
+ * (on) or gone (APP.md §2.4, §6; ruled 2026-11-03), so that the window's
+ * caption takes the green with the page — the touch's plain top, with
+ * white text — and gives it back with it: the page is what knows when the
+ * green is up. It carries a boolean and nothing of the ceremony, and it
+ * answers nothing. A repeat changes nothing, and a page that goes without
+ * saying the green has gone is the shell's to notice: a window made again
+ * wears no green, and a ceremony that has left the stage takes it down.
+ */
+export function StageGreen(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(4023474980, on);
+}

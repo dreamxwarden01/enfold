@@ -106,6 +106,7 @@ func TestBoundSurface(t *testing.T) {
 			"Reveal(string) error",
 			"SaveFile(string, string, string) (string, error)",
 			"ShowWindow()",
+			"StageGreen(bool)",
 		},
 	}
 	var c *app.Core
@@ -216,4 +217,20 @@ func TestClipboardFiles(t *testing.T) {
 	if _, err := NewShell(Hooks{}).ClipboardFiles(); string(MarshalError(err)) != `{"code":"internal"}` {
 		t.Fatalf("no reader lent: %s", MarshalError(err))
 	}
+}
+
+// TestStageGreen: the page's word about the touch's green reaches the
+// shell's hook as it was said, a repeat included — the shell decides what
+// a repeat changes — and a shell that lent no hook takes it as nothing
+// (APP.md §2.4, §6).
+func TestStageGreen(t *testing.T) {
+	var got []bool
+	s := NewShell(Hooks{StageGreen: func(on bool) { got = append(got, on) }})
+	for _, on := range []bool{true, true, false} {
+		s.StageGreen(on)
+	}
+	if !reflect.DeepEqual(got, []bool{true, true, false}) {
+		t.Fatalf("the hook heard %v", got)
+	}
+	NewShell(Hooks{}).StageGreen(true) // no hook: no panic
 }

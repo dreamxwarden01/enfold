@@ -93,15 +93,20 @@ type shell struct {
 	// has read the newest of both. It guards caption.
 	themeMu sync.Mutex
 	// caption is what the shell knows of the window's caption: the one
-	// window it may touch, whose page has loaded, and the theme and colour
-	// that window wears, so that a save which leaves both as they were
-	// repaints nothing (captionState).
+	// window it may touch, whose page has loaded, and the theme, colour
+	// and text colour that window wears, so that a save which leaves them
+	// as they were repaints nothing (captionState).
 	caption captionState
-	// made is the caption ensureWindow makes a window with, its theme and
-	// its colour, handed to that window's load listener by the OnCreate
-	// hook in main. The hook runs inside NewWithOptions, on ensureWindow's
-	// goroutine and under winMu, so what it reads is what was stored for
-	// that window.
+	// green is the touch's green as the page last said it
+	// (Shell.StageGreen), the window it was said in, and what the shell
+	// needs to take it down when no page says so (touchGreen). Guarded by
+	// themeMu, as caption is.
+	green touchGreen
+	// made is the caption ensureWindow makes a window with, its theme, its
+	// colour and its text's, handed to that window's load listener by the
+	// OnCreate hook in main. The hook runs inside NewWithOptions, on
+	// ensureWindow's goroutine and under winMu, so what it reads is what
+	// was stored for that window.
 	made atomic.Pointer[captionLook]
 }
 
@@ -163,6 +168,9 @@ func main() {
 		// Paste's source (APP.md §3, §6): Explorer's CF_HDROP, read by the
 		// shell since the WebView's clipboard holds no files.
 		ClipboardFiles: s.clipboardFiles,
+		// The touch's green, which the caption takes with the page (APP.md
+		// §2.4, §6; ruled 2026-11-03).
+		StageGreen: s.stageGreen,
 	})
 
 	profile := filepath.Join(dataDir, "WebView2")
@@ -232,7 +240,7 @@ func main() {
 		if w.Name() != windowName {
 			return
 		}
-		id, made := w.ID(), captionLook{theme: captionUnknown, colour: dwmColourDefault}
+		id, made := w.ID(), captionLook{theme: captionUnknown, colour: dwmColourDefault, text: dwmColourDefault}
 		if m := s.made.Load(); m != nil {
 			made = *m
 		}
@@ -366,6 +374,16 @@ func (s *shell) Emit(name string, payload any) {
 		s.syncTheme()
 		return
 	}
+	if name == app.EventVaultState {
+		// The touch's green has a backstop in the vault's state
+		// (touchGreen): a ceremony that has left the stage takes the green
+		// down after greenGrace if no page has. On a goroutine, as it
+		// takes themeMu, which a sync holds while it waits for the main
+		// thread; the status's Seq puts the states back in order.
+		if st, ok := payload.(app.VaultStatus); ok {
+			go s.greenState(st.Seq, st.State)
+		}
+	}
 	if s.tray == nil {
 		return
 	}
@@ -461,11 +479,13 @@ func (s *shell) ensureWindow() {
 	// from the window's creation until its page has loaded, the first time
 	// syncTheme may touch it. What the window is made with goes to its load
 	// listener as made, its colour DWM's own wherever the rule gives no
-	// CustomTheme.
+	// CustomTheme. A window is never made in the touch's green, and its
+	// caption's text is DWM's: the green is its page's to say, once it has
+	// one (touchGreen).
 	contrast := w32.IsCurrentlyHighContrastMode()
 	paints := w32.IsWindowsVersionAtLeast(10, 0, captionColourBuild)
 	prevalence := colorPrevalence()
-	made := captionLook{theme: captionOf(dark), colour: captionColour(dark, paints, contrast, prevalence)}
+	made := captionLook{theme: captionOf(dark), colour: captionColour(dark, paints, contrast, prevalence, false), text: dwmColourDefault}
 	if contrast {
 		made.theme = captionUnknown
 	}
@@ -629,22 +649,26 @@ func (s *shell) window() application.Window {
 	return w
 }
 
-// syncTheme sets the window's caption — its theme and its colour — and
-// the ground behind its page to the theme the setting resolves to now
-// (APP.md §2.4). It runs on a saved setting (settings.changed), on a flip
-// of Windows' own mode (SystemThemeChanged) and on a message that says
-// Windows' colours may have changed (colourMessage), reading the setting,
-// the mode, the contrast theme and the accent-title-bar setting afresh
-// under themeMu, so whichever runs last has read the newest of each. It
-// touches only a window whose page has loaded (captionState); one still
-// being made is caught up by its load (themeLoaded).
+// syncTheme sets the window's caption — its theme, its colour and its
+// text's colour — and the ground behind its page to the theme the setting
+// resolves to now and to the touch's green while it is up (APP.md §2.4).
+// It runs on a saved setting (settings.changed), on a flip of Windows' own
+// mode (SystemThemeChanged), on a message that says Windows' colours may
+// have changed (colourMessage) and as the touch's green comes and goes
+// (stageGreen, greenExpire), reading the setting, the mode, the contrast
+// theme, the accent-title-bar setting and the green afresh under themeMu,
+// so whichever runs last has read the newest of each. It touches only a
+// window whose page has loaded (captionState); one still being made is
+// caught up by its load (themeLoaded).
 //
 // Wails sets a window's theme only when it makes the window (beta.20 has
 // no SetTheme on a window), so the shell calls the same exported
 // w32.SetTheme on the window's HWND — DWMWA_USE_IMMERSIVE_DARK_MODE,
 // attribute 20 (19 before build 18985) — and sets the caption's colour
 // with w32.SetTitleBarColour, DWMWA_CAPTION_COLOR, attribute 35
-// (pkg/w32/theme.go 253-257). Then it has DWM re-read the frame: SetTheme
+// (pkg/w32/theme.go 253-257), and the colour of the caption's text with
+// w32.SetTitleTextColour, DWMWA_TEXT_COLOR, attribute 36 (theme.go 20,
+// 259-261). Then it has DWM re-read the frame: SetTheme
 // invalidates the client area alone (pkg/w32/theme.go 231), and a caption
 // no message repaints keeps its old colours. SetWindowPos with
 // SWP_FRAMECHANGED is how Wails itself has DWM re-read a frame
@@ -678,16 +702,20 @@ func (s *shell) themeLoaded(id uint, made captionLook) {
 func (s *shell) syncThemeLocked() {
 	dark := themeDark(s.settings().Theme, w32.IsCurrentlyDarkMode())
 	contrast := w32.IsCurrentlyHighContrastMode()
-	want := captionLook{
-		theme:  captionOf(dark),
-		colour: captionColour(dark, w32.IsWindowsVersionAtLeast(10, 0, captionColourBuild), contrast, colorPrevalence()),
-	}
+	paints := w32.IsWindowsVersionAtLeast(10, 0, captionColourBuild)
+	prevalence := colorPrevalence()
 	w := s.window()
 	if w == nil {
 		return // in the tray: the next window is made from the setting
 	}
-	theme, colour := s.caption.touch(w.ID(), want, contrast)
-	if !theme && !colour {
+	green := s.green.of(w.ID())
+	want := captionLook{
+		theme:  captionOf(dark),
+		colour: captionColour(dark, paints, contrast, prevalence, green),
+		text:   captionText(paints, contrast, prevalence, green),
+	}
+	theme, colour, text := s.caption.touch(w.ID(), want, contrast)
+	if !theme && !colour && !text {
 		// A window whose page has not loaded is caught up by its load, and
 		// one that wears want already has nothing to repaint.
 		return
@@ -703,6 +731,9 @@ func (s *shell) syncThemeLocked() {
 		if colour {
 			w32.SetTitleBarColour(hwnd, want.colour)
 		}
+		if text {
+			w32.SetTitleTextColour(hwnd, want.text)
+		}
 		w32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
 			w32.SWP_FRAMECHANGED|w32.SWP_NOMOVE|w32.SWP_NOSIZE|w32.SWP_NOZORDER|w32.SWP_NOACTIVATE)
 		if theme {
@@ -715,7 +746,67 @@ func (s *shell) syncThemeLocked() {
 		return true
 	})
 	if set {
-		s.caption.applied(theme, colour, want)
+		s.caption.applied(theme, colour, text, want)
+	}
+}
+
+// stageGreen is Shell.StageGreen: the lock stage saying the touch's green
+// has come up or gone (APP.md §2.4, §6; ruled 2026-11-03). While it is up
+// the window's caption takes the green with the page, the touch's plain
+// top (touchOf) with white text (captionInk), so that caption and page
+// are one surface as direction 1 drew the touch; as it goes the caption
+// is the ground's again, its text DWM's. The green is held for the window
+// shown at the call, so a window made again from the tray never wears the
+// green of the one closed under it (touchGreen). A bound call runs on a
+// goroutine of its own (beta.20, internal/assetserver/assetserver_webview.go
+// 97-98), never the main thread, so it may wait for themeMu and the sync.
+func (s *shell) stageGreen(on bool) {
+	if s.app == nil {
+		return
+	}
+	var win uint
+	if w := s.window(); w != nil {
+		win = w.ID()
+	}
+	s.themeMu.Lock()
+	defer s.themeMu.Unlock()
+	if s.green.say(on, win) {
+		s.syncThemeLocked()
+	}
+}
+
+// greenGrace is how long the backstop leaves the page to take the green
+// down itself once a ceremony has left the stage: an unlock's Done stands
+// on the green through the settle (SETTLE, 320 ms) and the scene's leave
+// (OUT, 160 ms; frontend/src/lib/motion.ts) before the page says so, and
+// a caption given back sooner would turn grey over a green page.
+const greenGrace = 2 * time.Second
+
+// greenState is the backstop's first half: a vault.state the core
+// emitted, by its Seq and its State (touchGreen.state). A state with no
+// ceremony on the stage while the green is up arms greenExpire, which
+// runs after greenGrace on a timer's goroutine.
+func (s *shell) greenState(seq uint64, state app.VaultState) {
+	s.themeMu.Lock()
+	arm, said := s.green.state(seq, state)
+	s.themeMu.Unlock()
+	if arm {
+		time.AfterFunc(greenGrace, func() { s.greenExpire(said) })
+	}
+}
+
+// greenExpire is the backstop's second half: a green still up with no
+// ceremony on the stage and no word from the page since the backstop was
+// armed is taken down by the shell, and the caption is the ground's again
+// (touchGreen.expire).
+func (s *shell) greenExpire(said uint64) {
+	if s.app == nil {
+		return
+	}
+	s.themeMu.Lock()
+	defer s.themeMu.Unlock()
+	if s.green.expire(said) {
+		s.syncThemeLocked()
 	}
 }
 
@@ -746,6 +837,27 @@ func groundOf(dark bool) application.RGBA {
 	return application.NewRGB(0xD5, 0xD3, 0xD5)
 }
 
+// touchOf is the touch's plain top in a theme (APP.md §6, Lock screen),
+// the stylesheet's --touch-top: the touch's gradient's own colour at the
+// middle of its top edge, flat across the window's first row and fading
+// into the wash 96 px down. It is the caption's colour while the green is
+// up (captionColour), meeting the page's top row with no line, as the
+// ground's does.
+func touchOf(dark bool) application.RGBA {
+	if dark {
+		return application.NewRGB(0x0B, 0x4B, 0x43)
+	}
+	return application.NewRGB(0x0D, 0x69, 0x5E)
+}
+
+// captionInk is the caption's text on the touch's green: white, as a COLORREF
+// for DWMWA_TEXT_COLOR (0x00BBGGRR, never DWMWA_COLOR_DEFAULT's 0xFFFFFFFF),
+// in both themes, as the ruling has it: what DWM picks for a coloured caption
+// is the build's to decide (on build 26300 it is already white on the green
+// while the window is active, and dimmed while it is not), so white is set
+// outright, which also keeps the name white on an inactive window.
+const captionInk uint32 = 0x00FFFFFF
+
 // captionOf is a resolved theme as captionState records it.
 func captionOf(dark bool) int32 {
 	if dark {
@@ -770,22 +882,47 @@ func colorref(c application.RGBA) uint32 {
 }
 
 // captionColour is the caption's colour rule (APP.md §2.4): the ground's
-// first row in the theme (groundOf), as a COLORREF for
+// first row in the theme (groundOf), or the touch's plain top (touchOf)
+// while the touch's green is up (green), as a COLORREF for
 // DWMWA_CAPTION_COLOR, so that the caption and the page's top row read as
 // one surface; or DWM's own (dwmColourDefault) where the shell's colour
-// has no place. That is a Windows before build 22000 (paints false), which
-// ignores the attribute and keeps its own caption; a contrast theme, whose
-// caption is the system's colours; and accent title bars, the user's own
-// choice of a caption in the accent colour, which ColorPrevalence records
-// as 1 (prevalence, colorPrevalence). The window's border,
-// DWMWA_BORDER_COLOR (34), is never the shell's: it is the window's edge
-// against the desktop and the windows beside it, and it carries the
-// accent setting too.
-func captionColour(dark, paints, contrast bool, prevalence uint64) uint32 {
-	if !paints || contrast || prevalence == 1 {
+// has no place (captionPainted), the green's no more than the ground's.
+// The window's border, DWMWA_BORDER_COLOR (34), is never the shell's: it
+// is the window's edge against the desktop and the windows beside it, and
+// it carries the accent setting too.
+func captionColour(dark, paints, contrast bool, prevalence uint64, green bool) uint32 {
+	switch {
+	case !captionPainted(paints, contrast, prevalence):
 		return dwmColourDefault
+	case green:
+		return colorref(touchOf(dark))
 	}
 	return colorref(groundOf(dark))
+}
+
+// captionText is the colour of the caption's text by the same rule (APP.md
+// §2.4): white (captionInk) while the touch's green is up and the caption is
+// the shell's to paint, so the window's name reads on the green in both
+// themes; DWM's own (dwmColourDefault) otherwise, which DWM picks against the
+// caption's colour (dark on the light ground, light on the dark one; build
+// 26300). Where the shell paints no caption it sets no text either: white on
+// a caption DWM draws in its own colours, a contrast theme's or the accent's,
+// could be white on white.
+func captionText(paints, contrast bool, prevalence uint64, green bool) uint32 {
+	if green && captionPainted(paints, contrast, prevalence) {
+		return captionInk
+	}
+	return dwmColourDefault
+}
+
+// captionPainted reports whether the caption is the shell's to paint:
+// not on a Windows before build 22000 (paints false), which ignores the
+// attribute and keeps its own caption; not under a contrast theme, whose
+// caption is the system's colours; and not with accent title bars, the
+// user's own choice of a caption in the accent colour, which
+// ColorPrevalence records as 1 (prevalence, colorPrevalence).
+func captionPainted(paints, contrast bool, prevalence uint64) bool {
+	return paints && !contrast && prevalence != 1
 }
 
 // customCaption is the window's Windows.CustomTheme: the caption's colour
@@ -797,10 +934,10 @@ func captionColour(dark, paints, contrast bool, prevalence uint64) uint32 {
 // one colour, as DWMWA_CAPTION_COLOR has no inactive form (dwmapi.h).
 // Where the rule gives DWM's own colour the entries are nil and Wails sets
 // nothing (processThemeColour, 1462-1467); the border and the caption's
-// text are DWM's in every case.
+// text are DWM's in every case, a window being made with no green.
 func customCaption(paints, contrast bool, prevalence uint64) application.ThemeSettings {
 	entry := func(dark bool) *application.WindowTheme {
-		c := captionColour(dark, paints, contrast, prevalence)
+		c := captionColour(dark, paints, contrast, prevalence, false)
 		if c == dwmColourDefault {
 			return nil
 		}
@@ -877,16 +1014,17 @@ func coloursChanged(msg uint32) bool {
 
 // captionLook is what the shell has DWM draw a window's caption in: the
 // theme of its frame (DWMWA_USE_IMMERSIVE_DARK_MODE), as captionOf records
-// it, and the caption's colour (DWMWA_CAPTION_COLOR), dwmColourDefault
-// where DWM draws its own.
+// it, the caption's colour (DWMWA_CAPTION_COLOR) and its text's
+// (DWMWA_TEXT_COLOR), each dwmColourDefault where DWM draws its own.
 type captionLook struct {
 	theme  int32
 	colour uint32
+	text   uint32
 }
 
 // captionState is what the shell knows of the window's caption (APP.md
-// §2.4), kept under shell.themeMu: the window it may touch and the theme
-// and colour that window wears. It holds the rule apart from Wails, where a test can
+// §2.4), kept under shell.themeMu: the window it may touch and the theme,
+// colour and text colour that window wears. It holds the rule apart from Wails, where a test can
 // reach it: no window is touched before its page has loaded, and its
 // first load is when a window made with a caption, its theme or its
 // colour, that has moved since is caught up.
@@ -924,26 +1062,94 @@ func (c *captionState) loaded(id uint, made captionLook) {
 // is set where it wears another, but never under a contrast theme:
 // Windows draws that caption in the system's colours, and Wails' own
 // updateTheme leaves it alone there (webview_window_windows.go
-// 1476-1478), as this does. Its colour is set where it wears another,
-// which under a contrast theme puts DWM's own back on a caption the shell
-// had painted (want carries dwmColourDefault there, captionColour), so
-// that no colour painted before a contrast theme began outlives it.
-func (c *captionState) touch(id uint, want captionLook, contrast bool) (theme, colour bool) {
+// 1476-1478), as this does. Its colour and its text's are each set where
+// it wears another, which under a contrast theme puts DWM's own back on a
+// caption the shell had painted (want carries dwmColourDefault there,
+// captionColour and captionText), so that no colour painted before a
+// contrast theme began outlives it, the touch's green and white included.
+func (c *captionState) touch(id uint, want captionLook, contrast bool) (theme, colour, text bool) {
 	if id == 0 || id != c.win {
-		return false, false
+		return false, false, false
 	}
-	return !contrast && c.wears.theme != want.theme, c.wears.colour != want.colour
+	return !contrast && c.wears.theme != want.theme, c.wears.colour != want.colour, c.wears.text != want.text
 }
 
 // applied records what syncTheme has set of want on the window: its theme,
-// its colour, or both.
-func (c *captionState) applied(theme, colour bool, want captionLook) {
+// its colour, its text's colour, or any of them.
+func (c *captionState) applied(theme, colour, text bool, want captionLook) {
 	if theme {
 		c.wears.theme = want.theme
 	}
 	if colour {
 		c.wears.colour = want.colour
 	}
+	if text {
+		c.wears.text = want.text
+	}
+}
+
+// touchGreen is the touch's green as the shell holds it (APP.md §2.4, §6;
+// ruled 2026-11-03), under shell.themeMu: the page's last word
+// (Shell.StageGreen), the window it was said in, and what the backstop
+// needs. The page says it as its lock stage mounts, at every change and as
+// the stage leaves; but a page can go without a word — its window closed
+// to the tray, a reload that never reaches the stage, a page that has
+// stopped — and the caption would then stay green over whatever came
+// next. Two backstops cover that. The green is the window's it was said
+// in, and Wails never gives a window's id to another (webview_window.go
+// 265-270), so a window made again wears none until its own page says
+// so; it is not taken down at a page's load, which can land after that
+// page's first word. And a vault.state with no ceremony on the stage
+// while the green is up arms a timer (greenGrace) that takes it down
+// unless the page has spoken since or a ceremony has come back.
+type touchGreen struct {
+	on      bool   // the page's last word: the green is up
+	win     uint   // the window that word was said in
+	said    uint64 // the words so far, so that a timer armed before a later one stands down
+	seq     uint64 // the newest vault.state's Seq, so that a late one is ignored
+	running bool   // that state names a ceremony on the stage (Unlocking or Releasing)
+}
+
+// of reports whether window id wears the green.
+func (g *touchGreen) of(id uint) bool {
+	return g.on && id != 0 && g.win == id
+}
+
+// say records the page's word, said in window win, and reports whether
+// the caption's look may move: a repeat moves nothing.
+func (g *touchGreen) say(on bool, win uint) bool {
+	g.said++
+	if on == g.on && (!on || win == g.win) {
+		return false
+	}
+	g.on, g.win = on, win
+	return true
+}
+
+// state records a vault.state, by its Seq and its State, and reports
+// whether the backstop is to be armed, with the word it is armed against:
+// a state no older than any seen, with no ceremony on the stage, while
+// the green is up. A lock stage's ceremony runs Unlocking and ends
+// Releasing (types.go); an unlock's Done then stands for the settle in
+// Unlocked, which greenGrace outlasts.
+func (g *touchGreen) state(seq uint64, st app.VaultState) (arm bool, said uint64) {
+	if seq < g.seq {
+		return false, 0
+	}
+	g.seq = seq
+	g.running = st == app.StateUnlocking || st == app.StateReleasing
+	return g.on && !g.running, g.said
+}
+
+// expire is the armed backstop: the green comes down if it is still up,
+// no ceremony is on the stage and the page has said nothing since. It
+// reports whether the caption's look may move.
+func (g *touchGreen) expire(said uint64) bool {
+	if !g.on || g.running || said != g.said {
+		return false
+	}
+	g.on = false
+	return true
 }
 
 // The native dialogs report a cancelled dialog as an error (the common

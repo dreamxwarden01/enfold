@@ -831,14 +831,30 @@ row (§6, *Controls*), the stylesheet's `--ground-paint`, #D5D3D5 light and #262
 window is Solid and opened at the app's root (Mica and its switch went with the painted ground,
 ruled 2026-11-02). **The caption's colour** is that same first row (`DWMWA_CAPTION_COLOR`, 35,
 through Wails' `w32.SetTitleBarColour`), so that the caption and the page's top row meet with no
-line (ruled 2026-11-02). The window is made with it, as Wails' `CustomTheme`, which Wails
-applies only as it makes a window, so the caption is never DWM's own while the page loads; the
-shell sets it again with each theme it sets. DWM draws its own caption in three cases: on
+line (ruled 2026-11-02). **While the touch's green is up** (§6, *Lock screen*) the caption takes
+the green instead, the touch's plain top — the stylesheet's `--touch-top`, #0D695E light and
+#0B4B43 dark — with its text white (`DWMWA_TEXT_COLOR`, 36, through Wails'
+`w32.SetTitleTextColour`), so that caption and page are one surface as the demo drew the touch
+(ruled 2026-11-03; the caption stayed the ground's grey over the green). The page says when the
+green comes and goes (`Shell.StageGreen`, a boolean: as the lock stage mounts, at each change
+and as the stage leaves), since only the page knows; the shell sets the green and the white as
+it sets the ground, under the same guards below, and as the green goes gives the caption the
+ground's colour again and its text back to DWM (`DWMWA_COLOR_DEFAULT`), which picks it against
+the caption's colour. Where no page says so the shell restores the caption itself: the green is
+held for
+the window it was said in, so a window made again from the tray wears none until its own page
+says so; and a vault state with no ceremony on the stage while the green is up takes it down
+after two seconds — longer than an unlock's Done stands on the green, the settle and the scene's
+leave — unless the page has spoken since or a ceremony has come back. The window is made with
+the ground's colour, never the green, as Wails' `CustomTheme`, which Wails applies only as it
+makes a window, so the caption is never DWM's own while the page loads; the shell sets it again
+with each theme it sets. DWM draws its own caption in three cases: on
 Windows 10 (before build 22000), which ignores the attribute, so there a line shows where the
 caption meets the page; under a contrast theme; and where the user has asked for the accent
 colour on title bars (`ColorPrevalence` 1 under `HKCU\SOFTWARE\Microsoft\Windows\DWM`, a missing
-value read as 0), so that choice stands. In the last two the shell gives a caption it had
-painted back to DWM (`DWMWA_COLOR_DEFAULT`), and it reads both afresh whenever Windows says its
+value read as 0), so that choice stands. In all three the touch's green stays off the caption
+too, and in the last two the shell gives a caption it had painted, its colour and its text's,
+back to DWM (`DWMWA_COLOR_DEFAULT`), and it reads both afresh whenever Windows says its
 colours may have changed (`WM_SETTINGCHANGE`, `WM_SYSCOLORCHANGE` or
 `WM_DWMCOLORIZATIONCOLORCHANGED`, seen through Wails' `WndProcInterceptor`), since Wails' own
 `SystemThemeChanged` comes only when the light or dark mode moves. The window's border
@@ -848,11 +864,13 @@ the setting is *Follow Windows*, a flip of Windows' own mode (`SystemThemeChange
 the same way, the page following it through `prefers-color-scheme`; *Light* and *Dark* stand
 through it. A change that comes while the window is being made waits for its page to load
 (`WebViewNavigationCompleted`, its listener attached as Wails adds the window) and is applied
-then, never while WebView2 is still being created: Wails pumps the main thread's messages
+then — the touch's green, which a page can say before that load lands, included — never while
+WebView2 is still being created: Wails pumps the main thread's messages
 meanwhile, and a background colour set from there reaches a WebView2 that is not ready, which
-stops the main thread or ends the process. A save that leaves the resolved theme and the
-caption's colour as they were repaints nothing, and under a contrast theme the caption is
-Windows' own: its dark mode is left alone, as Wails leaves it, and its colour is DWM's (above).
+stops the main thread or ends the process. A save that leaves the resolved theme, the
+caption's colour and its text's as they were repaints nothing, as does the green said again; and
+under a contrast theme the caption is Windows' own: its dark mode is left alone, as Wails leaves
+it, and its colour is DWM's (above).
 (It was set only when the window was made, so a saved theme left the caption stale until the
 window was made again.)
 
@@ -1958,13 +1976,21 @@ reads *Recovery key · Unlock*. Finishing setup asks the same cells first, with 
 *Continue*, since its first way in follows.
 
 **The touch takes the stage**: the touch's green over the whole scene — however far a short
-window scrolls — the panel's fill, stroke and shadow fading into it,
+window scrolls — and over the window's caption with it, the panel's fill, stroke and shadow
+fading into it,
 the stage's mark giving way (its opacity to 0 with the wash, its room kept, so
 nothing moves; ruled 2026-11-01), the header's state in the touch's soft ink in
 both themes, the 160 px rings pulsing, the hero "Touch your YubiKey now", "Touch it
 while it blinks. If it stops blinking, start again." in the touch's soft ink (no number: DESIGN.md
-trap 23) and the receipt "PIN accepted · <the YubiKey's name>". The derivation and the release
-keep the green and the layout — the rings held still at half, "Opening the vault…", "Touched ·
+trap 23) and the receipt "PIN accepted · <the YubiKey's name>". **The caption joins the
+takeover** (ruled 2026-11-03; it stayed the ground's grey, a strip over the green): the green's
+top is plain, as the painted ground's is (*Controls*, below) — one flat green, #0D695E in light
+and #0B4B43 in dark, the gradient's own colour at the middle of its top edge, held for the first
+px and fading into the gradient 96 px down, so that the window's first row is one colour across
+its width — and on Windows 11, where the caption is the shell's (§2.4), the caption takes that
+green with white text as the green comes and the ground's colour and Windows' own text again as
+it goes; where Windows draws its own caption it keeps it. The derivation and the release
+keep the green, the caption's with it, and the layout — the rings held still at half, "Opening the vault…", "Touched ·
 <the YubiKey's name>" — and Done pops its check on the same green. **The green holds through
 whatever follows a touch in the same ceremony** (ruled 2026-10-17), whatever the act and
 whatever way the core named: a create's or a setup's YubiKey proves itself by its touch, and the
@@ -3272,13 +3298,17 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   - *The PIN accepted, the touch*: an overlay with the touch's gradient fades in over the whole
     stage, 220 ms on the entering curve — its opacity moves, since a gradient cannot transition —
     the panel's fill, stroke and shadow and the stage's mark fade out with it, the
-    mark's room kept, and the rings start their 2.4 s pulse.
+    mark's room kept, and the rings start their 2.4 s pulse. The caption takes the green and its
+    white text at once, as Windows changes a caption in one frame, so for those 220 ms it is
+    ahead of the page's top row, which the overlay brings to the same green.
   - *Touched, opening*: the rings stop and hold at half; the lead and the receipt cross-fade,
     140 ms. No colour changes: the green stays through the derivation and the release.
   - *Done*: the check disc pops where the rings' core was (from 60% with a little overshoot,
     240 ms on the pop curve), the word — *Unlocked* — in the middle and the vault's name under the
     open padlock, and it stays for the settle (320 ms), so the ceremony has a full stop. Then the
-    lock screen lifts (8 px up, fading fast-first, 160 ms) and, a gap later, the shell arrives:
+    lock screen lifts (8 px up, fading fast-first, 160 ms), the caption giving the green back
+    once it has gone (so for those 160 ms it lags the page, as it leads it by 220 ms on the way
+    in), and, a gap later, the shell arrives:
     the rail slides in 12 px from the left and the layer rises 8 px, 220 ms, the layer 40 ms
     behind. The store holds `settling` for the settle after the state says Unlocked, and the
     lock screen keeps rendering the ceremony meanwhile — the state's event can land a few
@@ -3286,7 +3316,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     for that instant and the check was never seen.
   - *The touch timed out*: the rings stop, the overlay fades out over 160 ms on the exit's curve,
     the stage's ink and its mark returning with it over the same 160 ms — dark words never stand
-    on the green — and the neutral message arrives on the panel, on the touch's step.
+    on the green — and the neutral message arrives on the panel, on the touch's step. The caption
+    is the ground's again at once, its text Windows' own.
   - *In a dialog* the same beats play inside the box (Controls, below): the found LED's hold, the
     views crossing in one place, and the touch's wash filling the body with the box's stroke
     fading — in over 220 ms, out over 160 — while the foot band stays (ruled 2026-10-17).

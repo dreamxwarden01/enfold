@@ -44,6 +44,10 @@ type Hooks struct {
 	// stat'ed for its kind; an empty list when it holds none, and an error
 	// when the clipboard could not be opened (APP.md §3, §6 Paste).
 	ClipboardFiles func() (app.Clipboard, error)
+	// StageGreen takes the page's word that the touch's green is up on the
+	// lock stage, or has gone (APP.md §2.4, §6): the shell paints the
+	// window's caption with it. nil where the shell paints no caption.
+	StageGreen func(on bool)
 }
 
 // Shell is the window and the native dialogs.
@@ -57,6 +61,20 @@ func NewShell(h Hooks) *Shell { return &Shell{h: h} }
 func (s *Shell) ShowWindow()  { s.h.ShowWindow() }
 func (s *Shell) CloseWindow() { s.h.CloseWindow() }
 func (s *Shell) Quit()        { s.h.Quit() }
+
+// StageGreen is the lock stage saying that the touch's green has come up
+// (on) or gone (APP.md §2.4, §6; ruled 2026-11-03), so that the window's
+// caption takes the green with the page — the touch's plain top, with
+// white text — and gives it back with it: the page is what knows when the
+// green is up. It carries a boolean and nothing of the ceremony, and it
+// answers nothing. A repeat changes nothing, and a page that goes without
+// saying the green has gone is the shell's to notice: a window made again
+// wears no green, and a ceremony that has left the stage takes it down.
+func (s *Shell) StageGreen(on bool) {
+	if s.h.StageGreen != nil {
+		s.h.StageGreen(on)
+	}
+}
 
 // CloseDecided answers the close question the page asked when the window's
 // close was cancelled (APP.md §2.4, ruled 2026-09-13). action is "tray" or

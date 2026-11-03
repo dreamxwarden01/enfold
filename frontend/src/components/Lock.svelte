@@ -6,7 +6,7 @@
   // takeover"), built at last in place of the three cards. Where each of
   // the core's steps is drawn is lib/lockscreen's; its words are
   // lockCopy's and the verb table's (strings.ts).
-  import { CeremonyStep, Keys, Shell, Vault, VaultState, errorOf } from "../lib/api";
+  import { CeremonyStep, Keys, Shell, Vault, VaultState, errorOf, stageGreen } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { ceremonyCopy, codeText, commandCopy, dialogCopy, firstMethodCopy, lockCopy, retriesText, sinceText, stepText, vaultCopy, warningCopy } from "../lib/strings";
   import { OPENED, lockNotices, tier, tierIcon } from "../lib/notices";
@@ -226,6 +226,20 @@
   const found = $derived(held.found);
   const insertStep = $derived(held.insertStep);
   const isGreen = $derived(green(shown));
+  // The caption takes the green with the stage (APP.md §2.4, §6; ruled
+  // 2026-11-03): while it is up the shell paints the window's caption the
+  // touch's plain top with white text, so caption and page are one
+  // surface, and gives the caption back as it goes. The stage is what
+  // knows when the green is up, so it says so: as it mounts — a page
+  // loaded again mid-ceremony says what it shows — at every change, and
+  // as it leaves, the scene gone with the green on it. A page that goes
+  // without a word is the shell's to notice (main_windows.go touchGreen).
+  // A dialog's green (CeremonyPanel) stands inside its box, below the
+  // caption, and says nothing.
+  $effect(() => {
+    stageGreen(isGreen);
+  });
+  $effect(() => () => stageGreen(false));
 
   // The step line: an unlock's alone, shown while it runs and while its
   // failure is on the panel; at rest it is absent and its line is kept.

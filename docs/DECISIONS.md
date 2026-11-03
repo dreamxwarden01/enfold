@@ -5932,3 +5932,36 @@ older than this (its `will-change`), which a zoomed screenshot will show; the Va
 Settings, the other lock views and the touch's dissolve on the new card were not shot. On
 Windows 10 and builds before 22000 the caption stays DWM's own, about 32 levels off the page in
 light.
+
+**The caption joins the touch's takeover** (2026-11-03). The user's first look at the painted
+ground in the real window: "overall good", but on the touch step the caption bar was still the
+ground's grey — a grey strip over the green that takes the whole surface — and the user asked
+either for the caption to change or for the touch's background to be redesigned. Ruled, of the
+two ways offered: the caption takes the green too, as the demo drew the touch; the other way,
+the green fading to the ground's grey at its top under a grey caption, was not taken. Built: the
+green wash's top is made plain as the painted ground's is — one flat green, `--touch-top`,
+#0D695E light and #0B4B43 dark, the gradient's own colour at the middle of its top edge, held
+for the first px and fading into the gradient over 96 px, so the window's first row is one
+colour across its width and the page below the band is pixel for pixel what it was; the lock
+stage tells the shell when the green comes and goes (`Shell.StageGreen`, a boolean and nothing
+of the ceremony, sent as the stage mounts, at each change and as it leaves; only a change is
+sent, and the calls are chained so they land in order), since the page is what knows; the
+shell, under the same guards as the ground's colour — Windows 11 build 22000 and later, no
+contrast theme, no accent title bars — paints the caption the touch green with white text
+(`DWMWA_TEXT_COLOR`, 36) while the green is up, and gives the caption the ground's colour and
+its text back to DWM as the green goes; where no page can say so the shell restores the caption
+itself: the green belongs to the window it was said in, so a window made again from the tray
+wears none until its own page speaks, and a vault state with no ceremony on the stage takes it
+down after two seconds unless the page has spoken since. Measured in the mock: the first row is
+the token across the width in every green view (the touch, the derivation and Done, the first
+run's create) at both window sizes and both themes; the dissolve and the return are unchanged;
+the call fires on every path, a timeout, a lock mid-touch and a reload included. The reviewer
+probed DWM on this machine (build 26300): on a green caption DWM draws the title and the glyphs
+white of its own accord when the window is active and dims the glyphs when it is inactive, so
+the explicit white keeps only the title fully white on an inactive window. For the user's eye:
+the caption changes in one frame while the page dissolves over 220 ms, so it leads the page on
+the way in and stays green through the 160 ms lift after Done; the glyphs' colour on the green,
+active and inactive; a touch that times out; the first run's create at the smallest window,
+where the stage's light scrollbar track now meets a green caption. Left: a reload whose boot
+fails mid-touch keeps the caption green over the boot failure until the ceremony leaves the
+stage; Windows 11 builds before 26300 were not probed for the glyphs' colour.

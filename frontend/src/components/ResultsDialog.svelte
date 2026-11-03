@@ -5,14 +5,16 @@
   // and the code's own copy after a colon, with Show in Explorer where the
   // item is a file on disk (an add's source). Copy details and Close are
   // equal, standard buttons: nothing here is the suggested act. It opens
-  // on the page the batch ran on at once, and anywhere from the done
-  // line's Details, so it stands above every route (App.svelte).
+  // at once on the page the batch ran on when something in it failed,
+  // and anywhere from the done line's Details, so it stands above every
+  // route (App.svelte).
   import { Clipboard } from "@wailsio/runtime";
   import type { OpView } from "../lib/api";
   import { Shell, errorOf } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { detailsText, resultsTitle, rowName, summaryLine, tally, troubles } from "../lib/results";
   import { codeText, commandCopy, resultsCopy, unknownCodeParts } from "../lib/strings";
+  import { tip } from "../lib/tip";
   import Dialog from "./Dialog.svelte";
 
   interface Props {
@@ -52,8 +54,13 @@
   <ul class="plain results">
     {#each rows.slice(0, SHOWN) as t, i (i)}
       {@const parts = unknownCodeParts(t.text)}
+      {@const after = rowName(t).slice(t.name.length)}
       <li>
-        <span class="what"><b>{rowName(t)}</b>: {#if parts}{parts[0]}<span class="mono">{parts[1]}</span>{parts[2]}{:else}{t.text}{/if}</span>
+        <!-- The name is cut, never spilling, with its whole in the app's
+             tooltip while it is cut (APP.md §6, Dialogs); what rowName
+             adds after it — a folder's "(folder)" — and the colon stay
+             whole, on the name's line. -->
+        <span class="what"><span class="cut-run"><b class="cut-name" use:tip={{ text: t.name, cut: true }}>{t.name}</b>{#if after}<b>{after}</b>{/if}:</span> {#if parts}{parts[0]}<span class="mono">{parts[1]}</span>{parts[2]}{:else}{t.text}{/if}</span>
         {#if t.path}<button type="button" class="btn link" onclick={() => void show(t.path)}>{commandCopy.showInExplorer}</button>{/if}
       </li>
     {/each}

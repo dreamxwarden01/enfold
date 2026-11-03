@@ -22,6 +22,7 @@
   import PendingLabel from "./PendingLabel.svelte";
   import { date, dateTime, keyId, leaf, plural } from "../lib/format";
   import { actionOf, defaultTicks, differLine, incomingOf, summarise, tickable, tickedIds } from "../lib/merge";
+  import { tip } from "../lib/tip";
   import Dialog from "./Dialog.svelte";
   import CeremonyPanel from "./CeremonyPanel.svelte";
 
@@ -200,7 +201,10 @@
         <div class="mrow" class:skip={!tickable(r)}>
           <input type="checkbox" id="mg-{r.archiveId}" checked={!!ticks[r.archiveId]} disabled={!tickable(r)} onchange={(e) => tick(r.archiveId, e.currentTarget.checked)} />
           <div class="mbody">
-            <label for="mg-{r.archiveId}"><b>{r.name || "(unnamed)"}</b><span class="tag">{chip(r)}</span></label>
+            <!-- The name cut at the row's edge, with its whole in the app's
+                 tooltip while it is cut (APP.md §6, Dialogs); the chip
+                 beside it stays whole. -->
+            <label for="mg-{r.archiveId}"><b class="cut-name" use:tip={{ text: r.name, cut: true }}>{r.name || "(unnamed)"}</b><span class="tag">{chip(r)}</span></label>
             <span class="note">{note(r)}</span>
             {#if differLine(r.differs)}<span class="note diff">{differLine(r.differs)}</span>{/if}
           </div>

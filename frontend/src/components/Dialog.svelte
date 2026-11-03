@@ -1,3 +1,91 @@
+<script lang="ts" module>
+  // Names in a dialog (APP.md §6, Dialogs; ruled 2026-11-03, after the
+  // user's add conflict whose file name ran past the box's edge and gave
+  // its body a sideways scrollbar, while the file's row under the title
+  // was cut without saying so). A user-given name — a file's, a folder's,
+  // an archive's, a vault's, a YubiKey's label — said in a dialog's title
+  // or in one of its rows is one run that never breaks (app.css
+  // .cut-name). The box widens from its ruled width until the longest such
+  // name stands whole, up to the cap; past the cap the name is cut at its
+  // end with an ellipsis, as the lists and the crumbs cut a name, and the
+  // app's tooltip holds it whole while it is cut. The end cut and not the
+  // middle one: the record cuts in the middle only a path, to keep its
+  // drive and its file (the create dialog's *Kept in*), and no name; and
+  // the name's head is what a list showed the user, so it is what they
+  // know the file by.
+  import { tip } from "../lib/tip";
+
+  // NAME_CAP: how wide a dialog may grow for a name — the wide dialog's
+  // own 640, so no dialog is ever wider than the widest one ruled. The
+  // window's term is the 20 px every dialog keeps from its edges
+  // (app.css .dialog's max-width), so the cap is min(640, the window less
+  // 40): not 24 a side, the body's inset, since a second number for the
+  // one edge would let the cap and the box's own max-width disagree. At
+  // the 866 px minimum window the window's term is 826 (818 at 24 a side),
+  // so 640 rules at every width the window can take. Wider would buy
+  // little: at 640 a title's 20 px semibold holds about 56 characters and a
+  // row's 13 px about 85, where a name may run to 255.
+  export const NAME_CAP = 640;
+  export const NAME_EDGE = 20;
+
+  // A name's tail is the punctuation the text glues to it — the question
+  // mark of "Compact Photos 2024?" — drawn in the name's run, so that a
+  // name at its line's end never leaves its "?" on a line of its own. A
+  // cut name loses its tail with its end, the ellipsis standing for both:
+  // a "?" kept after the ellipsis would stand off from it by whatever part
+  // of a letter the cut left blank.
+  export interface NamePart {
+    text: string;
+    name: boolean;
+    tail?: string;
+  }
+
+  // A name's edge: the text's start or end, or a character that is no
+  // letter or digit. A short name is looked for where it stands as a
+  // word, so that "Rename e" cuts the last "e" and not the one in
+  // "Rename".
+  const edge = (c: string | undefined): boolean => c === undefined || !/[\p{L}\p{N}]/u.test(c);
+
+  function find(text: string, name: string, from: number): number {
+    const first = text.indexOf(name, from);
+    for (let i = first; i >= 0; i = text.indexOf(name, i + 1)) {
+      if (edge(text[i - 1]) && edge(text[i + name.length])) return i;
+    }
+    return first;
+  }
+
+  // nameParts splits a text that says user-given names — a title, a
+  // command row's label, an option's — into the names and the words
+  // around them. The names are given in the order the text says them, and
+  // each is looked for after the one before; a name the text does not
+  // say, or an empty one, is passed over, so a title that counts instead
+  // of naming ("2 files with the same names are already in test") cuts
+  // only what it says.
+  export function nameParts(text: string, names: readonly string[] = []): NamePart[] {
+    const out: NamePart[] = [];
+    let at = 0;
+    for (const name of names) {
+      if (!name) continue;
+      const i = find(text, name, at);
+      if (i < 0) continue;
+      if (i > at) out.push({ text: text.slice(at, i), name: false });
+      const tail = /^[^\s\p{L}\p{N}]*/u.exec(text.slice(i + name.length))?.[0] ?? "";
+      out.push({ text: name, name: true, tail });
+      at = i + name.length + tail.length;
+    }
+    if (at < text.length || out.length === 0) out.push({ text: text.slice(at), name: false });
+    return out;
+  }
+
+  export { named };
+</script>
+
+<!-- A text with its names cut (above): the words as they are, each name
+     with its tail a .cut-name run, with the app's tooltip holding the name
+     while it is cut. One line, so no whitespace stands between the parts
+     that the text did not have. -->
+{#snippet named(text: string, names: readonly string[] = [])}{#each nameParts(text, names) as p}{#if p.name}<span class="cut-name" use:tip={{ text: p.text, cut: true }}>{p.text}{p.tail}</span>{:else}{p.text}{/if}{/each}{/snippet}
+
 <script lang="ts">
   import { setContext, untrack } from "svelte";
   import type { Snippet } from "svelte";
@@ -10,6 +98,10 @@
 
   interface Props {
     title: string;
+    // names: the user-given names the title says, in the order it says
+    // them (nameParts, above): each one stands whole, the box widening for
+    // it up to the cap, and is cut past that (APP.md §6, Dialogs).
+    names?: readonly string[];
     // onclose is what Escape does (APP.md §6, "Dialogs stay put"): Cancel
     // where there is one, Close where the one action is Close, Skip — or
     // Skip all — in the conflict and refused-name dialogs, never Replace.
@@ -66,7 +158,7 @@
     // downward; every other dialog is centred.
     anchored?: boolean;
   }
-  let { title, onclose, dismissable = false, children, actions, wide = false, medium = false, heading, covered = false, onsubmit, select, closeButton = false, closeTitle, anchored = false }: Props = $props();
+  let { title, names = [], onclose, dismissable = false, children, actions, wide = false, medium = false, heading, covered = false, onsubmit, select, closeButton = false, closeTitle, anchored = false }: Props = $props();
 
   // What the body lends a ceremony panel (lib/dialogs DialogHost): the
   // foot band while it is mounted, and the touch's green over the box
@@ -99,6 +191,48 @@
     const [from, to] = untrack(() => select?.(field.value)) ?? [end, end];
     field.setSelectionRange(from, to);
   });
+
+  // The width the names ask for (APP.md §6, Dialogs; ruled 2026-11-03).
+  // Every name the box cuts (.cut-name: the title's and its rows') is
+  // measured as the dialog opens, and the box widens from its ruled
+  // width — 460, 520 or 640 — until the longest stands whole, up to the
+  // cap; a name that is longer still is cut there. Measured again when the
+  // title changes, and never narrowed while the dialog is up: a box that
+  // shrank under the pointer would move what it was about to press
+  // (Dialogs stay put). A name drawn later, a folder the Move to tree
+  // opens, is cut at the width the box took.
+  $effect(() => {
+    void title;
+    void names;
+    if (box) fit(box);
+  });
+
+  // The measures are layout's own (offsetWidth, scrollWidth), which the
+  // box's entering scale does not touch. The first step widens the box by
+  // the most any name hides, which is exact for a name that has its line
+  // or its row to itself; a name still cut after it grows slower than the
+  // box — one of two columns — and its rate, read off the two measures,
+  // says how much further to go. A name whose room did not grow at all is
+  // held by a width of its own and is cut there. The pixel over the
+  // rounded measures keeps a name that fits from losing its last letter
+  // to the ellipsis.
+  function fit(el: HTMLElement): void {
+    const cap = Math.min(NAME_CAP, window.innerWidth - 2 * NAME_EDGE);
+    const w0 = el.offsetWidth;
+    if (w0 >= cap) return;
+    const cut = [...el.querySelectorAll<HTMLElement>(".cut-name")];
+    const hidden = () => cut.map((n) => n.scrollWidth - n.clientWidth);
+    const h0 = hidden();
+    const most = Math.max(0, ...h0);
+    if (most <= 0) return;
+    const w1 = Math.min(cap, w0 + most + 1);
+    el.style.width = `${w1}px`;
+    let w = w1;
+    hidden().forEach((h, i) => {
+      if (h > 0 && h0[i] > h) w = Math.max(w, w1 + (h * (w1 - w0)) / (h0[i] - h) + 1);
+    });
+    el.style.width = `${Math.min(cap, Math.ceil(w))}px`;
+  }
 
   // The first field to type in: never a read-only one (the import
   // dialog's path, filled by its Choose… button) nor one inside a closed
@@ -217,11 +351,11 @@
   <div class="dialog-body">
     {#if closeButton}
       <div class="dialog-head">
-        <h2>{title}{@render heading?.()}</h2>
+        <h2>{@render named(title, names)}{@render heading?.()}</h2>
         <button type="button" class="btn subtle dialog-close" title={onclose ? (closeTitle ?? dialogCopy.cancelEsc) : undefined} aria-label={closeTitle ?? dialogCopy.cancel} disabled={!onclose} onclick={cancel}><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button>
       </div>
     {:else}
-      <h2>{title}{@render heading?.()}</h2>
+      <h2>{@render named(title, names)}{@render heading?.()}</h2>
     {/if}
     {@render children()}
   </div>

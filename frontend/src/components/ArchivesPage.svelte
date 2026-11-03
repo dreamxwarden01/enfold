@@ -181,7 +181,7 @@
   // A consequence dialog (the dialog template, ruled 2026-10-17): the
   // question, the body, the primary that repeats the command's verb, and
   // the mechanism, when there is one worth saying, behind *How this works*.
-  let confirm = $state<null | { title: string; body: string; how?: string; button: string; run: () => Promise<unknown> }>(null);
+  let confirm = $state<null | { title: string; names?: string[]; body: string; how?: string; button: string; run: () => Promise<unknown> }>(null);
   let showDetails = $state(false);
   // The Forget/Delete dialog runs off a snapshot of the record, never off
   // the live row: a forgotten record leaves the list the moment the write
@@ -1343,12 +1343,12 @@
 
   function askCompact() {
     const a = one;
-    if (a) confirm = { title: dialogCopy.compact.title(a.name), body: dialogCopy.compact.body, button: dialogCopy.compact.primary, run: () => Archives.Compact(a.id) };
+    if (a) confirm = { title: dialogCopy.compact.title(a.name), names: [a.name], body: dialogCopy.compact.body, button: dialogCopy.compact.primary, run: () => Archives.Compact(a.id) };
   }
 
   function askRekey() {
     const a = one;
-    if (a) confirm = { title: dialogCopy.rekeyArchive.title(a.name), body: dialogCopy.rekeyArchive.body, how: dialogCopy.rekeyArchive.how, button: dialogCopy.rekeyArchive.primary, run: () => Archives.RotateKey(a.id) };
+    if (a) confirm = { title: dialogCopy.rekeyArchive.title(a.name), names: [a.name], body: dialogCopy.rekeyArchive.body, how: dialogCopy.rekeyArchive.how, button: dialogCopy.rekeyArchive.primary, run: () => Archives.RotateKey(a.id) };
   }
 
   function toggleHidden() {
@@ -2165,7 +2165,7 @@
 {/if}
 
 {#if confirm}
-  <Dialog title={confirm.title} onclose={() => (confirm = null)}>
+  <Dialog title={confirm.title} names={confirm.names} onclose={() => (confirm = null)}>
     <p>{confirm.body}</p>
     {#if confirm.how}
       <!-- The mechanism, for whoever asks (the dialog template, ruled

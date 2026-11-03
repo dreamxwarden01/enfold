@@ -112,7 +112,7 @@
 </script>
 
 <!-- Close is its one action, so the backdrop closes it too (APP.md §7). -->
-<Dialog title={technicalCopy.titleOf(d.name)} wide onclose={onclose} dismissable>
+<Dialog title={technicalCopy.titleOf(d.name)} names={[d.name]} wide onclose={onclose} dismissable>
   {#if d.description}<p class="t-sub">{d.description}</p>{/if}
   {#if purge}
     <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{chipCopy.forgottenOn(date(d.forgottenAt))}. Its key is dropped at the first unlock after {date(purge)}.</span></div>

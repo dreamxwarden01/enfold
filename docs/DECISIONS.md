@@ -6087,3 +6087,38 @@ line: a half-circle at each end, read in the tour's zoom (at 100 % they are 1.4 
 against a half-width of 1.5, a little flat in the middle). The tour's left border follows
 (6.6), its line expectations with it; APP's section 6 says so. For the user's eye: the width
 and the ends in the real window, which the tour measures only as a width and a gap.
+
+**A name in a dialog never scrolls the dialog sideways** (2026-11-03). The user, in the real
+window: the add conflict's question for a file with a long name ran past the box's edge, the
+body grew a horizontal scrollbar, and the file's row under the title was cut without saying so;
+asked for a box that may grow, with a hard cap, and a cut past it. Ruled and built: a user-given
+name — a file's, a folder's, an archive's, a vault's, a YubiKey's label — in a dialog's title or
+in one of its rows is one run that never breaks (`.cut-name`, `Dialog.svelte`'s `nameParts` and
+its `named` snippet); the box widens from its ruled width (460, 520 or 640) until the longest
+such name stands whole, up to a cap of 640 px — the wide dialog's own, so no dialog is wider
+than the widest one ruled — or the window less the 20 px every dialog already keeps at each side
+(the box's own max-width margin, so the cap and the margin never disagree), which is never the
+smaller from the 866 × 554 minimum up; past the cap the name is cut at its end with an ellipsis
+and the app's tooltip holds it whole while it is cut, as the lists, the crumbs and the rail cut a
+name (the middle cut stays a path's alone, *Kept in*). A title wraps its words around the name,
+which takes a line of its own when it must, its glued punctuation going with it; the width is
+settled as the dialog opens and again when its title changes, and never narrows while it is up.
+Anything else too long — a path, a name in a sentence or in a field's label or hint — breaks at
+the edge (`.dialog-body` `overflow-wrap: anywhere`), and *Delete archive…*'s name to type wraps
+under its label, never cut. The rule covers the add conflict's names and its *Replace the file
+in …* row, the compare list (its tooltip the whole path, always), *Move to…*'s title and tree,
+the results dialog, the merge list, the extract's *Everything in …*, the import's *Replace this
+vault (…)* tick, Rename and its refusals, Delete archive, Compact, Details, Open and Remove.
+Measured in the mock by the builder and again by the reviewer (176 dialog states at 1086 × 694
+and 866 × 554, light and dark; names of 255 and 120 units, a 255-unit CJK name, the user's own
+45-character name, archive names of 255 and 1000): every body's scrollWidth is its clientWidth,
+no element stands past the box, the box never exceeds the cap, the user's name widens the
+conflict from 460 to 529 and stands whole. Left, the reviewer's nits: a results row's colon
+stands a glyph from the ellipsis when its name is cut (the "(folder)" and the colon are outside
+the run); the import's tick appears after *Choose…*, so a long vault name on it is cut at 520
+although the cap would hold it (the width is settled at opening, as ruled); a greyed command
+row's cut folder name may not show the app's tooltip, Chromium sending few pointer events to a
+disabled button's children, the row's native title still giving the reason; two names alike up
+to the cut look alike, their tooltips telling them apart. For the user's eye in the real
+window: the conflict question with the file that started this, and *Move … to…* when the name
+takes the line.

@@ -22,7 +22,7 @@
   let { path, onclose, onimport }: Props = $props();
 </script>
 
-<Dialog title={openCopy.title(baseName(path))} onclose={onclose}>
+<Dialog title={openCopy.title(baseName(path))} names={[baseName(path)]} onclose={onclose}>
   <p>{openCopy.keyNotInVault}</p>
   <p class="t-quiet">{openCopy.how}</p>
 

@@ -13,7 +13,7 @@
   import { codeText, dialogCopy, firstMethodCopy, importCopy, vaultCopy } from "../lib/strings";
   import { dateTime, leaf, plural } from "../lib/format";
   import { fieldMenu } from "../lib/fieldmenu";
-  import Dialog from "./Dialog.svelte";
+  import Dialog, { named } from "./Dialog.svelte";
   import FirstWayIn from "./FirstWayIn.svelte";
   import TextField from "./TextField.svelte";
 
@@ -204,7 +204,9 @@
         <svg class="i"><use href="#i-warn" /></svg>
         <span>{eff === "inplace" ? "Enfold switches to this file from" : "This replaces"} <strong>{st.displayName}</strong>, changed {dateTime(st.modifiedAt)}. {eff === "inplace" || st.keptElsewhere ? `It stays where it is${st.keptElsewhere ? ", at " + st.path : ""}, untouched` : "It is kept as a dated copy in Enfold's folder, never deleted"}: its own unlock methods still open it, and archives only it holds open only with it.{st.retireOwed ? ` ${importCopy.replacedOwes}` : ""}</span>
       </div>
-      <label class="check"><input type="checkbox" bind:checked={confirm} />{eff === "inplace" ? "Switch to this file" : "Replace this vault"} ({st.displayName})</label>
+      <!-- The tick names the vault on one line, its name cut as a title
+           cuts one (APP.md §6, Dialogs); the bar above says it whole. -->
+      <label class="check"><input type="checkbox" bind:checked={confirm} /><span class="cut-run">{@render named(`${eff === "inplace" ? "Switch to this file" : "Replace this vault"} (${st.displayName})`, [st.displayName])}</span></label>
     {/if}
     {#if isBackup}
       <FirstWayIn bind:this={first} heading={firstMethodCopy.headImport} context="adopt" {attempt} idPrefix="im" />

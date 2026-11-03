@@ -217,6 +217,9 @@
   // the rows speak of the clashes alone and a note says the merge.
   const collisionPlace = $derived(collisions ? (collisions.at === dirId ? folderName : rows.find((r) => r.id === collisions?.at)?.name ?? folderName) : "");
   const collisionSaid = $derived(collisions ? collisionPlan(collisions.list, collisions.offered, collisionPlace) : null);
+  // The names its title says, for the dialog to cut rather than spill
+  // (APP.md §6, Dialogs): the one name, when it names one, and the folder.
+  const collisionNames = $derived(collisions ? (collisions.list.length === 1 ? [shownName(collisions.list[0].name), collisionPlace] : [collisionPlace]) : []);
   const collisionRows: CommandRow[] = $derived.by(() => {
     const c = collisions;
     const p = collisionSaid;
@@ -224,6 +227,7 @@
     return [
       {
         label: p.replace.label,
+        names: [collisionPlace],
         says: p.replace.says,
         disabled: p.replace.off !== undefined,
         reason: p.replace.off,
@@ -1992,7 +1996,7 @@
   <!-- The title names what is renamed, and a quiet line under the field
        says what Enter does and when a taken name is said (APP.md §6,
        ruled 2026-10-17). -->
-  <Dialog title="Rename {renaming.name}" onclose={() => (renaming = null)} onsubmit={doRename} select={(v) => renameSelection(v, renaming?.isDir ?? false)}>
+  <Dialog title="Rename {renaming.name}" names={[renaming.name]} onclose={() => (renaming = null)} onsubmit={doRename} select={(v) => renameSelection(v, renaming?.isDir ?? false)}>
     <TextField id="rn" label="New name" bind:value={renameTo} bind:valid={renameValid} attempt={renameAttempt} judge={judgeRename} />
     <p class="t-quiet">Enter renames. A name already in {folderName} is refused here, not after.</p>
     {#snippet actions()}
@@ -2024,7 +2028,7 @@
      the folder sentence only when a folder is in the selection, and no
      undo anywhere in the copy - deletion is cryptographic erasure. -->
 {#if deleting}
-  <Dialog title={deleteTitle(deleting.rows, stat?.name ?? "")} onclose={() => (deleting = null)}>
+  <Dialog title={deleteTitle(deleting.rows, stat?.name ?? "")} names={[stat?.name ?? ""]} onclose={() => (deleting = null)}>
     <p>{deleteBody(deleting.rows)}</p>
     {#snippet actions()}
       <button type="button" class="btn danger-fill" onclick={doDelete}>Delete</button>
@@ -2067,7 +2071,7 @@
        backdrop is nothing: the dialog has a choice (APP.md §6, "Dialogs
        stay put"). No row wears the accent, so the one that looks like the
        default is never the mass overwrite (ruled 2026-10-14). -->
-  <Dialog title={conflictTitle(conflicts.length, conflicts[0].name, question.destination ?? "")} onclose={() => decide("skip")} closeButton closeTitle={dialogCopy.skipEsc}>
+  <Dialog title={conflictTitle(conflicts.length, conflicts[0].name, question.destination ?? "")} names={conflicts.length === 1 ? [conflicts[0].name] : []} onclose={() => decide("skip")} closeButton closeTitle={dialogCopy.skipEsc}>
     <CommandRows rows={conflictRows} />
   </Dialog>
 {/if}
@@ -2102,12 +2106,15 @@
      wears the accent (ruled 2026-10-14). A collision carries the two kinds
      only, so no size or date is said. -->
 {#if collisions && collisionSaid}
-  <Dialog title={collisionSaid.title} onclose={() => (collisions = null)}>
+  <Dialog title={collisionSaid.title} names={collisionNames} onclose={() => (collisions = null)}>
     <ul class="collide">
       {#each collisions.list.slice(0, 6) as c (c.name)}
         <li>
           <svg class="i" aria-hidden="true"><use href="#{fileIcon(c.name, c.existingIsDir)}" /></svg>
-          <span class="nm">{shownName(c.name)}</span>
+          <!-- Cut, never spilling, with its whole in the app's tooltip
+               while it is cut (APP.md §6, Dialogs; ruled 2026-11-03: the
+               user's row was cut and nothing said so). -->
+          <span class="nm cut-name" use:tip={{ text: shownName(c.name), cut: true }}>{shownName(c.name)}</span>
           <span class="kd" class:clash={c.isDir !== c.existingIsDir}>{collisionCopy.kind(c.isDir, c.existingIsDir)}</span>
         </li>
       {/each}

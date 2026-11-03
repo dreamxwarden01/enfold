@@ -19,6 +19,7 @@
   import { TREE_LIMIT, failed, folderLines, lines, needsRead, newTree, offReason, pathOf, read, reading, setOpen, treeKey } from "../lib/movetree";
   import type { Off, Tree } from "../lib/movetree";
   import { pending } from "../lib/pending";
+  import { tip } from "../lib/tip";
   import Dialog from "./Dialog.svelte";
   import TextField from "./TextField.svelte";
 
@@ -224,7 +225,7 @@
   }
 </script>
 
-<Dialog title={moveToCopy.title(ids.length, name)} medium onclose={oncancel}>
+<Dialog title={moveToCopy.title(ids.length, name)} names={[name]} medium onclose={oncancel}>
   <!-- The tree (the ARIA tree pattern): one row in the tab order, the
        selected one; a greyed row says why at its right. -->
   <!-- svelte-ignore a11y_interactive_supports_focus -->
@@ -254,7 +255,12 @@
             <span class="chev" aria-hidden="true"></span>
           {/if}
           <svg class="i kind" aria-hidden="true"><use href={l.depth === 0 ? "#i-box" : "#i-folder"} /></svg>
-          <span class="nm">{l.name}</span>
+          <!-- A folder's name is cut at the width the box took, with its
+               whole in the app's tooltip while it is cut (APP.md §6,
+               Dialogs): the tree is drawn a folder at a time, after the
+               box has settled its width, and a box that widened under the
+               pointer would move the row about to be pressed. -->
+          <span class="nm cut-name" use:tip={{ text: l.name, cut: true }}>{l.name}</span>
           <!-- Every greyed row says why at its right, the folders beneath a
                moved one included (the brief: the moved folders and their
                descendants, each with its reason; the final shoot of phase

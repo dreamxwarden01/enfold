@@ -3634,6 +3634,29 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   window and below, 108 at 1080 — and grow downward only, their body scrolling past 20 px from
   the bottom as every dialog's does (the import dialog's backup with the YubiKey's card ticked
   is taller and scrolls at 820 px, above). Every other dialog is centred.
+- *A name in a dialog* (ruled 2026-11-03, after the user's add conflict, whose file name ran
+  past the box's edge and gave its body a sideways scrollbar while the file's row under the
+  title was cut without saying so). A user-given name — a file's, a folder's, an archive's, a
+  vault's, a YubiKey's label — said in a dialog's title or in one of its rows (the add
+  conflict's names and its *Replace* row, the compare list, *Move to…*'s tree, the results
+  dialog, the merge list, the extract's *Everything in …*, the import's *Replace this vault (…)*
+  tick) is one run that never breaks: the box widens from its ruled width (460, 520 or 640)
+  until the longest such name stands whole, up to a cap of 640 px — the wide dialog's own, so
+  no dialog is ever wider than the widest one ruled — or the window less the 20 px every dialog
+  keeps at each side where that is less, which it never is from the 866 × 554 minimum (826)
+  up; past the cap the name is cut at its end with an ellipsis, as the
+  lists and the crumbs cut a name (the middle cut is the record's for a path alone, *Kept in*),
+  and the app's tooltip holds it whole while it is cut (the compare list's holds the whole path,
+  and always). A title wraps its words at its measure around the name, which takes a line of its
+  own when it must; the punctuation glued to it, a title's "?", goes with it and is cut with it.
+  The width is settled as the dialog opens, from the names it shows then, and again when its
+  title changes, and never narrows while the dialog is up; a name drawn later, a folder *Move
+  to…*'s tree opens, is cut at the width taken. Anything else too long for its line — a path, a
+  name in a sentence or in a field's label or hint — breaks where it meets the edge, as the
+  refused-name question's long name always did, and *Delete archive…*'s name to type is never
+  cut but wraps on a line of its own under its label. So no dialog scrolls sideways for any name,
+  R20's 255 code units or an archive's longer one (the mock, 1086 × 694 and 866 × 554 in both
+  themes, names of 255 and 120 code units: every dialog body's scrollWidth is its clientWidth).
 - *Type and spacing* (ruled 2026-10-17; the sizes inherited from the mockup — 12.5 and 11.5
   among fifteen, on a 1.45 line — are gone). Six type tokens and no other size, each on a
   whole-pixel line: caption 12/16, body 13/20, strong (600) 13/20 in Segoe UI Variable Text;

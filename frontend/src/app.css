@@ -2053,6 +2053,29 @@ tbody tr.up .fname { color: var(--ink-2); }
 .dialog { width: 460px; max-width: calc(100vw - 2 * var(--s5)); max-height: calc(100vh - 2 * var(--s5)); overflow: hidden; background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-window); display: flex; flex-direction: column; }
 .dialog-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--s6); display: flex; flex-direction: column; gap: var(--s3); }
 .dialog h2 { font: var(--t-sub); margin: 0; }
+/* Names in a dialog (APP.md §6, Dialogs; ruled 2026-11-03, after the
+   user's add conflict whose file name ran past the box's edge): a
+   user-given name in a title or a row is one run that never breaks. The
+   box widens for it up to the cap (Dialog.svelte, fit), and past the cap
+   it is cut at its end with an ellipsis, the app's tooltip holding it
+   whole while it is cut (lib/tip.ts), as the lists cut a name. An inline
+   block, so a title still wraps its words around the name and the name
+   is cut at the title's measure; aligned by its top, since a box that
+   clips its overflow stands on its bottom edge and not on the text's
+   baseline. */
+.cut-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+/* A name with what stands on its line with it — a results row's
+   "(folder)" and colon, the words before it in the extract's "Everything
+   in …" — is a flex run in which the name alone gives way, so what goes
+   with it never wraps onto a line of its own. pre keeps the spaces at
+   its parts' ends, which a flex item would drop. */
+.cut-run { display: inline-flex; max-width: 100%; min-width: 0; vertical-align: top; white-space: pre; }
+/* The guard under that rule: nothing else in a body widens it either. A
+   run too long for its line — a path, a name in a sentence or in a
+   field's label or hint — breaks where it meets the edge, as the
+   refused-name question's long name always did, so a dialog never
+   scrolls sideways. It changes nothing that fits. */
+.dialog-body { overflow-wrap: anywhere; }
 /* Focus moves into a dialog as it opens (Dialog.svelte); the box is not a
    control and wears no ring — its buttons and fields keep theirs. */
 .dialog:focus, .dialog:focus-visible { outline: none; box-shadow: var(--shadow-window); }

@@ -858,7 +858,7 @@
        form that asks why first (ruled 2026-10-27): it opens on the checked
        answer, Enter presses the primary, Escape is Cancel. Its height does
        not change with the answer or the tick, so it stays centred. -->
-  <Dialog title={dialogCopy.removeUnlockMethod.title(target.label, removeAdded(target))} onclose={() => (removing = null)} onsubmit={() => void doRemove()}>
+  <Dialog title={dialogCopy.removeUnlockMethod.title(target.label, removeAdded(target))} names={[target.label]} onclose={() => (removing = null)} onsubmit={() => void doRemove()}>
     <p>{dialogCopy.removeUnlockMethod.body(target.label, target.type)}</p>
     {#if (st?.retiredCopies ?? 0) > 0}
       <!-- Replaced copies keep their unlock methods (APP.md §13). -->

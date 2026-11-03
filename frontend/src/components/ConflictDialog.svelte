@@ -14,6 +14,7 @@
   import { untrack } from "svelte";
   import Dialog from "./Dialog.svelte";
   import { bytes, dateTime, fileIcon } from "../lib/format";
+  import { tip } from "../lib/tip";
   import { compareCopy } from "../lib/strings";
   import { continueLabel, sameDateAndSize, skipSameLabel, startingDecisions, ticks, toggle, withSkipSame } from "../lib/conflicts";
   import type { ConflictRow, Decision } from "../lib/conflicts";
@@ -58,7 +59,7 @@
           <input type="checkbox" checked={t.left} onchange={() => hit(r.path, "left")} />
           <svg class="i"><use href="#{fileIcon(r.name)}" /></svg>
           <span class="two-line who">
-            <b title={r.path}>{r.name}</b>
+            <b class="cut-name" use:tip={{ text: r.path }}>{r.name}</b>
             <small>{bytes(r.size)} · {dateTime(r.modifiedAt)}</small>
           </span>
         </label>
@@ -66,7 +67,7 @@
           <input type="checkbox" checked={t.right} onchange={() => hit(r.path, "right")} />
           <svg class="i"><use href="#{fileIcon(r.name)}" /></svg>
           <span class="two-line who">
-            <b title={r.dest}>{r.name}</b>
+            <b class="cut-name" use:tip={{ text: r.dest }}>{r.name}</b>
             <small>{bytes(r.existingSize)} · {dateTime(r.existingModifiedAt)}</small>
           </span>
         </label>
@@ -98,6 +99,10 @@
   .side { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
   .side input { flex: none; }
   .side .i { flex: none; color: var(--ink-3); }
-  /* One line each, cut with an ellipsis: the whole path is the name's title. */
+  /* One line each, cut with an ellipsis (APP.md §6, Dialogs): the whole
+     path is the name's tooltip, the app's (lib/tip.ts), shown whether the
+     name is cut or not, since the path says more than the name — which of
+     two copies of the same name this one is. The list is the wide
+     dialog's, at the cap already, so a name never widens it. */
   .who > * { white-space: nowrap; }
 </style>

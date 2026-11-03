@@ -201,7 +201,7 @@
      form-dialog rule): it opens with the focus in the name field, not on
      the box, and Enter there presses the primary, which marks the field
      if the name does not match. -->
-<Dialog {title} onclose={phase === "busy" ? undefined : phase === "mismatch-confirm" ? () => (phase = "mismatch") : onclose} dismissable={phase === "done" || phase === "error"} onsubmit={phase === "consent" || phase === "busy" ? () => void go() : undefined}>
+<Dialog {title} names={[name]} onclose={phase === "busy" ? undefined : phase === "mismatch-confirm" ? () => (phase = "mismatch") : onclose} dismissable={phase === "done" || phase === "error"} onsubmit={phase === "consent" || phase === "busy" ? () => void go() : undefined}>
   {#if phase === "consent" || phase === "busy"}
     {#if mode === "forget"}
       <p>{dialogCopy.forgetArchive.body(until)}</p>
@@ -218,7 +218,10 @@
          saying it again read as a value already filled in (ruled
          2026-10-17). -->
     <div class="field">
-      <div class="field-top"><label for="del-name">{dialogCopy.confirmName}</label><span class="hint">{name}</span></div>
+      <!-- The name to type is never cut, since every letter of it is to
+           be typed: it wraps, on a line of its own under the label when
+           it does not fit beside it (APP.md §6, Dialogs). -->
+      <div class="field-top name-top"><label for="del-name">{dialogCopy.confirmName}</label><span class="hint">{name}</span></div>
       <input id="del-name" class="input" class:invalid={!!nameSaid} aria-invalid={nameSaid ? "true" : undefined} bind:value={typed} onblur={leave} oninput={() => (mark = nextMark("change", mark, confirmNameProblem(typed, name)))} disabled={phase === "busy"} use:fieldMenu />
       {#if nameSaid}<div class="field-error">{nameSaid === CONFIRM_NAME ? CONFIRM_NAME : nameSaid}</div>{/if}
     </div>
@@ -299,4 +302,6 @@
   /* Delete names the path in its body: it wraps anywhere, never cut and
      never pushing the dialog wider (APP.md §13). */
   .path-body { overflow-wrap: anywhere; }
+  .name-top { flex-wrap: wrap; }
+  .name-top .hint { min-width: 0; }
 </style>

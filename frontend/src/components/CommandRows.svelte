@@ -4,6 +4,11 @@
   // the consequence, and as its title (APP.md §6, Controls).
   export interface CommandRow {
     label: string;
+    // names: the user-given names the label says — the add conflict's
+    // folder, "Replace the file in test" — each one cut rather than
+    // broken, as a dialog's title cuts it (Dialog.svelte nameParts; APP.md
+    // §6, Dialogs).
+    names?: readonly string[];
     says: string;
     run: () => void;
     disabled?: boolean;
@@ -18,6 +23,8 @@
   // accent, so the button that looks like the default is never the mass
   // overwrite (ruled 2026-10-14). The rows stand in the dialog's body; a
   // Cancel, where the dialog has one, stays in the foot band.
+  import { named } from "./Dialog.svelte";
+
   interface Props {
     rows: CommandRow[];
   }
@@ -29,7 +36,7 @@
     <button type="button" class="btn cmdrow" disabled={r.disabled} title={r.disabled ? r.reason : undefined} onclick={r.run}>
       <svg class="i" aria-hidden="true"><use href="#i-chevron" /></svg>
       <span class="cmdrow-text">
-        <b>{r.label}</b>
+        <b>{@render named(r.label, r.names)}</b>
         <small>{r.disabled && r.reason ? r.reason : r.says}</small>
       </span>
     </button>

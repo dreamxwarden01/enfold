@@ -19,7 +19,7 @@
   // invented path read as where an empty field would extract to, and an
   // empty field extracts nowhere (APP.md §7, ruled 2026-10-17).
   import { untrack } from "svelte";
-  import Dialog from "./Dialog.svelte";
+  import Dialog, { named } from "./Dialog.svelte";
   import { fieldMenu } from "../lib/fieldmenu";
   import { Shell } from "../lib/api";
   import { POLICIES, destinationEmpty, destinationForScope, followScope, rememberPolicy, startingPolicy, startingScope } from "../lib/extract";
@@ -72,7 +72,7 @@
   }
 </script>
 
-<Dialog title={extractCopy.title(archiveName)} onclose={oncancel} onsubmit={go}>
+<Dialog title={extractCopy.title(archiveName)} names={[archiveName]} onclose={oncancel} onsubmit={go}>
   <!-- The scope line (direction 7): what first, then where. With nothing
        selected the first radio is greyed and says why beneath it. -->
   <fieldset class="field choices">
@@ -85,7 +85,9 @@
       </span>
     </label>
     <label class="check">
-      <input type="radio" name="xscope" value="all" checked={scope === "all"} onchange={() => setScope("all")} />{extractCopy.scopeAll(archiveName)}
+      <!-- One line, the archive's name cut as the title cuts it (APP.md
+           §6, Dialogs). -->
+      <input type="radio" name="xscope" value="all" checked={scope === "all"} onchange={() => setScope("all")} /><span class="cut-run">{@render named(extractCopy.scopeAll(archiveName), [archiveName])}</span>
     </label>
   </fieldset>
 
@@ -131,7 +133,11 @@
   /* A fieldset that is a .field (APP.md §6, Type and spacing): the options
      stand 8 apart, and the legend — which sits outside the column's gap —
      is a field label, strong, 8 above the first of them. */
-  .choices { border: 0; margin: 0; padding: 0; }
+  /* min-inline-size: a fieldset is as wide as its widest line by default,
+     so the archive's name on "Everything in …" would push the dialog
+     wide; at 0 the line is held to the box and the name is cut (APP.md
+     §6, Dialogs). */
+  .choices { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
   .choices .lbl { font: var(--t-strong); color: var(--ink); padding: 0 0 var(--s2); }
   /* A greyed radio's words are greyed with it, and its reason stands
      under them in caption, as a disabled menu item keeps its reason as a

@@ -54,17 +54,23 @@ export function submitSecret(kind: "pin" | "password" | "recovery" | "mgmtkey" |
 // stageGreen tells the shell whether the touch's green is up on the lock
 // stage (APP.md §2.4, §6; ruled 2026-11-03), so that the window's caption
 // takes the green with the page and gives it back with it: the page is
-// what knows when the green is up. A boolean and nothing of the ceremony.
-// Only a change is sent, the first word of a page always: a page loaded
-// again mid-ceremony says what it shows. Each call waits for the one
-// before it to answer, since the shell takes every bound call on a
-// goroutine of its own and two in flight could land in either order. A
-// refusal, or a page with no shell behind it (the mock answers null), is
-// nothing to the page: the caption is the shell's to keep.
+// what knows when the green is up. It is said as the page's own change
+// begins, with how long that change takes in ms and the curve it runs on
+// as CSS writes it, so that the shell eases the caption on them; 0 ms is
+// a change the page draws at once. Nothing of the ceremony. Only a change
+// of the green is sent, whatever its duration — a word repeated with
+// another length moves nothing, since the green is where it was — and the
+// first word of a page always: a page loaded again mid-ceremony says what
+// it shows. Each call waits for the one before it to answer, since the
+// shell takes every bound call on a goroutine of its own and two in
+// flight could land in either order; the shell answers as it starts a
+// fade, not as it ends one. A refusal, or a page with no shell behind it
+// (the mock answers null), is nothing to the page: the caption is the
+// shell's to keep.
 let greenSaid: boolean | null = null;
 let greenCalls: Promise<unknown> = Promise.resolve();
-export function stageGreen(on: boolean): void {
+export function stageGreen(on: boolean, ms: number, curve: string): void {
   if (greenSaid === on) return;
   greenSaid = on;
-  greenCalls = greenCalls.then(() => Shell.StageGreen(on)).catch(() => undefined);
+  greenCalls = greenCalls.then(() => Shell.StageGreen(on, ms, curve)).catch(() => undefined);
 }

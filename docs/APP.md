@@ -836,12 +836,33 @@ the green instead, the touch's plain top — the stylesheet's `--touch-top`, #0D
 #0B4B43 dark — with its text white (`DWMWA_TEXT_COLOR`, 36, through Wails'
 `w32.SetTitleTextColour`), so that caption and page are one surface as the demo drew the touch
 (ruled 2026-11-03; the caption stayed the ground's grey over the green). The page says when the
-green comes and goes (`Shell.StageGreen`, a boolean: as the lock stage mounts, at each change
-and as the stage leaves), since only the page knows; the shell sets the green and the white as
-it sets the ground, under the same guards below, and as the green goes gives the caption the
-ground's colour again and its text back to DWM (`DWMWA_COLOR_DEFAULT`), which picks it against
-the caption's colour. Where no page says so the shell restores the caption itself: the green is
-held for
+green comes and goes (`Shell.StageGreen`: as the lock stage mounts, as its own change begins —
+the wash's fade in or out, the scene's lift after Done, or the scene's entrance where the stage
+arrives already green — and as the stage leaves), with how long that change takes and the curve
+it runs on, both read off what the browser runs, since only the page knows; the shell sets the
+green and the white under the same guards as the ground, below, and as the green goes gives the
+caption the ground's colour again and its text back to DWM (`DWMWA_COLOR_DEFAULT`), which picks
+it against the caption's colour. **The caption changes as the page does** (ruled 2026-11-03; it
+changed in one frame while the page dissolved over 220 ms): the shell eases its colour and its
+text's from what the caption shows at that moment to the look the page now shows, over the
+duration the page says and on its curve, mixed in sRGB as Chromium composites the wash's
+opacity, or the scene's, over the ground, so that the caption is the page's first row at every
+frame — the text from the ink DWM draws on the ground to white and back, its last frame giving
+it to DWM: black in light, and on an inactive window the grey DWM dims it to, #7F7E7F, both as
+probed on build 26300; white in dark, not probed, so that an inactive window there may step at
+a fade's first and last frames — in frames every 8 ms on the main thread, each setting the two
+colour attributes alone, with the frame re-read at the first and the last (`fadeFrameChanged`
+adds it to every frame, should a caption be seen to hold still until a fade ends). A change
+the page draws at once is the caption's at once: 0 ms under reduced motion and for a stage
+loaded again mid-touch, which no entrance brings in; and so are a theme, a guard and a backstop
+below, each of which stops a fade running, while a word from the page during a fade starts the
+next from where the caption is. A stage that arrives already green as its scene flies in (a
+pending touch adopted by an unlock begun over an open archive, §2.2) says so as the scene's
+entrance begins, after its gap, with the entrance's length and the curve of the window's first
+row through it: the scene's opacity times the share of that row its top edge covers, which is
+none until the edge, 8 px down at first, reaches the row, past half the entrance (2026-11-03;
+said as the stage mounted, it turned the caption green some 200 ms before the row). Where no
+page says so the shell restores the caption itself: the green is held for
 the window it was said in, so a window made again from the tray wears none until its own page
 says so; and a vault state with no ceremony on the stage while the green is up takes it down
 after two seconds — longer than an unlock's Done stands on the green, the settle and the scene's
@@ -1989,7 +2010,8 @@ and #0B4B43 in dark, the gradient's own colour at the middle of its top edge, he
 px and fading into the gradient 96 px down, so that the window's first row is one colour across
 its width — and on Windows 11, where the caption is the shell's (§2.4), the caption takes that
 green with white text as the green comes and the ground's colour and Windows' own text again as
-it goes; where Windows draws its own caption it keeps it. The derivation and the release
+it goes, following the page's first row frame for frame through each change; where Windows
+draws its own caption it keeps it. The derivation and the release
 keep the green, the caption's with it, and the layout — the rings held still at half, "Opening the vault…", "Touched ·
 <the YubiKey's name>" — and Done pops its check on the same green. **The green holds through
 whatever follows a touch in the same ceremony** (ruled 2026-10-17), whatever the act and
@@ -3298,17 +3320,20 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   - *The PIN accepted, the touch*: an overlay with the touch's gradient fades in over the whole
     stage, 220 ms on the entering curve — its opacity moves, since a gradient cannot transition —
     the panel's fill, stroke and shadow and the stage's mark fade out with it, the
-    mark's room kept, and the rings start their 2.4 s pulse. The caption takes the green and its
-    white text at once, as Windows changes a caption in one frame, so for those 220 ms it is
-    ahead of the page's top row, which the overlay brings to the same green.
+    mark's room kept, and the rings start their 2.4 s pulse. The caption follows the page's row
+    frame for frame: the shell brings it to the same green, and its text to white, over the
+    same 220 ms on the same curve (§2.4). A touch already up as the lock scene arrives — a
+    pending touch adopted by an unlock begun over an open archive — comes in with the scene,
+    and the caption with the window's first row, which turns green only as the rising scene's
+    top edge reaches it, past half the scene's 220 ms.
   - *Touched, opening*: the rings stop and hold at half; the lead and the receipt cross-fade,
     140 ms. No colour changes: the green stays through the derivation and the release.
   - *Done*: the check disc pops where the rings' core was (from 60% with a little overshoot,
     240 ms on the pop curve), the word — *Unlocked* — in the middle and the vault's name under the
     open padlock, and it stays for the settle (320 ms), so the ceremony has a full stop. Then the
-    lock screen lifts (8 px up, fading fast-first, 160 ms), the caption giving the green back
-    once it has gone (so for those 160 ms it lags the page, as it leads it by 220 ms on the way
-    in), and, a gap later, the shell arrives:
+    lock screen lifts (8 px up, fading fast-first, 160 ms), the caption following the page's
+    row frame for frame back to the ground as the green goes with the scene, and, a gap later,
+    the shell arrives:
     the rail slides in 12 px from the left and the layer rises 8 px, 220 ms, the layer 40 ms
     behind. The store holds `settling` for the settle after the state says Unlocked, and the
     lock screen keeps rendering the ceremony meanwhile — the state's event can land a few
@@ -3317,7 +3342,10 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   - *The touch timed out*: the rings stop, the overlay fades out over 160 ms on the exit's curve,
     the stage's ink and its mark returning with it over the same 160 ms — dark words never stand
     on the green — and the neutral message arrives on the panel, on the touch's step. The caption
-    is the ground's again at once, its text Windows' own.
+    follows the page's row frame for frame back to the ground over the same 160 ms, its text
+    Windows' own at the end; a lock or a cancel mid-touch fades the same way, and a timeout
+    that comes while the green is still arriving turns the fade back from where it is, over the
+    shorter time the browser gives the reversed one.
   - *In a dialog* the same beats play inside the box (Controls, below): the found LED's hold, the
     views crossing in one place, and the touch's wash filling the body with the box's stroke
     fading — in over 220 ms, out over 160 — while the foot band stays (ruled 2026-10-17).

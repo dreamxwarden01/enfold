@@ -10,10 +10,12 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -102,6 +104,10 @@ type shell struct {
 	// needs to take it down when no page says so (touchGreen). Guarded by
 	// themeMu, as caption is.
 	green touchGreen
+	// fade runs the caption's fades as the green comes and goes, on the
+	// page's own curve (captionFader); themeMu is held to start or stop
+	// one, never across one.
+	fade captionFader
 	// made is the caption ensureWindow makes a window with, its theme, its
 	// colour and its text's, handed to that window's load listener by the
 	// OnCreate hook in main. The hook runs inside NewWithOptions, on
@@ -697,9 +703,24 @@ func (s *shell) themeLoaded(id uint, made captionLook) {
 	s.syncThemeLocked()
 }
 
-// syncThemeLocked is syncTheme's work, with themeMu held. It is never
+// syncThemeLocked is syncTheme's work, with themeMu held: the caption is
+// brought to its look at once, a fade running stopped first. It is never
 // called on the main thread, which it waits for.
 func (s *shell) syncThemeLocked() {
+	s.syncCaptionLocked(0, "")
+}
+
+// syncCaptionLocked is syncThemeLocked with the page's fade (APP.md §2.4):
+// a change of the touch's green alone, which the page draws over ms on
+// curve (Shell.StageGreen), is eased on them frame by frame (planFade,
+// captionFader), the caption starting from the colours it shows at this
+// moment, a fade's included; everything else — a theme, a guard, a
+// backstop, a page that draws its change at once — is set at once, and
+// stops a fade running. What the window is to wear is recorded as the fade
+// starts (captionState.applied), so a sync while it runs, which finds that
+// look wanted already, leaves it running. It is never called on the main
+// thread, which it waits for.
+func (s *shell) syncCaptionLocked(ms int, curve string) {
 	dark := themeDark(s.settings().Theme, w32.IsCurrentlyDarkMode())
 	contrast := w32.IsCurrentlyHighContrastMode()
 	paints := w32.IsWindowsVersionAtLeast(10, 0, captionColourBuild)
@@ -717,8 +738,29 @@ func (s *shell) syncThemeLocked() {
 	theme, colour, text := s.caption.touch(w.ID(), want, contrast)
 	if !theme && !colour && !text {
 		// A window whose page has not loaded is caught up by its load, and
-		// one that wears want already has nothing to repaint.
+		// one that wears want already has nothing to repaint: a fade on its
+		// way to want goes on.
 		return
+	}
+	now := s.fade.clock()
+	shows, fading := s.fade.current(w.ID(), now)
+	if !fading {
+		shows = captionPair{colour: s.caption.wears.colour, text: s.caption.wears.text}
+	}
+	// The window is drawn active while it is the foreground window, which
+	// GetForegroundWindow answers from any thread; DWM dims its caption's
+	// text otherwise, and the fade's ink is the dimmed one.
+	active := w32.GetForegroundWindow() == uintptr(w.NativeWindow())
+	if f := planFade(ms, curve, theme, shows, captionPair{colour: want.colour, text: want.text}, dark, active, now); f != nil {
+		f.win, f.paint = w.ID(), captionPainter(w)
+		s.fade.start(f)
+		s.caption.applied(false, true, true, want)
+		return
+	}
+	if s.fade.stop() {
+		// The caption shows a colour of the fade's, whatever look it was
+		// going to: both colours are set.
+		colour, text = true, true
 	}
 	set := application.InvokeSyncWithResult(func() bool {
 		hwnd := uintptr(w.NativeWindow())
@@ -751,16 +793,23 @@ func (s *shell) syncThemeLocked() {
 }
 
 // stageGreen is Shell.StageGreen: the lock stage saying the touch's green
-// has come up or gone (APP.md §2.4, §6; ruled 2026-11-03). While it is up
-// the window's caption takes the green with the page, the touch's plain
-// top (touchOf) with white text (captionInk), so that caption and page
-// are one surface as direction 1 drew the touch; as it goes the caption
-// is the ground's again, its text DWM's. The green is held for the window
-// shown at the call, so a window made again from the tray never wears the
-// green of the one closed under it (touchGreen). A bound call runs on a
-// goroutine of its own (beta.20, internal/assetserver/assetserver_webview.go
-// 97-98), never the main thread, so it may wait for themeMu and the sync.
-func (s *shell) stageGreen(on bool) {
+// has come up or gone (APP.md §2.4, §6; ruled 2026-11-03), as the page's
+// own change begins, with how long that change takes (ms) and the curve it
+// runs on (curve, as CSS writes it). While it is up the window's caption
+// takes the green with the page, the touch's plain top (touchOf) with
+// white text (captionInk), so that caption and page are one surface as
+// direction 1 drew the touch; as it goes the caption is the ground's
+// again, its text DWM's. The change is eased on the page's duration and
+// curve, so the caption and the page's first row agree at every frame
+// (syncCaptionLocked; it was one frame's switch beside the page's 220 ms
+// dissolve, ruled 2026-11-03); ms 0 is a change the page draws at once,
+// and so is the caption's. The green is held for the window shown at the
+// call, so a window made again from the tray never wears the green of the
+// one closed under it (touchGreen). A bound call runs on a goroutine of
+// its own (beta.20, internal/assetserver/assetserver_webview.go 97-98),
+// never the main thread, so it may wait for themeMu and the sync; a fade
+// is started, not waited for, so the call answers at once.
+func (s *shell) stageGreen(on bool, ms int, curve string) {
 	if s.app == nil {
 		return
 	}
@@ -771,15 +820,16 @@ func (s *shell) stageGreen(on bool) {
 	s.themeMu.Lock()
 	defer s.themeMu.Unlock()
 	if s.green.say(on, win) {
-		s.syncThemeLocked()
+		s.syncCaptionLocked(ms, curve)
 	}
 }
 
 // greenGrace is how long the backstop leaves the page to take the green
 // down itself once a ceremony has left the stage: an unlock's Done stands
-// on the green through the settle (SETTLE, 320 ms) and the scene's leave
-// (OUT, 160 ms; frontend/src/lib/motion.ts) before the page says so, and
-// a caption given back sooner would turn grey over a green page.
+// on the green through the settle (SETTLE, 320 ms) before the page says
+// so, as the scene's leave begins (OUT, 160 ms, which the caption's fade
+// then runs; frontend/src/lib/motion.ts), and a caption given back sooner
+// would turn grey over a green page.
 const greenGrace = 2 * time.Second
 
 // greenState is the backstop's first half: a vault.state the core
@@ -1150,6 +1200,389 @@ func (g *touchGreen) expire(said uint64) bool {
 	}
 	g.on = false
 	return true
+}
+
+// fadeTick is the cadence of the caption's fade (APP.md §2.4): a frame
+// every 8 ms, about 120 a second, so a display at 60 Hz is given a new
+// colour twice in each of its frames and one at 120 Hz once. Each frame
+// paints the fade's colours at the moment it is painted, so a frame that
+// comes late, or a tick the ticker drops while the main thread is busy,
+// puts nothing out of step with the page.
+const fadeTick = 8 * time.Millisecond
+
+// fadeFrameChanged is whether every frame of the caption's fade has DWM
+// re-read the window's frame (SetWindowPos with SWP_FRAMECHANGED), as the
+// fade's first frame and its last always do. Off: a frame sets the
+// caption's two colour attributes and nothing more, since DWM draws the
+// caption itself and nothing read says it waits for a frame change to
+// show a new DWMWA_CAPTION_COLOR or DWMWA_TEXT_COLOR — dwmapi.h declares
+// both as plain [set] COLORREFs (Windows Kits 10.0.26100.0, um/dwmapi.h
+// 61-63), Wails sets each with one DwmSetWindowAttribute (beta.20,
+// pkg/w32/theme.go 253-261) — while a frame change at 120 a second would
+// have the window measure its frame again at each. Not seen in the real
+// window: if its caption holds still through the fade and changes only as
+// the fade ends, this is the switch to turn on.
+const fadeFrameChanged = false
+
+// fadeLongest caps a fade the page asks for: longer than any change of
+// the page's own (its longest, a scene's 220 ms), so that a word that went
+// wrong cannot keep the caption's ticker going for long.
+const fadeLongest = time.Second
+
+// captionDefaultInk is the caption's text where DWM picks it, on the
+// ground's colour, in each theme, for a window active or not, as a
+// COLORREF: what a fade mixes from as the green comes and towards as it
+// goes, before its last frame gives the text back to DWM
+// (dwmColourDefault), so that neither end steps. On the light ground,
+// black on an active window and #7F7E7F, DWM's dimmed grey, on an
+// inactive one, as the touch's review probed a title on this machine
+// (build 26300; 2026-11-02, its probe's light-ground-default-active.png
+// and light-ground-default-inactive.png, where every pixel the glyphs
+// cover whole reads so). On the dark ground white, DWM's text on a dark
+// caption, which no probe read, active or not; an inactive window there
+// may step at a fade's first and last frames, by however much DWM dims
+// it. A window whose activation changes during a fade steps at its end.
+func captionDefaultInk(dark, active bool) uint32 {
+	switch {
+	case dark:
+		return 0x00FFFFFF
+	case active:
+		return 0x00000000
+	}
+	return 0x007F7E7F
+}
+
+// captionPair is a caption's colour and its text's, as DWM's attributes
+// take them: a COLORREF each, or dwmColourDefault where DWM picks.
+type captionPair struct {
+	colour, text uint32
+}
+
+// fadeCurve is a timing function as CSS writes one: the curve a change of
+// the page runs on, which the caption's fade then runs on too. Either a
+// cubic Bézier from (0, 0) to (1, 1) through (x1, y1) and (x2, y2) —
+// cubic-bezier() and the keywords that name one — or, where stops is set,
+// CSS's linear(): the output at evenly spaced inputs, joined by straight
+// lines, which is how the page says a curve Svelte has sampled into an
+// animation's keyframes (the lock scene's lift; Lock.svelte sceneLift).
+type fadeCurve struct {
+	x1, y1, x2, y2 float64
+	stops          []float64
+}
+
+// linearCurve is CSS's linear: the output is the input.
+var linearCurve = fadeCurve{x2: 1, y2: 1}
+
+// cssCurves are the keywords CSS Easing defines as cubic Béziers (Level 1,
+// 2.2), and linear.
+var cssCurves = map[string]fadeCurve{
+	"linear":      linearCurve,
+	"ease":        {x1: 0.25, y1: 0.1, x2: 0.25, y2: 1},
+	"ease-in":     {x1: 0.42, y1: 0, x2: 1, y2: 1},
+	"ease-out":    {x1: 0, y1: 0, x2: 0.58, y2: 1},
+	"ease-in-out": {x1: 0.42, y1: 0, x2: 0.58, y2: 1},
+}
+
+// cssCurve reads a timing function as the page says it (Shell.StageGreen):
+// a computed transition-timing-function — cubic-bezier(x1, y1, x2, y2) or
+// a keyword — or linear() with plain numbers. Anything else — steps(), a
+// linear() that places its points with percentages, a Bézier whose x
+// leaves [0, 1], which CSS refuses — is read as linear: an even fade is
+// nearer the page than a jump.
+func cssCurve(s string) fadeCurve {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if c, ok := cssCurves[s]; ok {
+		return c
+	}
+	args := func(name string) ([]float64, bool) {
+		if !strings.HasPrefix(s, name+"(") || !strings.HasSuffix(s, ")") {
+			return nil, false
+		}
+		var out []float64
+		for _, a := range strings.Split(s[len(name)+1:len(s)-1], ",") {
+			v, err := strconv.ParseFloat(strings.TrimSpace(a), 64)
+			if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, false
+			}
+			out = append(out, v)
+		}
+		return out, true
+	}
+	if v, ok := args("cubic-bezier"); ok && len(v) == 4 && v[0] >= 0 && v[0] <= 1 && v[2] >= 0 && v[2] <= 1 {
+		return fadeCurve{x1: v[0], y1: v[1], x2: v[2], y2: v[3]}
+	}
+	if v, ok := args("linear"); ok && len(v) >= 2 {
+		return fadeCurve{stops: v}
+	}
+	return linearCurve
+}
+
+// at is the curve's output at input p, the share of the fade's time gone
+// (0 to 1): the stops joined by lines for a linear(), and for a Bézier
+// its y where its x is p, that x found to within 1e-7 by Newton's method
+// and, where that does not settle, by halving — the tolerance Chromium's
+// own solver works to (gfx::CubicBezier), so the caption and the page read
+// one curve alike.
+func (c fadeCurve) at(p float64) float64 {
+	if n := len(c.stops); n >= 2 {
+		switch {
+		case p <= 0:
+			return c.stops[0]
+		case p >= 1:
+			return c.stops[n-1]
+		}
+		x := p * float64(n-1)
+		i := int(x)
+		return c.stops[i] + (c.stops[i+1]-c.stops[i])*(x-float64(i))
+	}
+	switch {
+	case p <= 0:
+		return 0
+	case p >= 1:
+		return 1
+	}
+	const eps = 1e-7
+	t := p
+	for i := 0; i < 8; i++ {
+		x := bezierAt(c.x1, c.x2, t) - p
+		if math.Abs(x) < eps {
+			return bezierAt(c.y1, c.y2, t)
+		}
+		d := bezierSlope(c.x1, c.x2, t)
+		if math.Abs(d) < 1e-6 {
+			break
+		}
+		t -= x / d
+	}
+	lo, hi := 0.0, 1.0
+	t = p
+	for i := 0; i < 64; i++ {
+		x := bezierAt(c.x1, c.x2, t)
+		if math.Abs(x-p) < eps {
+			break
+		}
+		if x < p {
+			lo = t
+		} else {
+			hi = t
+		}
+		t = (lo + hi) / 2
+	}
+	return bezierAt(c.y1, c.y2, t)
+}
+
+// bezierAt is one coordinate of a CSS cubic Bézier at parameter t, a and b
+// that coordinate of its two control points: 3(1-t)²t·a + 3(1-t)t²·b + t³.
+func bezierAt(a, b, t float64) float64 {
+	return ((1+3*a-3*b)*t+3*b-6*a)*t*t + 3*a*t
+}
+
+// bezierSlope is bezierAt's derivative in t.
+func bezierSlope(a, b, t float64) float64 {
+	return 3*(1+3*a-3*b)*t*t + 2*(3*b-6*a)*t + 3*a
+}
+
+// mixColour is the COLORREFs a and b mixed, w of b (w 0 is a, w 1 is b),
+// each channel on its own in sRGB and rounded to the nearest level: what
+// Chromium composites in the page's first row as the wash's opacity w
+// lays the touch's green over the ground, or as the scene's opacity lays
+// it over the ground through the lift, with no linear-light step between,
+// so the caption and that row agree at every frame. A w beyond [0, 1],
+// which a Bézier that overshoots can give, holds each channel to its
+// 0-255 range.
+func mixColour(a, b uint32, w float64) uint32 {
+	var out uint32
+	for shift := 0; shift < 24; shift += 8 {
+		ca, cb := float64(a>>shift&0xFF), float64(b>>shift&0xFF)
+		v := math.Max(0, math.Min(255, math.Round(ca+(cb-ca)*w)))
+		out |= uint32(v) << shift
+	}
+	return out
+}
+
+// captionFade is one fade of window win's caption (APP.md §2.4): its
+// colour and its text's from what the caption showed as the page spoke
+// (from) to what the page now shows (to), every channel moving on the
+// page's curve over its dur from start; then last, the look itself, its
+// text DWM's own again where the text goes back to DWM.
+type captionFade struct {
+	win            uint
+	from, to, last captionPair
+	start          time.Time
+	dur            time.Duration
+	curve          fadeCurve
+	// paint sets a frame's colours on the window, on the main thread, and
+	// has DWM re-read the frame where frame is set; false once the window
+	// has gone.
+	paint func(c captionPair, frame bool) bool
+	begun bool // its first frame has been painted
+}
+
+// at is the fade's colours at now, and whether it has ended: last itself
+// once dur has passed.
+func (f *captionFade) at(now time.Time) (captionPair, bool) {
+	if f.dur <= 0 {
+		return f.last, true
+	}
+	p := float64(now.Sub(f.start)) / float64(f.dur)
+	if p >= 1 {
+		return f.last, true
+	}
+	e := f.curve.at(max(p, 0))
+	return captionPair{colour: mixColour(f.from.colour, f.to.colour, e), text: mixColour(f.from.text, f.to.text, e)}, false
+}
+
+// planFade is how the caption goes from shows, the colours it shows now,
+// to want (APP.md §2.4): a fade over the page's ms on its curve where only
+// the touch's green has moved — the theme as it was, a duration the page
+// gave, and the shell's own colour at both ends, the text DWM picks read
+// as captionDefaultInk for the window as it is, active or not — and nil,
+// a change set at once, for anything else:
+// a theme or a guard that moved, a backstop, a page that draws its change
+// at once (0 ms), a caption DWM draws at either end. ms is capped at
+// fadeLongest.
+func planFade(ms int, curve string, theme bool, shows, want captionPair, dark, active bool, now time.Time) *captionFade {
+	if ms <= 0 || theme || shows.colour == dwmColourDefault || want.colour == dwmColourDefault {
+		return nil
+	}
+	ink := func(c captionPair) captionPair {
+		if c.text == dwmColourDefault {
+			c.text = captionDefaultInk(dark, active)
+		}
+		return c
+	}
+	return &captionFade{
+		from:  ink(shows),
+		to:    ink(want),
+		last:  want,
+		start: now,
+		dur:   min(time.Duration(ms)*time.Millisecond, fadeLongest),
+		curve: cssCurve(curve),
+	}
+}
+
+// captionPainter is a fade's paint for window w: the caption's colour and
+// its text's (DWMWA_CAPTION_COLOR and DWMWA_TEXT_COLOR, as syncTheme sets
+// them) and, where frame is set, SetWindowPos with SWP_FRAMECHANGED, as
+// syncTheme has DWM re-read the frame. It runs on the main thread.
+func captionPainter(w application.Window) func(captionPair, bool) bool {
+	return func(c captionPair, frame bool) bool {
+		hwnd := uintptr(w.NativeWindow())
+		if hwnd == 0 {
+			return false // destroyed since
+		}
+		w32.SetTitleBarColour(hwnd, c.colour)
+		w32.SetTitleTextColour(hwnd, c.text)
+		if frame {
+			w32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+				w32.SWP_FRAMECHANGED|w32.SWP_NOMOVE|w32.SWP_NOSIZE|w32.SWP_NOZORDER|w32.SWP_NOACTIVATE)
+		}
+		return true
+	}
+}
+
+// captionFader runs the caption's fades (APP.md §2.4), one at a time: a
+// goroutine of the fade's own paints a frame at once and then one every
+// fadeTick, each on the main thread through InvokeSyncWithResult and
+// waited for before the next tick is taken, until the fade has ended, the
+// window has gone, or another fade or a sync has taken its place. So one
+// frame at most waits for the main thread, and a busy main thread makes
+// the ticker drop ticks (time.NewTicker) rather than queue frames, where
+// InvokeAsync would leave a closure per tick in Wails' store to be run in
+// one burst once the main thread is free (beta.20, application.go
+// 981-994, mainthread.go 10-21, mainthread_windows.go 70-124). Its fields
+// are under mu, which a frame holds on the main thread while it paints, so
+// a fade stopped or replaced paints nothing once stop or start has
+// returned; nothing that holds mu waits for the main thread or for
+// themeMu, and the main thread takes neither, so this cannot deadlock.
+// The shell holds themeMu to start or stop a fade, never across one.
+type captionFader struct {
+	mu  sync.Mutex
+	gen uint64       // the fades so far, so a frame of one replaced paints nothing
+	run *captionFade // the fade running; nil while none is
+	// invoke runs a frame on the main thread and waits for its answer:
+	// Wails' InvokeSyncWithResult, unless a test lends its own.
+	invoke func(func() bool) bool
+	// now is the frames' clock: time.Now, unless a test lends its own.
+	now func() time.Time
+}
+
+// clock is the time the fader's frames read.
+func (fd *captionFader) clock() time.Time {
+	if fd.now != nil {
+		return fd.now()
+	}
+	return time.Now()
+}
+
+// start runs f in place of any fade running, its first frame now.
+func (fd *captionFader) start(f *captionFade) {
+	fd.mu.Lock()
+	fd.gen++
+	gen := fd.gen
+	fd.run = f
+	fd.mu.Unlock()
+	go fd.loop(gen)
+}
+
+// stop ends the fade running, if one is, short of its last frame: the
+// caller sets the caption itself. It reports whether one was running.
+func (fd *captionFader) stop() bool {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fd.gen++
+	was := fd.run != nil
+	fd.run = nil
+	return was
+}
+
+// current is the colours window win's caption shows at now while a fade
+// runs on it — the fade's at that moment, which are the page's — and
+// false while none does.
+func (fd *captionFader) current(win uint, now time.Time) (captionPair, bool) {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	if fd.run == nil || fd.run.win != win {
+		return captionPair{}, false
+	}
+	c, _ := fd.run.at(now)
+	return c, true
+}
+
+// loop is fade gen's goroutine: a frame at once, then one each tick.
+func (fd *captionFader) loop(gen uint64) {
+	tick := time.NewTicker(fadeTick)
+	defer tick.Stop()
+	for fd.frame(gen) {
+		<-tick.C
+	}
+}
+
+// frame paints fade gen's colours at this moment, on the main thread, and
+// reports whether more frames are to come: none once the fade has ended,
+// been stopped or replaced, or found its window gone. The first frame and
+// the last have DWM re-read the window's frame; the ones between only if
+// fadeFrameChanged says so.
+func (fd *captionFader) frame(gen uint64) bool {
+	invoke := fd.invoke
+	if invoke == nil {
+		invoke = application.InvokeSyncWithResult[bool]
+	}
+	return invoke(func() bool {
+		fd.mu.Lock()
+		defer fd.mu.Unlock()
+		f := fd.run
+		if f == nil || gen != fd.gen {
+			return false
+		}
+		c, done := f.at(fd.clock())
+		if !f.paint(c, done || !f.begun || fadeFrameChanged) || done {
+			fd.run = nil
+			return false
+		}
+		f.begun = true
+		return true
+	})
 }
 
 // The native dialogs report a cancelled dialog as an error (the common

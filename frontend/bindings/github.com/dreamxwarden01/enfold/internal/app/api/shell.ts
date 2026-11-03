@@ -125,11 +125,17 @@ export function ShowWindow(): $CancellablePromise<void> {
  * (on) or gone (APP.md §2.4, §6; ruled 2026-11-03), so that the window's
  * caption takes the green with the page — the touch's plain top, with
  * white text — and gives it back with it: the page is what knows when the
- * green is up. It carries a boolean and nothing of the ceremony, and it
+ * green is up. It is said as the page's own change begins, with how long
+ * that change takes, ms, and the curve it runs on, curve, as CSS writes a
+ * timing function (cubic-bezier(…), a keyword, or linear(…)), so that the
+ * shell eases the caption's colours on the same curve frame by frame and
+ * caption and page change together; ms 0 is a change the page draws at
+ * once (reduced motion, a stage loaded again mid-touch), and the caption
+ * then changes at once too. It carries nothing of the ceremony, and it
  * answers nothing. A repeat changes nothing, and a page that goes without
  * saying the green has gone is the shell's to notice: a window made again
  * wears no green, and a ceremony that has left the stage takes it down.
  */
-export function StageGreen(on: boolean): $CancellablePromise<void> {
-    return $Call.ByID(4023474980, on);
+export function StageGreen(on: boolean, ms: number, curve: string): $CancellablePromise<void> {
+    return $Call.ByID(4023474980, on, ms, curve);
 }

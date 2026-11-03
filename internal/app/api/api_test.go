@@ -106,7 +106,7 @@ func TestBoundSurface(t *testing.T) {
 			"Reveal(string) error",
 			"SaveFile(string, string, string) (string, error)",
 			"ShowWindow()",
-			"StageGreen(bool)",
+			"StageGreen(bool, int, string)",
 		},
 	}
 	var c *app.Core
@@ -220,17 +220,27 @@ func TestClipboardFiles(t *testing.T) {
 }
 
 // TestStageGreen: the page's word about the touch's green reaches the
-// shell's hook as it was said, a repeat included — the shell decides what
-// a repeat changes — and a shell that lent no hook takes it as nothing
-// (APP.md §2.4, §6).
+// shell's hook as it was said, with the page's duration and curve, a
+// repeat included — the shell decides what a repeat changes — and a shell
+// that lent no hook takes it as nothing (APP.md §2.4, §6).
 func TestStageGreen(t *testing.T) {
-	var got []bool
-	s := NewShell(Hooks{StageGreen: func(on bool) { got = append(got, on) }})
-	for _, on := range []bool{true, true, false} {
-		s.StageGreen(on)
+	type word struct {
+		on    bool
+		ms    int
+		curve string
 	}
-	if !reflect.DeepEqual(got, []bool{true, true, false}) {
+	said := []word{
+		{true, 220, "cubic-bezier(0.2, 0, 0, 1)"},
+		{true, 0, ""},
+		{false, 160, "linear(0, 0.271, 0.488, 1)"},
+	}
+	var got []word
+	s := NewShell(Hooks{StageGreen: func(on bool, ms int, curve string) { got = append(got, word{on, ms, curve}) }})
+	for _, w := range said {
+		s.StageGreen(w.on, w.ms, w.curve)
+	}
+	if !reflect.DeepEqual(got, said) {
 		t.Fatalf("the hook heard %v", got)
 	}
-	NewShell(Hooks{}).StageGreen(true) // no hook: no panic
+	NewShell(Hooks{}).StageGreen(true, 220, "ease") // no hook: no panic
 }

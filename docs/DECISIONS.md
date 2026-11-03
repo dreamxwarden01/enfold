@@ -5965,3 +5965,47 @@ active and inactive; a touch that times out; the first run's create at the small
 where the stage's light scrollbar track now meets a green caption. Left: a reload whose boot
 fails mid-touch keeps the caption green over the boot failure until the ceremony leaves the
 stage; Windows 11 builds before 26300 were not probed for the glyphs' colour.
+
+**The caption changes as the page does** (2026-11-03). The user, in the real window: the caption's
+one-frame switch to the touch's green was out of step with the page's 220 ms dissolve, and asked
+for it to be as smooth as the page. Ruled and built: the shell eases the caption's colour and its
+text's colour itself, frame by frame, from what the caption shows at that moment to the look
+the page now shows, over the duration the page says and on the page's own curve, mixed in sRGB
+as Chromium composites the wash's opacity, or the scene's, over the ground — so the caption is
+the page's first row at every frame; a frame every 8 ms on the main thread, each setting the two
+colour attributes alone, the frame re-read at the first and the last (`fadeFrameChanged` adds it
+to every frame, should the real caption be seen to hold still until a fade ends — no source
+says whether DWM shows a new caption colour without it). The page says each change as its own
+change begins — the wash's fade in (220 ms on `--ease-enter`), its fade out on a timeout, a lock
+or a cancel (160 ms on `--ease-exit`, or the shorter time the browser gives a reversed fade), and
+the scene's lift after Done (160 ms, Svelte's curve sent as a CSS `linear()` of its keyframes) —
+with the duration and the curve read off what the browser actually runs (`Shell.StageGreen(on,
+ms, curve)`; the shell keeps no copy of any curve, since two of the three last 160 ms and differ
+by 112 levels at half time); 0 ms where the page draws no transition (reduced motion, a reload
+mid-touch), and the caption changes at once there, as do a theme change, a guard change and a
+backstop, each stopping a running fade. The review found one path where the page had said its
+word before any change was drawn — a pending touch picked up by an unlock begun outside the lock
+scene, such as the tray's *Unlock…* over an open archive, where the stage mounts already green
+inside a scene that flies in — and the repair holds the first word until the scene's entrance
+begins and sends the entrance's own curve, the scene's opacity times the share of the first row
+its rising top edge covers, measured against Chromium within 2 levels. The text fades between
+white and the ink DWM draws on the ground, black on the light ground, and the dimmed #7F7E7F
+when the window is inactive, read from the earlier probe's images (the dark ground's ink is
+white as recalled, unprobed). Measured in the mock: the page's calls on every path, and the shell's
+own mix against the page's first row within 2 levels at 114 sampled moments through the fade in,
+the fade out, a reversed fade and the lift, in both themes; the race detector clean over the
+ticker. For the user's eye in the real window: whether the caption moves through a fade at all
+without the per-frame repaint (if not, flip `fadeFrameChanged`), the lag between the page's call
+and the shell's first frame, a light inactive window's title through a timeout's fade, the dark
+theme's title at a fade's last frame, and the adopted-touch path above. Left: whether WebView2
+draws a rising scene's edge as headless Edge does; a change of the green within the entrance's
+first quarter second is sent on the wash's curve or dropped as a repeat.
+
+**Two small calls from the painted ground, both taken as recommended** (2026-11-03). The judge's
+`.rail` and `.unlock` scopes gave the ground's darker second ink to two opaque surfaces inside
+them, the compact rail's flyout and the lock stage's InfoBars, where the plain ink already keeps
+6:1 and the darker one only flattens the step under the first ink: both now read the plain
+second ink again (`--ink-2-plain`, the theme's own value), the lock card keeping the darker one
+as the judge measured it. And the painted ground's top fade holds its plain colour for the first
+px, as the touch's band does, so the window's first row is exactly the caption's colour in dark
+too, where it had dithered one level.

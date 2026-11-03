@@ -229,17 +229,164 @@
   // The caption takes the green with the stage (APP.md §2.4, §6; ruled
   // 2026-11-03): while it is up the shell paints the window's caption the
   // touch's plain top with white text, so caption and page are one
-  // surface, and gives the caption back as it goes. The stage is what
-  // knows when the green is up, so it says so: as it mounts — a page
-  // loaded again mid-ceremony says what it shows — at every change, and
-  // as it leaves, the scene gone with the green on it. A page that goes
-  // without a word is the shell's to notice (main_windows.go touchGreen).
-  // A dialog's green (CeremonyPanel) stands inside its box, below the
-  // caption, and says nothing.
+  // surface, and gives the caption back as it goes. It changes as the page
+  // does (ruled 2026-11-03; it was one frame's switch beside the page's
+  // 220 ms dissolve): the stage says the change as its own begins, with
+  // how long it takes and the curve it runs on, both read off what the
+  // browser runs, and the shell eases the caption on them frame by frame.
+  // The stage is what knows when the green is up, so it says so: as it
+  // mounts; at every change, as the wash's fade begins (washFade); and as
+  // the scene it stands in moves the green with it (sceneMove, below) —
+  // flying in with the stage already green, or lifting away after Done,
+  // after which it says nothing more. A stage that mounts green is said
+  // as its scene's entrance begins (arrived), so that the caption does not
+  // turn green while the scene still waits out its gap; a page loaded
+  // again mid-ceremony, which no entrance brings in, is drawn at once, so
+  // 0 ms. Its teardown says the green has gone, which repeats the lift's
+  // word, and is the word only for a scene that left with no lift; a first
+  // word still held goes with it. A page that goes without a word is the
+  // shell's to notice (main_windows.go touchGreen). A dialog's green
+  // (CeremonyPanel) stands inside its box, below the caption, and says
+  // nothing.
+  let section: HTMLElement | undefined = $state();
+  let wash: HTMLDivElement | undefined = $state();
+  let greenSpoken = false;
+  let lifting = false;
+  let entering = false;
   $effect(() => {
-    stageGreen(isGreen);
+    const on = isGreen;
+    if (lifting || entering) return;
+    if (!greenSpoken) {
+      greenSpoken = true;
+      if (on) {
+        // Svelte begins the scene's entrance in an effect that runs after
+        // this one and makes the entrance's first animation, the gap's, a
+        // microtask after that; two microtasks on, the scene has it if an
+        // entrance is coming (a flushSync makes it sooner, never later).
+        entering = true;
+        queueMicrotask(() => queueMicrotask(arrived));
+        return;
+      }
+      stageGreen(on, 0, "");
+      return;
+    }
+    stageGreen(on, ...washFade(untrack(() => wash)));
   });
-  $effect(() => () => stageGreen(false));
+  $effect(() => () => {
+    entering = false;
+    stageGreen(false, 0, "");
+  });
+  // arrived: the first word of a stage that mounted green, once it is
+  // known whether its scene flies in. A scene waiting out its gap
+  // (App.svelte: the lock scene's in:fly, GAP then MOVE) has the stage say
+  // so as the entrance itself begins (introstart, below), with its length
+  // and the first row's curve, and nothing before; a scene with no
+  // entrance — the page loaded again mid-ceremony — is drawn green at
+  // once, and so is the caption. Under reduced motion Svelte dispatches
+  // introstart at once, before this, and the word has been said.
+  function arrived() {
+    if (!entering) return;
+    const scene = section?.closest(".scene");
+    if (scene && typeof scene.getAnimations === "function" && scene.getAnimations().length > 0) return;
+    entering = false;
+    stageGreen(isGreen, 0, "");
+  }
+  // The scene moves the green with the whole stage: its lift (App.svelte:
+  // the .scene the stage stands in leaves 8 px up, fading, over OUT) after
+  // an unlock's Done, and its entrance (8 px up into place, over MOVE after
+  // GAP) where the stage mounted green or a lift is turned back. The stage
+  // says so as the scene's move begins — Svelte dispatches outrostart or
+  // introstart on the scene just before it starts the move's animation,
+  // which a microtask later is there to be read — and nothing more while
+  // it leaves.
+  onMount(() => {
+    const scene = section?.closest(".scene");
+    if (!scene) return;
+    const lift = () => {
+      lifting = true;
+      queueMicrotask(() => stageGreen(false, ...sceneMove(scene)));
+    };
+    const back = () => {
+      lifting = false;
+      entering = false;
+      queueMicrotask(() => stageGreen(isGreen, ...sceneMove(scene)));
+    };
+    scene.addEventListener("outrostart", lift);
+    scene.addEventListener("introstart", back);
+    return () => {
+      scene.removeEventListener("outrostart", lift);
+      scene.removeEventListener("introstart", back);
+    };
+  });
+  // washFade: the wash's fade as the green comes or goes, read off the
+  // transition the browser has just begun on its opacity (getAnimations
+  // brings the style up to date, which is what begins it): its length —
+  // the stylesheet's --dur-move in, --dur-out out, or less where it turns
+  // back a fade not done, as CSS Transitions shorten a reversed one — and
+  // the curve the stylesheet gives it, --ease-enter in, --ease-exit out,
+  // as the computed style says it. No transition — reduced motion zeroes
+  // the tokens, and a wash not drawn starts none — is a change drawn at
+  // once.
+  function washFade(el: Element | undefined): [number, string] {
+    if (!el || typeof el.getAnimations !== "function") return [0, ""];
+    const t = el.getAnimations().find((a) => (a as CSSTransition).transitionProperty === "opacity");
+    const ms = Number(t?.effect?.getTiming().duration) || 0;
+    return ms > 0 ? [Math.round(ms), getComputedStyle(el).transitionTimingFunction] : [0, ""];
+  }
+  // sceneMove: the scene's move as the caption is to follow it, read off
+  // the animation Svelte runs on the scene (the newest there): its length,
+  // and its curve as CSS's linear(), how far the window's first device row
+  // has gone from the colour it began in towards the one it ends in at
+  // evenly spaced moments, MOVE_STEPS to each of Svelte's keyframes. Svelte
+  // samples its easing (lib/motion's enter) into the keyframes, which the
+  // browser joins with straight lines in opacity and in offset; the row is
+  // the stage's colour laid over the ground at the scene's opacity times
+  // the share of the row the scene covers (edgeCover), which is all of it
+  // through the lift, the scene rising off the top, and nothing through
+  // more than half of the entrance, its top edge still below the row. No
+  // animation (reduced motion zeroes the scene's motion) is a change at
+  // once.
+  const MOVE_STEPS = 4;
+  function sceneMove(scene: Element): [number, string] {
+    const all = typeof scene.getAnimations === "function" ? scene.getAnimations() : [];
+    const a = all[all.length - 1];
+    const ms = Number(a?.effect?.getTiming().duration) || 0;
+    const frames = (a?.effect as KeyframeEffect | null)?.getKeyframes?.() ?? [];
+    if (ms <= 0 || frames.length < 2 || typeof DOMMatrixReadOnly !== "function") return [0, ""];
+    const down = (t: unknown) => (typeof t === "string" && t !== "" && t !== "none" ? new DOMMatrixReadOnly(t).m42 : 0);
+    const at = frames.map((k) => Number(k.computedOffset));
+    const op = frames.map((k) => (k.opacity == null ? 1 : Number(k.opacity)));
+    const dy = frames.map((k) => down(k.transform));
+    // The scene's own top, its move taken off, and the device pixel.
+    const top = scene.getBoundingClientRect().top - down(getComputedStyle(scene).transform);
+    const dpr = window.devicePixelRatio || 1;
+    if ([...at, ...op, ...dy, top].some((v) => !Number.isFinite(v))) return [0, ""];
+    const row = (u: number) => {
+      let i = 0;
+      while (i < at.length - 2 && u > at[i + 1]) i++;
+      const w = at[i + 1] > at[i] ? Math.min(1, Math.max(0, (u - at[i]) / (at[i + 1] - at[i]))) : 1;
+      return (op[i] + (op[i + 1] - op[i]) * w) * edgeCover((top + dy[i] + (dy[i + 1] - dy[i]) * w) * dpr);
+    };
+    const n = (frames.length - 1) * MOVE_STEPS;
+    const share = Array.from({ length: n + 1 }, (_, j) => row(j / n));
+    const from = share[0];
+    const to = share[n];
+    if (Math.abs(to - from) < 1e-6) return [0, ""];
+    return [Math.round(ms), `linear(${share.map((v) => +((v - from) / (to - from)).toFixed(4)).join(", ")})`];
+  }
+  // edgeCover: the share of the window's first device row that a layer
+  // covers whose top edge stands d device pixels below the window's top,
+  // as Chromium draws a layer its compositor moves: all of it at or above
+  // the top, none from a whole pixel down, and between them (1 - d)²(1 + d)
+  // — not the 1 - d of the row's area, which ran up to 28 levels ahead of
+  // the rows headless Edge drew at 125 % as this scene rose in, where this
+  // came within 2 on each of the three rows its edge crossed, in both
+  // themes (2026-11-03).
+  function edgeCover(d: number): number {
+    if (d <= 0) return 1;
+    if (d >= 1) return 0;
+    return (1 - d) * (1 - d) * (1 + d);
+  }
 
   // The step line: an unlock's alone, shown while it runs and while its
   // failure is on the panel; at rest it is absent and its line is kept.
@@ -597,10 +744,10 @@
   {/if}
 {/snippet}
 
-<section class="unlock" class:green={isGreen} aria-label={lockCopy.regionLabel}>
+<section class="unlock" class:green={isGreen} aria-label={lockCopy.regionLabel} bind:this={section}>
   <!-- The touch's green: an overlay over the whole stage whose opacity
        moves, since a gradient cannot transition (APP.md §6, Motion). -->
-  <div class="wash" aria-hidden="true"></div>
+  <div class="wash" aria-hidden="true" bind:this={wash}></div>
   <!-- The stage scrolls inside the section, so the wash under it covers
        the whole window however far a short one scrolls. -->
   <div class="u-scroll">

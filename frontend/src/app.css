@@ -41,6 +41,7 @@
   --surface-alt: #f4f4f7;
   --stroke-strong: #c9c9d0;
   --ink-2: #55565d;
+  --ink-2-plain: #55565d;
   --ink-3: #83848c;
   --accent-hover: #0b5a50;
   --accent-ink: #0a5349;
@@ -214,6 +215,7 @@
     --surface-alt: #33333a;
     --stroke-strong: #4a4a52;
     --ink-2: #b5b6be;
+    --ink-2-plain: #b5b6be;
     --ink-3: #898a93;
     --accent-hover: #6adcc5;
     --accent-ink: #7be0cb;
@@ -289,6 +291,7 @@
   --surface-alt: #33333a;
   --stroke-strong: #4a4a52;
   --ink-2: #b5b6be;
+  --ink-2-plain: #b5b6be;
   --ink-3: #898a93;
   --accent-hover: #6adcc5;
   --accent-ink: #7be0cb;
@@ -382,7 +385,7 @@ body {
 @media not (forced-colors: active) {
   body {
     background:
-      linear-gradient(var(--ground-paint), var(--ground-paint-0) 96px) 0 0 / 100% 100% no-repeat,
+      linear-gradient(var(--ground-paint), var(--ground-paint) 1px, var(--ground-paint-0) 96px) 0 0 / 100% 100% no-repeat,
       linear-gradient(var(--ground-veil), var(--ground-veil)) 0 0 / 100% 100% no-repeat,
       radial-gradient(40% 50% at 15% 20%, #3c78c8 0%, transparent 70%) -80px -80px / calc(100% + 160px) calc(100% + 160px) no-repeat,
       radial-gradient(45% 55% at 85% 30%, #e08a3c 0%, transparent 70%) -80px -80px / calc(100% + 160px) calc(100% + 160px) no-repeat,
@@ -401,6 +404,10 @@ body {
    and the stage's card, so the stage mark's thin lines keep theirs. In
    dark the ground's inks are the plain ones. */
 .rail, .unlock, .splash { --ink-2: var(--ink-2-ground); }
+/* Not the opaque surfaces inside them: the compact rail's flyout and the
+   InfoBars on the stage stand on a surface, where the plain second ink
+   keeps its step under the first (ruled 2026-11-03). */
+.rail-fly, .unlock .nslot-bars { --ink-2: var(--ink-2-plain); }
 .rail-x, .unlock .steps, .unlock .panel { --ink-3: var(--ink-3-ground); }
 input, textarea { user-select: text; cursor: text; }
 /* Selected text wears the accent's line under the ink, not Chromium's own

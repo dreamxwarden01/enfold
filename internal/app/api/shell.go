@@ -45,9 +45,11 @@ type Hooks struct {
 	// when the clipboard could not be opened (APP.md §3, §6 Paste).
 	ClipboardFiles func() (app.Clipboard, error)
 	// StageGreen takes the page's word that the touch's green is up on the
-	// lock stage, or has gone (APP.md §2.4, §6): the shell paints the
-	// window's caption with it. nil where the shell paints no caption.
-	StageGreen func(on bool)
+	// lock stage, or has gone, with how long the page's change takes and
+	// the curve it runs on (APP.md §2.4, §6): the shell paints the window's
+	// caption with it, eased on that curve. nil where the shell paints no
+	// caption.
+	StageGreen func(on bool, ms int, curve string)
 }
 
 // Shell is the window and the native dialogs.
@@ -66,13 +68,19 @@ func (s *Shell) Quit()        { s.h.Quit() }
 // (on) or gone (APP.md §2.4, §6; ruled 2026-11-03), so that the window's
 // caption takes the green with the page — the touch's plain top, with
 // white text — and gives it back with it: the page is what knows when the
-// green is up. It carries a boolean and nothing of the ceremony, and it
+// green is up. It is said as the page's own change begins, with how long
+// that change takes, ms, and the curve it runs on, curve, as CSS writes a
+// timing function (cubic-bezier(…), a keyword, or linear(…)), so that the
+// shell eases the caption's colours on the same curve frame by frame and
+// caption and page change together; ms 0 is a change the page draws at
+// once (reduced motion, a stage loaded again mid-touch), and the caption
+// then changes at once too. It carries nothing of the ceremony, and it
 // answers nothing. A repeat changes nothing, and a page that goes without
 // saying the green has gone is the shell's to notice: a window made again
 // wears no green, and a ceremony that has left the stage takes it down.
-func (s *Shell) StageGreen(on bool) {
+func (s *Shell) StageGreen(on bool, ms int, curve string) {
 	if s.h.StageGreen != nil {
-		s.h.StageGreen(on)
+		s.h.StageGreen(on, ms, curve)
 	}
 }
 

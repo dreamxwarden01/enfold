@@ -19,7 +19,7 @@
 //     arrow at either end and nothing down its middle, and at rest a line
 //     on whole device pixels at its right, as wide and as far in from the
 //     edge as the thumb's borders give once Chromium floors them to device
-//     pixels (2 px and 3 px in the design, 3 and 3 device px at 125 %);
+//     pixels (3 px and 3 px in the design, 4 and 3 device px at 125 %);
 //     the line does not grow under the pointer (ruled 2026-11-03 in the
 //     real window; it darkens on the thumb instead). In a contrast palette it
 //     is the system's, which app.css leaves to the theme: not the app's
@@ -76,11 +76,11 @@ const TOL = 0.25;
 // The app's scrollbar (app.css, the scrollbars), in CSS px: the gutter, the
 // thumb's right border and its left border. Chromium floors each border to
 // whole device pixels, so the line's width in device px is the gutter's
-// less the two floors: at 125 %, 15 less 9 and 3. The left border is 7.4,
-// clear of a device pixel's edge at 125 % (9.25), so the floor here is not
+// less the two floors: at 125 %, 15 less 8 and 3. The left border is 6.6,
+// clear of a device pixel's edge at 125 % (8.25), so the floor here is not
 // a matter of rounding.
 const BAR = 12;
-const THUMB = { right: 3, left: 7.4 };
+const THUMB = { right: 3, left: 6.6 };
 
 // setting is the app's Theme setting under a palette (setForcedColors'
 // theme): System for the first two forced looks, the other one for the

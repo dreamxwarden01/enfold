@@ -450,32 +450,51 @@ h1, h2, h3, h4 { margin: 0; }
 }
 a { color: var(--accent-ink); }
 /* Scrollbars (APP.md §6, Controls; ruled 2026-11-03, the phase-5 window
-   study's CSS route, and again that day in the real window, where the
-   thumb's growth under the pointer looked odd and jumped): WinUI's thin
-   bar, as near as Chromium's classic, non-overlay scrollbar can be drawn.
-   The real window at 125 % showed WebView2's own bar in the file list and
-   on Settings, a thick grey gutter with an arrow at each end. Here the
+   study's CSS route, and twice more that day in the real window: the
+   thumb's growth under the pointer looked odd and jumped, then the line
+   was a hair too thin and its ends looked cut): WinUI's thin bar, as
+   near as Chromium's classic, non-overlay scrollbar can be drawn. The
+   real window at 125 % showed WebView2's own bar in the file list and on
+   Settings, a thick grey gutter with an arrow at each end. Here the
    gutter is 12 px and clear, with no arrows, and it keeps its width in
    every state, so nothing reflows; every scroller's content gains what
    the system's bar took past it (3 px beside headless Edge's 15 px bar;
-   the real window's was not measured). It holds a 2 px rounded line in
-   the strong control stroke, 3 px in from its right edge: the thumb's
-   borders are transparent and its fill stops at its padding box. The
-   line does not grow when the pointer enters the scroller: a first build
-   grew it to a 6 px thumb on a track, as the study drew, and in the real
-   window the growth looked odd and jumped, since Chromium animates no
-   part of a ::-webkit-scrollbar, so no transition can smooth it. It
-   darkens instead, to the ink, while the pointer is over the thumb
-   itself and while it is held: Chromium tracks the thumb's own :hover
-   and :active, where a :hover on the scroller does not reach a custom
-   bar's parts without a change of the scroller's own style. The left
-   border is 7.4 px, not the study's 7: on the native path, the one
-   WebView2 takes, Chromium floors a border to whole device pixels, so at
-   125 % 7 drew a 4-device-pixel line in the 15-device-pixel gutter,
-   where 7.4 draws 3, the nearest crisp width to the design's 2.5; at
-   100 %, 150 % and 200 % both draw the design's own 2 px. Not 7.2, which
-   lands exactly on a device pixel at 125 % (9.0), so the line there
-   would hang on how the engine rounds before it floors.
+   the real window's was not measured). It holds a 3 px line with round
+   ends in the strong control stroke, 3 px in from its right edge: the
+   thumb's borders are transparent and its fill stops at its padding
+   box. The line does not grow when the pointer enters the scroller: a
+   first build grew it to a 6 px thumb on a track, as the study drew,
+   and in the real window the growth looked odd and jumped, since
+   Chromium animates no part of a ::-webkit-scrollbar, so no transition
+   can smooth it. It darkens instead, to the ink, while the pointer is
+   over the thumb itself and while it is held: Chromium tracks the
+   thumb's own :hover and :active, where a :hover on the scroller does
+   not reach a custom bar's parts without a change of the scroller's own
+   style. The left border is 6.6 px, not the 6 that leaves 3 px: on the
+   native path, the one WebView2 takes, Chromium floors a border to
+   whole device pixels, so at 125 % 6 and 3 would draw 7 and 3 of the
+   gutter's 15 and leave a 5-device-pixel line, where 6.6 draws 8 and
+   leaves 4, the nearest crisp width to the design's 3.75 (the study's
+   2 px line, 3 device pixels there, was the hair too thin). At 100 % the
+   line is the design's own 3 px; at 150 %, 175 % and 200 % it is 5
+   device pixels (the floors of 9.9 and 4.5, 11.55 and 5.25, 13.2 and
+   6), within a pixel of 4.5, 5.25 and 6, and a border that gave 200 %
+   its 6 would put 125 % on a device pixel's edge, where the width would
+   hang on how the engine rounds before it floors (8.25 here is clear
+   of one). The corner radii are set per corner so that the fill's own
+   corners, each the outer radius less the border on that side, come
+   out alike on both sides: with one radius on the whole 12 px box the
+   left corners, behind the wide border, had none and the right ones
+   kept 3 px, so the line looked like a pill cut down its middle. The
+   left corners' radius is 8 px and the right corners' 4, together
+   exactly the box's width: Chromium scales a wider pair down together
+   first (8.6 and 5 lost a tenth each and rounded the right end more
+   than the left), and at 125 %, where the floors leave the borders at
+   6.4 and 2.4, both corners come out at 1.6 px, 2 device pixels, half
+   the line, so each end is a half-circle; at 100 % they are 1.4 and 1
+   against a half-width of 1.5, a little flat in the middle. The radius
+   along the line, 4.4 px, is 2 past the 2.4 the top border keeps at
+   125 %.
    The bar's colours are tokens of its own, --bar-line and --bar-over,
    which fall back to the strong control stroke and the ink. The viewer's
    ground is dark in both themes (Viewer.svelte), so it sets them to the
@@ -501,11 +520,12 @@ a { color: var(--accent-ink); }
   ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
-    min-height: 32px; min-width: 32px; border-radius: 6px;
-    border: solid transparent; border-width: 3px 3px 3px 7.4px;
+    min-height: 32px; min-width: 32px;
+    border: solid transparent; border-width: 3px 3px 3px 6.6px;
+    border-radius: 8px 4px 4px 8px / 4.4px;
     background: var(--bar-line, var(--ctl-strong)) padding-box;
   }
-  ::-webkit-scrollbar-thumb:horizontal { border-width: 7.4px 3px 3px 3px; }
+  ::-webkit-scrollbar-thumb:horizontal { border-width: 6.6px 3px 3px 3px; border-radius: 4.4px / 8px 8px 4px 4px; }
   ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background-color: var(--bar-over, var(--ink)); }
   /* The dark theme's strong control stroke, and the viewer's own ink,
      which is the dark theme's. */

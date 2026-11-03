@@ -3849,10 +3849,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   search box has no clear button of Chromium's own, and selected text wears the accent's line
   under the ink, never the engine's blue (ruled 2026-10-17). **A scrollbar is WinUI's thin bar,
   drawn in CSS** (ruled 2026-11-03, after the real window drew WebView2's own bar, a thick grey
-  gutter with an arrow at each end, in the file list and on Settings; and again that day in the
-  real window, where a first build's thumb, grown under the pointer as the study drew it, looked
-  odd and jumped): a 12 px gutter with no arrows, clear but for a 2 px rounded line in the strong
-  control stroke 3 px in from its right edge, which does not grow — Chromium animates no part of a
+  gutter with an arrow at each end, in the file list and on Settings; and twice more that day in
+  the real window, where a first build's thumb, grown under the pointer as the study drew it,
+  looked odd and jumped, and the line it left was a hair too thin with ends that looked cut): a 12
+  px gutter with no arrows, clear but for a 3 px line with round ends in the strong control stroke
+  3 px in from its right edge, which does not grow — Chromium animates no part of a
   `::-webkit-scrollbar`, so the growth could only jump — but darkens to the ink while the pointer
   is over the thumb itself and while it is held. In the viewer, whose ground is dark in both
   themes, the bar wears the dark theme's colours. The gutter never changes width, and every

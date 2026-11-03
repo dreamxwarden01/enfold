@@ -6068,3 +6068,22 @@ alone and no longer stages the pointer; APP's section 6 says so. Left for the us
 the darkened line reads at 3 device pixels, and whether the line is easy to take hold of (the
 thumb's box is the whole 12 px gutter, its borders transparent, so the pointer need not land on
 the line itself).
+
+**The scrollbar's line, a hair wider and round at its ends** (2026-11-03, after 519e5fb). The user,
+in the real window at 125 %: the darkened line reads well, but the line is a little too thin,
+and its ends look like a round-ended thumb cut down its middle, pointed where they should be
+round. The cause of the ends: one 6 px radius on the whole 12 px thumb box, with the fill
+clipped to the padding box behind transparent borders of 7.4 px on the left and 3 on the right,
+leaves the fill's left corners no radius at all (6 less 7.4) and its right corners 3 px, so the
+line was flat on its left and a half-circle on its right. Ruled and built: the line is 3 px (the
+left border 6.6 px, which Chromium's floor to device pixels draws as 8 of the gutter's 15 at
+125 %, leaving a 4-device-pixel line against the design's 3.75; 3 px at 100 %, 5 device pixels
+at 150, 175 and 200 % — a border that gave 200 % its 6 would put 125 % on a device pixel's edge),
+and its corner radii are set per corner, 8 px on the left and 4 on the right, together exactly
+the thumb's width (a wider pair Chromium scales down together first, which a first try with 8.6
+and 5 showed, its right end rounder than its left), so that at 125 %, where the floors leave the
+borders at 6.4 and 2.4 px, the fill's corners come out alike, 2 device pixels each, half the
+line: a half-circle at each end, read in the tour's zoom (at 100 % they are 1.4 and 1 px
+against a half-width of 1.5, a little flat in the middle). The tour's left border follows
+(6.6), its line expectations with it; APP's section 6 says so. For the user's eye: the width
+and the ends in the real window, which the tour measures only as a width and a gap.

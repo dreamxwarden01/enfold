@@ -3861,12 +3861,13 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   bar; the real window's was not measured). It is `::-webkit-scrollbar` in the stylesheet, so it
   looks the same on every machine, and `scrollbar-width` and `scrollbar-color` are set nowhere,
   since either makes Chromium ignore it; Chromium floors the thumb's borders to whole device
-  pixels, so at 125 % the line is 3 device pixels, the nearest crisp width to the design's 2.5.
-  Windows' own overlay bars were not taken: WebView2's option for them is out of Wails' reach, and
-  the `OverlayScrollbar` feature flag is unverified in WebView2, hides the bar at rest, so nothing
-  says a list scrolls, and is a Chromium name a runtime update can drop without a word. A contrast
-  theme keeps the system's own bars, arrows and all, in its palette. **The window's ground is
-  painted**
+  pixels, so at 125 % the line is 4 device pixels, the nearest crisp width to the design's 3.75,
+  and 5 at 150, 175 and 200 %; its corner radii are set per corner so that the fill's corners come
+  out alike on both sides and the ends are round. Windows' own overlay bars were not taken:
+  WebView2's option for them is out of Wails' reach, and the `OverlayScrollbar` feature flag is
+  unverified in WebView2, hides the bar at rest, so nothing says a list scrolls, and is a Chromium
+  name a runtime update can drop without a word. A contrast theme keeps the system's own bars,
+  arrows and all, in its palette. **The window's ground is painted**
   (the phase-5 aurora study, ruled 2026-11-02, replacing the lookbook's green radial glow of
   2026-11-01 and the Mica material, retired with its switch): the demo's ground, three hues —
   blue at the top left, amber at the right, green at the foot — over a diagonal base, under a

@@ -104,6 +104,22 @@ export function Quit(): $CancellablePromise<void> {
 }
 
 /**
+ * QuitDecided answers the quit question (APP.md §2.4; ruled 2026-11-03,
+ * the user's). A quit asked for while an operation runs — the window's
+ * close under CloseAction quit, which never goes to the tray, or the
+ * tray's Quit, which shows the window first — does not end the process at
+ * once: the shell emits `shell.quit` with the operations that run, and
+ * the page asks in a dialog of its own, Quit or Keep running. proceed is
+ * Quit: the shell resolves and ends, whatever runs by then, since the
+ * question stood until it was answered. Keep running leaves everything as
+ * it was, and the next quit asks again. It answers nothing, and an answer
+ * with no question up does nothing.
+ */
+export function QuitDecided(proceed: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1684407938, proceed);
+}
+
+/**
  * Reveal shows a path in the file manager. The page prints on its own: the
  * recovery key's window.print() is watched by nothing since 2026-09-09, and
  * pressing Print… counts as done (APP.md §6).

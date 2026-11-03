@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cancellable, hasBar, opErrorLine, opLabel, showsCancel, stripCount } from "./ops";
+import { busyLabel, busyOp, busyOps, busyReason, cancellable, hasBar, opErrorLine, opLabel, showsCancel, stopsFirst, stripCount } from "./ops";
+import type { BusyOp } from "./ops";
 import { dragOutCopy } from "./strings";
 
 // The running operation in the foot (APP.md §2.3, §6). Since 2026-09-09 the foot says
@@ -193,5 +194,77 @@ describe("a finished operation's error line", () => {
 
   it("lets the reclaim's own outcome stand alone", () => {
     expect(opErrorLine("reclaim", 0, "archive.reclaim_incomplete", "Saved. Reclaiming space did not finish.")).toBe("Saved. Reclaiming space did not finish.");
+  });
+});
+
+// The busy archive (APP.md §2.3, §6; ruled 2026-11-03): what keeps one
+// archive busy, which of several the page names, and the words.
+describe("the busy archive", () => {
+  const A = "a1".repeat(16);
+  const B = "b2".repeat(16);
+  const op = (id: string, kind: string, startedAt: number, extra: Partial<BusyOp> = {}): BusyOp => ({ id, kind, archiveId: A, items: 0, dragItems: 0, phase: "", startedAt, finished: false, ...extra });
+
+  it("is idle with nothing running on the archive", () => {
+    expect(busyOp([], [], A)).toBeNull();
+    expect(busyOp([op("o1", "add", 5, { finished: true, items: 3 })], [], A)).toBeNull();
+  });
+
+  it("counts every kind, the core's own reclaim included, with the operation's reason", () => {
+    const cases: [BusyOp, string][] = [
+      [op("o", "add", 1, { items: 20 }), "Adding 20 files… wait for it to end"],
+      [op("o", "extract", 1, { items: 13 }), "Extracting 13 files… wait for it to end"],
+      [op("o", "replace", 1, { items: 1 }), "Replacing 1 file… wait for it to end"],
+      [op("o", "compact", 1), "Compacting… wait for it to end"],
+      [op("o", "reclaim", 1), "Reclaiming space… wait for it to end"],
+      [op("o", "verify", 1), "Refreshing the fingerprint… wait for it to end"],
+      [op("o", "rotate", 1), "Re-keying archive… wait for it to end"],
+      [op("o", "dragout", 1, { phase: "preparing", dragItems: 4 }), "Extracting 4 items… wait for it to end"],
+    ];
+    for (const [o, why] of cases) {
+      const b = busyOp([o], [], A);
+      expect(b?.id, o.kind).toBe("o");
+      expect(busyReason(b as BusyOp), o.kind).toBe(why);
+    }
+  });
+
+  it("leaves out a drag out still in its hover, which no one has chosen yet", () => {
+    expect(busyOp([op("d", "dragout", 1, { phase: "dragging", dragItems: 2 })], [], A)).toBeNull();
+    expect(busyOp([op("d", "dragout", 1, { phase: "awaiting", dragItems: 2 })], [], A)?.id).toBe("d");
+  });
+
+  it("names the latest begun on this archive, never another archive's", () => {
+    const ops = [op("o1", "add", 10, { items: 3 }), op("o2", "extract", 20, { items: 5 }), op("o3", "add", 30, { archiveId: B, items: 9 })];
+    expect(busyOp(ops, [], A)?.id).toBe("o2");
+    expect(busyOp(ops, [], B)?.id).toBe("o3");
+    expect(busyOp(ops, [], "c3".repeat(16))).toBeNull();
+    expect(busyOps(ops, [], A).map((o) => o.id)).toEqual(["o1", "o2"]);
+  });
+
+  it("holds an add the page started before the core has said a word of it, its count not known", () => {
+    const b = busyOp([], ["s1"], A);
+    expect(b).toMatchObject({ id: "s1", kind: "add", items: 0 });
+    expect(busyReason(b as BusyOp)).toBe("Adding files… wait for it to end");
+    expect(busyLabel(b as BusyOp, "Photos 2024")).toBe("Adding files to Photos 2024");
+    // Once heard of, the operation is the one in ops, not the placeholder.
+    expect(busyOp([op("s1", "add", 4, { items: 7 })], ["s1"], A)).toMatchObject({ id: "s1", items: 7 });
+  });
+
+  it("prefers what the foot can show while anything of this archive is seen running", () => {
+    const ops = [op("o1", "add", 10, { items: 20 })];
+    expect(busyOp(ops, ["s2"], A)?.id).toBe("o1");
+    expect(busyOps(ops, ["s2"], A).map((o) => o.id)).toEqual(["o1", "s2"]);
+  });
+
+  it("says a count not planned yet as files, never as a bare verb", () => {
+    expect(busyLabel(op("o", "add", 1), "Photos 2024")).toBe("Adding files to Photos 2024");
+    expect(busyLabel(op("o", "extract", 1))).toBe("Extracting files");
+    expect(busyLabel(op("o", "replace", 1))).toBe("Replacing files");
+    expect(busyLabel(op("o", "add", 1, { items: 20 }), "Photos 2024")).toBe("Adding 20 files to Photos 2024");
+    expect(busyLabel(op("o", "reclaim", 1), "Photos 2024")).toBe("Reclaiming space in Photos 2024");
+  });
+
+  it("lets Delete archive… stop what the foot can cancel, and not a compaction or a re-key", () => {
+    for (const k of ["add", "replace", "extract", "reclaim", "verify"]) expect(stopsFirst(op("o", k, 1)), k).toBe(true);
+    for (const k of ["compact", "rotate"]) expect(stopsFirst(op("o", k, 1)), k).toBe(false);
   });
 });

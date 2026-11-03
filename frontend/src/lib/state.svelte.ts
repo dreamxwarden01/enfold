@@ -22,13 +22,14 @@ import { clickRow, emptySelection, selectAll, survive, toggleRow } from "./selec
 import type { Modifiers, Selection } from "./selection";
 import { PAGE_LIMIT, applyReply, hasMore, liveIds, nextOffset } from "./paging";
 import type { Listing } from "./paging";
-import { opErrorLine } from "./ops";
+import { busyOps, opErrorLine, stopsFirst } from "./ops";
 import { clearsDone, doneLine, nextDone, sayDone } from "./foot";
 import type { DoneLine, DoneTurn } from "./foot";
 import type { Outcome } from "./outcome";
 import { answer as answerDrag, baseName, beginFlight, land, ownDrop } from "./dragout";
 import type { Flight, Landed, PendingMove, Verdict } from "./dragout";
-import type { Decision } from "./closing";
+import { askedLine, follow, opsNow } from "./closing";
+import type { AskedOp, Decision } from "./closing";
 import { droppedArchives } from "./archlist";
 import { toLeave } from "./leave";
 import { tamperedShown, tier } from "./notices";
@@ -359,6 +360,18 @@ class Store {
   // dialog stays put until the window goes.
   closeAsked = $state(false);
   closeBusy = $state(false);
+  // The quit question (APP.md §2.4; ruled 2026-11-03, the user's): the
+  // shell was asked to quit — the window's close under the Quit setting,
+  // the tray's Quit — while an operation runs, and asked the page to ask,
+  // Quit or Keep running, with no tray. quitBusy is the answer on its way.
+  quitAsked = $state(false);
+  quitBusy = $state(false);
+  // What a standing close or quit question names (lib/closing.ts follow):
+  // every operation that ran while it stood, followed to its end, so that
+  // the question — which stays until it is answered — says what still runs
+  // or that it has finished. Empty while neither is up. Raw: it is
+  // replaced, never changed in place.
+  asked = $state.raw<AskedOp[]>([]);
   // The drag out of the window in flight (APP.md §3, lib/dragout.ts): the
   // ids the gesture took and the folder they left, from the press-and-move
   // until Shell.DragOut has answered and, for a self-drop, the WebView's
@@ -368,6 +381,26 @@ class Store {
   // The Move a self-drop asks for, handed to the page — which performs it
   // and says a refusal against the target — the way `drop` is handed over.
   selfDrop = $state<PendingMove | null>(null);
+  // The operations the Archive page started that have said nothing yet, by
+  // archive (APP.md §6, the busy archive; ruled 2026-11-03): AddFiles and
+  // AddFolder answer the operation's id at once, but the core emits nothing
+  // for it until its plan is made — for a folder, once its whole tree is
+  // walked — so for that while runningOps does not hold it and the archive
+  // would read idle, and take a second drop of the same files. An id leaves
+  // with the operation's first op.progress or its op.done, or a status that
+  // names it, each of which puts it in ops (heard). lib/ops.ts busyOps
+  // reads them with runningOps.
+  starting = $state<Record<string, string[]>>({});
+  // The busy callout (APP.md §6, Paste; ruled 2026-11-03): a paste read
+  // while the archive is busy, or a drop that still arrived, is answered at
+  // the foot's running line of that archive's operation rather than in an
+  // InfoBar. The Archive page raises it and sends it away; the foot draws
+  // it, anchored to the line, and washes the line while it stands. One at
+  // a time: a second raise replaces it and restarts its clock.
+  busyTip = $state<{ archiveId: string; opId: string; text: string; seq: number } | null>(null);
+  // The waits Delete archive… makes on the operations it stopped (stopOps):
+  // each ends once none of its ids is still running or still starting.
+  private opWaits: { ids: Set<string>; done: () => void }[] = [];
   // The drag's folder the last drag out named (DragOutResult.folder, the
   // manifest at its top and every path handed out under its items): a
   // self-drop's own drop can reach the page after the call has answered
@@ -538,6 +571,24 @@ class Store {
   private forgetOp(opId: string): void {
     delete this.ops[opId];
     delete this.extractNames[opId];
+    this.followAsked();
+  }
+
+  // followAsked brings a standing close or quit question's operations up to
+  // date (lib/closing.ts follow), after anything that moves an operation:
+  // its progress, its end, a status, its forgetting, an add the page has
+  // started. named is what the shell's `shell.quit` named.
+  private followAsked(named: readonly OpView[] = []): void {
+    if (!this.closeAsked && !this.quitAsked) return;
+    const next = follow(this.asked, opsNow(this.ops, this.starting), named);
+    if (next !== this.asked) this.asked = next;
+  }
+
+  // askedLine is the standing question's sentence (lib/closing.ts): what
+  // runs and what each answer does, or that it has finished; "" when
+  // nothing was named. The close question's offers the tray.
+  get askedLine(): string {
+    return askedLine(this.asked, new Map(this.archives.map((a) => [a.id, a.name])), this.closeAsked);
   }
 
   // noteExtractNames records the names a re-issue was sent with, against
@@ -614,7 +665,28 @@ class Store {
     // through, so pressing the button twice must not stack two dialogs nor
     // restart the one already asking.
     Events.On("shell.close", () => {
+      // The quit question, when it is up, already asks this; the shell
+      // asks that one again rather than this one (closeGate), and a close
+      // from a shell that did not is nothing.
+      if (this.closeAsked || this.quitAsked) return;
+      this.asked = [];
       this.closeAsked = true;
+      this.followAsked();
+    });
+    // The quit question (APP.md §2.4; ruled 2026-11-03). The payload is
+    // the operations the shell saw running, read after it showed the
+    // window — made again from the tray if there was none, whose page has
+    // not heard of them yet. It takes the close question's place if that
+    // was up: the user's newer word is Quit, and the operations it named
+    // stay named. A second one while it is up — the tray's Quit pressed
+    // again, the window's close — keeps it as it stands and adds what it
+    // names.
+    Events.On("shell.quit", (e) => {
+      const named = Array.isArray(e.data) ? (e.data as OpView[]) : [];
+      if (!this.closeAsked && !this.quitAsked) this.asked = [];
+      this.closeAsked = false;
+      this.quitAsked = true;
+      this.followAsked(named);
     });
     // The tray's Unlock… (APP.md §2.4, ruled 2026-10-17): it has begun the
     // ceremony and shown the window, and the lock scene is where that
@@ -1021,7 +1093,10 @@ class Store {
         // does; its start clears the done line here as it would there.
         if (!o.finished) this.opBegins(o);
         this.ops[o.id] = o;
+        this.heard(o.id);
       }
+      this.settleWaits();
+      this.followAsked();
     }
     if (s.ceremony && s.ceremony.seq > this.ceremonySeq) {
       this.ceremonySeq = s.ceremony.seq;
@@ -1302,7 +1377,10 @@ class Store {
     // (clearsDone, APP.md §6 *The foot*).
     if (!done) this.opBegins(o);
     this.ops[o.id] = o;
+    this.heard(o.id);
+    this.followAsked();
     if (!done) return;
+    this.settleWaits();
     // A failure is an error InfoBar, which stays until it is dismissed
     // (direction 4, phase 4b); the user's own Cancel is not a failure, and
     // says what is left in the foot's done line instead (direction 4; it
@@ -1583,7 +1661,9 @@ class Store {
   // dismissClose is Esc on the close question: the window stays and the
   // shell is told nothing at all (APP.md §2.4, §6).
   dismissClose(): void {
-    if (!this.closeBusy) this.closeAsked = false;
+    if (this.closeBusy) return;
+    this.closeAsked = false;
+    this.asked = [];
   }
 
   // decideClose answers it. With remember the shell writes CloseAction
@@ -1598,11 +1678,32 @@ class Store {
     try {
       await Shell.CloseDecided(action, remember);
       this.closeAsked = false;
+      if (!this.quitAsked) this.asked = [];
       if (remember) void this.refreshSettings();
     } catch (e) {
       this.notice(codeText(errorOf(e).code), "error");
     } finally {
       this.closeBusy = false;
+    }
+  }
+
+  // decideQuit answers the quit question (APP.md §2.4; ruled 2026-11-03):
+  // Quit (proceed) or Keep running — Esc and the corner's close are Keep
+  // running, as a question with no Cancel answers it. The question stays
+  // until this answer, whatever ends meanwhile; on Quit the shell ends the
+  // process, whatever runs by then, and on Keep running everything stays
+  // as it was and the next quit asks again.
+  async decideQuit(proceed: boolean): Promise<void> {
+    if (this.quitBusy || !this.quitAsked) return;
+    this.quitBusy = true;
+    try {
+      await Shell.QuitDecided(proceed);
+      this.quitAsked = false;
+      this.asked = [];
+    } catch (e) {
+      this.notice(codeText(errorOf(e).code), "error");
+    } finally {
+      this.quitBusy = false;
     }
   }
 
@@ -2267,6 +2368,86 @@ class Store {
   // next press in a page's body (LayerFoot) is the user moving on from it.
   clearDone(): void {
     this.turnDone(nextDone({ shown: this.done, waiting: this.doneWaiting }));
+  }
+
+  // noteStarting records an operation the Archive page started, by the id
+  // AddFiles or AddFolder answered (starting, above). One already heard of
+  // — an op.progress that came before the call's answer, or its op.done
+  // for an add that was over by then — is not starting, and is not kept.
+  noteStarting(archiveId: string, opId: string): void {
+    if (!archiveId || !opId || opId in this.ops) return;
+    const now = this.starting[archiveId] ?? [];
+    if (!now.includes(opId)) this.starting[archiveId] = [...now, opId];
+    this.followAsked();
+  }
+
+  // heard: the core has said something of this operation, which is in ops
+  // from now on, so it is no longer starting.
+  private heard(opId: string): void {
+    for (const [archiveId, ids] of Object.entries(this.starting)) {
+      if (!ids.includes(opId)) continue;
+      const rest = ids.filter((x) => x !== opId);
+      if (rest.length > 0) this.starting[archiveId] = rest;
+      else delete this.starting[archiveId];
+    }
+  }
+
+  // stopOps is the stop *Delete archive…* makes before it lets the archive
+  // go (APP.md §6; the user's ruling of 2026-11-03). It is the one command
+  // that does not wait behind a running operation: the user has chosen to
+  // destroy the archive, so whatever runs on it is cancelled through
+  // CancelOp — the foot's own Cancel — and the call resolves once each has
+  // ended (its op.done heard), since the core's DeleteArchive refuses
+  // archive.busy while one still runs. Only what a cancel means something
+  // for is stopped (lib/ops.ts stopsFirst): a compaction and a re-key run
+  // to the end, and the delete is greyed behind them. A cancel the core
+  // refuses because the operation is already committing waits for that
+  // commit; one for an operation the core no longer knows counts as ended;
+  // any other refusal is thrown, for the dialog to say.
+  async stopOps(archiveId: string): Promise<void> {
+    const ids = busyOps(this.runningOps, this.starting[archiveId] ?? [], archiveId)
+      .filter(stopsFirst)
+      .map((o) => o.id);
+    if (ids.length === 0) return;
+    const wait = { ids: new Set(ids), done: () => {} };
+    const ended = new Promise<void>((resolve) => (wait.done = resolve));
+    this.opWaits.push(wait);
+    try {
+      for (const opId of ids) {
+        try {
+          await Archive.CancelOp(opId);
+        } catch (e) {
+          const code = errorOf(e).code;
+          if (code === Code.CodeOpNotFound) {
+            wait.ids.delete(opId);
+            this.heard(opId);
+          } else if (code !== Code.CodeOpCommitting) {
+            throw e;
+          }
+        }
+      }
+    } catch (e) {
+      this.opWaits = this.opWaits.filter((w) => w !== wait);
+      throw e;
+    }
+    this.settleWaits();
+    await ended;
+  }
+
+  // settleWaits ends each of stopOps' waits whose operations have all
+  // ended: finished in ops, and none of them still starting.
+  private settleWaits(): void {
+    if (this.opWaits.length === 0) return;
+    const starting = new Set(Object.values(this.starting).flat());
+    this.opWaits = this.opWaits.filter((w) => {
+      for (const id of [...w.ids]) {
+        const o = this.ops[id];
+        if (o ? o.finished : !starting.has(id)) w.ids.delete(id);
+      }
+      if (w.ids.size > 0) return true;
+      w.done();
+      return false;
+    });
   }
 
   // opBegins reads an operation the store has not seen before (from an

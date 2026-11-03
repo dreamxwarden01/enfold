@@ -1518,3 +1518,364 @@ func TestTheFaderUnderRace(t *testing.T) {
 		t.Fatal("two frames painted at once")
 	}
 }
+
+// ---- the quit question (APP.md §2.4; ruled 2026-11-03, the user's) --------
+
+// TestTheCloseGate is the window's close, case by case: the shell's own
+// close goes through, the setting decides the rest, and while the page's
+// quit question is up every close asks that question again — the question,
+// once up, stays until it is answered, so the window neither goes to the
+// tray nor closes under it.
+func TestTheCloseGate(t *testing.T) {
+	cases := []struct {
+		own, asking bool
+		action      string
+		want        closeAct
+	}{
+		{true, false, app.CloseAsk, closeLets},
+		{true, true, app.CloseQuit, closeLets},
+		{false, false, app.CloseTray, closeLets},
+		{false, false, app.CloseQuit, closeQuits},
+		{false, false, app.CloseAsk, closeAsks},
+		{false, false, "", closeAsks},
+		{false, false, "destroy", closeAsks},
+		{false, true, app.CloseAsk, closeReasks},
+		{false, true, app.CloseTray, closeReasks},
+		{false, true, app.CloseQuit, closeReasks},
+	}
+	for _, c := range cases {
+		if got := closeGate(c.own, c.asking, c.action); got != c.want {
+			t.Errorf("closeGate(own %v, asking %v, %q) = %d, want %d", c.own, c.asking, c.action, got, c.want)
+		}
+	}
+}
+
+// quitWorld is a quit's world for the tests: the status each read returns,
+// and what the quit did to it, in order.
+type quitWorld struct {
+	mu       sync.Mutex
+	statuses []app.VaultStatus // each read takes the next; the last stays
+	yes      bool              // the native question's answer
+	did      []string
+	asked    [][]app.OpView
+	natives  []string
+}
+
+func (w *quitWorld) hooks() quitHooks {
+	return quitHooks{
+		status: func() app.VaultStatus {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			st := w.statuses[0]
+			if len(w.statuses) > 1 {
+				w.statuses = w.statuses[1:]
+			}
+			return st
+		},
+		show: func() { w.note("show") },
+		ask: func(ops []app.OpView) {
+			w.mu.Lock()
+			w.asked = append(w.asked, ops)
+			w.mu.Unlock()
+			w.note("ask")
+		},
+		native: func(msg string) bool {
+			w.mu.Lock()
+			w.natives = append(w.natives, msg)
+			w.mu.Unlock()
+			w.note("native")
+			return w.yes
+		},
+		end: func() { w.note("end") },
+	}
+}
+
+func (w *quitWorld) note(s string) {
+	w.mu.Lock()
+	w.did = append(w.did, s)
+	w.mu.Unlock()
+}
+
+func (w *quitWorld) set(st ...app.VaultStatus) {
+	w.mu.Lock()
+	w.statuses = st
+	w.mu.Unlock()
+}
+
+func (w *quitWorld) done() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.did...)
+}
+
+func runningStatus(state app.VaultState, ops ...app.OpView) app.VaultStatus {
+	return app.VaultStatus{State: state, Ops: ops}
+}
+
+var (
+	addOp     = app.OpView{ID: "op-add", Kind: "add", ArchiveID: "a1", Items: 20, Total: 100, Done: 40}
+	reclaimOp = app.OpView{ID: "op-reclaim", Kind: "reclaim", ArchiveID: "a1"}
+	doneOp    = app.OpView{ID: "op-old", Kind: "extract", ArchiveID: "b2", Finished: true}
+)
+
+// TestTheCloseQuestionsQuitIsTheConfirmation: CloseAction ask, an add
+// running. The page's close question named the add and said Quit stops
+// it; its Quit comes back as CloseDecided("quit"), and the quit ends at
+// once — no second question, native or the page's (it used to ask the
+// native "1 operation(s) are still running" after it).
+func TestTheCloseQuestionsQuitIsTheConfirmation(t *testing.T) {
+	var g quitGate
+	w := &quitWorld{}
+	w.set(runningStatus(app.StateUnlocked, addOp))
+	runQuit(&g, w.hooks(), true)
+	if got := w.done(); !reflect.DeepEqual(got, []string{"end"}) {
+		t.Fatalf("the close question's Quit did %v, want only the end", got)
+	}
+	if !g.ending() || g.pending() {
+		t.Fatalf("after the confirmed quit: ending %v, pending %v", g.ending(), g.pending())
+	}
+	// A second quit — the tray's, or a second answer — finds it under way.
+	runQuit(&g, w.hooks(), false)
+	runQuit(&g, w.hooks(), true)
+	if got := w.done(); len(got) != 1 {
+		t.Fatalf("a quit under way ran again: %v", got)
+	}
+}
+
+// TestThePresetQuitAsksThePage: CloseAction quit, which never asks and
+// never goes to the tray. With an add running, the window's close is
+// cancelled and the quit shows the window and asks the page, naming the
+// add; nothing ends until the answer. The same close pressed again while
+// the question is up asks it again — it does not quit and does not stack.
+func TestThePresetQuitAsksThePage(t *testing.T) {
+	var g quitGate
+	w := &quitWorld{}
+	w.set(runningStatus(app.StateUnlocked, addOp, doneOp))
+	if closeGate(false, g.pending(), app.CloseQuit) != closeQuits {
+		t.Fatal("the preset quit's close does not run the quit")
+	}
+	runQuit(&g, w.hooks(), false)
+	if got := w.done(); !reflect.DeepEqual(got, []string{"show", "ask"}) {
+		t.Fatalf("the preset quit did %v, want the window shown, then the question", got)
+	}
+	if len(w.asked[0]) != 1 || w.asked[0][0].ID != addOp.ID || w.asked[0][0].Finished {
+		t.Fatalf("the question named %+v, want the running add alone", w.asked[0])
+	}
+	if !g.pending() || g.ending() {
+		t.Fatalf("while asked: pending %v, ending %v", g.pending(), g.ending())
+	}
+	// The close again, under any setting: the question again, nothing else.
+	for _, action := range []string{app.CloseQuit, app.CloseTray, app.CloseAsk} {
+		if closeGate(false, g.pending(), action) != closeReasks {
+			t.Fatalf("a close under %q while asked is not asked again", action)
+		}
+	}
+	runQuit(&g, w.hooks(), false)
+	if got := w.done(); !reflect.DeepEqual(got, []string{"show", "ask", "show", "ask"}) {
+		t.Fatalf("asked again: %v", got)
+	}
+	if len(w.natives) != 0 {
+		t.Fatalf("a native question was asked: %v", w.natives)
+	}
+}
+
+// TestTheTraysQuitShowsTheWindowFirst: the tray's Quit with an operation
+// running shows the window — made again from the tray when there is none,
+// which is ensureWindow's — before the question is emitted, and the
+// operations it names are read after the window is shown. An operation
+// that ended between the two reads is named finished, since its end was
+// emitted before a window made again could hear it; one begun since is
+// named too.
+func TestTheTraysQuitShowsTheWindowFirst(t *testing.T) {
+	var g quitGate
+	w := &quitWorld{}
+	ended := addOp
+	ended.Finished = true
+	w.set(
+		runningStatus(app.StateLocked, addOp),
+		runningStatus(app.StateLocked, ended, reclaimOp),
+	)
+	runQuit(&g, w.hooks(), false)
+	if got := w.done(); !reflect.DeepEqual(got, []string{"show", "ask"}) {
+		t.Fatalf("the tray's Quit did %v", got)
+	}
+	got := w.asked[0]
+	if len(got) != 2 || got[0].ID != addOp.ID || !got[0].Finished || got[1].ID != reclaimOp.ID || got[1].Finished {
+		t.Fatalf("the question named %+v, want the add finished, then the reclaim running", got)
+	}
+	// One gone from the second read altogether is named finished too.
+	var g2 quitGate
+	w2 := &quitWorld{}
+	w2.set(runningStatus(app.StateUnlocked, addOp), runningStatus(app.StateUnlocked))
+	runQuit(&g2, w2.hooks(), false)
+	if a := w2.asked[0]; len(a) != 1 || a[0].ID != addOp.ID || !a[0].Finished {
+		t.Fatalf("an add gone from the status was named %+v", a)
+	}
+}
+
+// TestTheQuitQuestionsAnswer: Quit ends once, Keep running ends nothing and
+// takes the question down, so the next quit asks again; an answer with no
+// question up — late, or twice — does nothing.
+func TestTheQuitQuestionsAnswer(t *testing.T) {
+	var g quitGate
+	if g.answer(true) {
+		t.Fatal("an answer with no question up went on")
+	}
+	w := &quitWorld{}
+	w.set(runningStatus(app.StateUnlocked, addOp))
+
+	// The refusal.
+	runQuit(&g, w.hooks(), false)
+	if g.answer(false) {
+		t.Fatal("Keep running went on")
+	}
+	if g.pending() || g.ending() {
+		t.Fatalf("after Keep running: pending %v, ending %v", g.pending(), g.ending())
+	}
+	if g.answer(true) {
+		t.Fatal("a second answer to a question already answered went on")
+	}
+	if closeGate(false, g.pending(), app.CloseQuit) != closeQuits {
+		t.Fatal("after Keep running the next close does not quit (and ask) again")
+	}
+
+	// The next quit asks again, and Quit ends, once.
+	runQuit(&g, w.hooks(), false)
+	if got := w.done(); !reflect.DeepEqual(got, []string{"show", "ask", "show", "ask"}) {
+		t.Fatalf("the second quit did %v", got)
+	}
+	if !g.answer(true) {
+		t.Fatal("Quit did not go on")
+	}
+	if !g.ending() || g.pending() {
+		t.Fatalf("after Quit: ending %v, pending %v", g.ending(), g.pending())
+	}
+	if g.answer(true) || g.answer(false) {
+		t.Fatal("an answer after Quit went on")
+	}
+	// Every close is the shell's own from here on.
+	if closeGate(g.ending(), g.pending(), app.CloseAsk) != closeLets {
+		t.Fatal("the quit's own close is asked")
+	}
+}
+
+// TestTheQuestionOutlivesItsOperation: the add ends while the question is
+// up. Nothing quits by itself and nothing is taken down: the shell does not
+// watch the operations, it waits for the answer. A quit asked for again
+// meanwhile — the tray's Quit pressed a second time — shows the same
+// question again rather than quitting because nothing runs now, and Quit
+// then simply quits, with no native question even with an unlock begun.
+func TestTheQuestionOutlivesItsOperation(t *testing.T) {
+	var g quitGate
+	w := &quitWorld{}
+	w.set(runningStatus(app.StateUnlocked, addOp))
+	runQuit(&g, w.hooks(), false)
+
+	ended := addOp
+	ended.Finished = true
+	w.set(runningStatus(app.StateUnlocking, ended))
+	if got := w.done(); !reflect.DeepEqual(got, []string{"show", "ask"}) {
+		t.Fatalf("the operation's end did %v", got)
+	}
+	if !g.pending() {
+		t.Fatal("the question went with its operation")
+	}
+	runQuit(&g, w.hooks(), false)
+	if got := w.done(); !reflect.DeepEqual(got, []string{"show", "ask", "show", "ask"}) {
+		t.Fatalf("a quit asked again after the end did %v, want the question again", got)
+	}
+	if !g.answer(true) {
+		t.Fatal("Quit after the end did not go on")
+	}
+	if len(w.natives) != 0 {
+		t.Fatalf("a native question followed the page's answer: %v", w.natives)
+	}
+}
+
+// TestTheQuitWithNothingRunning: nothing runs — the quit ends at once, the
+// window neither shown nor asked; an unlock in progress keeps its native
+// question, whose No takes the quit back and whose Yes ends. The close
+// question's Quit during an unlock with nothing running asks that native
+// question as before, since the close question did not name the unlock.
+func TestTheQuitWithNothingRunning(t *testing.T) {
+	var g quitGate
+	w := &quitWorld{}
+	w.set(runningStatus(app.StateUnlocked, doneOp))
+	runQuit(&g, w.hooks(), false)
+	if got := w.done(); !reflect.DeepEqual(got, []string{"end"}) {
+		t.Fatalf("a quit with nothing running did %v", got)
+	}
+
+	var u quitGate
+	n := &quitWorld{}
+	n.set(runningStatus(app.StateUnlocking))
+	runQuit(&u, n.hooks(), false)
+	if got := n.done(); !reflect.DeepEqual(got, []string{"native"}) || n.natives[0] != unlockQuestion {
+		t.Fatalf("an unlock's quit did %v asking %v", got, n.natives)
+	}
+	if u.ending() || u.pending() {
+		t.Fatalf("after No: ending %v, pending %v", u.ending(), u.pending())
+	}
+	n.yes = true
+	runQuit(&u, n.hooks(), true)
+	if got := n.done(); !reflect.DeepEqual(got, []string{"native", "native", "end"}) {
+		t.Fatalf("the close question's Quit during an unlock did %v", got)
+	}
+
+	// An unlock with an operation running: the page's question alone, and
+	// its Quit is the one confirmation.
+	var b quitGate
+	r := &quitWorld{}
+	r.set(runningStatus(app.StateUnlocking, addOp))
+	runQuit(&b, r.hooks(), false)
+	if got := r.done(); !reflect.DeepEqual(got, []string{"show", "ask"}) {
+		t.Fatalf("an unlock with an add running did %v", got)
+	}
+	if !b.answer(true) || len(r.natives) != 0 {
+		t.Fatalf("the page's Quit during an unlock: natives %v", r.natives)
+	}
+}
+
+// TestAskedOpsIsNeverNil: the payload is a list the page can read, empty
+// rather than null.
+func TestAskedOpsIsNeverNil(t *testing.T) {
+	if got := askedOps(app.VaultStatus{}, app.VaultStatus{}); got == nil || len(got) != 0 {
+		t.Fatalf("askedOps of nothing = %#v", got)
+	}
+	if got := unfinishedOps(app.VaultStatus{Ops: []app.OpView{doneOp}}); got == nil || len(got) != 0 {
+		t.Fatalf("unfinishedOps of a finished op = %#v", got)
+	}
+	if runningOps(runningStatus(app.StateUnlocked, addOp, doneOp, reclaimOp)) != 2 {
+		t.Fatal("runningOps miscounts")
+	}
+}
+
+// TestTheQuitGateUnderRace: the tray's Quit, the window's close and the
+// page's answers arriving at once from goroutines of their own end the
+// process at most once, and once the end has begun nothing asks again.
+func TestTheQuitGateUnderRace(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		var g quitGate
+		w := &quitWorld{}
+		w.set(runningStatus(app.StateUnlocked, addOp))
+		var wg sync.WaitGroup
+		var ends atomic.Int32
+		h := w.hooks()
+		h.end = func() { ends.Add(1) }
+		for i := 0; i < 8; i++ {
+			wg.Add(3)
+			go func() { defer wg.Done(); runQuit(&g, h, false) }()
+			go func(i int) {
+				defer wg.Done()
+				if g.answer(i%2 == 0) {
+					h.end()
+				}
+			}(i)
+			go func() { defer wg.Done(); _ = closeGate(g.ending(), g.pending(), app.CloseQuit) }()
+		}
+		wg.Wait()
+		if n := ends.Load(); n > 1 {
+			t.Fatalf("round %d: the process ended %d times", round, n)
+		}
+	}
+}

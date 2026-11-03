@@ -6,6 +6,8 @@
 // the rail shows is decided here; Rail.svelte draws it.
 
 import { VaultState } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
+import { busyLabel, busyOp } from "./ops";
+import type { BusyOp } from "./ops";
 import { commandCopy, lockCopy, railCopy } from "./strings";
 
 // Below a 1008 px window the rail is the compact one, 48 px of icons
@@ -41,6 +43,46 @@ export function railCurrent(route: string, current: string | null): string {
       return current ? `archive:${current}` : "archives";
   }
   return "";
+}
+
+// ---- an open archive's row while it is busy (ruled 2026-11-03, the user's)
+//
+// One archive does one thing at a time (APP.md §2.3), so while an operation
+// runs on an archive its row in the rail says so: the 20 px × that closes it
+// gives its place to a ring — the 14 px ring of the Archives item's mark,
+// 2 px of the accent over the stroke, filled from the top to the
+// operation's percentage while its total is known, and a quarter of it
+// turning while it is not — and the row's tooltip and name say the
+// operation. The row still opens the archive; the × comes back when the
+// operation ends. Busy is the Archive page's own rule (lib/ops.ts busyOp):
+// any kind, a reclaim included, but a drag out still in its hover, and an
+// add the page started that has said nothing yet.
+
+// The fields the row reads of an operation (OpView's): busyOp's, and the
+// bytes its ring fills by.
+export interface RowOp extends BusyOp {
+  done: number;
+  total: number;
+}
+
+export interface RowBusy {
+  // The operation, as a busy command's reason names it without its tail:
+  // "Adding 20 files", "Adding files" before the count is planned.
+  what: string;
+  // The ring's fill, 0 to 100, or null while the total is not known: the
+  // turning quarter.
+  ring: number | null;
+}
+
+// rowBusy is what an open archive's row says while an operation runs on
+// it, or null while it is idle: the latest begun on it, as the Archive
+// page names it.
+export function rowBusy(ops: readonly RowOp[], starting: readonly string[], archiveId: string): RowBusy | null {
+  const b = busyOp(ops, starting, archiveId);
+  if (!b) return null;
+  const o = ops.find((x) => x.id === b.id);
+  const ring = o && o.total > 0 ? Math.round((Math.max(0, Math.min(o.done, o.total)) / o.total) * 100) : null;
+  return { what: busyLabel(b), ring };
 }
 
 export interface VaultHead {

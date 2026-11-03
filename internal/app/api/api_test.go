@@ -103,6 +103,7 @@ func TestBoundSurface(t *testing.T) {
 			"PickFiles(string, bool) ([]string, error)",
 			"PickFolder(string) (string, error)",
 			"Quit()",
+			"QuitDecided(bool)",
 			"Reveal(string) error",
 			"SaveFile(string, string, string) (string, error)",
 			"ShowWindow()",
@@ -243,4 +244,18 @@ func TestStageGreen(t *testing.T) {
 		t.Fatalf("the hook heard %v", got)
 	}
 	NewShell(Hooks{}).StageGreen(true, 220, "ease") // no hook: no panic
+}
+
+// TestQuitDecided: the page's answer to its quit question reaches the
+// shell's hook as it was given, Quit and Keep running alike, and a shell
+// that lent no hook takes it as nothing (APP.md §2.4; ruled 2026-11-03).
+func TestQuitDecided(t *testing.T) {
+	var got []bool
+	s := NewShell(Hooks{QuitDecided: func(proceed bool) { got = append(got, proceed) }})
+	s.QuitDecided(false)
+	s.QuitDecided(true)
+	if !reflect.DeepEqual(got, []bool{false, true}) {
+		t.Fatalf("the hook heard %v", got)
+	}
+	NewShell(Hooks{}).QuitDecided(true) // no hook: no panic
 }

@@ -6152,3 +6152,88 @@ frontend gates and the repo tour pass. Left: the mock's `AddFiles` ignores the p
 colliding name a second time), so a tour that stages a skip needs a shim or a mock that honours
 the policy; the done line after a chosen skip says "Added 2 of 3 files", the same line as a
 batch that lost a file, and never "1 skipped" — the dialog's caption has that count.
+
+## 2026-11-03 — The busy archive: a second drop or paste while an operation runs, the rail's ring, the foot on its own page, the quit question
+
+**What a busy archive does with a second drop or a paste** (2026-11-03). The user's finding: files
+dropped on an archive while an add was running started a second batch, which then skipped or
+collided with the first; asked whether to queue or to refuse, and whether a full-page veil was
+the way to say it (their own first idea, with the worry that it would feel like the web). A
+design study of four directions was mocked on the real page (V1 the list says it with a standing
+veil; V2 the foot says it with greyed commands and an InfoBar on a hover; V3 the page veil; V4 the
+study's own mix) and judged against Windows' idiom, the record, the ink and the cost; published
+for the user's pick. Two facts decided most of it, confirmed in the code: a refused drop never
+arrives (the Wails runtime sets the drop effect from `data-file-drop-target` after the page's own
+handlers, so with the attribute off the list Chromium fires dragleave instead of drop, and
+nothing is queued), and the list stays live during an add (only the short calls wait on the
+archive's turn). The user took the judge's V4 with its corrections and ruled the rest: a reclaim
+counts as busy; *Extract…* is greyed while busy and a row does not lift for a drag out; the quiet
+rest is accepted; the study's Ctrl+V InfoBar is replaced by a callout that points at the foot;
+the veil's words go on a plate; and *Delete archive…* is not greyed but stops the operation
+first. Built: an archive is busy while any operation of its own is unfinished, a reclaim
+included, a drag out still hovering excluded, and while an add is *starting* (the store keeps
+the ids `AddFiles` and `AddFolder` return until the core first reports on them, since an
+operation emits nothing until its plan is made — the gap in which the bug would have come back).
+At rest nothing is veiled: *Add*, *Extract…*, *Rename…* and *Delete…*, the pane's three
+*Extract* buttons and the viewer's, are greyed with the operation's reason as their title
+("Adding 20 files… wait for it to end"; "Adding files…" in the gap), the menus' items with the
+reason as a second line kept to one line (the menu widens for it); the greyed commands' keys do
+nothing; the empty state's two buttons are greyed and its caption reads "The files appear here
+once they are added" for an add. Files held over the busy list: the attribute is off, so
+Windows' no-drop pointer stands and a release drops nothing; one `held` state replaces
+`dropping` (set on dragenter and every dragover of an outside file drag, cleared when the drag
+leaves the card, drops or ends), which also fixes the ring going out as a drag crossed onto a
+row; the list's card alone takes a veil of the surface at 80 % with its two lines on a plate of
+the surface at 96 %, the card's stroke and radius, centred ("Adding 20 files to Photos 2024" /
+"Drop here when it ends"), so the words never meet what is beneath — measured about 17:1 in
+light and 12:1 in dark over a 60-row list, the plate opaque Canvas under both contrast
+palettes; the veil gives way to the ring under the hand if the operation ends. A paste while
+busy reads the clipboard first (no files: the InfoBar as today; files: the callout; files and
+the operation over: the paste runs), and a drop that still arrives is refused the same way: a
+callout in WinUI's TeachingTip idiom over the foot's running line of this archive, its tail on
+the line's name, one line of body ink ("Paste again when it ends." / "Drop again when it
+ends."), the line washed while it stands; it goes after 5 s, on Esc, any key or pointer press,
+or the operation's end, never stacks and never takes focus. *Delete archive…* stays live here
+and on the Archives page's row: its dialog says "… is still running. Deleting stops it first."
+above the name to type, and on consent the page cancels what runs, waits for each operation's
+end, then lets the archive go and deletes it; a delete the core still refuses as busy after the
+stop is said as the error it is ("The archive is busy with another operation.", `deleteOutcome`),
+not as a held file; behind a compaction or a re-key, which run to their end, *Delete archive…*
+is greyed with that reason instead. Measured in the mock by the builder (114 checks) and the
+reviewer (160 more, a real CDP drag, the gap, the clipboard, the delete flow), at both sizes,
+light, dark and the two contrast palettes; 35 new tests. Left: the callout's wash on the dark
+foot is a hairline, the ruling's letter, for the user's eye; one Esc with an error InfoBar up
+closes the bar and sends the callout away (it goes on any key); held is cleared by a dragleave,
+which CDP's synthetic cancel never sends, so Esc mid-drag is a real-window check; the core's
+`archive.busy` names both the archive's turn and a file another program holds, so a delete
+refused after a stop because an antivirus holds the file says the former (a separate code would
+be a Go change); the compact rail at 866 × 554 names a busy archive by its name alone once the
+foot is scoped to its page (below).
+
+**The rail's ring, the foot on its own page, and the quit question** (2026-11-03, the user's
+three rulings with the pick). *The rail*: while an archive is busy its row's × gives way to the
+house's progress ring, the Archives mark's own 14 px ring filled to the percentage when the
+total is known, else a quarter arc of the accent turning on the existing keyframes; every
+turning ring is anchored to the document timeline's origin (`inPhase`), so two archives busy at
+once turn as one (measured: two rings mounted 370 ms apart read the same angle in three
+same-frame samples; a hand-made offset read 133° apart as a control); the ring is aria-hidden
+and the row's name and tooltip say "Photos 2024 · Adding 20 files"; the row still opens the
+archive; under reduced motion the quarter stands still. *The foot*: the running line, with its
+bar, bytes, time left and *Cancel*, shows only while the page above is the busy archive's own
+(`latestOp(ops, archiveId)`, `pageOps`); on the Archives page, Settings and another archive's
+page the rail says it instead; the +N flyout counts this archive's; the done line is unchanged.
+*The quit question with a running operation* moves from the native Yes/No box to the page's own
+dialog (`quitGate`, `runQuit`, `closeGate` in the shell, testable; `Shell.QuitDecided(proceed)`
+bound): with *Ask each time* the close question gains the sentence "Adding 20 files to Photos
+2024 is still running. Quit stops it; in the tray it goes on." and its *Quit* never asks again;
+with the preset *Quit* the shell shows the window if it is hidden and the page asks *Quit* /
+*Keep running*, no tray option; the tray's *Quit* shows the window first, made again if none,
+then asks the same; once up the question stays until answered — if the operation ends meanwhile
+the sentence says it "has finished" and nothing quits by itself. The native "An unlock is in
+progress" question is kept only when nothing else runs. Left for the user's eye in the real
+window: the tray's *Quit* with the window closed to the tray (the mock cannot make a window), and
+minimised; the preset *Quit*'s × during an add; the sentence changing while the dialog is up;
+the ring's --stroke track on the current row in dark, where a low percentage is a speck; a real
+contrast theme on the row's ring; the compact rail's glyph naming only the archive (a nit to
+take: the words of the busy row on the glyph and the flyout's row); Narrator reading the
+question's sentence only when it changes.

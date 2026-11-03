@@ -4,7 +4,7 @@
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { Clipboard as ClipboardView, Collision, Crumb, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, archivesCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyNames, keyTitles, listCopy, noticeCopy, paneCopy, typeLabel } from "../lib/strings";
+  import { archivePageCopy, archivesCopy, busyCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyNames, keyTitles, listCopy, noticeCopy, paneCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
   import { freeWorthShowing } from "../lib/status";
@@ -35,8 +35,9 @@
   import type { Intent } from "../lib/listkeys";
   import { KEY_ECHO_MS, keyAnchor } from "../lib/menu";
   import type { MenuClose } from "../lib/menu";
-  import { fileBlankItems, fileRowItems } from "../lib/filemenu";
-  import type { FileBlankCmd, FileCmd } from "../lib/filemenu";
+  import { CLOSING, fileBlankItems, fileRowItems } from "../lib/filemenu";
+  import type { FileBlankCmd, FileCmd, Stop } from "../lib/filemenu";
+  import { BUSY_TIP_MS, busyLabel, busyOp, busyOps, busyReason, stopsFirst } from "../lib/ops";
   import { clipOf, pastePlan, planOf } from "../lib/paste";
   import type { AddPlan, Clip } from "../lib/paste";
   import { PREVIEW_TEXT_CAP } from "../lib/viewer";
@@ -56,7 +57,8 @@
   import TextField from "./TextField.svelte";
   import TamperedBar from "./TamperedBar.svelte";
   import NoticeSlot from "./NoticeSlot.svelte";
-  import { LEAVE, delay, slideIn, travel, unfold } from "../lib/motion";
+  import { LEAVE, MOVE, delay, enter, motion, slideIn, travel, unfold } from "../lib/motion";
+  import { fade } from "svelte/transition";
 
   const id = $derived(store.current ?? "");
   const stat = $derived(store.stat);
@@ -130,6 +132,46 @@
   // the toolbar's commands are greyed with why rather than each press
   // ending in an InfoBar (the review of 2026-10-18).
   const closingWhy = $derived(draining ? archivePageCopy.closing : undefined);
+  // The busy archive (APP.md §6; the busy-archive study and the user's
+  // rulings of 2026-11-03). One archive does one thing at a time (§2.3):
+  // an operation holds it for its whole run and the short calls wait on
+  // it, so while one runs here — any kind, the core's own reclaim
+  // included, and an add this page started that has said nothing yet
+  // (store.starting) — the commands that would wait or start a second are
+  // greyed with the operation's reason, and the list takes no drop.
+  // Reading stays live: Open, Copy name, browsing, the selection, the pane
+  // and the viewer. busy is this archive's latest (lib/ops.ts busyOp),
+  // never the foot's latest, which is across archives.
+  const busy = $derived(busyOp(store.runningOps, store.starting[id] ?? [], id));
+  const busyWhy = $derived(busy ? busyReason(busy) : undefined);
+  // The operation by the name the foot gives it, with the archive's
+  // registry name as the foot takes it: the veil's first line.
+  const listedName = $derived(store.archives.find((a) => a.id === id)?.name || archiveName);
+  const busyName = $derived(busy ? busyLabel(busy, listedName) : "");
+  // What greys the archive's own commands, said as their titles: the drain
+  // after its Close first, since nothing at all can be done then, and
+  // otherwise a running operation. One path for both (lib/filemenu.ts Stop).
+  const blockedWhy = $derived(closingWhy ?? busyWhy);
+  const blocked = $derived(blockedWhy !== undefined);
+  const menuStop = $derived<Stop | undefined>(draining ? CLOSING : busyWhy ? { why: busyWhy, reads: false } : undefined);
+  // *Delete archive…* does not wait: it stops what runs first (store.stopOps),
+  // but not a compaction or a re-key, which run to the end — behind those
+  // it is greyed with the operation's reason.
+  const runsToEnd = $derived(!!busy && !stopsFirst(busy));
+  // Why *Delete archive…* is greyed (More, below): the drain first, then
+  // the vault's two (locked, Tampered), then the operation that runs to
+  // the end. Only that last is the busy reason, which keeps to one line in
+  // the menu as the other busy reasons do (deleteWaits, app.css); the
+  // vault's own sentences wrap at the menu's measure as every reason does.
+  const deleteWhy = $derived(closingWhy ?? (!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : runsToEnd ? busyWhy : undefined));
+  const deleteWaits = $derived(deleteWhy !== undefined && deleteWhy === busyWhy);
+  // Its sentence while something runs here, above the name to type: what
+  // it stops first, named as the foot names it.
+  const deleteStops = $derived.by(() => {
+    const all = busyOps(store.runningOps, store.starting[id] ?? [], id).filter(stopsFirst);
+    const o = busyOp(all, [], id);
+    return o ? busyCopy.deleteStops(busyLabel(o, listedName), all.length - 1) : "";
+  });
   // The archive.needs_reopen bar's button (APP.md §2.3, ruled 2026-10-19:
   // one meaning for Close): the head's graceful *Close*, and, once that
   // leave has left the archive draining, the head's *Force close*.
@@ -237,7 +279,24 @@
       { label: p.skip.label, says: p.skip.says, run: () => void addWith(c.at, c.plan, "skip") },
     ];
   });
-  let dropping = $state(false);
+  // held: files from outside the window are held over the list (the
+  // busy-archive study's correction 1). Set by every dragenter and
+  // dragover of a drag that carries files and is not the page's own drag
+  // out; cleared by a dragleave whose next element is outside the list —
+  // or none, as when the drag leaves the window or a refused release ends
+  // it — and by a drop, here or anywhere on the window. A crossing from
+  // the blank area onto a row keeps it: the row's dragenter comes before
+  // the blank area's dragleave, and that leave's next element is the row
+  // (today's ring, which any dragleave cleared, went out over the rows).
+  // Idle and held: the dashed ring. Busy and held: the veil.
+  let held = $state(false);
+  function holdOn(e: DragEvent) {
+    if (!store.dragOut && e.dataTransfer?.types.includes("Files")) held = true;
+  }
+  function holdOff(e: DragEvent) {
+    const to = e.relatedTarget;
+    if (!(to instanceof Node) || !listEl?.contains(to)) held = false;
+  }
 
   function fail(e: unknown) {
     store.notice(codeText(errorOf(e).code), "error");
@@ -288,6 +347,10 @@
     if (!p || !pastThreshold(e.clientX - p.x, e.clientY - p.y)) return;
     pressEnd();
     p.dragged = true;
+    // A row does not lift while the archive is busy (the busy archive,
+    // ruled 2026-11-03): a drag out is an extract by another gesture, and
+    // Extract… is greyed; the gesture is spent, so its release is no click.
+    if (blocked) return;
     // The native drag takes the mouse from here; a second gesture while
     // this one is in flight is ignored by the store.
     void store.beginDragOut([...store.sel.ids]);
@@ -442,6 +505,8 @@
       case "paste":
         // Not while the archive drains after its Close: every add would
         // answer archive.not_open, and the page already says it is closing.
+        // While it is busy the clipboard is read all the same, and the
+        // answer decides (paste).
         if (!draining) void paste(readClip());
         break;
       case "typeahead": {
@@ -586,6 +651,7 @@
   // The viewer's *Extract…* (Ctrl+E there too): the one dialog, on the file
   // shown, over the viewer.
   function viewExtract(r: FileRow) {
+    if (blocked) return;
     extracting = { ids: [r.id], count: 1 };
   }
 
@@ -596,7 +662,7 @@
   // the title names the item when it is one.
   let moving = $state<{ ids: string[]; name: string } | null>(null);
   function askMoveTo(ids: string[]) {
-    if (draining || ids.length === 0) return;
+    if (blocked || ids.length === 0) return;
     const name = ids.length === 1 ? (rows.find((r) => r.id === ids[0])?.name ?? "") : "";
     moving = { ids: [...ids], name };
   }
@@ -641,8 +707,8 @@
     const c = ctx;
     if (!c) return [];
     const r = c.row;
-    if (r) return fileRowItems(r.isDir, draining).map((i) => ({ ...i, run: () => runRowCmd(i.cmd, r) }));
-    return fileBlankItems(draining, clip).map((i) => ({ ...i, run: () => runBlankCmd(i.cmd) }));
+    if (r) return fileRowItems(r.isDir, menuStop).map((i) => ({ ...i, run: () => runRowCmd(i.cmd, r) }));
+    return fileBlankItems(menuStop, clip).map((i) => ({ ...i, run: () => runBlankCmd(i.cmd) }));
   });
 
   function runRowCmd(cmd: FileCmd, r: FileRow) {
@@ -712,7 +778,9 @@
     if (echo() || t.closest("thead") || t.closest("tbody tr")) return;
     store.clearSelection();
     moveError = null;
-    void readClip();
+    // No clipboard read while the archive is busy or closing: Paste is
+    // greyed with that reason whatever the clipboard holds.
+    if (!blocked) void readClip();
     ctx = { x: e.clientX, y: e.clientY, row: null, key: false };
   }
 
@@ -727,7 +795,7 @@
       const box = listEl?.getBoundingClientRect();
       if (!box) return;
       const head = listEl?.querySelector("thead")?.getBoundingClientRect().height ?? 0;
-      void readClip();
+      if (!blocked) void readClip();
       ctx = { ...keyAnchor({ left: box.left, bottom: box.top + head }), row: null, key: true };
       return;
     }
@@ -876,22 +944,28 @@
     }
   }
 
+  // Each add's id is kept as starting until the core first speaks of it
+  // (store.noteStarting): an add emits nothing until its plan is made, and
+  // the archive is busy from the moment the call answers.
   async function addWith(at: string, plan: AddPlan, policy: string) {
     collisions = null;
+    const arch = id;
     try {
-      if (plan.files.length > 0) await Archive.AddFiles(id, at, plan.files, policy);
-      for (const d of plan.dirs) await Archive.AddFolder(id, at, d, policy);
+      if (plan.files.length > 0) store.noteStarting(arch, await Archive.AddFiles(arch, at, plan.files, policy));
+      for (const d of plan.dirs) store.noteStarting(arch, await Archive.AddFolder(arch, at, d, policy));
     } catch (e) {
       fail(e);
     }
   }
 
   async function pickFiles() {
+    if (blocked) return;
     const p = (await Shell.PickFiles("Add files", true)) ?? [];
     await addAt(dirId, { files: p, dirs: [] });
   }
 
   async function pickFolder() {
+    if (blocked) return;
     const p = await Shell.PickFolder("Add a folder");
     if (p) await addAt(dirId, { files: [], dirs: [p] });
   }
@@ -920,14 +994,18 @@
   // key; greyed while nothing is selected — with no reason under it, since
   // the list itself shows nothing picked and the line read as clutter in
   // the real window (ruled 2026-10-27) — and while the archive drains,
-  // with the closing title, which the list does not show.
+  // with the closing title, which the list does not show; and while an
+  // operation runs here, with its reason (the busy archive). *Delete
+  // archive…* stays live while one runs (the user's ruling of 2026-11-03):
+  // its dialog says what it stops first, but not behind a compaction or a
+  // re-key, which run to the end.
   const moreItems: MenuItem[] = $derived([
     {
       label: commandCopy.moveTo,
       icon: "i-move",
       keys: keyNames.moveTo,
-      disabled: draining || selected.size === 0,
-      title: closingWhy,
+      disabled: blocked || selected.size === 0,
+      title: blockedWhy,
       run: () => askMoveTo(chosenIds),
     },
     {
@@ -935,8 +1013,8 @@
       label: commandCopy.deleteArchive,
       icon: "i-trash",
       danger: true,
-      disabled: draining || !store.unlocked || tampered,
-      title: closingWhy ?? (!store.unlocked ? archivePageCopy.deleteNeedsUnlock : tampered ? archivePageCopy.deleteTampered : undefined),
+      disabled: draining || !store.unlocked || tampered || runsToEnd,
+      title: deleteWhy,
       run: () => void askDeleteArchive(),
     },
   ]);
@@ -965,6 +1043,7 @@
   });
 
   function askFolder() {
+    if (blocked) return;
     newFolder = "";
     newFolderValid = true;
     newFolderAttempt = 0;
@@ -1008,7 +1087,67 @@
       store.notice(noticeCopy.dropOffList, "error");
       return;
     }
+    // A drop that still arrived while the archive is busy (the study's
+    // correction 3): the list stops being a drop target the moment an
+    // operation runs, so the drag's release is refused in place and never
+    // reaches here, unless the operation began between the last hover and
+    // the release. Then nothing is added, and the foot's running line says
+    // what to wait for (the callout; never an add queued behind it).
+    if (busy) {
+      raiseTip(busyCopy.dropAgain);
+      return;
+    }
     void addAt(d.dirId, planOf(d.paths, d.isDir ?? []));
+  });
+
+  // ---- the busy callout (APP.md §6, Paste; the user's ruling of 2026-11-03,
+  // in place of the study's InfoBar) ---------------------------------------
+  // A paste read while the archive is busy, or a drop that still arrived,
+  // points at what the user waits for: a callout at the foot's running line
+  // of this archive's operation, in WinUI's TeachingTip idiom, the line
+  // washed while it stands (LayerFoot draws both). It never takes the
+  // focus and never stacks (a second one replaces it and restarts its
+  // clock), and it goes after BUSY_TIP_MS, on Esc, on any key or pointer
+  // press, when the operation ends, or with the page.
+  let tipTimer: ReturnType<typeof setTimeout> | undefined;
+  function raiseTip(text: string) {
+    const b = busy;
+    if (!b) return;
+    clearTimeout(tipTimer);
+    store.busyTip = { archiveId: id, opId: b.id, text, seq: (store.busyTip?.seq ?? 0) + 1 };
+    tipTimer = setTimeout(dropTip, BUSY_TIP_MS);
+  }
+  function dropTip() {
+    clearTimeout(tipTimer);
+    if (store.busyTip) store.busyTip = null;
+  }
+  // Any press sends it away. Esc is spent on it (taken, so the list keeps
+  // its selection), as one Esc closes one thing (APP.md §6, InfoBars) — and
+  // so an Esc already spent elsewhere, on the newest error InfoBar
+  // (App.svelte escNotice, which takes it first and prevents it), leaves
+  // the callout standing: it had closed both (the page review of
+  // 2026-11-03).
+  function tipKey(e: KeyboardEvent) {
+    if (!store.busyTip) return;
+    if (e.key === "Escape") {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+    }
+    dropTip();
+  }
+  function tipPress() {
+    if (store.busyTip) dropTip();
+  }
+  // The operation it named has ended, or the archive is idle: it goes.
+  $effect(() => {
+    const t = store.busyTip;
+    if (!t) return;
+    const live = busyOps(store.runningOps, store.starting[id] ?? [], id).some((o) => o.id === t.opId);
+    if (t.archiveId !== id || !live) untrack(dropTip);
+  });
+  $effect(() => () => {
+    clearTimeout(tipTimer);
+    if (untrack(() => store.busyTip)) store.busyTip = null;
   });
 
   // ---- Paste (ruled 2026-10-26, the user's; APP.md §6; lib/paste.ts) ----
@@ -1065,6 +1204,13 @@
       store.notice(noticeCopy.nothingToPaste, "info");
       return;
     }
+    // Decided at the answer (the study's correction 5): files, and the
+    // archive still busy, are the callout; an operation that ended while
+    // the clipboard was read lets the paste run.
+    if (busy) {
+      raiseTip(busyCopy.pasteAgain);
+      return;
+    }
     await addAt(at, plan);
   }
 
@@ -1116,7 +1262,9 @@
     // otherwise offer a copy that means nothing.
     e.preventDefault();
     e.stopPropagation();
-    const ok = canDrop(t, f);
+    // A Move waits behind a running operation as every short call does,
+    // so a busy archive takes none (the busy archive): the effect is none.
+    const ok = !blocked && canDrop(t, f);
     if (e.dataTransfer) e.dataTransfer.dropEffect = ok ? "move" : "none";
     dropTarget = ok ? { id: t.id, at } : null;
     springOver(e, t, at, f.ids, name);
@@ -1167,7 +1315,7 @@
     e.preventDefault();
     e.stopPropagation();
     springer.hover(null, pointOf(e), () => {});
-    const ok = canDrop(hereTarget, f);
+    const ok = !blocked && canDrop(hereTarget, f);
     if (e.dataTransfer) e.dataTransfer.dropEffect = ok ? "move" : "none";
     dropTarget = ok ? { id: hereTarget.id, at: "list" } : null;
   }
@@ -1176,7 +1324,7 @@
   // otherwise it goes on to the window's own listener (dropElsewhere) and
   // the runtime's, as before.
   function dropBlank(e: DragEvent) {
-    dropping = false;
+    held = false;
     if (store.dragOut && isOver(hereTarget.id, "list")) dropOn(e, hereTarget, "list");
   }
 
@@ -1208,6 +1356,7 @@
   // has had it already, and what it reports (store.drop) is told apart by
   // its paths. A foreign drop ends the flight the same way, as nothing.
   function dropElsewhere(e: DragEvent) {
+    held = false;
     springer.cancel();
     dropTarget = null;
     const f = store.dragOut;
@@ -1239,6 +1388,7 @@
   // form rule and the button is never disabled — pressing it, or Enter,
   // marks what would refuse (APP.md §6, Forms).
   function askRename(r: FileRow) {
+    if (blocked) return;
     renameTo = r.name;
     renameValid = true;
     renameAttempt = 0;
@@ -1278,7 +1428,7 @@
   // the Delete acts on the ones the question named.
   async function askDelete() {
     const want = new Set(chosenIds);
-    if (want.size === 0) return;
+    if (blocked || want.size === 0) return;
     if (chosen.length === want.size) {
       deleting = { ids: chosen.map((r) => r.id), rows: chosen };
       return;
@@ -1339,7 +1489,7 @@
   // An archive that holds nothing has nothing to extract, and the toolbar's
   // button is greyed then.
   function extractCommand() {
-    if (selected.size === 0 && (stat?.records ?? 0) === 0) return;
+    if (blocked || (selected.size === 0 && (stat?.records ?? 0) === 0)) return;
     extracting = { ids: chosenIds, count: selected.size };
   }
 
@@ -1347,7 +1497,7 @@
   // dialog on *Everything*, its selection line greyed since nothing is
   // selected.
   function extractEverything() {
-    if ((stat?.records ?? 0) === 0) return;
+    if (blocked || (stat?.records ?? 0) === 0) return;
     extracting = { ids: [], count: 0 };
   }
 
@@ -1471,8 +1621,10 @@
   // handle goes.
   let deletingArchive = $state<{ id: string; name: string; path: string; createdAt: number } | null>(null);
   // released: the consent was given and the archive let go of, so this
-  // page has nothing left to show once the dialog closes.
+  // page has nothing left to show once the dialog closes. stopping: the
+  // consent was given and what ran on the archive is being stopped first.
   let released = false;
+  let stopping = false;
 
   async function askDeleteArchive() {
     const archiveId = id;
@@ -1495,7 +1647,24 @@
   // since the delete is refused while either does. It throws what the core
   // refused the close with, which ends the dialog with nothing removed.
   async function letGo(archiveId: string): Promise<void> {
+    // What runs on the archive is stopped first and its end waited for
+    // (store.stopOps; the user's ruling of 2026-11-03): the core refuses a
+    // delete while an operation runs, and the user has chosen to destroy
+    // the archive. Nothing more is read of the archive from here on: the
+    // stopped operation's end would read it again, and that read would
+    // meet the leave below and stand as an error in the dialog (the
+    // build's tour found it). A stop refused lets go of nothing, and the
+    // dialog says why as it says any refusal.
     store.releasedForDelete = archiveId;
+    stopping = true;
+    try {
+      await store.stopOps(archiveId);
+    } catch (e) {
+      store.releasedForDelete = null;
+      throw e;
+    } finally {
+      stopping = false;
+    }
     released = true;
     await Archives.Leave(archiveId);
     await store.refreshArchives();
@@ -1525,7 +1694,7 @@
   // takes both — the archive it let go of is read like any other again,
   // and the Stat's archive.not_open then leaves it (refreshArchive).
   $effect(() => () => {
-    if (released) store.releasedForDelete = null;
+    if (released || stopping) store.releasedForDelete = null;
   });
 
   // The foot's note (LayerFoot): where you are — "Trips · 3 items" — beside
@@ -1624,7 +1793,7 @@
   const noPreview = $derived(!!one && !one.isDir && (kind === "none" || previewFailed));
 </script>
 
-<svelte:window onkeydown={onKey} ondrop={dropElsewhere} />
+<svelte:window onkeydown={onKey} ondrop={dropElsewhere} onkeydowncapture={tipKey} onpointerdowncapture={tipPress} ondragend={() => (held = false)} />
 
 <!-- While the viewer is up the page under it is inert: no key, no click,
      no tab stop reaches it (the viewer is over it). -->
@@ -1695,15 +1864,19 @@
          entered, said here too, above the list it was aimed at. -->
     <div class="move-note">Not moved: {moveError.text}</div>
   {/if}
-  <div class="cmdbar" bind:this={cmdbar}>
-    <MenuButton id="add" label="Add" icon="i-plus" items={addItems} disabled={draining} title={closingWhy} />
+  <!-- busy: an operation runs here and the archive is not closing, so the
+       menus' reasons are the operation's, each kept to one line (app.css);
+       delete-waits: More's *Delete archive…* is greyed by that reason too,
+       behind a compaction or a re-key, and keeps it to one line as well. -->
+  <div class="cmdbar" class:busy={!!busy && !draining} class:delete-waits={deleteWaits} bind:this={cmdbar}>
+    <MenuButton id="add" label="Add" icon="i-plus" items={addItems} disabled={blocked} title={blockedWhy} />
     <!-- Greyed on Records, never on Files: a record count is the only
          thing that can say whether the tree holds anything, since a
          folder occupies no data region and an archive of folders alone
          reports 0 files while holding real records (APP.md §3). -->
-    <button type="button" class="btn subtle" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
-    <button type="button" class="btn subtle" disabled={draining || !one} title={closingWhy ?? (one ? keyTitles.rename : archivePageCopy.renameNeedsOne)} onclick={() => { if (one) askRename(one); }}><svg class="i"><use href="#i-rename" /></svg>{commandCopy.rename}</button>
-    <button type="button" class="btn subtle danger" disabled={draining || selected.size === 0} title={closingWhy ?? (selected.size === 0 ? archivePageCopy.deleteNeedsSome : keyTitles.delete)} onclick={() => void askDelete()}><svg class="i"><use href="#i-trash" /></svg>{commandCopy.delete}</button>
+    <button type="button" class="btn subtle" disabled={blocked || (stat?.records ?? 0) === 0} title={blockedWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+    <button type="button" class="btn subtle" disabled={blocked || !one} title={blockedWhy ?? (one ? keyTitles.rename : archivePageCopy.renameNeedsOne)} onclick={() => { if (one) askRename(one); }}><svg class="i"><use href="#i-rename" /></svg>{commandCopy.rename}</button>
+    <button type="button" class="btn subtle danger" disabled={blocked || selected.size === 0} title={blockedWhy ?? (selected.size === 0 ? archivePageCopy.deleteNeedsSome : keyTitles.delete)} onclick={() => void askDelete()}><svg class="i"><use href="#i-trash" /></svg>{commandCopy.delete}</button>
     <div class="grow"></div>
     <!-- [⋯ More] [View ▾] at the right (direction 3): the archive's own
          command, and how the page is laid out. -->
@@ -1766,18 +1939,26 @@
       <div class="fold" transition:unfold><div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow">{codeText("archive.copy_mismatch")}</span><button type="button" class="btn sm" disabled={!store.unlocked || tampered} title={!store.unlocked ? codeText(Code.CodeVaultLocked) : tampered ? vaultCopy.changesOff : undefined} onclick={() => void refreshFingerprint()}>{commandCopy.refreshFingerprint}</button></div></div>
     {/if}
   </NoticeSlot>
-  <!-- View › Preview pane off gives the list the whole width (direction 3). -->
-  <div class="file-split" class:dropping class:bare={!paneOn}>
+  <!-- View › Preview pane off gives the list the whole width (direction 3).
+       held: files from outside are held over an idle list, which wears the
+       dashed ring (app.css); over a busy one the veil stands instead. -->
+  <div class="file-split" class:held={held && !busy} class:bare={!paneOn}>
     <!-- A click on the list's blank area — under the last row, or in the
          container beside the table — clears the selection and the anchor
          (APP.md §6); a click that lands on a row is the row's. The drop
          target carries the directory id the page is showing, never a
          name: a stale id is refused, where a stale path would resolve to
-         whatever folder now happens to carry that name (§3). -->
+         whatever folder now happens to carry that name (§3). While an
+         operation runs on the archive the list is no drop target at all
+         (the busy archive, ruled 2026-11-03): the runtime then answers the
+         drag with the system's no-drop pointer and a release that never
+         drops (it reads the attribute on every dragover), so a second batch
+         never starts behind the first; the attribute comes back the moment
+         the operation ends, under the hand too. -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
-    <div class="tablewrap" class:drop-into={isOver(hereTarget.id, "list")} data-file-drop-target="true" data-archive-id={id} data-dir-id={dirId}
+    <div class="tablewrap" class:drop-into={isOver(hereTarget.id, "list")} data-file-drop-target={busy ? undefined : "true"} data-archive-id={id} data-dir-id={dirId}
       role="region" aria-label="Files" bind:this={listEl} onclick={blank} oncontextmenu={blankMenu} onscroll={scrolled}
-      ondragenter={() => { if (!store.dragOut) dropping = true; }} ondragover={overBlank} ondragleave={() => (dropping = false)} ondrop={dropBlank}>
+      ondragenter={holdOn} ondragover={(e) => { holdOn(e); overBlank(e); }} ondragleave={holdOff} ondrop={dropBlank}>
       {#if isEmpty && !parentId}
         {@render emptyFolder()}
       {:else}
@@ -1885,6 +2066,26 @@
       {/if}
     </div>
 
+    {#if held && busy && !draining}
+      <!-- The veil (the busy archive; the user's ruling of 2026-11-03 on
+           its words): files held over a busy list veil the list's card
+           alone, never the pane or the page, in its own surface 1 px
+           inside its stroke, and the two lines stand on a plate, a small
+           card of the surface, so they never meet what is under them — the
+           rows, the header, the empty folder's heading and buttons. It
+           takes no pointer, so the drag's events and the runtime's hit
+           test reach the list beneath; it goes with the drag, and gives way
+           to the ring if the operation ends under the hand. Not while the
+           archive drains, which closes when its operation ends: the head
+           says so, and nothing could be dropped here later. -->
+      <div class="busy-veil" role="status" in:fade={motion(MOVE, { easing: enter })} out:fade={motion(LEAVE)}>
+        <div class="busy-plate">
+          <span class="busy-what">{busyName}</span>
+          <span class="busy-when">{busyCopy.dropHere}</span>
+        </div>
+      </div>
+    {/if}
+
     {#if paneOn}
       <aside class="preview" aria-label="Preview" ondragstart={noDrag}>
         {#if shape === "rest"}
@@ -1905,7 +2106,7 @@
             </dl>
           </div>
           <div class="preview-actions">
-            <button type="button" class="btn" disabled={draining || (stat?.records ?? 0) === 0} title={closingWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractEverything}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+            <button type="button" class="btn" disabled={blocked || (stat?.records ?? 0) === 0} title={blockedWhy ?? ((stat?.records ?? 0) === 0 ? archivePageCopy.extractNothing : keyTitles.extract)} onclick={extractEverything}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
           </div>
         {:else if shape === "several"}
           <!-- Several selected: how many and how much — the bytes once every
@@ -1920,7 +2121,7 @@
             <!-- One accent per surface (ruled 2026-10-19): while the locked
                  line shows, its *Unlock* is the page's, and this is a
                  standard button. -->
-            <button type="button" class="btn" class:accent={store.unlocked} disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{paneCopy.extractSome(selected.size)}</button>
+            <button type="button" class="btn" class:accent={store.unlocked} disabled={blocked} title={blockedWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{paneCopy.extractSome(selected.size)}</button>
           </div>
         {:else if one}
           {@const size = bytes(one.size)}
@@ -1978,7 +2179,7 @@
             <dl class="kv stk"><dt>Path</dt><dd>{one.path}</dd></dl>
           </div>
           <div class="preview-actions">
-            <button type="button" class="btn" disabled={draining} title={closingWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
+            <button type="button" class="btn" disabled={blocked} title={blockedWhy ?? keyTitles.extract} onclick={extractCommand}><svg class="i"><use href="#i-extract" /></svg>{commandCopy.extract}</button>
           </div>
         {/if}
       </aside>
@@ -2048,6 +2249,7 @@
     mode="delete"
     onclose={closeDeleteArchive}
     release={() => letGo(deletingArchive?.id ?? "")}
+    running={deleteStops}
   />
 {/if}
 
@@ -2136,9 +2338,13 @@
      so a second right-click elsewhere is a menu of its own, placed anew. -->
 {#if ctx}
   {@const c = ctx}
-  {#key c}
-    <ContextMenu x={c.x} y={c.y} keyboard={c.key} items={ctxItems} label={c.row?.name ?? folderName} onclose={closeCtx} />
-  {/key}
+  <!-- busy: the items greyed by a running operation keep their reason to
+       one line (app.css), as the toolbar's More does. -->
+  <div class="file-menus" class:busy={!!busy && !draining}>
+    {#key c}
+      <ContextMenu x={c.x} y={c.y} keyboard={c.key} items={ctxItems} label={c.row?.name ?? folderName} onclose={closeCtx} />
+    {/key}
+  </div>
 {/if}
 
 <!-- Move to… (direction 7): the folder tree over the page. -->
@@ -2166,7 +2372,7 @@
     current={viewing.id}
     pinned={viewing.pinned}
     more={hasMore(store.page)}
-    extractWhy={closingWhy}
+    extractWhy={blockedWhy}
     onstep={viewStep}
     onclose={closeViewer}
     onextract={viewExtract}
@@ -2175,13 +2381,20 @@
 {/if}
 
 {#snippet emptyFolder()}
+  <!-- While an operation runs here the two buttons are greyed with its
+       reason and the drop is not offered: an add says where its files
+       will be, any other operation says nothing (the busy archive). -->
   <div class="empty-folder">
     <h2 class="t-section">{archivePageCopy.emptyTitle(folderName)}</h2>
     <div class="row">
-      <button type="button" class="btn" disabled={draining} onclick={() => void pickFiles()}><svg class="i"><use href="#i-file" /></svg>{commandCopy.addFiles}</button>
-      <button type="button" class="btn" disabled={draining} onclick={() => void pickFolder()}><svg class="i"><use href="#i-folder" /></svg>{commandCopy.addFolder}</button>
+      <button type="button" class="btn" disabled={blocked} title={blockedWhy} onclick={() => void pickFiles()}><svg class="i"><use href="#i-file" /></svg>{commandCopy.addFiles}</button>
+      <button type="button" class="btn" disabled={blocked} title={blockedWhy} onclick={() => void pickFolder()}><svg class="i"><use href="#i-folder" /></svg>{commandCopy.addFolder}</button>
     </div>
-    <span class="t-quiet">{archivePageCopy.emptyDrop}</span>
+    {#if !busy}
+      <span class="t-quiet">{archivePageCopy.emptyDrop}</span>
+    {:else if busy.kind === "add"}
+      <span class="t-quiet">{busyCopy.appearing}</span>
+    {/if}
   </div>
 {/snippet}
 

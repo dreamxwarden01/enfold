@@ -755,6 +755,22 @@ select.input option::checkmark { order: 2; margin-left: auto; color: var(--accen
 .menu button.two .mlabel > :first-child { grid-column: 3; grid-row: 1; }
 .menu button.two .acc { grid-column: 4; grid-row: 1; margin-top: 2px; margin-left: var(--s2); }
 .menu button .mwhy { grid-column: 3 / -1; grid-row: 2; width: 0; min-width: 100%; font: var(--t-cap); color: var(--ink-2); white-space: normal; text-wrap: pretty; }
+/* The busy archive's reason (ruled 2026-11-03, the study's correction 6):
+   "Adding 20 files… wait for it to end" keeps to one line and widens the
+   menu, where the rule above would break it after "wait for it". The
+   Archive page marks the toolbar and its file menus busy only while an
+   operation, and not the drain, greys them. The toolbar's *Delete
+   archive…*, in the danger ink, keeps the rule above for the vault's
+   sentences (locked, Tampered), and takes this one when its reason is the
+   operation's, behind a compaction or a re-key (.delete-waits). The
+   reason's floor is its whole line (min-width: max-content): More hangs
+   from a 32 px button, so its box is as wide as its content's narrowest,
+   and a reason with no floor of its own ran past the card's edge there
+   (the page review of 2026-11-03); the context menus, placed over the
+   window, took the line's width already. */
+.cmdbar.busy .menu button.two:not(.danger) .mwhy, .cmdbar.delete-waits .menu button.two.danger .mwhy, .file-menus.busy .ctxmenu .mwhy { width: auto; min-width: max-content; white-space: nowrap; }
+/* The file menus' wrapper only marks them: it takes no box in the page. */
+.file-menus { display: contents; }
 /* An icon alone on a button (the toolbar's More, the crumbs' ellipsis):
    square, the icon in the middle. */
 .btn.icon-only { width: 32px; padding: 0; justify-content: center; }
@@ -966,12 +982,27 @@ progress:indeterminate { background: var(--accent-line); }
    mask's colour is its opacity, not a colour on screen). */
 @property --pct { syntax: "<number>"; inherits: false; initial-value: 0; }
 .rail-mark { position: absolute; right: var(--s3); top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
-.rail-mark.ring {
-  width: 14px; height: 14px; margin-top: -7px;
+.rail-mark.ring { width: 14px; height: 14px; margin-top: -7px; }
+.rail-mark.ring, .rail-ring {
   background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--stroke) 0);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
   transition: --pct var(--dur-fast) var(--ease-enter);
+}
+/* An open archive's row while an operation runs on it (APP.md §6, Rail;
+   ruled 2026-11-03, the user's): its 20 px × gives its place to the same
+   ring, 14 px and 2 px of the accent over the stroke, filled from the top
+   to the operation's percentage, in the ×'s box — 3 px round it, centred
+   where the × was, and 4 px from the name as the × stands (the button's
+   own 8 px gap taken back), so the name's room does not change. While the
+   total is not known a quarter of it turns, once a second as the pending
+   ring does, every turning ring on screen in one phase (Rail.svelte
+   inPhase); under reduced motion the quarter stands still. */
+.rail-ring { flex: none; width: 14px; height: 14px; border-radius: 50%; margin: 3px 3px 3px calc(3px + var(--s1) - var(--s2)); }
+.rail-ring.turning { --pct: 25; animation: ring-turn var(--loop-ring) linear infinite; }
+.rail-child.busy .rail-go .ellipsis { flex: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .rail-ring.turning { animation: none; }
 }
 .rail-foot { padding: var(--s2) 0 0; border-top: 1px solid var(--stroke); margin-top: var(--s2); }
 /* The vault head (direction 10, ruled 2026-10-18): the vault's name in the
@@ -1125,6 +1156,31 @@ progress:indeterminate { background: var(--accent-line); }
 }
 .foot-pop.ops-pop { left: var(--s6); }
 .foot-pop.notice-pop { right: var(--s6); }
+/* The busy callout (APP.md §6, Paste; ruled 2026-11-03): WinUI's
+   TeachingTip over the foot's running line — the flyout's surface,
+   stroke and shadow, the card's radius, one line of body ink — its tail on
+   the line's name (LayerFoot places it: --tip-left, --tip-tail). The tail
+   is a turned square of the same surface and stroke over the box's edge. */
+.foot-tip {
+  position: absolute; bottom: calc(100% + var(--s2)); left: var(--tip-left, var(--s6)); z-index: 6;
+  padding: var(--s2) var(--s3); white-space: nowrap; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--stroke-strong); border-radius: var(--r-card); box-shadow: var(--shadow-pop);
+  font: var(--t-body); color: var(--ink);
+}
+.foot-tip::after {
+  content: ""; position: absolute; top: 100%; left: var(--tip-tail, var(--s4)); width: 10px; height: 10px; margin: -5px 0 0 -5px;
+  background: var(--surface); border: 1px solid var(--stroke-strong); border-width: 0 1px 1px 0; transform: rotate(45deg);
+}
+/* The running line under the callout: the info tier's fill and stroke,
+   the InfoBars' own, so the eye lands on the line it points at. The line
+   always carries the fill's room — 8 px each side, given back by the
+   margin — so the wash moves nothing as it comes and goes, over the enter
+   duration in and the exit one out. */
+.layer-foot .fit {
+  margin: 0 calc(-1 * var(--s2)); padding: 3px var(--s2); border-radius: var(--r-ctl);
+  transition: background-color var(--dur-leave) var(--ease-enter), box-shadow var(--dur-leave) var(--ease-enter);
+}
+.layer-foot .fit.washed { background-color: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); transition-duration: var(--dur-fast); }
 /* The pending ring (direction 4, phase 3; lib/pending.ts): one rule for
    every wait the user started — the preview pane's, a row's open, a
    dialog's primary. 14 px, 2 px of the accent turning once a second on
@@ -1588,7 +1644,39 @@ button.crumb:active { background: var(--fill-2); transition-duration: 0s; }
 .file-split { display: grid; grid-template-columns: 1fr var(--pane-w-files); gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); container: files / inline-size; }
 /* View › Preview pane off (direction 3): the list takes the whole width. */
 .file-split.bare { grid-template-columns: minmax(0, 1fr); }
-.file-split.dropping .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
+/* Files from outside held over an idle list (ArchivePage held): the dashed
+   ring, steady while the drag crosses the rows, since held ends only when
+   the drag leaves the list (it went out over the rows when any dragleave
+   ended it, the busy-archive study's probe). */
+.file-split.held .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
+/* The list and the pane hold their cells, so the busy veil, a third child
+   in the list's cell, never pushes them on through the grid's
+   auto-placement (the study's first run found it). */
+.file-split > .tablewrap { grid-area: 1 / 1; }
+.file-split > aside.preview { grid-area: 1 / 2; }
+/* Files held over a busy list (the busy archive, ruled 2026-11-03): the
+   list's card alone takes a veil of its own surface, 1 px inside its
+   stroke, under the notice slot's bars and over the sticky header; it
+   takes no pointer, so the drag's events and the runtime's hit test reach
+   the list under it. Its words stand on the plate: a small card of the
+   surface, near opaque, with the card's stroke and radius, centred in the
+   list, so they never meet the rows, the header or the empty folder's
+   heading and buttons beneath. The veil is lighter than the study's 90 %
+   since the plate carries the words; the two alphas are the measured ones
+   (the veil still reads as one round the plate, and the words keep 4.5:1
+   and more over anything beneath). No ring, no glyph, no accent. */
+.busy-veil {
+  grid-area: 1 / 1; position: relative; z-index: 4; margin: 1px; border-radius: calc(var(--r-card) - 1px);
+  display: grid; place-items: center; padding: var(--s4); min-width: 0; min-height: 0; pointer-events: none;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+}
+.busy-plate {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s1); max-width: 100%; min-width: 0;
+  padding: var(--s3) var(--s5); text-align: center; overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--surface) 96%, transparent); border: 1px solid var(--stroke); border-radius: var(--r-card);
+}
+.busy-plate .busy-what { font: var(--t-strong); color: var(--ink); }
+.busy-plate .busy-when { font: var(--t-body); color: var(--ink); }
 /* A drag of the selection onto a folder row, onto `..` or onto the heading
    is a Move (APP.md §6) — since 2026-09-11 the native drag of the one
    gesture, released over Enfold's own window (APP.md §3): rows are not
@@ -2414,12 +2502,20 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
 
   /* The rail's op mark: a Highlight dot. The ring is a measure drawn as a
      gradient, which forcing drops, so it opts out to keep it, in system
-     colours alone: the one opt-out with no text over its Highlight. On a
-     hovered item both turn to HighlightText. */
+     colours alone: the one opt-out with no text over its Highlight. A busy
+     archive's row ring is the same ring (ruled 2026-11-03). On a hovered
+     item both turn to HighlightText. */
   .rail-mark { background: Highlight; }
-  .rail-mark.ring { forced-color-adjust: none; background: conic-gradient(Highlight calc(var(--pct) * 1%), GrayText 0); }
+  .rail-mark.ring, .rail-ring { forced-color-adjust: none; background: conic-gradient(Highlight calc(var(--pct) * 1%), GrayText 0); }
   .rail-item:hover .rail-mark { background: HighlightText; }
-  .rail-item:hover .rail-mark.ring { background: conic-gradient(HighlightText calc(var(--pct) * 1%), color-mix(in srgb, HighlightText 40%, Highlight) 0); }
+  .rail-item:hover :is(.rail-mark.ring, .rail-ring) { background: conic-gradient(HighlightText calc(var(--pct) * 1%), color-mix(in srgb, HighlightText 40%, Highlight) 0); }
+  /* The busy plate and the callout, opaque in the Canvas with the text's
+     ink and a CanvasText stroke (the engine would keep a fill's alpha);
+     the veil under the plate is the Canvas at its own alpha, as forced.
+     The washed line, whose fill the theme turns into the Canvas it stands
+     on, takes a CanvasText outline instead. */
+  .busy-plate, .foot-tip, .foot-tip::after { background-color: Canvas; color: CanvasText; border-color: CanvasText; box-shadow: none; }
+  .layer-foot .fit.washed { box-shadow: none; outline: 1px solid CanvasText; }
   /* The foot's notices dot, a fill in its tier's ink. */
   .layer-foot .notice-btn :is(.att-dot, .att-dot.info) { background: CanvasText; }
   .layer-foot .notice-btn:hover :is(.att-dot, .att-dot.info) { background: HighlightText; }

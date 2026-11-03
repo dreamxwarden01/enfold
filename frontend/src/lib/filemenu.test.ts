@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileBlankItems, fileRowItems } from "./filemenu";
+import { CLOSING, fileBlankItems, fileRowItems } from "./filemenu";
 import { secondLine } from "./menu";
 import type { CmdItem } from "./menu";
 import type { Clip } from "./paste";
@@ -10,7 +10,7 @@ const read = (items: CmdItem<string>[]) => items.flatMap((i) => [...(i.sep ? ["�
 
 describe("a row's menu", () => {
   it("on a file: Open, Extract… · Rename…, Move to… · Delete… · Copy name, each with its key", () => {
-    expect(read(fileRowItems(false, false))).toEqual([
+    expect(read(fileRowItems(false))).toEqual([
       `${commandCopy.open} [Enter]`,
       `${commandCopy.extract} [Ctrl+E]`,
       "──",
@@ -24,12 +24,12 @@ describe("a row's menu", () => {
   });
 
   it("on a folder: the same without Copy name", () => {
-    expect(fileRowItems(true, false).map((i) => i.cmd)).toEqual(["open", "extract", "rename", "moveTo", "delete"]);
+    expect(fileRowItems(true).map((i) => i.cmd)).toEqual(["open", "extract", "rename", "moveTo", "delete"]);
   });
 
   it("has Open as its one default, and Delete… as its one danger", () => {
     for (const dir of [true, false]) {
-      const m = fileRowItems(dir, false);
+      const m = fileRowItems(dir);
       expect(m.filter((i) => i.isDefault).map((i) => i.cmd)).toEqual(["open"]);
       expect(m.filter((i) => i.danger).map((i) => i.cmd)).toEqual(["delete"]);
       expect(m.every((i) => !i.disabled)).toBe(true);
@@ -37,31 +37,52 @@ describe("a row's menu", () => {
   });
 
   it("offers neither Extract here nor Properties", () => {
-    const labels = fileRowItems(false, false).map((i) => i.label);
+    const labels = fileRowItems(false).map((i) => i.label);
     expect(labels.some((l) => /here|propert/i.test(l))).toBe(false);
   });
 
   it("greys every command while the archive is closing, with why — but Copy name", () => {
-    const m = fileRowItems(false, true);
+    const m = fileRowItems(false, CLOSING);
     for (const i of m) {
       if (i.cmd === "copyName") expect(i.disabled).toBeFalsy();
       else expect(i).toMatchObject({ disabled: true, title: archivePageCopy.menuClosing });
+    }
+  });
+
+  // The busy archive (ruled 2026-11-03): what writes waits behind the
+  // operation, so it is greyed with the operation's reason; a read does
+  // not, so Open stays, and Copy name asks nothing of the archive.
+  it("greys Extract…, Rename…, Move to… and Delete… while an operation runs, Open and Copy name live", () => {
+    const why = "Adding 20 files… wait for it to end";
+    for (const dir of [false, true]) {
+      const m = fileRowItems(dir, { why, reads: false });
+      expect(m.filter((i) => i.disabled).map((i) => i.cmd)).toEqual(["extract", "rename", "moveTo", "delete"]);
+      for (const i of m.filter((x) => x.disabled)) expect(secondLine(i)).toBe(why);
+      expect(m.find((i) => i.cmd === "open")?.disabled).toBeFalsy();
     }
   });
 });
 
 describe("the blank area's menu", () => {
   it("is Paste · Create folder… · Add files…, Add a folder…", () => {
-    expect(read(fileBlankItems(false))).toEqual([`${commandCopy.paste} [Ctrl+V]`, "──", `${commandCopy.createFolder} [Ctrl+Shift+N]`, "──", commandCopy.addFiles, commandCopy.addFolder]);
+    expect(read(fileBlankItems())).toEqual([`${commandCopy.paste} [Ctrl+V]`, "──", `${commandCopy.createFolder} [Ctrl+Shift+N]`, "──", commandCopy.addFiles, commandCopy.addFolder]);
     for (const clip of ["pending", "unknown", "empty", "copy", "move"] as const) {
-      expect(fileBlankItems(true, clip).every((i) => i.disabled && i.title === archivePageCopy.menuClosing && !i.note)).toBe(true);
+      expect(fileBlankItems(CLOSING, clip).every((i) => i.disabled && i.title === archivePageCopy.menuClosing && !i.note)).toBe(true);
+    }
+  });
+
+  it("greys every item while an operation runs, Paste with the operation's reason and not the clipboard's", () => {
+    const why = "Reclaiming space… wait for it to end";
+    for (const clip of ["pending", "unknown", "empty", "copy", "move"] as const) {
+      const m = fileBlankItems({ why, reads: false }, clip);
+      expect(m.every((i) => i.disabled && secondLine(i) === why), clip).toBe(true);
     }
   });
 });
 
 // Paste (ruled 2026-10-26; lib/paste.ts): the files copied in Explorer.
 describe("the blank area's Paste", () => {
-  const paste = (clip: Clip) => fileBlankItems(false, clip).find((i) => i.cmd === "paste");
+  const paste = (clip: Clip) => fileBlankItems(undefined, clip).find((i) => i.cmd === "paste");
 
   it("is enabled with nothing under it while the read is on its way, after a failed read, and for a copy", () => {
     for (const clip of ["pending", "unknown", "copy"] as const) {
@@ -83,6 +104,6 @@ describe("the blank area's Paste", () => {
   });
 
   it("greys nothing else with the clipboard", () => {
-    expect(fileBlankItems(false, "empty").filter((i) => i.disabled).map((i) => i.cmd)).toEqual(["paste"]);
+    expect(fileBlankItems(undefined, "empty").filter((i) => i.disabled).map((i) => i.cmd)).toEqual(["paste"]);
   });
 });

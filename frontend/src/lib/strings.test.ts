@@ -251,6 +251,19 @@ describe("the lock screen's and the dialogs' words", () => {
     expect(closeCopy.body.indexOf("Quit")).toBe(0);
     expect(closeCopy.body.indexOf("tray")).toBeGreaterThan(0);
   });
+  // The questions while an operation runs (APP.md §2.4; ruled 2026-11-03).
+  it("says what runs and what each answer does, agreeing in number, and then that it has finished", () => {
+    expect(closeCopy.stillRunning("Adding 20 files to Photos 2024", 0, true)).toBe("Adding 20 files to Photos 2024 is still running. Quit stops it; in the tray it goes on.");
+    expect(closeCopy.stillRunning("Adding 20 files to Photos 2024", 0, false)).toBe("Adding 20 files to Photos 2024 is still running. Quit stops it.");
+    expect(closeCopy.stillRunning("Adding 20 files to Photos 2024", 1, true)).toBe("Adding 20 files to Photos 2024 and 1 other operation are still running. Quit stops them; in the tray they go on.");
+    expect(closeCopy.stillRunning("Adding 20 files to Photos 2024", 2, false)).toBe("Adding 20 files to Photos 2024 and 2 other operations are still running. Quit stops them.");
+    expect(closeCopy.finished("Adding 20 files to Photos 2024", 0)).toBe("Adding 20 files to Photos 2024 has finished.");
+    expect(closeCopy.finished("Adding 20 files to Photos 2024", 1)).toBe("Adding 20 files to Photos 2024 and 1 other operation have finished.");
+    // The quit question offers no tray: Quit and Keep running.
+    expect(closeCopy.quitTitle).toBe("Quit Enfold?");
+    expect(closeCopy.keepRunning).toBe("Keep running");
+    expect(closeCopy.quit).toBe("Quit");
+  });
   it("says a backup check's outcome one way, on the lock screen and in the panel", () => {
     expect(ceremonyCopy.verified(1)).toBe("The backup opens. 1 archive inside.");
     expect(ceremonyCopy.verified(3)).toBe("The backup opens. 3 archives inside.");

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FileOutcome, OpView } from "./api";
 import { Code } from "./api";
-import { DONE_WAITING, backupLine, checkedLine, clearsDone, doneLine, fraction, latestOp, nextDone, progressCaption, railMark, sayDone, standingNotices, staysUnlocked, timeLeft, track } from "./foot";
+import { DONE_WAITING, backupLine, checkedLine, clearsDone, doneLine, fraction, latestOp, nextDone, pageOps, progressCaption, railMark, sayDone, standingNotices, staysUnlocked, timeLeft, track } from "./foot";
 import type { Track } from "./foot";
 import { codeText, dialogCopy, doneCopy, footCopy, pendingCopy, reclaimedText, resultsCopy } from "./strings";
 
@@ -97,12 +97,45 @@ describe("the caption and the line", () => {
 describe("which operation the foot names", () => {
   it("is the one begun last", () => {
     const ops = [op({ id: "a", startedAt: 10, finished: false }), op({ id: "b", startedAt: 12, finished: false }), op({ id: "c", startedAt: 11, finished: false })];
-    expect(latestOp(ops)?.id).toBe("b");
+    expect(latestOp(ops, "a1")?.id).toBe("b");
   });
 
   it("ignores what has finished, and is null with nothing running", () => {
-    expect(latestOp([op({ id: "a", startedAt: 20, finished: true }), op({ id: "b", startedAt: 10, finished: false })])?.id).toBe("b");
-    expect(latestOp([op({ finished: true })])).toBeNull();
+    expect(latestOp([op({ id: "a", startedAt: 20, finished: true }), op({ id: "b", startedAt: 10, finished: false })], "a1")?.id).toBe("b");
+    expect(latestOp([op({ finished: true })], "a1")).toBeNull();
+  });
+
+  it("takes the last listed of those begun in the same second", () => {
+    const ops = [op({ id: "a", startedAt: 10, finished: false }), op({ id: "b", startedAt: 10, finished: false })];
+    expect(latestOp(ops, "a1")?.id).toBe("b");
+  });
+
+  // The running line is the page's archive's alone (ruled 2026-11-03, the
+  // user's): the rail's row says the others.
+  it("is of the archive whose page is up, never another archive's, however late it began", () => {
+    const ops = [op({ id: "mine", archiveId: "a1", startedAt: 10, finished: false }), op({ id: "theirs", archiveId: "b2", startedAt: 30, finished: false })];
+    expect(latestOp(ops, "a1")?.id).toBe("mine");
+    expect(latestOp(ops, "b2")?.id).toBe("theirs");
+    expect(latestOp(ops, "c3")).toBeNull();
+  });
+
+  it("is nothing where no archive's page is up: the Archives page, Vault, Settings, the lock stage", () => {
+    const ops = [op({ id: "a", archiveId: "a1", startedAt: 10, finished: false })];
+    expect(latestOp(ops, null)).toBeNull();
+    expect(latestOp(ops, undefined)).toBeNull();
+    expect(latestOp(ops, "")).toBeNull();
+  });
+
+  it("counts for the +N flyout only the operations of the archive whose page is up", () => {
+    const ops = [
+      op({ id: "a", archiveId: "a1", startedAt: 10, finished: false }),
+      op({ id: "b", archiveId: "b2", startedAt: 11, finished: false }),
+      op({ id: "c", archiveId: "a1", startedAt: 12, finished: false }),
+      op({ id: "d", archiveId: "a1", startedAt: 13, finished: true }),
+    ];
+    expect(pageOps(ops, "a1").map((o) => o.id)).toEqual(["a", "c"]);
+    expect(pageOps(ops, "b2").map((o) => o.id)).toEqual(["b"]);
+    expect(pageOps(ops, null)).toEqual([]);
   });
 });
 

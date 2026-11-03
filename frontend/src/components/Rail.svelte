@@ -5,7 +5,7 @@
   import { fade, fly } from "svelte/transition";
   import { MediaQuery } from "svelte/reactivity";
   import { motion, delay, enter, GAP, MOVE, FAST, LEAVE } from "../lib/motion";
-  import { RAIL_COMPACT_QUERY, railChildren, railCurrent, vaultButtonLabel, vaultHead } from "../lib/rail";
+  import { RAIL_COMPACT_QUERY, railChildren, railCurrent, rowBusy, vaultButtonLabel, vaultHead } from "../lib/rail";
   import { railMark } from "../lib/foot";
   import { codeText, railCopy, settingsCopy, vaultCopy } from "../lib/strings";
   import { tip } from "../lib/tip";
@@ -47,6 +47,40 @@
   // a status names it, then every one the status names.
   const currentName = $derived(store.page?.crumbs?.[0]?.name || store.archives.find((a) => a.id === store.current)?.name || "");
   const children = $derived(railChildren(store.current, currentName, store.status?.opened));
+  // Each open archive's row while an operation runs on it (lib/rail.ts
+  // rowBusy; ruled 2026-11-03, the user's): the ring in place of its ×, and
+  // the operation in its tooltip and name. The compact rail draws no ×, so
+  // it keeps the Archives icon's mark alone.
+  const busyRows = $derived(new Map(children.map((c) => [c.id, rowBusy(store.runningOps, store.starting[c.id] ?? [], c.id)])));
+
+  // inPhase keeps every turning ring on screen in one phase (ruled
+  // 2026-11-03): two or three archives busy at once turn as one, whenever
+  // each row's ring began. Each ring-turn animation is anchored to the
+  // document timeline's origin (startTime 0), so its angle is the
+  // timeline's time modulo a turn — the same for every ring, across mounts
+  // and across a ring that stops and turns again. It is anchored as the
+  // action starts or its ring starts turning, and again as the browser
+  // starts the animation (animationstart), which covers a ring whose
+  // animation the stylesheet restarts. Under reduced motion there is none
+  // to anchor: the quarter stands still.
+  function inPhase(node: HTMLElement, turning: boolean) {
+    const anchor = () => {
+      if (typeof node.getAnimations !== "function") return;
+      for (const a of node.getAnimations()) {
+        if ((a as CSSAnimation).animationName === "ring-turn" && a.startTime !== 0) a.startTime = 0;
+      }
+    };
+    node.addEventListener("animationstart", anchor);
+    if (turning) anchor();
+    return {
+      update(t: boolean) {
+        if (t) anchor();
+      },
+      destroy() {
+        node.removeEventListener("animationstart", anchor);
+      },
+    };
+  }
 
   // A row goes back to its archive's page: the one the store holds as it
   // was left, another — a second left open by a lock — by opening it,
@@ -219,15 +253,26 @@
              Close by another name (APP.md §2.3). -->
         {#each children as c (c.id)}
           {@const name = c.name}
-          <div class="rail-item rail-child" class:current={here === `archive:${c.id}`} data-tip-anchor>
-            <button type="button" class="rail-go" aria-current={here === `archive:${c.id}` ? "page" : undefined} use:tip={{ text: name, cut: true, side: "end" }} onclick={() => showArchive(c.id)}>
+          {@const b = busyRows.get(c.id) ?? null}
+          {@const said = b ? railCopy.busyRow(name, b.what) : ""}
+          <div class="rail-item rail-child" class:current={here === `archive:${c.id}`} class:busy={!!b} data-tip-anchor>
+            <!-- While busy the row's tooltip, always shown, and its name say
+                 the archive and the operation; the ring, which says nothing
+                 to a reader, is hidden from one. The ring stands inside the
+                 row's button, so the whole row still opens the archive. -->
+            <button type="button" class="rail-go" aria-current={here === `archive:${c.id}` ? "page" : undefined} aria-label={b ? said : undefined} use:tip={b ? { text: said, side: "end" } : { text: name, cut: true, side: "end" }} onclick={() => showArchive(c.id)}>
               <svg class="i"><use href="#i-box" /></svg><span class="ellipsis">{name}</span>
+              {#if b}
+                <span class="rail-ring" class:turning={b.ring === null} style:--pct={b.ring} aria-hidden="true" use:inPhase={b.ring === null}></span>
+              {/if}
             </button>
             <!-- Gone once a Close has left it and something still holds
                  it: a second Leave does nothing, and the kill switch is
                  the head's or the inspector's *Force close* (the review of
-                 2026-10-18). -->
-            {#if !store.leftHeld(c.id)}
+                 2026-10-18). Gone too while an operation runs on it, the
+                 ring standing in its place until the operation ends (ruled
+                 2026-11-03); the head's *Close* stays, and drains. -->
+            {#if !b && !store.leftHeld(c.id)}
               <button type="button" class="rail-x" aria-label={railCopy.closeArchive(name)} use:tip={{ text: railCopy.closeArchive(name), side: "end" }} onclick={() => void store.closeArchive(c.id)}>
                 <svg class="i"><use href="#i-x" /></svg>
               </button>

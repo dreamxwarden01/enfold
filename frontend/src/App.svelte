@@ -198,9 +198,19 @@
 
 <!-- The close question (APP.md §2.4): above every route, and above the
      splash too — a close while the first status is still on its way
-     deserves the same answer. -->
+     deserves the same answer. While an operation runs it says so, and
+     what each answer does (ruled 2026-11-03). -->
 {#if store.closeAsked}
-  <CloseDialog busy={store.closeBusy} onclose={() => store.dismissClose()} ondecide={(a, r) => void store.decideClose(a, r)} />
+  <CloseDialog line={store.askedLine} busy={store.closeBusy} onclose={() => store.dismissClose()} ondecide={(a, r) => void store.decideClose(a, r)} />
+{/if}
+
+<!-- The quit question (APP.md §2.4; ruled 2026-11-03, the user's): the
+     shell's `shell.quit`, a quit asked for while an operation runs. Above
+     every route and the splash, as the close question is — a window the
+     tray's Quit made again asks it before its first status is in. Esc,
+     the corner's close and Keep running answer Keep running. -->
+{#if store.quitAsked}
+  <CloseDialog mode="quit" line={store.askedLine} busy={store.quitBusy} onclose={() => void store.decideQuit(false)} ondecide={() => void store.decideQuit(true)} />
 {/if}
 
 <!-- A file opened from Explorer whose key is not in this vault (APP.md

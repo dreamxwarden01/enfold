@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   OpenPath: vi.fn(),
   DragOut: vi.fn(),
   CloseDecided: vi.fn(),
+  QuitDecided: vi.fn(),
   PendingOpen: vi.fn(),
   invoke: vi.fn(),
   Lock: vi.fn(),
@@ -32,6 +33,7 @@ const m = vi.hoisted(() => ({
   SettingsGet: vi.fn(),
   SettingsSet: vi.fn(),
   CheckFiles: vi.fn(),
+  CancelOp: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -51,9 +53,9 @@ vi.mock("./api", async () => {
   const never = () => new Promise(() => {});
   return {
     ...actual,
-    Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children },
+    Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children, CancelOp: m.CancelOp },
     Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath, Close: m.Close, CloseAll: m.CloseAll, CheckFiles: m.CheckFiles },
-    Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided, PendingOpen: m.PendingOpen },
+    Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided, QuitDecided: m.QuitDecided, PendingOpen: m.PendingOpen },
     Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: m.LastExportAt, Lock: m.Lock, BackupStatus: m.BackupStatus },
     Keys: { Slots: m.Slots, EntangledState: never },
     Settings: { Get: m.SettingsGet, Set: m.SettingsSet },
@@ -109,6 +111,7 @@ beforeEach(async () => {
   m.OpenPath.mockReset();
   m.DragOut.mockReset();
   m.CloseDecided.mockReset().mockResolvedValue(undefined);
+  m.QuitDecided.mockReset().mockResolvedValue(undefined);
   m.PendingOpen.mockReset().mockResolvedValue({ seq: 0, path: "", rest: null });
   m.invoke.mockReset();
   m.Lock.mockReset().mockResolvedValue(undefined);
@@ -120,6 +123,7 @@ beforeEach(async () => {
   m.Slots.mockReset().mockImplementation(() => new Promise(() => {}));
   m.SettingsGet.mockReset().mockImplementation(() => new Promise(() => {}));
   m.SettingsSet.mockReset().mockResolvedValue(undefined);
+  m.CancelOp.mockReset().mockResolvedValue(undefined);
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -654,6 +658,117 @@ describe("the close the shell cancelled", () => {
     await store.decideClose("tray", false);
     expect(store.closeAsked).toBe(true);
     expect(store.closeBusy).toBe(false);
+    expect(store.notices.length).toBe(1);
+  });
+});
+
+// The two questions while an operation runs (APP.md §2.4; ruled 2026-11-03,
+// the user's). The close question names what runs and what each answer
+// does; a quit asked for while something runs — the window's close under
+// the Quit setting, the tray's Quit — is the shell's `shell.quit` with the
+// operations, and the page asks Quit or Keep running, answered as
+// Shell.QuitDecided. Either question, once up, stays until it is answered:
+// an operation that ends meanwhile changes its sentence, nothing more.
+describe("the questions while an operation runs", () => {
+  const close = () => m.handlers["shell.close"]({ data: undefined });
+  const quit = (ops: OpView[] | null) => m.handlers["shell.quit"]({ data: ops });
+  const progress = (o: OpView) => m.handlers["op.progress"]({ data: o });
+  const done = (o: OpView) => m.handlers["op.done"]({ data: o });
+  const add = (x: Partial<OpView> = {}): OpView =>
+    ({ id: "op-add", kind: "add", archiveId: "a1", done: 40, total: 100, items: 20, dragItems: 0, phase: "", startedAt: 100, finished: false, returned: 0, ...x }) as OpView;
+
+  beforeEach(async () => {
+    m.List.mockResolvedValue([{ id: "a1", name: "Photos 2024" } as ArchiveSummary]);
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it("names the running add in the close question, and says it has finished when it ends, still asking", () => {
+    progress(add());
+    close();
+    expect(store.closeAsked).toBe(true);
+    expect(store.askedLine).toBe("Adding 20 files to Photos 2024 is still running. Quit stops it; in the tray it goes on.");
+    done(add({ finished: true }));
+    expect(store.closeAsked).toBe(true);
+    expect(store.askedLine).toBe("Adding 20 files to Photos 2024 has finished.");
+    expect(m.CloseDecided).not.toHaveBeenCalled();
+  });
+
+  it("adds nothing to the close question while nothing runs", () => {
+    close();
+    expect(store.askedLine).toBe("");
+  });
+
+  it("forgets what it named once the question is answered or dismissed", async () => {
+    progress(add());
+    close();
+    store.dismissClose();
+    expect(store.asked).toEqual([]);
+    close();
+    await store.decideClose("tray", false);
+    expect(store.asked).toEqual([]);
+  });
+
+  it("asks the quit question with the operations the shell named, before the page has heard of them", () => {
+    quit([add()]);
+    expect(store.quitAsked).toBe(true);
+    expect(store.closeAsked).toBe(false);
+    expect(store.askedLine).toBe("Adding 20 files to Photos 2024 is still running. Quit stops it.");
+  });
+
+  it("keeps the quit question up when the operation ends, saying it has finished, and quits nothing", () => {
+    progress(add());
+    quit([add()]);
+    done(add({ finished: true }));
+    expect(store.quitAsked).toBe(true);
+    expect(store.askedLine).toBe("Adding 20 files to Photos 2024 has finished.");
+    expect(m.QuitDecided).not.toHaveBeenCalled();
+  });
+
+  it("takes the close question's place, keeping what it named, and a close meanwhile is nothing", () => {
+    progress(add());
+    close();
+    quit([add()]);
+    expect(store.closeAsked).toBe(false);
+    expect(store.quitAsked).toBe(true);
+    expect(store.asked.length).toBe(1);
+    close();
+    expect(store.closeAsked).toBe(false);
+    // A second shell.quit keeps it as it stands and adds what it names.
+    quit([add(), add({ id: "op-b", kind: "extract", archiveId: "a1", items: 3, startedAt: 120 })]);
+    expect(store.asked.length).toBe(2);
+    expect(store.askedLine).toBe("Extracting 3 files from Photos 2024 and 1 other operation are still running. Quit stops them.");
+  });
+
+  it("answers Quit and Keep running through QuitDecided, once each, and takes the question down", async () => {
+    quit([add()]);
+    await store.decideQuit(false);
+    expect(m.QuitDecided).toHaveBeenCalledWith(false);
+    expect(store.quitAsked).toBe(false);
+    expect(store.asked).toEqual([]);
+    // No question up: an answer is nothing.
+    await store.decideQuit(true);
+    expect(m.QuitDecided).toHaveBeenCalledTimes(1);
+    quit([add()]);
+    const d = deferred<void>();
+    m.QuitDecided.mockReturnValueOnce(d.promise);
+    const p = store.decideQuit(true);
+    expect(store.quitBusy).toBe(true);
+    await store.decideQuit(false); // the second press
+    expect(m.QuitDecided).toHaveBeenCalledTimes(2);
+    expect(m.QuitDecided).toHaveBeenLastCalledWith(true);
+    d.resolve();
+    await p;
+    expect(store.quitAsked).toBe(false);
+  });
+
+  it("keeps the quit question up and says why when the call was refused", async () => {
+    quit([add()]);
+    m.QuitDecided.mockRejectedValueOnce({ cause: { code: "internal" } });
+    await store.decideQuit(true);
+    expect(store.quitAsked).toBe(true);
+    expect(store.quitBusy).toBe(false);
     expect(store.notices.length).toBe(1);
   });
 });
@@ -2409,5 +2524,135 @@ describe("the results dialog after a batch", () => {
     store.results = null;
     m.handlers["op.done"]({ data: ended("o3", [added, skipped, failed]) });
     expect(opened()).toBe("o3");
+  });
+});
+
+// The busy archive (APP.md §6; ruled 2026-11-03): the adds the page started
+// that have said nothing yet, and Delete archive…'s stop.
+describe("the adds the page started that have said nothing yet (starting)", () => {
+  const view = (id: string, archiveId = "a", finished = false) =>
+    ({ id, archiveId, kind: "add", done: 0, total: 10, items: 2, dragItems: 0, phase: "", startedAt: 1, finished, returned: 0 }) as unknown as OpView;
+  const withOps = (seq: number, ops: OpView[]) => ({ seq, state: "unlocked", openArchives: 0, ops }) as unknown as VaultStatus;
+
+  async function booted() {
+    vi.useFakeTimers();
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("keeps the id AddFiles answered, by archive, until the operation's first op.progress", async () => {
+    await booted();
+    store.noteStarting("a", "s1");
+    store.noteStarting("b", "s2");
+    expect(store.starting).toEqual({ a: ["s1"], b: ["s2"] });
+    m.handlers["op.progress"]({ data: view("s1") });
+    expect(store.starting).toEqual({ b: ["s2"] });
+    expect(store.runningOps.map((o) => o.id)).toEqual(["s1"]);
+  });
+
+  it("lets it go with its op.done, for an add cancelled before its plan was made", async () => {
+    await booted();
+    store.noteStarting("a", "s1");
+    m.handlers["op.done"]({ data: view("s1", "a", true) });
+    expect(store.starting).toEqual({});
+  });
+
+  it("lets it go with a status that names it, which puts it in ops", async () => {
+    await booted();
+    store.noteStarting("a", "s1");
+    m.handlers["vault.state"]({ data: withOps(2, [view("s1")]) });
+    expect(store.starting).toEqual({});
+    expect(store.ops["s1"]).toBeTruthy();
+  });
+
+  it("does not keep one the core has already spoken of, so a quick add never reads as starting for good", async () => {
+    await booted();
+    m.handlers["op.done"]({ data: view("s1", "a", true) });
+    store.noteStarting("a", "s1");
+    expect(store.starting).toEqual({});
+  });
+});
+
+describe("Delete archive…'s stop (stopOps)", () => {
+  const view = (id: string, kind = "add", finished = false, archiveId = "a") =>
+    ({ id, archiveId, kind, done: 0, total: 10, items: 2, dragItems: 0, phase: kind === "compact" ? "compacting" : "", startedAt: 1, finished, returned: 0 }) as unknown as OpView;
+  const coded = (code: string) => Object.assign(new Error(code), { code });
+
+  async function booted() {
+    vi.useFakeTimers();
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+  const flush = async () => {
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  };
+
+  it("cancels what runs on the archive, the foot's own Cancel, and ends only once each op.done is heard", async () => {
+    await booted();
+    m.handlers["op.progress"]({ data: view("o1") });
+    m.handlers["op.progress"]({ data: view("o2", "extract") });
+    m.handlers["op.progress"]({ data: view("o3", "add", false, "b") });
+    let ended = false;
+    void store.stopOps("a").then(() => (ended = true));
+    await flush();
+    expect(m.CancelOp.mock.calls.map((c) => c[0])).toEqual(["o1", "o2"]);
+    expect(ended).toBe(false);
+    m.handlers["op.done"]({ data: view("o1", "add", true) });
+    await flush();
+    expect(ended).toBe(false);
+    m.handlers["op.done"]({ data: view("o2", "extract", true) });
+    await flush();
+    expect(ended).toBe(true);
+  });
+
+  it("stops an add still starting too, and waits for its op.done", async () => {
+    await booted();
+    store.noteStarting("a", "s1");
+    let ended = false;
+    void store.stopOps("a").then(() => (ended = true));
+    await flush();
+    expect(m.CancelOp).toHaveBeenCalledWith("s1");
+    expect(ended).toBe(false);
+    m.handlers["op.done"]({ data: view("s1", "add", true) });
+    await flush();
+    expect(ended).toBe(true);
+  });
+
+  it("leaves a compaction alone, which runs to the end", async () => {
+    await booted();
+    m.handlers["op.progress"]({ data: view("c1", "compact") });
+    await store.stopOps("a");
+    expect(m.CancelOp).not.toHaveBeenCalled();
+  });
+
+  it("waits through a cancel refused for a commit, and counts an operation the core no longer knows as ended", async () => {
+    await booted();
+    m.handlers["op.progress"]({ data: view("o1") });
+    m.handlers["op.progress"]({ data: view("o2") });
+    m.CancelOp.mockRejectedValueOnce(coded("op.committing")).mockRejectedValueOnce(coded("op.not_found"));
+    let ended = false;
+    void store.stopOps("a").then(() => (ended = true));
+    await flush();
+    expect(ended).toBe(false);
+    m.handlers["op.done"]({ data: view("o1", "add", true) });
+    await flush();
+    expect(ended).toBe(true);
+  });
+
+  it("throws any other refusal, for the dialog to say, and waits for nothing", async () => {
+    await booted();
+    m.handlers["op.progress"]({ data: view("o1") });
+    m.CancelOp.mockRejectedValueOnce(coded("archive.not_open"));
+    await expect(store.stopOps("a")).rejects.toMatchObject({ code: "archive.not_open" });
+  });
+
+  it("resolves at once with nothing running", async () => {
+    await booted();
+    await store.stopOps("a");
+    expect(m.CancelOp).not.toHaveBeenCalled();
   });
 });

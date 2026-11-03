@@ -352,6 +352,15 @@ these and three more knobs:
                        runs that long (4 s by default); an op of more than 12 s
                        ticks twice a second, so the foot's "about 4 min left"
                        shows once 3 s of it have passed
+    a long add:        POST /mock/state {"addSeconds": 120} - every AddFiles and
+                       AddFolder runs that long (4 s by default), for the busy
+                       archive (APP.md 6): its greyed commands, the veil over a
+                       busy list, the busy callout, Delete archive... stopping it
+    an add's plan:     POST /mock/state {"planSeconds": 6} - every add says
+                       nothing for that long first (no op.progress), as the
+                       core's add says nothing until its plan is made - for a
+                       folder, once its whole tree is walked; the page holds
+                       the id AddFiles answered as starting meanwhile
     a backup saved:    the export's "done" scene sets backup.at to now (and
                        missing and rekeyed to 0), as the core's export records
                        it, so the Backups card follows
@@ -1061,7 +1070,7 @@ def op_view(op):
 
 
 def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", archive_id=None,
-             policy="", destination="", on_cancel=None):
+             policy="", destination="", on_cancel=None, quiet=0.0):
     """An operation is a transaction (APP.md 2.3): it begins, ticks
     op.progress by *bytes* - Done against Total, both plaintext - and
     commits at its end. A Cancel aborts it and publishes nothing: the
@@ -1074,7 +1083,9 @@ def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", ar
     the steps done and the steps in all, answers the FileOutcomes a cancel
     reports - an extract's, which keeps the files it wrote (APP.md 2.3).
     It ticks 24 times, or twice a second for a long one, so the foot's
-    rate (5 s of samples) can say "about N min left"."""
+    rate (5 s of samples) can say "about N min left". quiet is how long it
+    says nothing first, its plan being made (an add's planSeconds); a
+    cancel then ends it at once."""
     if steps is None:
         steps = max(24, int(seconds * 2))
     state["nextOp"] = state.get("nextOp", 0) + 1
@@ -1089,8 +1100,13 @@ def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", ar
     state["ops"][op_id] = op
 
     def run():
+        waited = 0.0
+        while waited < quiet and not op.get("cancelled"):
+            time.sleep(0.1)
+            waited += 0.1
         for i in range(1, steps + 1):
-            time.sleep(seconds / steps)
+            if not op.get("cancelled"):
+                time.sleep(seconds / steps)
             if op.get("cancelled"):
                 op["finished"] = True
                 op["error"] = "op.cancelled"
@@ -1345,7 +1361,13 @@ def add_files(args):
             out.append(res)
         return out
 
-    return start_op("add", ADDED_SIZE * len(paths), commit, items=len(paths))
+    return start_op("add", ADDED_SIZE * len(paths), commit, items=len(paths), **add_timing())
+
+
+def add_timing():
+    """An add's own pace: state["addSeconds"] (4 s by default) and
+    state["planSeconds"], the silence before its first op.progress."""
+    return {"seconds": float(state.get("addSeconds") or 4.0), "quiet": float(state.get("planSeconds") or 0.0)}
 
 
 def add_folder(args):
@@ -1353,7 +1375,7 @@ def add_folder(args):
     bad = a_dir(parent)
     if bad:
         return bad
-    return start_op("add", ADDED_SIZE, lambda: add_one(parent, path, True), items=1)
+    return start_op("add", ADDED_SIZE, lambda: add_one(parent, path, True), items=1, **add_timing())
 
 
 def replace_file(args):

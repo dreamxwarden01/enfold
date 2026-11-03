@@ -20,9 +20,10 @@
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, keyHint, keyTitles, pendingCopy, sinceText, vaultCopy } from "../lib/strings";
+  import { archivesCopy, busyCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, keyHint, keyTitles, pendingCopy, sinceText, vaultCopy } from "../lib/strings";
   import { bytes, date, dateTime, plural } from "../lib/format";
-  import { chipKinds, compacting, fingerprintOf, folderOf, rowRefusal, vaultFigures, viewRows } from "../lib/archlist";
+  import { chipKinds, compacting, fingerprintOf, folderOf, rowRefusal, runningKind, vaultFigures, viewRows } from "../lib/archlist";
+  import { busyLabel, busyOp, busyOps, stopsFirst } from "../lib/ops";
   import type { ChipKind, ListView } from "../lib/archlist";
   import { fold, folded } from "../lib/cmdbar";
   import { KEY_ECHO_MS, groups, keyAnchor } from "../lib/menu";
@@ -1244,6 +1245,29 @@
   // ends the dialog with its reason and nothing removed.
   // The dialog takes the row it was asked for: the selected one, or a
   // forgotten row's own *Delete archive…* in the Forgotten view.
+  // The stop, with the Archive page's own archive — kept open while this
+  // page is up — not read again meanwhile: the stopped operation's end
+  // would read it, and that read would meet the close and stand as an
+  // error in the dialog (store.releasedForDelete holds it off).
+  async function stopFirst(id: string): Promise<void> {
+    const held = store.current === id && store.releasedForDelete === null;
+    if (held) store.releasedForDelete = id;
+    try {
+      await store.stopOps(id);
+    } finally {
+      if (held) store.releasedForDelete = null;
+    }
+  }
+
+  // Delete's sentence while an operation runs on the archive, the one its
+  // release stops first: named as the foot names it, with the archive.
+  const delStops = $derived.by(() => {
+    if (!del || del.mode !== "delete") return "";
+    const all = busyOps(store.runningOps, store.starting[del.id] ?? [], del.id).filter(stopsFirst);
+    const o = busyOp(all, [], del.id);
+    return o ? busyCopy.deleteStops(busyLabel(o, del.name), all.length - 1) : "";
+  });
+
   function startDelete(mode: "delete" | "forget", a: ArchiveSummary | null) {
     if (!a) return;
     const created = det && det.archiveId === a.id ? det.createdAt : 0;
@@ -1252,8 +1276,13 @@
 
   // letGo: the close, when the row is open at the moment of consent —
   // read off the list then, not when the dialog opened. It throws what
-  // the core refused it with.
-  async function letGo(id: string): Promise<void> {
+  // the core refused it with. A Delete first stops what runs on the
+  // archive and waits for its end (store.stopOps; APP.md §6, the user's
+  // ruling of 2026-11-03), since the core refuses a delete while an
+  // operation runs: an add left running on its page, a *Refresh
+  // fingerprint* begun here.
+  async function letGo(id: string, mode: "delete" | "forget"): Promise<void> {
+    if (mode === "delete") await stopFirst(id);
     if (!store.archives.find((x) => x.id === id)?.open) return;
     try {
       await Archives.Close(id);
@@ -1367,6 +1396,7 @@
           running: store.runningOps.some((o) => o.archiveId === one.id),
           forgotten: hideStop,
           compacting: compactStop,
+          rekeying: runningKind(one, store.runningOps) === "rotate",
           hidden: !!one.hidden,
           missing: one.note === "archive.file_missing",
           foreign,
@@ -2196,7 +2226,8 @@
     mode={del.mode}
     onclose={() => (del = null)}
     ondone={() => { void store.refreshArchives(); void store.loadDetails(paneId); }}
-    release={() => letGo(del?.id ?? "")}
+    release={() => letGo(del?.id ?? "", del?.mode ?? "forget")}
+    running={delStops}
   />
 {/if}
 

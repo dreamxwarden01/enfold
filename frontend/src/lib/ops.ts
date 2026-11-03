@@ -4,7 +4,7 @@
 // writes and commits at its end, so the foot has one job — name what is running, move a bar by the bytes
 // the core reports, and offer *Cancel* where a cancel means something.
 import { plural } from "./format";
-import { dragOutCopy, opCopy } from "./strings";
+import { busyCopy, dragOutCopy, opCopy } from "./strings";
 
 // opLabel is the running operation's name, as the foot says it: the verb
 // and what it is working on — *Adding 3 files*, *Adding 1 file*,
@@ -148,3 +148,110 @@ export function opErrorLine(kind: string, items: number, code: string, text: str
   if (code === "archive.reclaim_incomplete") return text;
   return `${opLabel(kind, items)}: ${text}`;
 }
+
+// ---- the busy archive (APP.md §2.3, §6; ruled 2026-11-03) ------------------
+//
+// One archive does one thing at a time: an operation holds the archive's
+// opMu for its whole run, and the short calls — Create folder, Delete,
+// Rename, Move — wait on it, so a Rename pressed during a seven-minute add
+// waited seven minutes for its answer, and a second drop of the same files
+// started a second add that found the first one's files there and skipped
+// them all (the busy-archive study, 2026-11-03). Reads do not wait: the
+// list, the pane and the viewer stay live. So while an operation runs, the
+// archive's page greys what would wait or start a second, says why, and
+// refuses a drop in place.
+
+// The fields the busy archive reads of an operation (OpView's).
+export interface BusyOp {
+  id: string;
+  kind: string;
+  archiveId?: string;
+  items: number;
+  dragItems?: number;
+  phase?: string;
+  startedAt: number;
+  finished?: boolean;
+}
+
+// busyOps: what keeps the archive busy, newest last. Every unfinished
+// operation on it, of any kind — the reclaim the core starts itself
+// included, since it holds the archive as an add does (the user's ruling
+// of 2026-11-03) — but a drag out still in its hover phase, which is the
+// user's own gesture under the pointer and no operation chosen yet (and
+// whose self-drop is a Move the page must still take). Then the operations
+// this page started that the store has heard nothing of (starting, by
+// archive): AddFiles and AddFolder answer an id at once, but the core emits
+// nothing for the operation until its plan is made — for a folder, once
+// its whole tree is walked — and without them the list would take a second
+// drop in that gap, which is the report the study began from. Their count
+// is not known yet; they are adds, the only operations the page starts.
+export function busyOps(ops: readonly BusyOp[], starting: readonly string[], archiveId: string): BusyOp[] {
+  if (archiveId === "") return [];
+  const running = ops
+    .filter((o) => !o.finished && o.archiveId === archiveId && !(o.kind === "dragout" && o.phase === "dragging"))
+    .sort((a, b) => a.startedAt - b.startedAt);
+  const known = new Set(ops.map((o) => o.id));
+  const quiet = starting.filter((id) => !known.has(id)).map((id): BusyOp => ({ id, kind: "add", archiveId, items: 0, startedAt: 0 }));
+  return [...running, ...quiet];
+}
+
+// busyOp: the one the page names — the latest begun on this archive while
+// any is seen running, and lib/foot.ts latestOp is not it, since that one
+// is across archives and with two running the foot may name the other's;
+// with none seen, the latest one started that has said nothing yet. Null
+// when the archive is idle.
+export function busyOp(ops: readonly BusyOp[], starting: readonly string[], archiveId: string): BusyOp | null {
+  const all = busyOps(ops, starting, archiveId);
+  const seen = all.filter((o) => known(ops, o.id));
+  const pick = seen.length > 0 ? seen : all;
+  return pick.length > 0 ? pick[pick.length - 1] : null;
+}
+
+const known = (ops: readonly BusyOp[], id: string): boolean => ops.some((o) => o.id === id);
+
+// The operations whose name counts what they write, and how the name reads
+// while that count is not planned yet: "Adding files to Photos 2024", never
+// "Adding to Photos 2024".
+function uncounted(kind: string, phase: string): [string, string] | null {
+  switch (kind) {
+    case "add":
+      return [busyCopy.adding, "to"];
+    case "replace":
+      return [busyCopy.replacing, "in"];
+    case "extract":
+      return [busyCopy.extracting, "from"];
+    case "dragout":
+      return phase !== "" && phase !== "dragging" ? [busyCopy.extractingItems, "from"] : null;
+  }
+  return null;
+}
+
+// busyLabel: the busy operation's name, as the foot's running line says it
+// (opLabel), with the archive when one is given — the veil's first line
+// and Delete archive…'s sentence say it so, the reasons without it. A count
+// not planned yet says "files" instead of nothing.
+export function busyLabel(o: BusyOp, archive = ""): string {
+  const n = stripCount({ kind: o.kind, items: o.items, dragItems: o.dragItems });
+  const phase = o.phase ?? "";
+  const bare = n === 0 ? uncounted(o.kind, phase) : null;
+  return bare ? named(bare[0], bare[1], archive) : opLabel(o.kind, n, phase, archive);
+}
+
+// busyReason: why a command is greyed while the archive is busy, as its
+// title or a menu item's second line — "Adding 20 files… wait for it to
+// end", "Reclaiming space… wait for it to end".
+export function busyReason(o: BusyOp): string {
+  return busyCopy.reason(busyLabel(o));
+}
+
+// stopsFirst: whether *Delete archive…* can stop this operation before it
+// lets the archive go — the operations the foot offers a Cancel for. A
+// compaction and a re-key run to the end (above), so the delete is greyed
+// behind them instead.
+export function stopsFirst(o: BusyOp): boolean {
+  return cancellable(o.kind, o.phase ?? "");
+}
+
+// How long the busy callout stands at the foot's running line when nothing
+// sends it away sooner (APP.md §6, Paste; ruled 2026-11-03).
+export const BUSY_TIP_MS = 5000;

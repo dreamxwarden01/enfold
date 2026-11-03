@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { railChildren, railCurrent, vaultButtonLabel, vaultHead } from "./rail";
+import { railChildren, railCurrent, rowBusy, vaultButtonLabel, vaultHead } from "./rail";
+import type { RowOp } from "./rail";
+import { railCopy } from "./strings";
 
 // The rail (APP.md §6, Rail; directions 3, 6 and 10, ruled 2026-10-18):
 // the open archive is a row of its own, the vault head says the lock
@@ -62,5 +64,44 @@ describe("the vault head", () => {
     expect(vaultButtonLabel(vaultHead({ state: "unlocked", displayName: "Personal vault" }))).toBe("Personal vault · Unlocked · Lock now");
     expect(vaultButtonLabel(vaultHead({ state: "locked", displayName: "Personal vault" }))).toBe("Personal vault · Locked · Unlock");
     expect(vaultButtonLabel(vaultHead({ state: "none" }))).toBe("Vault · No vault yet");
+  });
+});
+
+// An open archive's row while an operation runs on it (APP.md §6, Rail;
+// ruled 2026-11-03, the user's): the ring in place of its ×, filled to the
+// percentage while the total is known and turning while it is not, and the
+// operation in the row's tooltip and name.
+describe("an open archive's row while it is busy", () => {
+  const MB = 1024 * 1024;
+  const op = (x: Partial<RowOp> = {}): RowOp => ({ id: "op1", kind: "add", archiveId: "a1", items: 20, done: 0, total: 0, startedAt: 100, finished: false, ...x });
+
+  it("is idle with nothing running on its archive", () => {
+    expect(rowBusy([], [], "a1")).toBeNull();
+    expect(rowBusy([op({ finished: true })], [], "a1")).toBeNull();
+    expect(rowBusy([op({ archiveId: "b2" })], [], "a1")).toBeNull();
+  });
+
+  it("fills the ring to the operation's percentage while its total is known", () => {
+    expect(rowBusy([op({ done: 58 * MB, total: 100 * MB })], [], "a1")).toEqual({ what: "Adding 20 files", ring: 58 });
+    expect(rowBusy([op({ done: 120, total: 100 })], [], "a1")?.ring).toBe(100);
+    expect(rowBusy([op({ done: 0, total: 100 })], [], "a1")?.ring).toBe(0);
+  });
+
+  it("turns while the total is not known, and says the add's files before its count", () => {
+    expect(rowBusy([op({ items: 0 })], [], "a1")).toEqual({ what: "Adding files", ring: null });
+    // An add the page started that has said nothing yet (the starting ids).
+    expect(rowBusy([], ["op9"], "a1")).toEqual({ what: "Adding files", ring: null });
+    expect(rowBusy([op({ kind: "reclaim", items: 0 })], [], "a1")).toEqual({ what: "Reclaiming space", ring: null });
+  });
+
+  it("names the latest begun on its archive, of any kind, but a drag out still in its hover", () => {
+    const ops = [op({ id: "a", startedAt: 10, done: 1, total: 4 }), op({ id: "b", kind: "extract", items: 13, startedAt: 12 }), op({ id: "c", archiveId: "b2", startedAt: 20 })];
+    expect(rowBusy(ops, [], "a1")).toEqual({ what: "Extracting 13 files", ring: null });
+    expect(rowBusy([op({ kind: "dragout", phase: "dragging", dragItems: 2 })], [], "a1")).toBeNull();
+    expect(rowBusy([op({ kind: "dragout", phase: "preparing", dragItems: 2, done: 1, total: 2 })], [], "a1")).toEqual({ what: "Extracting 2 items", ring: 50 });
+  });
+
+  it("says the archive and the operation in the row's name", () => {
+    expect(railCopy.busyRow("Photos 2024", "Adding 20 files")).toBe("Photos 2024 · Adding 20 files");
   });
 });

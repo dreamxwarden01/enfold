@@ -17,6 +17,7 @@
   // record — a record dropped against a file that is still intact would
   // destroy the keys of an archive nobody could open again.
   import { Archives, Shell, errorOf } from "../lib/api";
+  import { deleteOutcome } from "../lib/archcmds";
   import { store } from "../lib/state.svelte";
   import { archivesCopy, codeText, commandCopy, dialogCopy, pendingCopy } from "../lib/strings";
   import { pending } from "../lib/pending";
@@ -46,8 +47,15 @@
     // archive exactly as it was. It throws the coded error that stopped
     // it, which ends the dialog with nothing removed.
     release?: () => Promise<void>;
+    // running: Delete's sentence while an operation runs on the archive
+    // (APP.md §6; the user's ruling of 2026-11-03) — "Adding 20 files to
+    // Photos 2024 is still running. Deleting stops it first." — said above
+    // the name to type, empty when nothing runs. The release stops it
+    // (store.stopOps) and waits for its end before it lets the archive go,
+    // the dialog standing in its pending state meanwhile.
+    running?: string;
   }
-  let { id, name, path, createdAt, mode, onclose, ondone, release }: Props = $props();
+  let { id, name, path, createdAt, mode, onclose, ondone, release, running = "" }: Props = $props();
 
   type Phase = "consent" | "busy" | "done" | "mismatch" | "mismatch-confirm" | "unreachable" | "unreadable" | "failed" | "error";
   let phase = $state<Phase>("consent");
@@ -70,6 +78,13 @@
   // release the core refused falls back to the mode's own words.
   let acted = $state<"" | "delete" | "forget">("");
   const did = $derived(acted || mode);
+
+  // The sentence as the consent read it: it follows the operation while
+  // the dialog asks — gone if the operation ends first — and holds once the
+  // act has begun, so the stop's own end does not reflow the dialog under
+  // its pending state.
+  let stopsAtAct = $state("");
+  const stops = $derived(phase === "consent" ? running : stopsAtAct);
 
   const nameSaid = $derived(mark && confirmNameProblem(typed, name) ? confirmNameProblem(typed, name) : "");
   const leave = onLeave(() => (mark = nextMark("leave", mark, confirmNameProblem(typed, name))));
@@ -113,23 +128,11 @@
       ondone?.();
     } catch (e) {
       problem = fail(e);
-      switch (problem) {
-        case "archive.not_this_archive":
-          phase = "mismatch";
-          break;
-        case "archive.file_unreachable":
-          phase = "unreachable";
-          break;
-        case "archive.busy":
-        case "archive.invalid":
-          phase = "unreadable";
-          break;
-        case "archive.delete_failed":
-          phase = "failed";
-          break;
-        default:
-          phase = "error";
-      }
+      // A delete that stopped what ran first (stopsAtAct) and is still
+      // refused as busy met a race on the archive's turn, said as any error
+      // is; otherwise busy is a file another program holds (lib/archcmds.ts
+      // deleteOutcome).
+      phase = deleteOutcome(problem, stopsAtAct !== "");
     }
   }
 
@@ -155,6 +158,7 @@
     if (phase !== "consent") return;
     mark = nextMark("press", mark, confirmNameProblem(typed, name));
     if (confirmNameProblem(typed, name)) return;
+    stopsAtAct = running;
     if (!(await released())) return;
     await (mode === "forget" ? forget() : remove());
   }
@@ -212,6 +216,12 @@
     {:else}
       <!-- A record with no path yet still reads as a sentence. -->
       <p class="path-body">{dialogCopy.deleteArchive.body(here || "its file")}</p>
+      {#if stops}
+        <!-- What the delete stops first (the user's ruling of 2026-11-03):
+             the one command that does not wait for the archive's running
+             operation, since the user has chosen to destroy the archive. -->
+        <p class="stops">{stops}</p>
+      {/if}
     {/if}
     <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{backupLine}</span></div>
     <!-- The name to type stands once, as the label's hint; a placeholder
@@ -301,7 +311,7 @@
 <style>
   /* Delete names the path in its body: it wraps anywhere, never cut and
      never pushing the dialog wider (APP.md §13). */
-  .path-body { overflow-wrap: anywhere; }
+  .path-body, .stops { overflow-wrap: anywhere; }
   .name-top { flex-wrap: wrap; }
   .name-top .hint { min-width: 0; }
 </style>

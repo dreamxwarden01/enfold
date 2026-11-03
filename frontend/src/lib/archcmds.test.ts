@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { archCommands, blankMenu, rowMenu } from "./archcmds";
+import { archCommands, blankMenu, deleteOutcome, rowMenu } from "./archcmds";
 import type { ArchFacts, ArchItem } from "./archcmds";
+import { Code } from "./api";
 import { archivePageCopy, archivesCopy, commandCopy } from "./strings";
 
 // The selected archive's commands (directions 6 and 7): one table for the
@@ -96,6 +97,18 @@ describe("a row's menu on the list", () => {
     expect(c.destroy.every((i) => i.title === why.compacting)).toBe(true);
   });
 
+  // The busy archive (the user's ruling of 2026-11-03): Delete archive…
+  // stops what runs first, so it stays live — but behind the two
+  // operations that run to the end.
+  it("keeps Delete archive… live while an operation runs, and greys it behind a compaction or a re-key", () => {
+    const busy = archCommands(facts({ open: true, running: true }));
+    expect(busy.destroy.find((i) => i.cmd === "delete")?.disabled).toBe(false);
+    expect(archCommands(facts({ running: true, compacting: true })).destroy[1]).toMatchObject({ disabled: true, title: why.compacting });
+    expect(archCommands(facts({ running: true, rekeying: true })).destroy[1]).toMatchObject({ disabled: true, title: why.rekeying });
+    // A locked vault says so first: the record is the vault's.
+    expect(archCommands(facts({ unlocked: false, rekeying: true })).destroy[1].title).toBe(why.locked);
+  });
+
   it("greys Show in Explorer for another system's path", () => {
     expect(archCommands(facts({ foreign: true })).reveal[0]).toMatchObject({ disabled: true, title: why.foreign });
   });
@@ -126,5 +139,28 @@ describe("the list's blank area", () => {
     expect(blankMenu(false, false)[0]).toMatchObject({ disabled: true, title: why.locked });
     expect(blankMenu(true, true)[0]).toMatchObject({ disabled: true, title: why.tampered });
     expect(blankMenu(false, true)[1].disabled).toBe(false);
+  });
+});
+
+// Where a refused Delete archive… lands in its dialog (DeleteArchiveDialog).
+describe("a refused Delete archive…", () => {
+  it("keeps the four outcomes of APP.md §13 by the core's codes", () => {
+    expect(deleteOutcome(Code.CodeArchiveNotThisOne, false)).toBe("mismatch");
+    expect(deleteOutcome(Code.CodeArchiveUnreachable, false)).toBe("unreachable");
+    expect(deleteOutcome(Code.CodeArchiveInvalid, false)).toBe("unreadable");
+    expect(deleteOutcome(Code.CodeArchiveDeleteFailed, false)).toBe("failed");
+    expect(deleteOutcome(Code.CodeInternal, false)).toBe("error");
+  });
+
+  // archive.busy is a file another program holds, unless the delete
+  // stopped what ran first: then it is a race on the archive's turn (the
+  // core's reclaim after the stopped add), said as any error is, never as
+  // a file that could not be read (the page review of 2026-11-03).
+  it("reads busy as a held file, but after a stop as an error like any", () => {
+    expect(deleteOutcome(Code.CodeArchiveBusy, false)).toBe("unreadable");
+    expect(deleteOutcome(Code.CodeArchiveBusy, true)).toBe("error");
+    // The stop changes nothing else.
+    expect(deleteOutcome(Code.CodeArchiveInvalid, true)).toBe("unreadable");
+    expect(deleteOutcome(Code.CodeArchiveNotThisOne, true)).toBe("mismatch");
   });
 });

@@ -83,15 +83,30 @@ export function fraction(done: number, total: number): number | null {
 
 // ---- which operation the foot shows ---------------------------------------
 
-type Running = Pick<OpView, "id" | "startedAt" | "finished">;
+type Running = Pick<OpView, "id" | "startedAt" | "finished" | "archiveId">;
 
-// latestOp is the running operation the foot names: the one begun last,
-// the last listed among those begun in the same second. The rest are
-// behind the "+N" button.
-export function latestOp<T extends Running>(ops: readonly T[]): T | null {
+// The running line is the page's archive's alone (ruled 2026-11-03, the
+// user's): it shows only while the page up is the busy archive's own — the
+// route an archive's page and that archive the one it holds. On the
+// Archives page, Vault, Settings and another archive's page the foot draws
+// no running line for it: the archive's row in the rail wears the ring in
+// place of its ×, and the Archives item its mark. archiveId is the archive
+// whose page is up, or null where no archive's page is.
+
+// pageOps: the running operations of the archive whose page is up, in the
+// order given — what the "+N" flyout lists and counts.
+export function pageOps<T extends Running>(ops: readonly T[], archiveId: string | null | undefined): T[] {
+  if (!archiveId) return [];
+  return ops.filter((o) => !o.finished && o.archiveId === archiveId);
+}
+
+// latestOp is the running operation the foot names: of the archive whose
+// page is up, the one begun last, the last listed among those begun in the
+// same second; null with no archive's page up. The rest are behind the
+// "+N" button.
+export function latestOp<T extends Running>(ops: readonly T[], archiveId: string | null | undefined): T | null {
   let found: T | null = null;
-  for (const o of ops) {
-    if (o.finished) continue;
+  for (const o of pageOps(ops, archiveId)) {
     if (!found || o.startedAt >= found.startedAt) found = o;
   }
   return found;

@@ -40,6 +40,10 @@ export interface ArchFacts {
   running: boolean;
   forgotten: boolean;
   compacting: boolean;
+  // A re-key of the archive runs (lib/archlist.ts runningKind): it runs to
+  // the end, so *Delete archive…*, which stops every other operation on
+  // the archive first (the user's ruling of 2026-11-03), waits for it.
+  rekeying?: boolean;
   hidden: boolean;
   // The core's archive.file_missing note: *Locate…* is offered.
   missing: boolean;
@@ -115,10 +119,15 @@ export function archCommands(f: ArchFacts | null): ArchGroups {
   ];
 
   // The two that destroy, last and in the danger ink (direction 6). A
-  // record already forgotten has nothing more to forget.
+  // record already forgotten has nothing more to forget. *Delete archive…*
+  // stays live while an operation runs on the archive (the user's ruling of
+  // 2026-11-03: its dialog says the operation is still running and that
+  // deleting stops it first, store.stopOps) — the one command that does
+  // not wait for it, since the user has chosen to destroy the archive —
+  // but not behind the two that run to the end, a compaction and a re-key.
   const destroy: ArchItem[] = [
     { cmd: "forget", label: commandCopy.forgetArchive, icon: "i-x", danger: true, ...off(lockWhy ?? (f?.forgotten ? why.alreadyForgotten : compactWhy)) },
-    { cmd: "delete", label: commandCopy.deleteArchive, icon: "i-trash", danger: true, keys: keyNames.delete, ...off(lockWhy ?? compactWhy) },
+    { cmd: "delete", label: commandCopy.deleteArchive, icon: "i-trash", danger: true, keys: keyNames.delete, ...off(lockWhy ?? compactWhy ?? (f?.rekeying ? why.rekeying : undefined)) },
   ];
 
   const restore: ArchItem[] = [{ cmd: "restore", label: commandCopy.restore, icon: "i-undo", ...off(lockWhy) }];
@@ -148,4 +157,38 @@ export function blankMenu(unlocked: boolean, tampered: boolean): CmdItem<ArchBla
     // double-click in Explorer does (APP.md §14).
     { cmd: "openFile", label: archivesCopy.openFile, icon: "i-file", keys: keyNames.openFile, disabled: false },
   ];
+}
+
+// deleteOutcome: where a *Delete archive…* the core refused lands in its
+// dialog (DeleteArchiveDialog; APP.md §13's outcomes). The core answers
+// archive.busy in two senses (internal/app/records.go): a file another
+// program holds (openFailure), which the dialog reads as a file it could
+// not read — nothing removed, the record kept, and Retry, Locate… or
+// Forget archive only… — and the archive's own turn still taken by an
+// operation of its own (busyForRecordLocked). The second is what follows a
+// delete that stopped what ran first (stoppedFirst; the user's ruling of
+// 2026-11-03, store.stopOps): the stopped add's end can start the core's
+// reclaim (internal/app/ops.go finishOp) before the delete's own check, a
+// race on the archive's turn. That one is said as any error is, the code's
+// sentence in the danger bar (APP.md §6, *Delete archive…*), never as a
+// file that could not be read, which it is not (the page review of
+// 2026-11-03 found the unreadable outcome there, with a Forget-only way on
+// its false premise).
+export type DeleteOutcome = "mismatch" | "unreachable" | "unreadable" | "failed" | "error";
+
+export function deleteOutcome(code: string, stoppedFirst: boolean): DeleteOutcome {
+  switch (code) {
+    case "archive.not_this_archive":
+      return "mismatch";
+    case "archive.file_unreachable":
+      return "unreachable";
+    case "archive.busy":
+      return stoppedFirst ? "error" : "unreadable";
+    case "archive.invalid":
+      return "unreadable";
+    case "archive.delete_failed":
+      return "failed";
+    default:
+      return "error";
+  }
 }

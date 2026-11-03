@@ -668,14 +668,25 @@ is cancelled and the page asks, in its own dialog, *Quit* or *Keep running in th
 opens and Enter pressing it, and *Keep running in the tray* the standard button beside it, with
 no third (ruled 2026-10-17, the user's: the default is Quit, so the close still never defaults
 to the tray) — with *Remember my choice* unticked, kept for whichever of the two is pressed.
+While an operation runs the question says so under its line, naming it and what each answer
+does (ruled 2026-11-03, the user's) — "Adding 20 files to Photos 2024 is still running. Quit
+stops it; in the tray it goes on.", the latest begun with "… and 1 other operation are still
+running. Quit stops them; in the tray they go on." for more — and once up it stays until it is
+answered: an operation that ends meanwhile neither takes it down nor quits anything, and the
+sentence then says "Adding 20 files to Photos 2024 has finished." (`lib/closing.ts`; a polite
+live region, so the change is read out too).
 The close button in the dialog's top-right corner and Esc cancel the question: the dialog
 closes, the window stays, and nothing is remembered; a click on the backdrop is nothing.
 The answer, remembered or not, is `Settings.CloseAction` — `ask` (the default) · `tray` ·
 `quit` — and the Settings page shows it as *When the window closes*, three radios, *Ask each
 time · Keep running in the tray · Quit*, each applied the moment it is chosen (§6, *Settings*),
 so the remembering is undone there too. *Quit* is the shell's Quit
-(§3: the running operations named, `ResolveForShutdown`, `app.Quit()`); a close the shell
-performs itself (a lock trigger's, Quit's own) never asks. With *tray* the window's close —
+(§3: `ResolveForShutdown`, `app.Quit()`) with no second question: the close question named
+what runs and said that *Quit* stops it, so its answer is the quit's confirmation (ruled
+2026-11-03; a native "N operation(s) are still running. Cancel them and quit?" used to follow
+it). With *quit* the close never asks this question, but a quit while an operation runs asks
+its own (§2.4, *The quit question*); a close the shell performs itself (a lock trigger's,
+Quit's own) never asks. With *tray* the window's close —
 which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the shell, so an
   archive whose window was closed closes, or drains, exactly like one its *Close* left, and a
   window recreated from the tray starts at the list. Minimising to the taskbar is not a close:
@@ -812,7 +823,37 @@ refusal of the begin (setup needed, the Smart Card service missing) is the lock 
 say (*Close all
 archives* went 2026-09-13: the window's close already closes, or drains, every open archive (`LeaveAll`), and while the window
 is up the page closes archives; a tray item that changed the core under a page that did not
-refresh was worse than none).
+refresh was worse than none). The menu's *Quit* with an operation running shows the window
+first and asks there (below).
+
+**The quit question** (ruled 2026-11-03, the user's; it was a native Yes/No message box, "N
+operation(s) are still running. Cancel them and quit?"). A quit asked for while an operation
+runs is asked by the page, in its own dialog: *Quit Enfold?*, the close question's sentence
+with "Quit stops it." alone — "Adding 20 files to Photos 2024 is still running. Quit stops
+it." — and *Quit*, the accent and the default, first in the foot band, with the focus on it as
+the dialog opens and Enter pressing it, and *Keep running* the standard button beside it, with
+no tray and nothing to remember; Esc and the corner's close are *Keep running*, and a click on
+the backdrop is nothing. It has three ways in. The close with no preset (*Ask each time*) asks
+the close question (§2.3), which names the operation itself, and its *Quit* is the
+confirmation: the shell does not ask again. The close under the preset *Quit*, which never asks
+and never goes to the tray: the shell cancels the close, shows the window (a minimised one
+included) and asks the page, `shell.quit` carrying the operations that run. The tray's *Quit*:
+the shell shows the window first — making it again, as *Open* does, when it went to the tray —
+and asks the same question on it. The answer comes back as `Shell.QuitDecided(proceed)` (§3):
+*Quit* runs the rest of the quit — out of sight, `ResolveForShutdown`, `app.Quit()` — whatever
+runs by then; *Keep running* changes nothing, and the next quit asks again. Once up the
+question stays until it is answered: an operation that ends meanwhile does not take it down and
+nothing quits by itself — the sentence then says "Adding 20 files to Photos 2024 has
+finished." and *Quit* simply quits — and while it is up the window's close, under any setting,
+and the tray's *Quit* again show the same question again rather than asking anew, going to the
+tray or closing under it (`main_windows.go` `closeGate`, `quitGate`). The shell reads the
+operations after it has shown the window, so that an end it emits from then on reaches the page
+that asks; a window made again names them from the event before its own first status has
+answered, and one that ended between the shell's two reads is named finished. With nothing
+running a quit ends at once, as before. An unlock in progress with nothing else running keeps
+the native question, "An unlock is in progress. Cancel it and quit?": the page's question is
+about operations, and the ceremony has the lock stage; with an operation running as well, the
+page's question is the one asked, and its *Quit* stops both.
 
 **The window's theme** (ruled 2026-11-01, phase 5). The window is made in the theme the setting
 resolves to at that moment — *Light*, *Dark*, or for *Follow Windows* Windows' own app mode —
@@ -1630,7 +1671,10 @@ the data folder.
 
 **Shell** — `ShowWindow`, `CloseWindow`, `CloseDecided(action, remember)` (the close question's
 answer: `tray` or `quit`; with `remember` the setting is written first; the shell then closes
-to the tray without asking again, or quits), `PickFiles`, `PickFolder`, `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
+to the tray without asking again, or quits, the answer being the quit's confirmation, §2.3),
+`QuitDecided(proceed)` (the quit question's answer, §2.4, ruled 2026-11-03: *Quit* goes on
+whatever runs by then, *Keep running* changes nothing; an answer with no question up does
+nothing), `PickFiles`, `PickFolder`, `SaveFile(title, filename, dir)` (`dir` empty leaves the folder to the shell; the archive create passes `lastArchiveFolder`),
 `Reveal`, `OpenDataFolder()` (ruled 2026-10-18, for the boot failure's page, §2.4: opens the
 shell's own data folder — the settings, the WebView profile and the log — as a folder in
 Explorer, not selected in its parent as `Reveal` shows a path; it takes no path from the page,
@@ -1651,14 +1695,18 @@ is `[]`, never null, when the clipboard holds no files — text, an image, nothi
 that are gone — and `move` is then false; it takes nothing from the page and reads only on the
 page's ask, a menu opened or a key pressed; nothing of the archive is ever written to the
 clipboard as files, the drag out staying the one way out, *A drag out of the window* above), `Quit`
-(names the running operations, if any, in a native Yes/No question — the only buttons a Windows
-message box has — then `ResolveForShutdown`, then `app.Quit()`; never asked twice). A cancelled native file
+(with an operation running, shows the window and asks the page's quit question, `shell.quit`
+with the operations that run, §2.4; with an unlock in progress and nothing running, a native
+Yes/No question — the only buttons a Windows message box has; then `ResolveForShutdown`, then
+`app.Quit()`; never asked twice). A cancelled native file
 dialog is "nothing chosen", never an error; a submitted secret that found no prompt is reported
 back as the `secret.refused {Code}` event. Tray and menu callbacks run on the Wails main thread
 and leave it (a goroutine) before touching the window or a dialog. The service lives in `internal/app/api` like the others and holds the Wails
 calls behind an unexported `Hooks` value the shell supplies, so nothing of Wails is reflected. File
 drop: the window is created with `EnableFileDrop`, and Wails delivers a drop only over an element
-marked `data-file-drop-target` — the Archive page's file list, and the Archives page's body,
+marked `data-file-drop-target` — the Archive page's file list, while no operation runs on its
+archive (ruled 2026-11-03, §6, *The busy archive*: a busy list is no target, so Windows' no-drop
+pointer stands over it and a release drops nothing, nothing queued behind the operation), and the Archives page's body,
 which carries no ids and makes a drop with no `data-archive-id` that the page opens as §14 says
 (ruled 2026-10-14); the shell re-emits the dropped paths and the drop target's `data-archive-id` / `data-dir-id` —
 the id the page is showing, from `Page`'s `dirID` and `Crumbs`, never a path — to the frontend,
@@ -2227,8 +2275,10 @@ counted by Ctrl+A, absent at the root — and under it, once the listing has lan
 folder's block** stands centred in the list's height (ruled 2026-10-18, direction 3; it was one
 line, "Trips is empty. Drop files here, or use Add."): "Trips is empty" at the section size (the
 root by the archive's name), *Add files…* and *Add a folder…* as standard buttons under it —
-greyed while the archive drains — and "or drop files here" in the caption; the whole list stays
-the drop target; then the
+greyed while the archive drains, and while an operation runs on it with that operation's reason
+(*The busy archive*, below) — and "or drop files here" in the caption, which an add running on
+the archive turns into "The files appear here once they are added" and any other operation
+hides (ruled 2026-11-03); the whole list stays the drop target while the archive is idle; then the
 rows in `sort`'s order (§3), directories first; **four columns — Name, Size, Type, Modified**
 (*Stored as* is gone from the list; the preview's facts keep it as *Compressed*, "71% smaller"
 or "No, stored as is", never the method — ruled 2026-10-17): a folder shows no size and the type
@@ -2316,7 +2366,8 @@ list (*The foot*, below; the 42 px operation strip that stood above the list is 
 2026-10-18); no pending bar, no Save, no Discard: every operation commits at its end, §2.3), **the
 toolbar** (ruled 2026-10-18, direction 3): [+ Add ▾] [Extract…] [Rename…] [Delete…], then at
 the right an icon-only [⋯ More] and [View ▾] — while the archive drains, Add, Extract…, Rename…
-and Delete… are greyed (§2.3). *Add* is one menu: *Add files…* and *Add a folder…* (it read *Add
+and Delete… are greyed (§2.3), and while an operation runs on it, with that operation's reason
+(*The busy archive*, below). *Add* is one menu: *Add files…* and *Add a folder…* (it read *Add
 folder…*), each with its icon, then a separator and *Create folder…* with Ctrl+Shift+N at its
 right (a directory record, made at once whether or not a file is added into it — FORMAT R39).
 *More* holds *Move to…* with Ctrl+Shift+M at its right, greyed while nothing is selected, with
@@ -2325,7 +2376,23 @@ in the real window (ruled 2026-10-27; 2026-10-26 had it say "Select what to move
 separator and *Delete
 archive…*, in the danger ink, greyed with its reason while the vault is locked or Tampered — it
 stood at the toolbar's right beside the file-level *Delete…*; the Archives list's row menu offers
-it too (§13). *View* holds *Preview pane*, a setting
+it too (§13). While an operation runs on the archive *Delete archive…* stays live, here and on
+the Archives page's row (ruled 2026-11-03, the user's): it is the one command that breaks the
+archive's one-thing-at-a-time on purpose, because the user has chosen to destroy the archive.
+Its dialog says so in its body, above the name to type — "Adding 20 files to Photos 2024 is
+still running. Deleting stops it first." (with "and 1 other operation are still running.
+Deleting stops them first." for more) — and on its consent the page cancels what runs, by the
+foot's own *Cancel* (`CancelOp`), waits for each operation's end, and only then lets the archive
+go and deletes it, the dialog standing in its pending state through the wait; a refusal the core
+still answers the dialog says as it says any. `archive.busy` after the stop is such a race on the
+archive's turn — the stopped add's end can start the core's reclaim before the delete's own check
+— so there it is said as any error is, "The archive is busy with another operation." in the
+dialog's danger bar under "Nothing was deleted", and never as a file that could not be read, its
+meaning when nothing was stopped (`lib/archcmds.ts` `deleteOutcome`; the page review of
+2026-11-03). A compaction and a re-key run to the end (§2.3), so behind one *Delete archive…* is
+greyed with its reason instead — "Compacting… wait for it to end" here, on one line as every busy
+reason (*Menus*), "Wait until its compaction ends" or "Wait until its re-key ends" on the Archives
+page. *View* holds *Preview pane*, a setting
 with its tick while the pane shows and Alt+P at its right. Then
 *Extract…* (one command for the selection or the whole archive, the extract dialog's scope line
 asking which, §3; titled *Extract… (Ctrl+E)*, greyed with "This archive holds nothing yet"
@@ -2370,7 +2437,8 @@ item opens the results dialog at once (one whose only leftovers are skips does n
 line, whose *Details* opens the same dialog from any page (*The foot*, below; ruled 2026-10-18 —
 it was a *What happened* dialog here and the summary as a toast elsewhere); a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
 is said by an InfoBar naming it, the page having walked its crumbs upwards; the name column takes the width the others do not need — Size, Type and Modified are fixed;
-drag-and-drop in (§3's drop) and out (§3's drag out — the staged route; the same native drag
+drag-and-drop in (§3's drop; refused in place while the archive is busy, *The busy archive*,
+below) and out (§3's drag out — the staged route; the same native drag
 serves the list's own moves, a self-drop being a `Move`); the extract dialog and the conflict dialogs of §3; the
 locked banner — one 40 px attention line naming this archive as decrypted and still saving, with
 *Close* — the head's graceful leave by the same word, absent while the archive drains — and
@@ -2397,7 +2465,9 @@ right-click there clears the selection, as a click does; a header cell is not bl
 brings or makes something here: *Paste* Ctrl+V first, as Explorer has it (ruled 2026-10-26,
 below) · ─ · *Create folder…* Ctrl+Shift+N · ─ · *Add files…* · *Add a folder…*. While
 the archive drains after its *Close* every item but *Copy name* is greyed with "This archive is
-closing", *Paste* included. Three commands are not offered: "Extract here" — Enfold has no "here" on disk, and
+closing", *Paste* included; while an operation runs on it, *Extract…*, *Rename…*, *Move to…* and
+*Delete…* and the blank area's four items are greyed with that operation's reason, *Open* and
+*Copy name* staying live, and the reason keeps to one line (*The busy archive*, below; *Menus*). Three commands are not offered: "Extract here" — Enfold has no "here" on disk, and
 *Extract…* with its prefilled destination is the one command — *Properties*, the pane being
 the facts, and a *Copy* of archive files to the clipboard, which would be an extraction by
 another name, the drag out staying the one way out (§3). Each item carries its icon (*Paste*'s
@@ -2424,10 +2494,69 @@ dialog and the done line unchanged, and **nothing is ever deleted from the user'
 paste**; enabled after a read that failed (a clipboard another program held for a moment), a
 press then reading again and saying the code's own line if it fails again. A Ctrl+V with no
 files on the clipboard says so in an info InfoBar, "Nothing to paste. Copy files in Explorer
-first."; while the archive drains it does nothing. A paste runs while the vault is locked, as a
+first."; while the archive drains it does nothing; and while an operation runs on it (*The busy
+archive*, below) the press still reads the clipboard and the answer decides (ruled 2026-11-03):
+no files, the same InfoBar; files, **the busy callout**, and nothing is added; files, and the
+operation ended meanwhile, the paste runs. The callout (the user's ruling of 2026-11-03, in place
+of an InfoBar) points at what the paste waits for: WinUI's TeachingTip over the foot's running
+line of this archive's operation, its tail on the line's name, a box of the surface with the
+flyout's stroke and shadow at the card's radius, one line of body ink, "Paste again when it
+ends." — "Drop again when it ends." for a drop that still arrived — while the running line
+itself takes the info tier's fill, the InfoBars' own, so the eye lands on it. It rises over the
+enter duration and goes over the exit one (at once under reduced motion), after 5 s, on Esc,
+which it spends — an Esc the newest error InfoBar took first leaves it standing, one Esc closing
+one thing — on any other key or pointer press, or when the operation ends; it never takes the
+focus, never stacks (a second one restarts its clock) and says itself as a status. When the
+foot shows no running line of this archive — an add not yet heard from, a done line holding its
+time — it stands at the foot's left edge with the same words; the foot never shows another
+archive's operation on this page (*The foot*, ruled 2026-11-03). A
+paste runs while the vault is locked, as a
 drop does — an add commits the archive and owes its receipt (§2.3). The menu is placed again
 when its items change, so the caption that arrives after it stands never leaves it hanging off
 the window (§6, *Menus*).
+
+**The busy archive** (ruled 2026-11-03: the busy-archive study's choice, the page saying it where
+the pointer is and nowhere else at rest, with the user's rulings on the callout, the plate and
+*Delete archive…*; `lib/ops.ts` `busyOp`, `busyReason`). One archive does one thing at a time
+(§2.3): an operation holds it for its whole run and the short calls — *Create folder*, *Delete*,
+*Rename*, *Move* — wait behind it, so a *Rename* pressed during a long add waited for the add,
+and a second batch dropped during one started behind it, found the first one's files there and
+skipped every one. An archive is **busy** while any operation of its own has not ended — of any
+kind, the core's own reclaim included — but a drag out still in its hover (§3), which no one has
+chosen yet; and from the moment `AddFiles` or `AddFolder` answers until that operation first says
+anything, since the core emits nothing for an add until its plan is made (`store.starting`).
+With several, the page names the latest begun on this archive, as the foot's running line does,
+which since 2026-11-03 is this archive's alone (*The foot*). **At rest** nothing stands over the
+page — no veil, no banner — and the foot's running line, the rail's mark and the ring on the
+archive's own row in the rail (*Rail*) say it. Greyed, with the reason as the control's title:
+the toolbar's *Add* (the whole button), *Extract…*, *Rename…* and *Delete…*, the pane's
+*Extract…* in its three forms and the viewer's *Extract…*, and an empty folder's two buttons;
+greyed, with the reason as the item's second line: *More*'s *Move to…*, the row menu's
+*Extract…*, *Rename…*, *Move to…* and *Delete…*, and the blank area's *Paste* (no clipboard is
+read), *Create folder…*, *Add files…* and *Add a folder…*. The reason is the operation's name
+without the archive, then the wait: "Adding 20 files… wait for it to end", "Extracting 13 files…
+wait for it to end", "Compacting… wait for it to end", "Reclaiming space… wait for it to end"; an
+add that has not counted its files yet is "Adding files… wait for it to end", never a bare verb.
+*Open*, *Copy name*, browsing, the selection, the pane and the viewer stay live, since reads
+never wait. The keys of the greyed commands do nothing, as a greyed command's key does; a row
+does not lift for a drag out, an extract by another gesture; and a self-drop's *Move* is refused
+in place. **The drop**: while the archive is busy the list is no drop target (§3), so Windows'
+no-drop pointer stands over it and a release drops nothing. While files from outside are held
+over the list — from the drag's first hover until it leaves the list, is let go or ends — an idle
+list wears its dashed accent ring, steady across the rows, and a busy one **a veil**: the list's
+card alone, never the pane or the page, takes its own surface at 80 %, 1 px inside its stroke,
+over the move duration (at once under reduced motion), and centred on it **a plate**, a small card
+of the surface at 96 % with the card's stroke and radius, holds two lines, the operation's name
+with the archive in the strong weight, "Adding 20 files to Photos 2024", over "Drop here when it
+ends" in the body weight, both in the ink. The words stand on the plate so they never meet what
+is under them — the rows, the header, an empty folder's heading and buttons — and keep 4.5:1 and
+more there in both themes (measured at worst about 17:1 light and 12:1 dark, by what lies under
+the plate); the veil round the plate still shows the list faintly (1.5:1 light, 1.8:1 dark),
+which reads as a veil where the study's 90 % read as a sheet. No ring, no glyph, no accent; it is a
+status. It goes with the drag, a refused release included, and if the operation ends while the files
+are held the list takes the drop again under the hand and the veil gives way to the ring. Under a
+contrast theme the plate is the Canvas, opaque, in CanvasText with a CanvasText stroke, and the veil
+the Canvas at its alpha.
 
 **The viewer** (ruled 2026-10-26, phase 4b of direction 7; `Viewer.svelte`, `lib/viewer.ts`) is
 a file looked at large inside the window — the long look, where the pane is the quick one —
@@ -2438,7 +2567,7 @@ dialog it opens stands over it. It is dark in both themes (`--viewer-*`), as a p
 Its 40 px bar holds the name (strong, cut with the app's tooltip), "4 of 13", the file's size,
 type and date in one caption line, then *Extract…* with "Ctrl+E" after its label in the caption
 ink — the extract dialog on the file shown, greyed with the closing reason while the archive
-drains — and a 28 px × titled *Close (Esc)*. Under it the stage, a 32 px round *Previous (←)*
+drains, and with the operation's while one runs on it — and a 28 px × titled *Close (Esc)*. Under it the stage, a 32 px round *Previous (←)*
 and *Next (→)* at its sides, greyed at the ends. **It shows exactly what the pane can show,
 larger** (`previewKind`): a picture at its own size, only ever shrunk to fit and never enlarged; a
 video with its controls, no download, no playback rate and no picture-in-picture window; a sound
@@ -2699,8 +2828,8 @@ is 34 px and always there, and it is where status lives, so an operation never m
 the 42 px operation strip that stood above the list, and pushed it down as an operation began,
 is retired. 2026-09-11's rule for the drag out's strip, "a button that vanishes reflows the
 strip; a greyed one keeps its shape", is kept by a slot that never reflows at all.
-- **The left slot** says the page's note at rest; the running operation while one runs; then how
-  it ended, the done line; then the note again — one at a time, by the house crossfade: the old
+- **The left slot** says the page's note at rest; the running operation while one runs on the
+  archive whose page is up; then how it ended, the done line; then the note again — one at a time, by the house crossfade: the old
   line leaves over 100 ms fast first and the new one comes in over 140 ms a gap (60 ms) later, so
   two lines are never drawn over each other (ruled 2026-10-26; they crossed at once, and a drag's
   line and the note under it were caught both half drawn). A done line holds its time even while another operation still runs, and the slot's
@@ -2710,9 +2839,14 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   `opLabel`) — *Adding 3 files to Photos 2024*, *Adding 1 file to …*, *Refreshing the
   fingerprint of Photos 2024* (*Verifying …* until 2026-10-18, §2.3), *Reclaiming space in
   Photos 2024*, *Re-keying Photos 2024* (ruled 2026-10-17: the button's verb), *Compacting
-  Family videos*, *Extracting 13 files from Photos 2024* — since the foot shows every running
-  operation, the Archives page's included, on whichever page is up (ruled 2026-10-14: the verb
-  alone did not say whose it was); then a 160 × 3 px progress line, the accent filling
+  Family videos*, *Extracting 13 files from Photos 2024* (ruled 2026-10-14: the verb alone did
+  not say whose it was). It shows only while the page up is the busy archive's own — the route
+  an archive's page, and that archive the one it holds (ruled 2026-11-03, the user's; it showed
+  every running operation on whichever page was up): on the Archives page, *Vault*, *Settings*
+  and another archive's page the foot draws no running line for it, the archive's row in the
+  rail wearing the ring in its ×'s place (*Rail*, below) and *Archives* its mark (`lib/foot.ts`
+  `latestOp`, `pageOps`); the foot still follows every operation's bytes and its *Cancelling…*,
+  so the line comes back as it was. Then a 160 × 3 px progress line, the accent filling
   `--fill-2` by bytes, a moving 40 px segment while the total is not known and a still pale line
   under reduced motion; then "9.4 MB of 28 MB · about 2 min left" or "· less than a minute
   left". The rate is the bytes the last 5 s moved over those 5 s; it is said only after 3 s and
@@ -2726,7 +2860,8 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
 - **The drag out** in the foot keeps its three phases (§3): the hover, *Dragging 4 items from
   Photos 2024*, the label alone; the staging, *Extracting 4 items*, with the line by bytes and *Cancel*; Explorer's
   wait, the line full and *Cancel* greyed in place, until `DoDragDrop` returns.
-- **Two or more running**: the latest begun shows, with a subtle *+1* (*+N*) after it, which
+- **Two or more running** on the archive whose page is up: the latest begun of them shows, with
+  a subtle *+1* (*+N*) after it, counting only that archive's (ruled 2026-11-03), which
   opens the operations' flyout — a 360 px popover over the foot at its left, the menu's surface,
   stroke and shadow — one 40 px row per operation, ruled off from the next: its name, under it
   the bytes and its own time left, under both its line across the text's width, and at the right
@@ -2806,7 +2941,8 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   over `--fill-2`, moving over the fast duration). On the compact rail (Motion, *Rail*) the mark
   sits just off the Archives icon's top-right corner, clear of the glyph: a 7 px dot, or a 10 px
   ring still 2 px wide (ruled 2026-10-18; the 14 px ring over the glyph's lid read as a clipped
-  icon).
+  icon). The busy archive's own row on the expanded rail wears the same 14 px ring in its ×'s
+  place, turning while the total is not known (*Rail*; ruled 2026-11-03).
 - **The pending ring**: a wait the user started marks the control that started it only once it
   has lasted 300 ms, so a quick answer never flashes anything (`lib/pending.ts`, one primitive):
   the 14 px ring — 2 px of the accent on its pale line, one turn a second, still under reduced
@@ -3443,7 +3579,21 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     opens another archive's, leaving the one shown (§2.3). At its right a 20 px × titled "Close
     Photos 2024" is the graceful leave (§2.3); it is gone while a *Close* has left the archive and
     something still holds it, since a second leave does nothing and *Force close* is the head's
-    and the Archives page's;
+    and the Archives page's. While an operation runs on the archive — any kind, a reclaim
+    included, but a drag out in its hover, and an add the page started that has said nothing
+    yet (the Archive page's own rule, `lib/ops.ts` `busyOp`) — the × gives its place to **a
+    ring** (ruled 2026-11-03, the user's: one archive does one thing at a time, so its row says
+    it): the *Archives* item's own 14 px ring, 2 px of the accent over the stroke, filled from
+    the top to the operation's percentage while its total is known, and a quarter of it turning
+    once a second, as the pending ring turns, while it is not; every turning ring on screen
+    turns in one phase, each turn anchored to the document timeline's origin (`Rail.svelte`
+    `inPhase`), so two or three archives busy at once turn as one; under reduced motion the
+    quarter stands still. It stands centred where the × stood, the name's room unchanged, and is
+    hidden from a reader: the row's tooltip, shown whether or not the name is cut, and its name
+    say the archive and the operation, "Photos 2024 · Adding 20 files" (a busy reason's words
+    without its tail, `lib/rail.ts` `rowBusy`). The row still opens the archive, from its ring
+    too; the × comes back when the operation ends, and the head's *Close* stays as it was,
+    draining (§2.3);
   - *Vault*; the gap; and under a stroke, *Settings*.
   An item has no card of its own — the current one used to be a raised white card with a
   border, a shadow and bold text. The current item is the same subtle fill as a hover, at the
@@ -3461,8 +3611,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   otherwise, whose press is the foot's own act (*Lock now* while unlocked, *Unlock* while locked,
   in any other state the lock scene, which says what comes first) and whose name and tooltip say
   the vault, its state and that act, "Personal vault · Unlocked · Lock now" — then the items as
-  40 px icons, each open archive as its glyph indented under *Archives* with no ×, so nothing on
-  the compact rail closes an archive by accident (the page's *Close* is the way), the operation's
+  40 px icons, each open archive as its glyph indented under *Archives* with no × and no ring
+  (the *Archives* icon's mark says it), so nothing on the compact rail closes an archive by
+  accident (the page's *Close* is the way), the operation's
   mark off the *Archives* icon's corner (*The foot*), and *Settings* at the foot. The toggle opens
   **the flyout**, NavigationView's labels: a box beside the rail on the menu's surface, stroke and
   shadow, under the dialogs' smoke, holding the expanded rail's rows — the vault head, the items,
@@ -3493,7 +3644,13 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   page's table alone ended in one, and "Forgotten. Restore it first." became "Restore it first").
   The caption starts under the label's first letter and runs under the key to where the key
   ends, wrapping there: it never widens the menu, whose width its first lines and its minimum
-  set (ruled 2026-10-27; it had wrapped in the label's own column beside the key).
+  set (ruled 2026-10-27; it had wrapped in the label's own column beside the key). One reason
+  keeps to one line and widens the menu instead: a busy archive's, "Adding 20 files… wait for it
+  to end", which broke after "wait for it" (ruled 2026-11-03; §6, *The busy archive*) — on the
+  row and blank menus, on the toolbar *More*'s *Move to…*, and on its *Delete archive…* when
+  that is greyed behind a compaction or a re-key; the vault's own sentences under *Delete
+  archive…* still wrap. The line is the menu's floor, so *More*, whose box hangs from its 32 px
+  button, widens with it too (the page review of 2026-11-03 found the line running past its card).
   A reason the screen already gives is not said: the toolbar *More*'s *Move to…* with nothing
   selected is greyed with no second line (ruled 2026-10-27, §6).
   Two menus still say a reason in the full sentence of a button's title and keep its full stop
@@ -3636,9 +3793,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   import dialog's path, which its *Choose…* fills) nor one inside a closed card; one with no field
   to type in yet opens on its submit button when that is enabled (*Finish setting up*'s
   *Continue*, until a card opens) and on its box when it is not (the import dialog before a file is
-  read). Every other dialog takes the focus on its box, save the close question: a form with no
-  field, it opens with the focus on its submit, *Quit*, which Enter presses (§2.3, ruled
-  2026-10-17). A form that asks a question and has no field to type in — *Remove <name>?*, the
+  read). Every other dialog takes the focus on its box, save the close question and the quit
+  question: forms with no field, each opens with the focus on its submit, *Quit*, which Enter
+  presses (§2.3, ruled 2026-10-17; §2.4, ruled 2026-11-03). A form that asks a question and has no field to type in — *Remove <name>?*, the
   password's *Change…* and *Turn on…* — opens with the focus on its question's checked answer
   (the radio checked in its `fieldset`), so that the question and the answer are read before
   anything else, and Enter there presses the submit (ruled 2026-10-27); the replacement's
@@ -3961,7 +4118,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   dialog whose foot holds no way out has a close button in its top-right corner instead, on
   the title's line at the body's 24 px inset: a 32 px subtle button with the × glyph, titled
   *Cancel (Esc)*, that does exactly what Esc does (ruled 2026-10-17). Only the close question
-  has one (§2.3), its foot being its two answers — and, since 2026-10-18, the extract's
+  and the quit question have one (§2.3, §2.4), each foot being its two answers — the quit
+  question's close, as its Esc, being *Keep running* — and, since 2026-10-18, the extract's
   conflict question, which has no foot band at all, its answers being command rows in its body
   and its close being *Skip* (§3). Each page's head is one
   height, the line of a 32 px button, whether or not it carries one, so the body never starts

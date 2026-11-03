@@ -664,6 +664,41 @@ export const archivePageCopy = {
   emptyDrop: "or drop files here",
 };
 
+// The busy archive (APP.md §6; the busy-archive study and the user's
+// rulings of 2026-11-03). One archive does one thing at a time (§2.3): an
+// operation holds the archive for its whole run, and the short calls wait
+// behind it, so while one runs the page greys what would wait or start a
+// second and says what it waits for, in these words.
+export const busyCopy = {
+  // A greyed command's reason, as its title or a menu item's second line:
+  // the operation's name without the archive, then the wait — "Adding 20
+  // files… wait for it to end", "Compacting… wait for it to end".
+  reason: (label: string): string => `${label}… wait for it to end`,
+  // The name of an add, a replace or an extract whose count is not planned
+  // yet (lib/ops.ts busyLabel): "Adding files", never a bare verb.
+  adding: "Adding files",
+  replacing: "Replacing files",
+  extracting: "Extracting files",
+  extractingItems: "Extracting items",
+  // The plate on the list's veil, under the operation's name with the
+  // archive, while files from outside are held over a busy list: the drop
+  // is refused, and this is when it will be taken.
+  dropHere: "Drop here when it ends",
+  // The callout at the foot's running line (one line, a sentence): a paste
+  // read while the archive is busy, and a drop that still arrived, the
+  // operation having begun between the last hover and the release.
+  pasteAgain: "Paste again when it ends.",
+  dropAgain: "Drop again when it ends.",
+  // The empty folder's caption while an add fills it, in place of "or drop
+  // files here".
+  appearing: "The files appear here once they are added",
+  // Delete archive…'s body while an operation runs on the archive, above
+  // the name to type: the delete is the one command that does not wait,
+  // and it says what it stops.
+  deleteStops: (label: string, more = 0): string =>
+    more > 0 ? `${label} and ${plural(more, "other operation")} are still running. Deleting stops them first.` : `${label} is still running. Deleting stops it first.`,
+};
+
 // typePlural is a file type said of every file of it: "PDF documents",
 // "disc images", "Go source files". The type's own name is the strings
 // table's (typeLabel); a name that is a mass noun or ends in y takes
@@ -750,6 +785,11 @@ export const railCopy = {
   // The vault head's name when there is no vault yet to name.
   noVault: "Vault",
   closeArchive: (name: string): string => `Close ${name}`,
+  // An open archive's row while an operation runs on it (APP.md §6, Rail;
+  // ruled 2026-11-03): its tooltip and its name say the archive and the
+  // operation, "Photos 2024 · Adding 20 files", since the ring that stands
+  // where its × stood says nothing to a reader.
+  busyRow: (name: string, what: string): string => `${name} · ${what}`,
   openNav: "Open navigation",
   closeNav: "Close navigation",
   vaultButton: (name: string, word: string, act: string): string => [name, word, act].filter(Boolean).join(" · "),
@@ -1154,6 +1194,29 @@ export const closeCopy = {
   quit: "Quit",
   remember: "Remember my choice",
   inSettings: "You can change this in Settings.",
+  // The quit question (APP.md §2.4; ruled 2026-11-03, the user's): a quit
+  // asked for while an operation runs — the window's close under the Quit
+  // setting, which never goes to the tray, or the tray's Quit — asks it,
+  // with Quit and Keep running and no tray.
+  quitTitle: "Quit Enfold?",
+  keepRunning: "Keep running",
+  // The quit question's corner button and Esc answer Keep running, not Cancel.
+  keepRunningEsc: "Keep running (Esc)",
+  // The sentence both questions add while an operation runs, naming the
+  // latest begun and counting the rest, and what each answer does; tray
+  // is the close question's, which offers the tray.
+  stillRunning: (label: string, more: number, tray: boolean): string => {
+    const one = more === 0;
+    const what = one ? `${label} is still running.` : `${label} and ${plural(more, "other operation")} are still running.`;
+    const stops = one ? "Quit stops it" : "Quit stops them";
+    if (!tray) return `${what} ${stops}.`;
+    return `${what} ${stops}; in the tray ${one ? "it goes" : "they go"} on.`;
+  },
+  // The same sentence once what it named has ended while the question
+  // stood: the question stays until it is answered, and Quit then simply
+  // quits.
+  finished: (label: string, more: number): string =>
+    more === 0 ? `${label} has finished.` : `${label} and ${plural(more, "other operation")} have finished.`,
 };
 
 // Opening an archive from Explorer (APP.md §14, decision 4): a
@@ -1299,6 +1362,10 @@ export const archivesCopy = {
     forgotten: "Restore it first",
     alreadyForgotten: "Already forgotten",
     compacting: "Wait until its compaction ends",
+    // *Delete archive…* while a re-key runs on the archive: a re-key runs to
+    // the end (APP.md §2.3), so the delete, which stops what it can first,
+    // cannot stop this one.
+    rekeying: "Wait until its re-key ends",
     // *Show in Explorer* on a record whose last path is another system's
     // (lib/paths.ts foreignPath): this machine has no such place to show.
     foreign: "Last seen on another system",

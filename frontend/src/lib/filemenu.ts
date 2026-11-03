@@ -21,12 +21,28 @@ import { archivePageCopy, commandCopy, keyNames } from "./strings";
 export type FileCmd = "open" | "extract" | "rename" | "moveTo" | "delete" | "copyName";
 export type FileBlankCmd = "paste" | "createFolder" | "addFiles" | "addFolder";
 
-// closing: the archive drains after its *Close* (APP.md §2.3), when every
-// page-facing call answers archive.not_open — every command is greyed with
-// that, but *Copy name*, which asks nothing of the archive.
-export function fileRowItems(isDir: boolean, closing: boolean): CmdItem<FileCmd>[] {
-  const off = closing ? { disabled: true, title: archivePageCopy.menuClosing } : {};
-  const open: CmdItem<FileCmd> = { cmd: "open", label: commandCopy.open, icon: "i-open", keys: keyNames.open, isDefault: true, ...off };
+// Stop: what stops the archive's own commands now, and why, said as each
+// greyed item's second line. Two states grey by this one path (the busy
+// archive, ruled 2026-11-03): the drain after the archive's *Close* (APP.md
+// §2.3), when every page-facing call answers archive.not_open, so *Open*
+// is greyed too (reads); and an operation still running on the archive
+// (lib/ops.ts busyReason), when what would write waits behind it but a
+// read does not, so *Open* stays.
+export interface Stop {
+  why: string;
+  reads: boolean;
+}
+
+// The drain's stop, in the menu's few words.
+export const CLOSING: Stop = { why: archivePageCopy.menuClosing, reads: true };
+
+const offFor = (why: string | undefined) => (why === undefined ? {} : { disabled: true, title: why });
+
+// Every command is greyed with the stop's reason but *Copy name*, which
+// asks nothing of the archive, and *Open* while only writes are stopped.
+export function fileRowItems(isDir: boolean, stop?: Stop): CmdItem<FileCmd>[] {
+  const off = offFor(stop?.why);
+  const open: CmdItem<FileCmd> = { cmd: "open", label: commandCopy.open, icon: "i-open", keys: keyNames.open, isDefault: true, ...offFor(stop?.reads ? stop.why : undefined) };
   return groups<CmdItem<FileCmd>>(
     [open, { cmd: "extract", label: commandCopy.extract, icon: "i-extract", keys: keyNames.extract, ...off }],
     [
@@ -47,10 +63,12 @@ export function fileRowItems(isDir: boolean, closing: boolean): CmdItem<FileCmd>
 // to paste" when it names no files; enabled while the read is on its way
 // (a press waits for the answer) or after it failed (a press reads again);
 // and, for files cut in Explorer, enabled with the caption that the
-// originals stay where they are — a paste never deletes them.
-export function fileBlankItems(closing: boolean, clip: Clip = "pending"): CmdItem<FileBlankCmd>[] {
-  const off = closing ? { disabled: true, title: archivePageCopy.menuClosing } : {};
-  const pasteNow = closing ? off : clip === "empty" ? { disabled: true, title: archivePageCopy.nothingToPaste } : clip === "move" ? { note: archivePageCopy.pasteKeepsOriginals } : {};
+// originals stay where they are — a paste never deletes them. A stop greys
+// every item, *Paste* first, and its reason wins over the clipboard's: the
+// page reads no clipboard then (a paste would add, and the add would wait).
+export function fileBlankItems(stop?: Stop, clip: Clip = "pending"): CmdItem<FileBlankCmd>[] {
+  const off = offFor(stop?.why);
+  const pasteNow = stop ? off : clip === "empty" ? { disabled: true, title: archivePageCopy.nothingToPaste } : clip === "move" ? { note: archivePageCopy.pasteKeepsOriginals } : {};
   return groups<CmdItem<FileBlankCmd>>(
     [{ cmd: "paste", label: commandCopy.paste, icon: "i-paste", keys: keyNames.paste, ...pasteNow }],
     [{ cmd: "createFolder", label: commandCopy.createFolder, icon: "i-folder-add", keys: keyNames.createFolder, ...off }],

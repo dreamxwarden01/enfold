@@ -28,9 +28,13 @@ type Hooks struct {
 	// DataDir is the core's data folder (Deps.DataDir): the settings, the
 	// WebView profile and the log the boot failure points to (APP.md 2.4).
 	DataDir string
-	// Quit runs the shell's quit flow: name any running operations, resolve,
-	// then end the process.
+	// Quit runs the shell's quit flow: ask about any running operation —
+	// the page's own quit question — resolve, then end the process.
 	Quit func()
+	// QuitDecided is the page's answer to its quit question (APP.md §2.4;
+	// ruled 2026-11-03): Quit (proceed) or Keep running. An answer with no
+	// question up does nothing.
+	QuitDecided func(proceed bool)
 	// DragOut runs the native drag of the selected records out of the
 	// window — on a thread of the drag's own — and returns when it has
 	// ended (APP.md §3); nil when the shell has no native drag.
@@ -99,6 +103,22 @@ func (s *Shell) CloseDecided(action string, remember bool) error {
 		return &app.Error{Code: app.CodeInternal}
 	}
 	return asErr(s.h.CloseDecided(action, remember))
+}
+
+// QuitDecided answers the quit question (APP.md §2.4; ruled 2026-11-03,
+// the user's). A quit asked for while an operation runs — the window's
+// close under CloseAction quit, which never goes to the tray, or the
+// tray's Quit, which shows the window first — does not end the process at
+// once: the shell emits `shell.quit` with the operations that run, and
+// the page asks in a dialog of its own, Quit or Keep running. proceed is
+// Quit: the shell resolves and ends, whatever runs by then, since the
+// question stood until it was answered. Keep running leaves everything as
+// it was, and the next quit asks again. It answers nothing, and an answer
+// with no question up does nothing.
+func (s *Shell) QuitDecided(proceed bool) {
+	if s.h.QuitDecided != nil {
+		s.h.QuitDecided(proceed)
+	}
 }
 
 // PendingOpen is the page asking, at boot, whether this launch was asked

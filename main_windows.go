@@ -74,10 +74,12 @@ type shell struct {
 	lock *lockWatch
 	log  func(string, ...any)
 
-	profile  string
-	winMu    sync.Mutex
-	quitMu   sync.Mutex
-	quitting bool
+	profile string
+	winMu   sync.Mutex
+	// gate is the quit's own state: whether it is under way, and whether
+	// the page's quit question is up with its answer still to come (APP.md
+	// §2.4; ruled 2026-11-03).
+	gate     quitGate
 	settings func() app.Settings
 	// open is the "open this from Explorer" a launch carried (APP.md §14,
 	// openarg.go): the page takes it at boot, and a second launch fills it
@@ -169,8 +171,10 @@ func main() {
 		OpenFolder:   s.openFolder,
 		DataDir:      dataDir,
 		Quit:         s.quit,
-		DragOut:      s.dragOut,
-		PendingOpen:  s.open.take,
+		// The quit question's answer (APP.md §2.4; ruled 2026-11-03).
+		QuitDecided: s.quitDecided,
+		DragOut:     s.dragOut,
+		PendingOpen: s.open.take,
 		// Paste's source (APP.md §3, §6): Explorer's CF_HDROP, read by the
 		// shell since the WebView's clipboard holds no files.
 		ClipboardFiles: s.clipboardFiles,
@@ -562,15 +566,15 @@ func (s *shell) ensureWindow() {
 	// to close unconditionally, WM_CLOSE returns 0 without destroying
 	// anything, so the window simply stays.
 	w.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		if s.ownClose() {
-			return // ours: the tray, the answered question, the way out
-		}
-		switch s.settings().CloseAction {
-		case app.CloseTray:
-			// The user has said so: on to the tray, as below.
-		case app.CloseQuit:
+		switch closeGate(s.ownClose(), s.gate.pending(), s.settings().CloseAction) {
+		case closeLets:
+			// Ours (the tray, the answered question, the way out), or the
+			// user has said so: on to the tray, as below.
+		case closeQuits, closeReasks:
+			// Off this goroutine: the quit may ask the page and wait for
+			// its answer, or show the native question of an unlock.
 			e.Cancel()
-			go s.quit() // off this goroutine: quit shows a native question
+			go s.quit()
 		default:
 			// ask, and anything a file no longer holds: the page asks.
 			e.Cancel()
@@ -592,10 +596,47 @@ func (s *shell) ensureWindow() {
 // mark if it is: a quit never asks, and neither does the one close a
 // CloseWindow or an answered close question performs.
 func (s *shell) ownClose() bool {
-	s.quitMu.Lock()
-	quitting := s.quitting
-	s.quitMu.Unlock()
-	return quitting || s.ours.Swap(false)
+	return s.gate.ending() || s.ours.Swap(false)
+}
+
+// The window's close, as the gate in ensureWindow decides it (APP.md §2.3,
+// §2.4).
+type closeAct int
+
+const (
+	// closeLets lets the close through: the shell's own, or CloseAction
+	// tray, the window going to the tray.
+	closeLets closeAct = iota
+	// closeQuits cancels it and runs the quit: CloseAction quit, which
+	// never asks — unless an operation is running, when the quit asks the
+	// page's quit question (quitGate).
+	closeQuits
+	// closeAsks cancels it and has the page ask the close question.
+	closeAsks
+	// closeReasks cancels it while the page's quit question is up, and
+	// asks that question again rather than a second one: the question,
+	// once up, stays until it is answered (ruled 2026-11-03), so the
+	// window neither goes to the tray nor closes under it.
+	closeReasks
+)
+
+// closeGate is what the window's close does: own is ownClose's answer,
+// asking whether the page's quit question is up, action the CloseAction
+// setting.
+func closeGate(own, asking bool, action string) closeAct {
+	switch {
+	case own:
+		return closeLets
+	case asking:
+		return closeReasks
+	}
+	switch action {
+	case app.CloseTray:
+		return closeLets
+	case app.CloseQuit:
+		return closeQuits
+	}
+	return closeAsks
 }
 
 // dropPayload is what a file drop becomes for the page: the paths, what
@@ -643,7 +684,11 @@ func (s *shell) closeDecided(action string, remember bool) *app.Error {
 		}
 	}
 	if action == app.CloseQuit {
-		go s.quit() // the bound call answers; the native question follows
+		// The bound call answers; the quit follows. The close question
+		// named whatever was running and said that Quit stops it, so the
+		// answer is the quit's confirmation and nothing asks again (ruled
+		// 2026-11-03; the native question used to follow it).
+		go s.quitAnswered()
 		return nil
 	}
 	s.closeWindow()
@@ -1710,50 +1755,217 @@ func (s *shell) dragOut(archiveID string, recordIDs []string) (app.DragOutResult
 	return d.Run()
 }
 
-// quit is the tray's and the page's Quit: the running operations are named
-// and the quit confirmed, then the ordered shutdown runs and the process
-// ends. Never asked twice. There are no unsaved changes to ask about since
-// 2026-09-09 — every operation commits at its own end (APP.md §2.3) — so
-// what the question names is what quitting would cancel.
-func (s *shell) quit() {
-	s.quitMu.Lock()
-	if s.quitting {
-		s.quitMu.Unlock()
-		return
+// eventShellQuit is the shell asking the page its quit question (APP.md
+// §2.4; ruled 2026-11-03, the user's): a quit was asked for — the window's
+// close under CloseAction quit, the tray's Quit, Shell.Quit — while an
+// operation runs. The payload is the operations the question names
+// (askedOps): those that ran as the quit was asked for, each as the status
+// read after the window was shown has it, finished or not, and any begun
+// since — so that a page made again for the question names them before its
+// own first status has answered.
+const eventShellQuit = "shell.quit"
+
+// unlockQuestion is the one question the quit still asks natively: an
+// unlock in progress with no operation running. The page's question is
+// about operations, and while a ceremony is on the lock stage the page has
+// the ceremony to show; a Windows message box has only Yes and No.
+const unlockQuestion = "An unlock is in progress. Cancel it and quit?"
+
+// quitGate is the quit's state (APP.md §2.4; ruled 2026-11-03): whether
+// the quit is under way — every close is the shell's own from then on —
+// and whether the page's quit question is up, its answer still to come.
+// The question is asked once and stays: while it is up, a second quit
+// shows it again rather than asking anew, and an operation that ends
+// meanwhile changes nothing here — only the answer does.
+type quitGate struct {
+	mu       sync.Mutex
+	quitting bool
+	asking   bool
+}
+
+// What a quit does next, as quitGate.begin decides it.
+type quitStep int
+
+const (
+	// quitIdle: the quit is already under way; nothing more to do.
+	quitIdle quitStep = iota
+	// quitEnd: nothing to ask, or the user has answered — end now.
+	quitEnd
+	// quitAskPage: show the window and ask the page's quit question, or
+	// ask it again while it is up.
+	quitAskPage
+	// quitAskNative: an unlock is in progress and nothing else runs —
+	// the native question, as before.
+	quitAskNative
+)
+
+// begin is a quit's decision. running is the operations not finished,
+// unlocking whether the vault is in an unlock's ceremony, and confirmed
+// whether the user has already said Quit to a question that named what
+// runs — the close question's answer (ruled 2026-11-03: it is the
+// confirmation, so nothing asks a second time).
+func (g *quitGate) begin(running int, unlocking, confirmed bool) quitStep {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch {
+	case g.quitting:
+		return quitIdle
+	case confirmed:
+		g.asking = false
+		g.quitting = true
+		if running == 0 && unlocking {
+			return quitAskNative
+		}
+		return quitEnd
+	case g.asking:
+		return quitAskPage
+	case running > 0:
+		g.asking = true
+		return quitAskPage
 	}
-	s.quitting = true
-	s.quitMu.Unlock()
-	st := s.core.Status()
-	if running := runningOps(st); running > 0 || st.State == app.StateUnlocking {
-		// A Windows question dialog is a Yes/No message box: Show blocks
-		// until it closes and then runs the callback of the button whose
-		// label is the one pressed — "Yes" or "No", nothing else.
-		msg := fmt.Sprintf("%d operation(s) are still running. Cancel them and quit?", running)
-		if st.State == app.StateUnlocking {
-			msg = "An unlock is in progress. Cancel it and quit?"
-		}
-		d := s.app.Dialog.Question().SetTitle(appName).SetMessage(msg)
-		yes := d.AddButton("Yes")
-		no := d.AddButton("No")
-		d.SetDefaultButton(yes).SetCancelButton(no)
-		var proceed atomic.Bool
-		yes.OnClick(func() { proceed.Store(true) })
-		if w := s.window(); w != nil {
-			d.AttachToWindow(w)
-		}
-		d.Show()
-		if !proceed.Load() {
-			s.quitMu.Lock()
-			s.quitting = false
-			s.quitMu.Unlock()
+	g.quitting = true
+	if unlocking {
+		return quitAskNative
+	}
+	return quitEnd
+}
+
+// answer is the page's answer to its quit question, Quit (proceed) or
+// Keep running, and reports whether the quit goes on. An answer with no
+// question up is a stale one and does nothing. Quit is the confirmation
+// whatever runs by then: the question stood until it was answered, and an
+// operation that ended meanwhile changes nothing but its sentence.
+func (g *quitGate) answer(proceed bool) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.asking || g.quitting {
+		return false
+	}
+	g.asking = false
+	if !proceed {
+		return false
+	}
+	g.quitting = true
+	return true
+}
+
+// refused is the native question answered No: the quit is off, and the
+// next close asks again.
+func (g *quitGate) refused() {
+	g.mu.Lock()
+	g.quitting = false
+	g.mu.Unlock()
+}
+
+// ending reports whether the quit is under way.
+func (g *quitGate) ending() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.quitting
+}
+
+// pending reports whether the page's quit question is up.
+func (g *quitGate) pending() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.asking
+}
+
+// quitHooks is what a quit does to the world, lent by the shell, so that
+// the flow can be followed without a window.
+type quitHooks struct {
+	status func() app.VaultStatus
+	// show shows the window, made again if it went to the tray
+	// (ensureWindow).
+	show func()
+	// ask emits the page's quit question with the operations that run.
+	ask func(ops []app.OpView)
+	// native asks the Yes/No message box and reports Yes.
+	native func(msg string) bool
+	// end is the ordered end: out of sight, resolved, quit.
+	end func()
+}
+
+// runQuit is the quit, asked for by the tray's Quit, Shell.Quit, the
+// window's close under CloseAction quit, or the close question answered
+// Quit (confirmed). There are no unsaved changes to ask about since
+// 2026-09-09 — every operation commits at its own end (APP.md §2.3) — so
+// what a question names is what quitting would cancel. While an operation
+// runs the page asks it, in a dialog of its own (ruled 2026-11-03, the
+// user's; it was a native "N operation(s) are still running. Cancel them
+// and quit?"): the window is shown first — made again from the tray when
+// there is none — and the operations are read after it, so that an
+// operation's end the core emits from here on reaches the page that asks.
+// The answer comes back through Shell.QuitDecided (quitDecided).
+func runQuit(g *quitGate, h quitHooks, confirmed bool) {
+	st := h.status()
+	switch g.begin(runningOps(st), st.State == app.StateUnlocking, confirmed) {
+	case quitIdle:
+		return
+	case quitAskPage:
+		h.show()
+		h.ask(askedOps(st, h.status()))
+	case quitAskNative:
+		if !h.native(unlockQuestion) {
+			g.refused()
 			return
 		}
+		h.end()
+	case quitEnd:
+		h.end()
 	}
-	// Out of sight first, then the ordered end: a pending touch (§2.2)
-	// may keep the card busy for the key's own timeout, and nobody stands
-	// at a frozen window for that — the window and the tray go, the
-	// process lingers unseen until the card answers and is released, then
-	// ends. onShutdown's second ResolveForShutdown finds nothing left.
+}
+
+// quit is the tray's and the page's Quit, and the window's close under
+// CloseAction quit.
+func (s *shell) quit() { runQuit(&s.gate, s.quitHooks(), false) }
+
+// quitAnswered is the close question answered Quit: the question named
+// what runs, so the answer confirms the quit (ruled 2026-11-03).
+func (s *shell) quitAnswered() { runQuit(&s.gate, s.quitHooks(), true) }
+
+// quitDecided is Shell.QuitDecided: the page's answer to its quit
+// question. The bound call answers at once; the end follows on a
+// goroutine of its own, as closeDecided's does.
+func (s *shell) quitDecided(proceed bool) {
+	if s.gate.answer(proceed) {
+		go s.endQuit()
+	}
+}
+
+func (s *shell) quitHooks() quitHooks {
+	return quitHooks{
+		status: s.core.Status,
+		show:   s.ensureWindow,
+		ask:    func(ops []app.OpView) { s.app.Event.Emit(eventShellQuit, ops) },
+		native: s.askNative,
+		end:    s.endQuit,
+	}
+}
+
+// askNative is the Windows question: a Yes/No message box. Show blocks
+// until it closes and then runs the callback of the button whose label is
+// the one pressed — "Yes" or "No", nothing else.
+func (s *shell) askNative(msg string) bool {
+	d := s.app.Dialog.Question().SetTitle(appName).SetMessage(msg)
+	yes := d.AddButton("Yes")
+	no := d.AddButton("No")
+	d.SetDefaultButton(yes).SetCancelButton(no)
+	var proceed atomic.Bool
+	yes.OnClick(func() { proceed.Store(true) })
+	if w := s.window(); w != nil {
+		d.AttachToWindow(w)
+	}
+	d.Show()
+	return proceed.Load()
+}
+
+// endQuit is the ordered end. Out of sight first: a pending touch (§2.2)
+// may keep the card busy for the key's own timeout, and nobody stands at
+// a frozen window for that — the window and the tray go, the process
+// lingers unseen until the card answers and is released, then ends.
+// onShutdown's second ResolveForShutdown finds nothing left.
+func (s *shell) endQuit() {
 	if w := s.window(); w != nil {
 		w.Hide()
 	}
@@ -1765,16 +1977,53 @@ func (s *shell) quit() {
 	s.app.Quit()
 }
 
-// runningOps counts the operations of a status that have not finished: what
-// the Quit question names, and what the tray's tooltip says is under way.
+// runningOps counts the operations of a status that have not finished:
+// what the quit question names, and what the tray's tooltip says is under
+// way.
 func runningOps(st app.VaultStatus) int {
-	n := 0
-	for _, o := range st.Ops {
-		if !o.Finished {
-			n++
+	return len(unfinishedOps(st))
+}
+
+// askedOps is what the quit question names: the operations that ran when
+// the quit was asked for (before), each as the status read after the
+// window was shown has it (after), and any that has begun since. One that
+// ended between the two reads is named finished, so the page says it has
+// finished rather than leaving the question with nothing to say: its end
+// was emitted before a window made again could hear it. Never nil.
+func askedOps(before, after app.VaultStatus) []app.OpView {
+	now := map[string]app.OpView{}
+	for _, o := range after.Ops {
+		now[o.ID] = o
+	}
+	out := []app.OpView{}
+	named := map[string]bool{}
+	for _, o := range unfinishedOps(before) {
+		if v, ok := now[o.ID]; ok {
+			o = v
+		} else {
+			o.Finished = true
+		}
+		named[o.ID] = true
+		out = append(out, o)
+	}
+	for _, o := range unfinishedOps(after) {
+		if !named[o.ID] {
+			out = append(out, o)
 		}
 	}
-	return n
+	return out
+}
+
+// unfinishedOps is the operations of a status that have not finished, in
+// its order. Never nil.
+func unfinishedOps(st app.VaultStatus) []app.OpView {
+	out := []app.OpView{}
+	for _, o := range st.Ops {
+		if !o.Finished {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // onShutdown is the bounded, ordered end (§5): resolve, lock, stop.

@@ -14,7 +14,11 @@
   // (lib/foot.ts), and Cancel where a cancel means something; then how it
   // ended, the done line, for 6 s or until the next press in a page's
   // body; then the note again. With two or more running the latest shows,
-  // and "+1" opens the flyout that lists them all.
+  // and "+1" opens the flyout that lists them all. The running line is the
+  // page's archive's alone (ruled 2026-11-03, the user's): it shows only
+  // while the page up is that archive's own, and the flyout lists only its
+  // operations; anywhere else the archive's row in the rail says it, with
+  // the ring in place of its ×. The done line is said on any page.
   //
   // The right slot is the lock state, always: the open padlock, the
   // nearer deadline said quietly (lib/format.ts lockLine), Stay unlocked
@@ -23,7 +27,7 @@
   // status's standing notices gather beside it behind "1 notice"
   // (direction 9 left them to this foot). Commands are subtle buttons 24 px
   // high; what reveals something is a hyperlink button.
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { fade, fly } from "svelte/transition";
   import { Archive, Shell, Vault, errorOf } from "../lib/api";
   import type { OpView } from "../lib/api";
@@ -31,7 +35,7 @@
   import { lockLine } from "../lib/format";
   import { motion, delay, enter, FAST, GAP, LEAVE } from "../lib/motion";
   import { cancellable, hasBar, opLabel, showsCancel, stripCount } from "../lib/ops";
-  import { fraction, latestOp, progressCaption, standingNotices, staysUnlocked, timeLeft, track } from "../lib/foot";
+  import { fraction, latestOp, pageOps, progressCaption, standingNotices, staysUnlocked, timeLeft, track } from "../lib/foot";
   import type { DoneAction, Track } from "../lib/foot";
   import { tier, tierIcon } from "../lib/notices";
   import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
@@ -49,8 +53,14 @@
   const stay = $derived(!!st && store.unlocked && staysUnlocked(st.locksAt, st.absoluteAt, store.now));
 
   // ---- the running operations ---------------------------------------------
-  const running = $derived(store.runningOps);
-  const latest = $derived(latestOp(running));
+  // Every running operation is followed — its bytes for the time left, its
+  // Cancel pressed — so that coming back to an archive's page finds its
+  // line as it was; the line and the flyout are the page's archive's
+  // (lib/foot.ts pageOps, latestOp): the archive whose page is up, or none.
+  const allRunning = $derived(store.runningOps);
+  const shown = $derived(store.route === "archive" ? store.current : null);
+  const running = $derived(pageOps(allRunning, shown));
+  const latest = $derived(latestOp(allRunning, shown));
   // The registry row's name for each archive: OpView carries the id only.
   const names = $derived(new Map(store.archives.map((a) => [a.id, a.name])));
 
@@ -63,7 +73,7 @@
   let tracks = $state<Record<string, Track>>({});
   $effect(() => {
     const seen = new Set<string>();
-    for (const o of running) {
+    for (const o of allRunning) {
       seen.add(o.id);
       const was = untrack(() => tracks[o.id]);
       const now = track(was, { t: Date.now(), done: o.done });
@@ -114,7 +124,7 @@
   // An operation that has ended leaves the list, so it does not grow for
   // the length of the session.
   $effect(() => {
-    const live = new Set(running.map((o) => o.id));
+    const live = new Set(allRunning.map((o) => o.id));
     if (cancelling.some((id) => !live.has(id))) cancelling = cancelling.filter((id) => live.has(id));
   });
 
@@ -212,9 +222,52 @@
   function lockNow() {
     Vault.Lock().catch((e) => store.notice(codeText(errorOf(e).code), "error"));
   }
+
+  // ---- the busy callout (APP.md §6, Paste; ruled 2026-11-03) ---------------
+  //
+  // The Archive page raises it (store.busyTip) when a paste is read, or a
+  // drop still arrives, while its archive is busy, and sends it away; the
+  // foot draws it, since what it points at is the foot's own running line.
+  // When the foot shows the operation it names, the callout stands over
+  // that line, its tail on the line's name, and the line takes the info
+  // tier's fill while it stands, so the eye lands on what it waits for.
+  // When the foot shows anything else — an add that has said nothing yet,
+  // a done line holding its time — it stands at the foot's left edge with
+  // the same words. The foot never shows another archive's line on this
+  // page (pageOps), so the tail is never on another archive's operation.
+  const tip = $derived(store.busyTip);
+  const tipOnLine = $derived(!!tip && slot === `op:${tip.opId}`);
+  let footEl = $state<HTMLDivElement | undefined>();
+  let tipEl = $state<HTMLDivElement | undefined>();
+  let tipAt = $state({ left: 0, tail: 0 });
+
+  // Centred over the name, as a TeachingTip is over its target, and pulled
+  // inside the foot's padding; the tail stays on the name, 14 px clear of
+  // the box's corners.
+  function placeTip() {
+    const foot = footEl;
+    const box = tipEl;
+    if (!foot || !box) return;
+    const f = foot.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(foot).paddingLeft) || 0;
+    const names = tipOnLine ? foot.querySelectorAll<HTMLElement>(".fit.washed .opname") : [];
+    const r = names.length > 0 ? names[names.length - 1].getBoundingClientRect() : null;
+    const x = r && r.width > 0 ? r.left - f.left + r.width / 2 : pad + 16;
+    const w = box.offsetWidth;
+    const left = Math.max(pad, Math.min(x - w / 2, f.width - pad - w));
+    tipAt = { left, tail: Math.max(14, Math.min(x - left, w - 14)) };
+  }
+
+  $effect(() => {
+    if (!tip) return;
+    void tip.text;
+    void tipOnLine;
+    void slot;
+    void tick().then(placeTip);
+  });
 </script>
 
-<svelte:window onpointerdown={outside} onkeydowncapture={key} onkeydown={lockKey} />
+<svelte:window onpointerdown={outside} onkeydowncapture={key} onkeydown={lockKey} onresize={() => { if (tip) placeTip(); }} />
 
 {#snippet progressLine(o: OpView, wide: boolean)}
   {@const f = fraction(o.done, o.total)}
@@ -229,7 +282,7 @@
   <button type="button" class="btn subtle xs" disabled={!can} aria-disabled={!can} onclick={can ? () => void cancel(o.id) : undefined}>{pending ? footCopy.cancelling : footCopy.cancel}</button>
 {/snippet}
 
-<div class="layer-foot">
+<div class="layer-foot" bind:this={footEl}>
   <div class="foot-left">
     {#key slot}
       <!-- The house crossfade (lib/motion.ts GAP): the old line leaves
@@ -249,7 +302,7 @@
           </span>
         {:else if slot.startsWith("op:") && latest}
           {@const o = latest}
-          <span class="fit" use:fit={`${label(o)}|${bytesOf(o)}|${leftOf(o)}|${running.length}`}>
+          <span class="fit" class:washed={!!tip && tip.opId === o.id} use:fit={`${label(o)}|${bytesOf(o)}|${leftOf(o)}|${running.length}`}>
             <span class="opname ellipsis" title={label(o)}>{label(o)}</span>
             {#if hasBar(o.kind, o.phase)}
               {@render progressLine(o, false)}
@@ -317,6 +370,12 @@
         <div class="nrow {tier(code)}"><svg class="i"><use href="#{tierIcon(tier(code))}" /></svg><span>{warningCopy(code)}</span></div>
       {/each}
     </div>
+  {/if}
+
+  {#if tip}
+    <!-- Rises over the enter duration and goes over the exit one, at once
+         under reduced motion; it takes no focus, and says itself (status). -->
+    <div class="foot-tip" role="status" bind:this={tipEl} style:--tip-left="{tipAt.left}px" style:--tip-tail="{tipAt.tail}px" in:fly={motion(FAST, { y: 4, easing: enter })} out:fade={motion(LEAVE, { easing: enter })}>{tip.text}</div>
   {/if}
 </div>
 

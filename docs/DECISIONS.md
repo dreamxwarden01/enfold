@@ -6054,3 +6054,17 @@ and Aquatic, Desert, Dusk or Night sky, which cannot be emulated, bringing the s
 Left: the real window's classic bar was never measured, so the record names no width for it;
 175 % draws 4 and 11 device px against the design's 3.5 and 10.5, which no CSS value fixes; the
 tour stages only the file list, so the viewer's colours are not asserted by it.
+
+**The scrollbar's line does not grow** (2026-11-03, after e31353c). The user, in the real window
+at 125 %: the thin line draws and does redraw under the pointer, but its growth to a 6 px thumb
+looks odd and jumps — Chromium animates no part of a `::-webkit-scrollbar`, so no transition can
+smooth it — and a line that only darkens while pointing at the bar would read better. Ruled and
+built: the line keeps its 2 px at rest and under the pointer alike, and darkens to the ink while
+the pointer is over the thumb itself and while it is held (Chromium tracks the thumb's own
+`:hover` and `:active`, which the first build already measured exact); the `--scroll-over`
+property, the `:has()` list and the scroller's hover rule go with the growth, and `--bar-held`
+folds into `--bar-over`, now the ink, the viewer's its own; the tour measures the line at rest
+alone and no longer stages the pointer; APP's section 6 says so. Left for the user's eye: whether
+the darkened line reads at 3 device pixels, and whether the line is easy to take hold of (the
+thumb's box is the whole 12 px gutter, its borders transparent, so the pointer need not land on
+the line itself).

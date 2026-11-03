@@ -20,9 +20,8 @@
 //     on whole device pixels at its right, as wide and as far in from the
 //     edge as the thumb's borders give once Chromium floors them to device
 //     pixels (2 px and 3 px in the design, 3 and 3 device px at 125 %);
-//     with the pointer over the list the line grows to the thumb the
-//     borders give then (6 px, 8 device px at 125 %), which also proves
-//     the bar is redrawn when the pointer arrives. In a contrast palette it
+//     the line does not grow under the pointer (ruled 2026-11-03 in the
+//     real window; it darkens on the thumb instead). In a contrast palette it
 //     is the system's, which app.css leaves to the theme: not the app's
 //     12 px, an arrow at each end and a thumb between them (15 px, as
 //     headless Edge's own bar measured before the app drew its own).
@@ -39,8 +38,7 @@
 // dark, forced-black and forced-white, and lock-<look>.png for
 // forced-black-light-setting and forced-white-dark-setting;
 // mark-zoom-<look>.png and scrollbar-zoom-<look>.png, enlarged so each
-// device pixel shows, with scrollbar-zoom-<look>-hover.png in light and
-// dark; and tour.json, the measurements.
+// device pixel shows; and tour.json, the measurements.
 import { writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { launch, startMock, strokeProfile, sleep, REPO } from "./cdp.mjs";
@@ -76,15 +74,13 @@ const MARK = ".unlock .stage-mark .idart";
 // the grid is out by.
 const TOL = 0.25;
 // The app's scrollbar (app.css, the scrollbars), in CSS px: the gutter, the
-// thumb's right border, and its left border at rest and with the pointer
-// over the scroller. Chromium floors each border to whole device pixels,
-// so the line's width in device px is the gutter's less the two floors:
-// at 125 %, 15 less 9 and 3 at rest, and 15 less 4 and 3 under the
-// pointer. The left borders are 7.4 and 3.4, clear of a device pixel's
-// edge at 125 % (9.25 and 4.25), so the floors here are not a matter of
-// rounding.
+// thumb's right border and its left border. Chromium floors each border to
+// whole device pixels, so the line's width in device px is the gutter's
+// less the two floors: at 125 %, 15 less 9 and 3. The left border is 7.4,
+// clear of a device pixel's edge at 125 % (9.25), so the floor here is not
+// a matter of rounding.
 const BAR = 12;
-const THUMB = { right: 3, restLeft: 7.4, hoverLeft: 3.4 };
+const THUMB = { right: 3, left: 7.4 };
 
 // setting is the app's Theme setting under a palette (setForcedColors'
 // theme): System for the first two forced looks, the other one for the
@@ -200,12 +196,12 @@ function linePixels(img, list, bar, right, dpr, token, left) {
 }
 
 // Whether a line read by linePixels is the one the borders give.
-function lineProblems(name, what, l) {
-  if (!l.found) return [`${name}: no line found in the bar's gutter ${what}`];
+function lineProblems(name, l) {
+  if (!l.found) return [`${name}: no line found in the bar's gutter`];
   const out = [];
-  if (l.whole !== true) out.push(`${name}: the bar's line ${what} is not on whole device pixels: full ${l.full.join(" ") || "none"}, partial ${l.partial.join(" ") || "none"}`);
-  if (Math.abs(l.sum - l.expected.width) > TOL) out.push(`${name}: the bar's line ${what} is ${l.sum} device px wide, not ${l.expected.width}`);
-  if (l.gap === null || Math.abs(l.gap - l.expected.right) > TOL) out.push(`${name}: the bar's line ${what} stands ${l.gap} device px in from the gutter's edge, not ${l.expected.right}`);
+  if (l.whole !== true) out.push(`${name}: the bar's line is not on whole device pixels: full ${l.full.join(" ") || "none"}, partial ${l.partial.join(" ") || "none"}`);
+  if (Math.abs(l.sum - l.expected.width) > TOL) out.push(`${name}: the bar's line is ${l.sum} device px wide, not ${l.expected.width}`);
+  if (l.gap === null || Math.abs(l.gap - l.expected.right) > TOL) out.push(`${name}: the bar's line stands ${l.gap} device px in from the gutter's edge, not ${l.expected.right}`);
   return out;
 }
 
@@ -303,19 +299,13 @@ try {
         if (px.arrows.length !== 2) problems.push(`${look.name}: the system's bar shows ${px.arrows.length} arrow runs, not one at each end`);
         if (!px.thumbs.length) problems.push(`${look.name}: no thumb found in the system bar's pixels`);
       } else {
-        // The app's bar, at rest and then with the pointer over the list.
+        // The app's bar.
         if (bar !== BAR) problems.push(`${look.name}: the file list's bar is ${bar} px, not the app's ${BAR} (the system's is 15, with arrows)`);
         if (px.arrows.length || px.thumbs.length) problems.push(`${look.name}: the gutter's middle column holds runs (arrows ${px.arrows.length}, others ${px.thumbs.length}), where the app's bar draws nothing at rest`);
         const right = await p.ev(`parseFloat(getComputedStyle(document.querySelector(${JSON.stringify(LIST)})).borderRightWidth)`);
         const token = await p.resolveColor(LIST, "var(--ctl-strong)", "color");
-        r.list.line = linePixels(img, list, bar, right, tour.dpr, token, THUMB.restLeft);
-        problems.push(...lineProblems(look.name, "at rest", r.list.line));
-        await p.mouse(list.css.x + list.css.width / 2, list.css.y + list.css.height / 2);
-        await sleep(500);
-        r.list.grown = linePixels(await p.pixels(), list, bar, right, tour.dpr, token, THUMB.hoverLeft);
-        problems.push(...lineProblems(look.name, "under the pointer", r.list.grown));
-        await p.screenshot(path.join(OUT, `scrollbar-zoom-${look.name}-hover.png`), zoom, { zoom: 3 });
-        await park(p);
+        r.list.line = linePixels(img, list, bar, right, tour.dpr, token, THUMB.left);
+        problems.push(...lineProblems(look.name, r.list.line));
       }
     }
     if (m.scrollTop <= 0) problems.push(`${look.name}: the wheel did not scroll the list`);
@@ -336,7 +326,7 @@ for (const [name, r] of Object.entries(tour.looks)) {
   const mark = s ? `mark full ${s.full.join(",") || "none"} partial ${s.partial.join(",") || "none"}, ink ${s.sum} px at ${s.centre}` : "mark not measured";
   const px = r.list && r.list.pixels;
   const line = (l) => !l ? "" : !l.found ? "none" : `${l.sum} px (${l.expected.width}) ${l.gap} in (${l.expected.right})`;
-  const own = r.list && r.list.line ? `, line ${line(r.list.line)}, under the pointer ${line(r.list.grown)}` : "";
+  const own = r.list && r.list.line ? `, line ${line(r.list.line)}` : "";
   const list = r.list ? `; list bar ${r.list.bar} px, scrollTop ${r.list.metrics.scrollTop}, thumb ${px ? runs(px.thumbs) : "none"}, arrows ${px ? runs(px.arrows) : "none"}${own}` : "";
   console.log(`${name}: snap ${snap}; ${mark}${list}`);
 }

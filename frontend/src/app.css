@@ -450,63 +450,42 @@ h1, h2, h3, h4 { margin: 0; }
 }
 a { color: var(--accent-ink); }
 /* Scrollbars (APP.md §6, Controls; ruled 2026-11-03, the phase-5 window
-   study's CSS route): WinUI's thin bar, as near as Chromium's classic,
-   non-overlay scrollbar can be drawn. The real window at 125 % showed
-   WebView2's own bar in the file list and on Settings, a thick grey
-   gutter with an arrow at each end. Here the gutter is 12 px and clear,
-   with no arrows, and it keeps its width in every state, so nothing
-   reflows under the pointer; every scroller's content gains what the
-   system's bar took past it (3 px beside headless Edge's 15 px bar; the
-   real window's was not measured). At rest it holds a 2 px rounded line
-   in the strong control stroke, 3 px in from its right edge: the thumb's
-   borders are transparent and its fill stops at its padding box. While
-   the pointer is over the scroller the left border closes, so the line
-   grows to a 6 px thumb on a faint track; it darkens to the second ink
-   under the pointer and to the ink while it is held. The left border is
-   7.4 px at rest and 3.4 px under the pointer, not the study's 7 and 3,
-   whose thumbs it measured at 2.0 and 6.0 px on the emulated path, which
-   lays the page out in CSS pixels. On the native path, the one WebView2
-   takes, Chromium floors a border to whole device pixels, so at 125 % 7
-   and 3 drew thumbs of 4 and 9 device pixels in the 15-device-pixel
-   gutter, where these draw 3 and 8, the nearest crisp widths to the
-   design's 2.5 and 7.5; at 100 %, 150 % and 200 % they draw the design's
-   own 2 and 6 px. Not 7.2 and 3.2: those land exactly on a device pixel
-   at 125 % (9.0 and 4.0), so the line there hangs on how the engine
-   rounds before it floors, and at 150 % they draw 4 and 10.
-   The bar's colours are its own tokens, --bar-line, --bar-track,
-   --bar-over and --bar-held, which fall back to the strong control
-   stroke, the faint fill, the second ink and the ink. The viewer's
+   study's CSS route, and again that day in the real window, where the
+   thumb's growth under the pointer looked odd and jumped): WinUI's thin
+   bar, as near as Chromium's classic, non-overlay scrollbar can be drawn.
+   The real window at 125 % showed WebView2's own bar in the file list and
+   on Settings, a thick grey gutter with an arrow at each end. Here the
+   gutter is 12 px and clear, with no arrows, and it keeps its width in
+   every state, so nothing reflows; every scroller's content gains what
+   the system's bar took past it (3 px beside headless Edge's 15 px bar;
+   the real window's was not measured). It holds a 2 px rounded line in
+   the strong control stroke, 3 px in from its right edge: the thumb's
+   borders are transparent and its fill stops at its padding box. The
+   line does not grow when the pointer enters the scroller: a first build
+   grew it to a 6 px thumb on a track, as the study drew, and in the real
+   window the growth looked odd and jumped, since Chromium animates no
+   part of a ::-webkit-scrollbar, so no transition can smooth it. It
+   darkens instead, to the ink, while the pointer is over the thumb
+   itself and while it is held: Chromium tracks the thumb's own :hover
+   and :active, where a :hover on the scroller does not reach a custom
+   bar's parts without a change of the scroller's own style. The left
+   border is 7.4 px, not the study's 7: on the native path, the one
+   WebView2 takes, Chromium floors a border to whole device pixels, so at
+   125 % 7 drew a 4-device-pixel line in the 15-device-pixel gutter,
+   where 7.4 draws 3, the nearest crisp width to the design's 2.5; at
+   100 %, 150 % and 200 % both draw the design's own 2 px. Not 7.2, which
+   lands exactly on a device pixel at 125 % (9.0), so the line there
+   would hang on how the engine rounds before it floors.
+   The bar's colours are tokens of its own, --bar-line and --bar-over,
+   which fall back to the strong control stroke and the ink. The viewer's
    ground is dark in both themes (Viewer.svelte), so it sets them to the
    dark theme's: with the light theme's, its text drew a near-black line
    on its dark panel (1.3:1), where the system's bar had followed the
    viewer's dark color-scheme (5.3:1). Tokens of the bar's own, not the
    general ones set on the viewer, so nothing else there moves.
-   The state is --scroll-over, 1 while the pointer is over the scroller:
-   a property of the scroller's own, registered as not inherited so that
-   a scroller inside a hovered one keeps its 0, which the bar's parts take
-   with inherit. A :hover on the parts alone is not enough: Chromium
-   redraws a custom scrollbar only when its element's own style changes,
-   so with the parts alone the preview's text, its facts and the Details
-   dialog's versions kept their line under the pointer, and a thumb grown
-   by some other change of its scroller stayed grown after the pointer
-   left (headless Edge 156). It is 0 again while the pointer is over a
-   scroller inside this one, or a menu drawn in it, so only the bar of the
-   innermost scroller under the pointer grows: the Details dialog's body
-   keeps its line while the pointer is in its versions table. The list
-   names classes, and CSS cannot tell a box that scrolls from one that
-   does not, so it names a class only where every box that wears it is a
-   scroller: the preview's facts and not the Archives panel's, a list
-   that never scrolls, and not the Archives pane's body, which in the
-   wide layout is no box at all, the pane around it being the scroller
-   that must answer the pointer on its facts (and below the threshold
-   nothing around that body draws a bar). A text box counts as a scroller
-   even while its text is too short to scroll, so the panel around a
-   short description keeps its line while the pointer is on it, which
-   costs only the growth there. A scroller that can stand inside another
-   joins that list.
    ::-webkit-scrollbar, not scrollbar-width and scrollbar-color: the
-   standard pair can neither drop the arrows nor grow under the pointer,
-   and once either is set on an element Chromium ignores these
+   standard pair can neither drop the arrows nor draw the line this
+   narrow, and once either is set on an element Chromium ignores these
    pseudo-elements there, so neither is set anywhere in the app
    (scrollbar-gutter would be harmless, and is not set either). Not
    Windows' overlay bars: WebView2's environment option for them is out of
@@ -516,32 +495,21 @@ a { color: var(--accent-ink); }
    contrast theme keeps the system's own bars, arrows and all, in its
    palette (the media query), so nothing here fights the colours the user
    chose to read by. */
-@property --scroll-over { syntax: "<integer>"; inherits: false; initial-value: 0; }
 @media not (forced-colors: active) {
   ::-webkit-scrollbar { width: 12px; height: 12px; background: transparent; }
   ::-webkit-scrollbar-corner { background: transparent; }
   ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
-  ::-webkit-scrollbar-track {
-    --scroll-over: inherit;
-    background: color-mix(in srgb, var(--bar-track, var(--fill-2)) calc(var(--scroll-over) * 100%), transparent);
-  }
+  ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
-    --scroll-over: inherit;
     min-height: 32px; min-width: 32px; border-radius: 6px;
-    border: solid transparent; border-width: 3px 3px 3px calc(7.4px - 4px * var(--scroll-over));
+    border: solid transparent; border-width: 3px 3px 3px 7.4px;
     background: var(--bar-line, var(--ctl-strong)) padding-box;
   }
-  ::-webkit-scrollbar-thumb:horizontal { border-width: calc(7.4px - 4px * var(--scroll-over)) 3px 3px 3px; }
-  ::-webkit-scrollbar-thumb:hover { background-color: var(--bar-over, var(--ink-2)); }
-  ::-webkit-scrollbar-thumb:active { background-color: var(--bar-held, var(--ink)); }
-  /* The dark theme's strong control stroke and faint fill, and the
-     viewer's own inks, which are the dark theme's second ink and ink. */
-  .viewer {
-    --bar-line: rgba(255, 255, 255, 0.54); --bar-track: rgba(255, 255, 255, 0.04);
-    --bar-over: var(--viewer-ink-2); --bar-held: var(--viewer-ink);
-  }
-  :hover { --scroll-over: 1; }
-  :hover:has(:is(.tablewrap, .preview .pfacts, .art pre, textarea, .merge-list, .cmp, .mtree, .sb-pop, .menu):hover) { --scroll-over: 0; }
+  ::-webkit-scrollbar-thumb:horizontal { border-width: 7.4px 3px 3px 3px; }
+  ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background-color: var(--bar-over, var(--ink)); }
+  /* The dark theme's strong control stroke, and the viewer's own ink,
+     which is the dark theme's. */
+  .viewer { --bar-line: rgba(255, 255, 255, 0.54); --bar-over: var(--viewer-ink); }
 }
 
 /* ---------- controls ---------------------------------------- */

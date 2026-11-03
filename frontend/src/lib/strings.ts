@@ -837,6 +837,8 @@ export const doneCopy = {
   added: (n: number, archive: string): string => `Added ${plural(n, "file")}${archive ? ` to ${archive}` : ""}`,
   addedOf: (n: number, of: number, archive: string): string => `Added ${n} of ${plural(of, "file")}${archive ? ` to ${archive}` : ""}`,
   addedFolders: (n: number, archive: string): string => `Added ${plural(n, "folder")}${archive ? ` to ${archive}` : ""}`,
+  // An add whose only trouble is a folder's, nothing written (lib/foot.ts).
+  addedNone: (archive: string): string => `Nothing was added${archive ? ` to ${archive}` : ""}`,
   replaced: (n: number, archive: string): string => `Replaced ${plural(n, "file")}${archive ? ` in ${archive}` : ""}`,
   replacedOf: (n: number, of: number, archive: string): string => `Replaced ${n} of ${plural(of, "file")}${archive ? ` in ${archive}` : ""}`,
   compacted: (archive: string): string => `Compacted ${archive || "the archive"}`,

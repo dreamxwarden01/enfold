@@ -13,7 +13,7 @@ import { actEnd, chainAfter, chainFor, followUp, replaceNotice } from "./rekey";
 import type { Chain, FollowUp, LastAct, ReplaceNotice } from "./rekey";
 import { delay, SETTLE } from "./motion";
 import { ROOT_ID, retryChain, shownDir, wentName } from "./tree";
-import { hasTrouble } from "./results";
+import { opensAtOnce } from "./results";
 import { hasConflicts } from "./conflicts";
 import { hasRefusals } from "./refused";
 import { DEFAULT_SORT, sortString } from "./sort";
@@ -1319,11 +1319,14 @@ class Store {
     }
     const line = doneLine(o, new Map(this.archives.map((a) => [a.id, a.name])));
     if (line) this.showDone(line);
-    // Something was left out — a kind that differs, a name the tree
-    // cannot hold, a skipped subtree. The page it happened on says what
-    // happened, item by item, at once (APP.md §3); anywhere else the done
-    // line's Details opens the same dialog.
-    if (!o.error && hasTrouble(o.results) && here) this.results = o;
+    // Something failed — a kind that differs, a name the tree cannot
+    // hold. The page it happened on says what happened, item by item, at
+    // once (APP.md §6, *The results dialog*); anywhere else the done
+    // line's Details opens the same dialog. A batch whose only leftovers
+    // are skips does not open it by itself (opensAtOnce, ruled 2026-11-03):
+    // a skip is not a write that went wrong — most often it is the user's
+    // answer a moment ago — and the done line's Details still lists it.
+    if (!o.error && opensAtOnce(o.results) && here) this.results = o;
     if (o.archiveId && o.archiveId === this.current) void this.refreshArchive();
     void this.refreshArchives();
     // An extract records nothing: the destination is prefilled by the rule

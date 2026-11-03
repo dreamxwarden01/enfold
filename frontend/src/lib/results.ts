@@ -120,6 +120,25 @@ export function detailsText(title: string, summary: string, rows: Trouble[]): st
   return [...head, "", ...rows.map((t) => `${rowName(t)}: ${t.text}`)].join("\n");
 }
 
+// hasTrouble says whether the dialog has rows at all: something failed or
+// was skipped. The done line offers its Details on it (foot.ts).
 export function hasTrouble(results: FileOutcome[] | null | undefined): boolean {
   return (results ?? []).some((r) => r.outcome === "failed" || r.outcome === "skipped");
+}
+
+// opensAtOnce says whether the dialog opens by itself on the page where
+// the batch ran (APP.md §6, *The results dialog*; ruled 2026-11-03): only
+// when something failed. A skip is not a write that went wrong. It is the
+// user's own answer (the conflict question's *Skip*, a skip policy), so a
+// dialog opening at once to say so asks again about a choice just made;
+// or the add's own skip of a name that came to stand in the folder after
+// the page asked CheckNames, which sees only what is committed (a second
+// drop of a file still being added, whose add waits for the first and then
+// finds it there; an earlier item of the same drop whose name folds onto
+// it); or an extract's folder already in the destination, used as it
+// stands. The done line's Details (hasTrouble, foot.ts) opens the dialog
+// with the skipped rows; a batch that also failed opens it with every row,
+// the skips among them.
+export function opensAtOnce(results: FileOutcome[] | null | undefined): boolean {
+  return (results ?? []).some((r) => r.outcome === "failed");
 }

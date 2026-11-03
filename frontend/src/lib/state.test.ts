@@ -2369,3 +2369,45 @@ describe("the rows an operation added", () => {
     expect(store.fresh.size).toBe(0);
   });
 });
+
+// The results dialog opens by itself on the page where the batch ran only
+// when something failed (APP.md §6, ruled 2026-11-03): a batch whose only
+// leftovers are the skips the user chose says them in the done line, whose
+// Details opens the same dialog.
+describe("the results dialog after a batch", () => {
+  const added = { path: "C:/a", name: "a", isDir: false, outcome: "added", id: "n1", size: 1, modifiedAt: 1 };
+  const skipped = { path: "C:/s", name: "s", isDir: false, outcome: "skipped", size: 0, modifiedAt: 0 };
+  const failed = { path: "C:/f", name: "f", isDir: false, outcome: "failed", code: "io", size: 0, modifiedAt: 0 };
+  const ended = (id: string, results: unknown[]) => ({ id, archiveId: "a", kind: "add", done: 1, total: 1, items: results.length, dragItems: 0, phase: "", startedAt: 1, finished: true, returned: 0, results });
+
+  // Fake timers, so the done line's hold and the op's forgetting are
+  // left behind with the test rather than running into the next one.
+  async function shown() {
+    vi.useFakeTimers();
+    m.Status.mockResolvedValueOnce(status(1, "unlocked"));
+    store.boot();
+    await open(["x"]);
+    m.Stat.mockResolvedValue(stat(2));
+    m.Page.mockResolvedValue(reply(2, ["x"], 1));
+  }
+
+  it("stays shut after a skip the user chose, and the done line offers its Details", async () => {
+    await shown();
+    m.handlers["op.done"]({ data: ended("o1", [added, added, skipped]) });
+    expect(store.results).toBeNull();
+    expect(store.done?.text).toBe("Added 2 of 3 files");
+    expect(store.done?.action?.kind).toBe("details");
+  });
+
+  it("opens at once when something failed, with or without skips", async () => {
+    await shown();
+    // Read through a function: after the assignment below, the checker
+    // would take store.results for null.
+    const opened = (): string | undefined => store.results?.id;
+    m.handlers["op.done"]({ data: ended("o2", [added, failed]) });
+    expect(opened()).toBe("o2");
+    store.results = null;
+    m.handlers["op.done"]({ data: ended("o3", [added, skipped, failed]) });
+    expect(opened()).toBe("o3");
+  });
+});

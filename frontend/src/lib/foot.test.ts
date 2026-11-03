@@ -207,6 +207,17 @@ describe("the done line", () => {
     expect(doneLine(part, names)).toEqual({ tone: "neutral", text: "Added 2 of 4 files to Photos 2024", action: { kind: "details", op: part } });
   });
 
+  it("says what an add did when its trouble is no file's, never a count of nothing", () => {
+    // A folder offered where a file of its name stands, answered Skip: the
+    // core plans nothing for it and reports the folder as skipped.
+    const none = op({ kind: "add", items: 0, results: [out({ isDir: true, outcome: "skipped" })] });
+    expect(doneLine(none, names)).toEqual({ tone: "neutral", text: "Nothing was added to Photos 2024", action: { kind: "details", op: none } });
+    const beside = op({ kind: "add", items: 1, results: [out({}), out({ isDir: true, outcome: "skipped" })] });
+    expect(doneLine(beside, names)).toEqual({ tone: "neutral", text: "Added 1 file to Photos 2024", action: { kind: "details", op: beside } });
+    const made = op({ kind: "add", items: 0, results: [out({ isDir: true, outcome: "created" }), out({ isDir: true, outcome: "skipped" })] });
+    expect(doneLine(made, names)).toEqual({ tone: "neutral", text: "Added 1 folder to Photos 2024", action: { kind: "details", op: made } });
+  });
+
   it("counts the files an add wrote, not the folders it made on the way", () => {
     const o = op({ kind: "add", items: 2, results: [out({ isDir: true, outcome: "created" }), out({}), out({})] });
     expect(doneLine(o, names)?.text).toBe("Added 2 files to Photos 2024");

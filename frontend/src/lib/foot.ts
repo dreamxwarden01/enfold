@@ -220,6 +220,17 @@ export function doneLine(o: OpView, names: ReadonlyMap<string, string>): DoneLin
     case "add": {
       const { written, of, folders } = counted(o);
       if (of === 0 && folders > 0 && !trouble) return { tone: "ok", text: doneCopy.addedFolders(folders, name) };
+      // A file left out is counted, "Added 2 of 4 files". Trouble that is
+      // no file's — a folder skipped where a file of its name stands, the
+      // conflict question answered Skip — leaves every file written, and
+      // the line says what was added, or that nothing was, with Details
+      // for the rest; never "Added 0 of 0 files" (ruled 2026-11-03, with
+      // the results dialog no longer opening by itself for a skip, so
+      // this line is the page's only word).
+      if (trouble && written === of) {
+        const text = of > 0 ? doneCopy.added(written, name) : folders > 0 ? doneCopy.addedFolders(folders, name) : doneCopy.addedNone(name);
+        return { tone: "neutral", text, action: details };
+      }
       if (trouble || written < of) return { tone: "neutral", text: doneCopy.addedOf(written, of, name), action: trouble ? details : undefined };
       return { tone: "ok", text: doneCopy.added(written, name) };
     }

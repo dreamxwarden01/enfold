@@ -2364,8 +2364,9 @@ coming at least every 600 ms. After a spring nothing springs again until the poi
 more than 4 px (the drag threshold) from where it stood, so the row that comes under a still
 pointer — the `..` that takes the first folder's place — is neither climbed nor entered. A file
 row and a crumb never spring, and a drag from outside the window never does: it is an add (§3);
-an op of the open archive that reports a failed or skipped
-item opens the results dialog at once, and an op of another archive says it in the foot's done
+an op of the open archive that reports a failed
+item opens the results dialog at once (one whose only leftovers are skips does not: ruled
+2026-11-03, *The results dialog*, below), and an op of another archive says it in the foot's done
 line, whose *Details* opens the same dialog from any page (*The foot*, below; ruled 2026-10-18 —
 it was a *What happened* dialog here and the summary as a toast elsewhere); a folder the page stood in that went (a Discard dropped it, a Delete took an ancestor)
 is said by an InfoBar naming it, the page having walked its crumbs upwards; the name column takes the width the others do not need — Size, Type and Modified are fixed;
@@ -2768,8 +2769,24 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   other command: the next step an act's end offers, such as *Replace recovery keys…*, stands in
   that end, beside its reason (§13).
 - **The results dialog** (`ResultsDialog`; §3, `FileOutcome`) says what a batch left out. It
-  stands above every route: it opens at once on the archive's page where the batch ran, and from
-  the done line's *Details* on any page. Its title is the outcome, counted — "2 files were not
+  stands above every route: it opens at once on the archive's page where the batch ran when
+  something in it failed, and from the done line's *Details* on any page. A batch whose only
+  leftovers are skips does not open it by itself (ruled 2026-11-03, the user's finding: after
+  *Skip* in an add's conflict question it opened at once to say the file was skipped, a second
+  prompt for the choice just made). A skip is the user's own answer (the conflict question's
+  *Skip*, a *Skip* policy); or the add's own skip of a name that came to stand in the folder
+  after the page asked `CheckNames`, which sees only what is committed (a second drop of a file
+  still being added, whose add waits for the first and then finds it there; an earlier item of
+  the same drop whose name folds onto it); or an extract's folder already in the destination,
+  used as it stands. None of them is a write that went wrong, which is what the dialog opening
+  at once is for: the done line still counts the skip, "Added 2 of 3 files to Photos 2024"
+  [*Details*] — or, when the skip is a folder's and every file was written (a folder offered
+  where a file of its name stands, answered *Skip*), says what was added or that nothing was,
+  "Nothing was added to Photos 2024" [*Details*], never a count of nothing — and its *Details*
+  opens the dialog with the skipped rows and their reason, while a batch with a failure opens it
+  at once with every row, the skips among them (`lib/results.ts` `opensAtOnce`; the done line's
+  *Details* is still `hasTrouble`'s, a failure or a skip).
+  Its title is the outcome, counted — "2 files were not
   added", "1 file was skipped", "2 files were not added and 1 was skipped", the verb the kind's
   (added, replaced, extracted), *folders* when every row is a folder and *items* when they mix —
   with the summary line under it as a caption ("2 files added · 1 folder created · 1 skipped").

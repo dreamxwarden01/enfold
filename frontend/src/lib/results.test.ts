@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FileOutcome } from "./api";
 import { Code } from "./api";
 import { codeText } from "./strings";
-import { detailsText, hasTrouble, resultsTitle, rowName, summaryLine, tally, troubles } from "./results";
+import { detailsText, hasTrouble, opensAtOnce, resultsTitle, rowName, summaryLine, tally, troubles } from "./results";
 
 function out(o: Partial<FileOutcome>): FileOutcome {
   return { path: "", name: "", isDir: false, outcome: "added", size: 0, modifiedAt: 0, ...o };
@@ -119,5 +119,42 @@ describe("the results dialog", () => {
   it("says a skip without a colon inside its own copy", () => {
     const [t] = troubles([out({ name: "a.jpg", outcome: "skipped" })]);
     expect(t.text).not.toMatch(/:/);
+  });
+});
+
+// The dialog opens by itself only when something failed (APP.md §6, ruled
+// 2026-11-03): a skip is not a write that went wrong — most often it is
+// the user's own answer, the conflict question's Skip — and the done
+// line's Details still opens the dialog on it.
+describe("the results dialog opening at once", () => {
+  const added = out({ name: "a.jpg", outcome: "added" });
+  const skipped = out({ name: "b.jpg", outcome: "skipped" });
+  const failed = out({ name: "c.jpg", outcome: "failed", code: Code.CodeIO });
+
+  it("stays shut when the only leftovers are skips", () => {
+    expect(opensAtOnce([added, added, skipped])).toBe(false);
+    expect(opensAtOnce([skipped])).toBe(false);
+    expect(opensAtOnce([out({ name: "Trips", isDir: true, outcome: "skipped" })])).toBe(false);
+    // The done line's Details still has the skipped rows to show.
+    expect(hasTrouble([added, skipped])).toBe(true);
+    expect(troubles([added, skipped], "add").map((t) => t.outcome)).toEqual(["skipped"]);
+  });
+
+  it("opens when something failed", () => {
+    expect(opensAtOnce([added, failed])).toBe(true);
+    expect(opensAtOnce([out({ name: "x", outcome: "failed" })])).toBe(true);
+    expect(opensAtOnce([out({ name: "Photos", isDir: true, outcome: "failed", code: Code.CodeKindMismatch })])).toBe(true);
+  });
+
+  it("opens when something failed and something was skipped, with every row", () => {
+    expect(opensAtOnce([added, skipped, failed])).toBe(true);
+    expect(troubles([added, skipped, failed], "add").map((t) => t.outcome)).toEqual(["skipped", "failed"]);
+  });
+
+  it("stays shut when nothing was left out", () => {
+    expect(opensAtOnce([added, out({ name: "Trips", isDir: true, outcome: "created" }), out({ name: "2024", isDir: true, outcome: "entered" })])).toBe(false);
+    expect(opensAtOnce([])).toBe(false);
+    expect(opensAtOnce(null)).toBe(false);
+    expect(opensAtOnce(undefined)).toBe(false);
   });
 });

@@ -6122,3 +6122,33 @@ disabled button's children, the row's native title still giving the reason; two 
 to the cut look alike, their tooltips telling them apart. For the user's eye in the real
 window: the conflict question with the file that started this, and *Move … to…* when the name
 takes the line.
+
+**The results dialog opens by itself only for a failure** (2026-11-03). The user, in the real
+window: after *Skip* in an add's conflict question, the results dialog opened at once to say the
+file was skipped — a second prompt for the choice just made. Ruled and built: the dialog opens
+by itself, on the archive's page where the batch ran, only when something in it failed; a batch
+whose only leftovers are skips does not open it, the done line still counts them ("Added 2 of 3
+files to Photos 2024" with *Details*), and *Details* opens the same dialog with the skipped rows
+and their reason, as before. The test is a pure predicate, `opensAtOnce` in `lib/results.ts`
+(true for a failed outcome alone), called from the one place that opens the dialog at once
+(`store.applyOp`); `troubles`, `resultsTitle` and `hasTrouble` are as they were, so the dialog's
+rows and the done line's *Details* still count a skip. Why no skip is news enough to open it: a
+skip is the user's own answer (the question's *Skip*, a *Skip* policy), or the add's own skip of
+a name that came to stand in the folder after the page asked `CheckNames`, which sees only what
+is committed (a second drop of a file still being added; an earlier item of the same drop whose
+name folds onto it), or an extract's folder already in the destination, used as it stands — none
+a write that went wrong. The reviewer's finding, taken: with the dialog quiet, the done line was
+the page's only word, and an add whose skip was a folder's (a folder offered where a file of
+its name stands, answered *Skip*) read "Added 0 of 0 files to Photos 2024", or "Added 1 of 1
+file" beside an added file, since the line counts file outcomes alone; now trouble that is no
+file's leaves the line saying what was added ("Added 1 file to Photos 2024") or that nothing was
+("Nothing was added to Photos 2024"), in the neutral ink with *Details*, never a count of
+nothing. Measured in the mock by the builder and the reviewer (the reviewer's mock honouring the
+policy as the core does), at both sizes and in both themes: a chosen skip opens no dialog, one
+file skipped opens none, a failure opens "1 file was not added" at once, a failure beside a skip
+opens "1 file was not added and 1 was skipped", a clean add opens nothing and has no *Details*,
+an extract under *Skip* opens nothing and its *Details* says "3 files were skipped"; the four
+frontend gates and the repo tour pass. Left: the mock's `AddFiles` ignores the policy (it adds a
+colliding name a second time), so a tour that stages a skip needs a shim or a mock that honours
+the policy; the done line after a chosen skip says "Added 2 of 3 files", the same line as a
+batch that lost a file, and never "1 skipped" — the dialog's caption has that count.

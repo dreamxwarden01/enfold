@@ -565,6 +565,7 @@ func TestCloseDuringAwaitingFinishesAtOnce(t *testing.T) {
 // past the hour and not live, goes; a young one and a foreign one stay.
 func TestDragScavengeAtStart(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	root := filepath.Join(dir, "data", "drag")
 	mk := func(name string, m *dragout.Manifest) string {
 		p := filepath.Join(root, name)
@@ -620,6 +621,7 @@ func TestDragScavengeAtStart(t *testing.T) {
 // and what is under test is the exit's own pass.
 func TestDragSweepAtExit(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	root := filepath.Join(dir, "drag")
 	mk := func(name string, m *dragout.Manifest) string {
 		p := filepath.Join(root, name)

@@ -15,6 +15,11 @@ import (
 // testing's own cleanup removes the test's whole temporary root. The harness
 // calls it right after its t.TempDir, so that it runs after the core's
 // Close; and once per test, so that with two harnesses it runs after both.
+// A test that builds its core by hand calls it the same way, right after
+// its first t.TempDir and before any Close is registered, and freshCore
+// calls it for the folder it is given: those cores delete files as the
+// harness's do, and testing's removal failed on the stray copy below in
+// about one race run in twenty (2026-11-04).
 // A folder made before the harness is left to testing, since a core made
 // before it is closed after this runs.
 //
@@ -51,6 +56,17 @@ func removeTempDirs(t *testing.T, dir string) {
 			}
 		}
 	})
+}
+
+// tempDirHolding is the folder t.TempDir made that holds path: path itself
+// when t.TempDir made it, else its parent, as for a core whose data folder
+// is the "data" a test names inside its t.TempDir. removeTempDirs judges
+// whatever is not such a folder.
+func tempDirHolding(path string) string {
+	if _, err := strconv.Atoi(filepath.Base(path)); err == nil {
+		return path
+	}
+	return filepath.Dir(path)
 }
 
 // removePatiently is the removal of one folder removeTempDirs makes.

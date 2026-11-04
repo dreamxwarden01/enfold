@@ -124,5 +124,29 @@ type Receipt struct {
 	WrittenAt int64
 }
 
-// now is the clock every timestamp comes from; tests replace it.
-var now = func() int64 { return time.Now().Unix() }
+// clock, set by a test through SetNow, is read by now in place of the wall
+// clock. nil outside tests.
+var clock func() int64
+
+// now is the clock every timestamp comes from: the wall clock in Unix
+// seconds, or the test's clock when one is set.
+func now() int64 {
+	if clock != nil {
+		return clock()
+	}
+	return time.Now().Unix()
+}
+
+// SetNow installs clock for a test of another package, in the shape of the
+// keystore's SetCommitFault: a file's modified_at is the time of the write
+// that added it (FORMAT.md, the file record's modified_at row; R32), not
+// the source file's time, so a test of the order by modified time gives
+// each add its own second through this hook rather than hoping the adds
+// straddle the wall clock's seconds as it needs. It returns a function that
+// puts the previous clock back. Package-level: a test that sets it does not
+// run in parallel. Never called outside tests.
+func SetNow(f func() int64) (restore func()) {
+	prev := clock
+	clock = f
+	return func() { clock = prev }
+}

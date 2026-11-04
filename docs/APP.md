@@ -4492,7 +4492,20 @@ The core is tested without Wails: it takes app-side interfaces `Cards` (`Readers
 Keystore and archive are the real packages over temp files; timers take a clock. The keystore
 exports two test hooks, `SetCommitFault` and `SetWriteSeen` (since 2026-10-27; nil outside
 tests, each returning its restore), so that the core's tests fail a commit at a named step and
-see where each write lands (FORMAT R41). The shell is exercised by hand in `wails3 dev` with
+see where each write lands (FORMAT R41). The archive exports one in the same shape, `SetNow` (since 2026-11-04), which puts a
+test's clock in place of the wall clock for every timestamp the archive writes, so that the order
+by modified time — a file's `modified_at` is the time of its add (R32), not the source file's —
+is tested with each add in its own second rather than on whatever seconds the adds happened to
+land in. A ceremony's last step reaches the tests before the
+ceremony has ended: a flow sets `StepDone`, `StepRecords` or the reveal's URL itself and only then
+returns to the run that clears it, so a test that went straight on was refused with
+`ceremony.in_progress` (three tests, five times, until 2026-11-04; with that window held open on
+purpose, twelve tests in `merge_test.go`, `records_test.go`, `rekey_test.go` and `reveal_test.go`
+failed so). The test recorder's wait for such a step therefore also waits on that ceremony's `done`
+channel, when the ceremony is still at the very event seen. A test that builds its core by hand
+has its folders removed with the same patience as the harness's (`removeTempDirs`), since the
+anti-virus's stray copy of a deleted file failed testing's own removal about once in twenty race
+runs of the package. The shell is exercised by hand in `wails3 dev` with
 `ENFOLD_DATA_DIR` set to a throwaway data folder — which now holds the vault too (§2.1), so a
 throwaway folder is a throwaway vault — instead of `%LOCALAPPDATA%\Enfold`. Frontend tests cover
 the copy mapping of ceremony states and the "never 0 attempts" rule.

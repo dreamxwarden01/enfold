@@ -62,6 +62,13 @@ func writeVault(t *testing.T, path, password string, specs ...keystore.SlotSpec)
 // and password the vault's own, empty while its switch is off.
 func harnessOver(t *testing.T, cards *fakeCards, dir, path, recovery, password string) *harness {
 	t.Helper()
+	// Before the core's Close is registered, so that it runs after it, as
+	// newHarness does (tempdir_test.go): without it the anti-virus's
+	// passing copy of a file the core deleted in dir's data folder failed
+	// testing's own removal ("The directory is not empty"), seen once in a
+	// race run of TestALegacyTailIsRetiredInFullBeforeAPublish on
+	// 2026-11-04. Every caller passes a folder t.TempDir just made.
+	removeTempDirs(t, dir)
 	h := &harness{t: t, dir: dir, vault: path, recovery: recovery, entangled: password, clk: newFakeClock(), rec: &recorder{}, cards: cards}
 	var cs Cards
 	if cards != nil {
@@ -75,6 +82,7 @@ func harnessOver(t *testing.T, cards *fakeCards, dir, path, recovery, password s
 		t.Fatal(err)
 	}
 	h.c = c
+	h.rec.hear(c)
 	t.Cleanup(c.Close)
 	if e := c.OpenVaultFile(path, "Test vault"); e != nil {
 		t.Fatalf("open vault: %v", e)
@@ -212,10 +220,15 @@ func (h *harness) chooseNew(pw string) {
 // end waits for the act's final event, Done or Failed.
 func (h *harness) end() CeremonyState {
 	h.t.Helper()
-	return h.rec.waitFor(h.t, EventVaultCeremony, func(x any) bool {
+	st := h.rec.waitFor(h.t, EventVaultCeremony, func(x any) bool {
 		s, ok := x.(CeremonyState)
 		return ok && (s.Step == StepDone || s.Step == StepFailed)
 	}).(CeremonyState)
+	// A Done the flow set itself reaches the test before the ceremony has
+	// ended; the next act would be refused with ceremony.in_progress
+	// (waitCeremonyEnded).
+	h.rec.waitCeremonyEnded(h.t, st)
+	return st
 }
 
 // done is end, failing the test unless the act ended Done.

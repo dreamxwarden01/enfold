@@ -2,11 +2,12 @@ package app
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/dreamxwarden01/enfold/internal/archive"
 )
 
 // The order of a listing (APP.md §3 Page, ruled 2026-09-10): the core's, so
@@ -209,37 +210,30 @@ func TestSortByModified(t *testing.T) {
 // successive offsets are one list; Children answers the folder's ids in
 // that order and counts what Total counts; the sort string is checked.
 func TestPageOrderIsOneListAcrossOffsets(t *testing.T) {
+	// A file's modified_at is the time of the write that added it, not the
+	// source file's time (FORMAT.md, the file record's modified_at row;
+	// R32), so the order by modified time is the order of the adds. Each
+	// timestamp the archive writes here is its own second, one past the
+	// last, through archive.SetNow: on the wall clock, twelve adds that all
+	// landed within one second tied and fell back to the name, and adds that
+	// straddled a second did not, so the -modified order below held about
+	// nineteen runs in twenty under -race (2026-11-04). The restore is
+	// registered before the harness, so that it runs after the harness's
+	// own cleanup has closed the archive.
+	var tick atomic.Int64
+	tick.Store(time.Now().Unix())
+	t.Cleanup(archive.SetNow(func() int64 { return tick.Add(1) }))
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	id := h.openArchive(t, "Sorted")
 	var paths []string
-	var whens []time.Time
-	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 1; i <= 12; i++ {
 		// Sizes that collide in pairs, so the name tie-break is exercised
 		// across a page boundary too.
-		p := h.src(t, fmt.Sprintf("f%02d.txt", i), strings.Repeat("x", (i+1)/2))
-		when := base.Add(time.Duration(13-i) * time.Hour)
-		if err := os.Chtimes(p, when, when); err != nil {
-			t.Fatal(err)
-		}
-		paths = append(paths, p)
-		whens = append(whens, when)
+		paths = append(paths, h.src(t, fmt.Sprintf("f%02d.txt", i), strings.Repeat("x", (i+1)/2)))
 	}
-	// The order below is the order of these times, read by the add from the
-	// files. On this machine a scanner in the temp folder has been seen to
-	// move a fresh file's time under a test (twice in one gate run,
-	// 2026-09-21, never in isolation): a time that did not stay is the
-	// machine's doing, not the sort's, and says so rather than failing.
-	for i, p := range paths {
-		st, err := os.Stat(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !st.ModTime().Equal(whens[i]) {
-			t.Skipf("%s: the file's time moved under the test (%v, set %v) — the machine, not the sort", filepath.Base(p), st.ModTime(), whens[i])
-		}
-	}
+	// One add of the twelve, which adds them in this order, f01.txt first:
+	// f12.txt is the newest.
 	h.add(t, id, rootID, PolicySkip, paths...)
 	for _, d := range []string{"Beta", "alpha"} {
 		if _, e := h.c.CreateFolder(id, rootID, d); e != nil {
@@ -291,7 +285,7 @@ func TestPageOrderIsOneListAcrossOffsets(t *testing.T) {
 		t.Fatalf("-size,-name: %q", got)
 	}
 	whole, _ = h.c.Page(id, rootID, "-modified", 0, 100)
-	if got := whole.Rows[2].Name + " " + whole.Rows[13].Name; got != "f01.txt f12.txt" {
+	if got := whole.Rows[2].Name + " " + whole.Rows[13].Name; got != "f12.txt f01.txt" {
 		var times []string
 		for _, r := range whole.Rows {
 			times = append(times, fmt.Sprintf("%s@%d", r.Name, r.ModifiedAt))

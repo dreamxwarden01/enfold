@@ -439,6 +439,7 @@ func TestRemovableFalseForTheLastRecoverySlotWhileEntangled(t *testing.T) {
 	b := newFakeCard("654321")
 	pubB := b.addKey(0x9d, true)
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	vault := filepath.Join(dir, "vault.eks")
 	rk, err := kdf.NewRecoveryKey()
 	if err != nil {
@@ -470,6 +471,7 @@ func TestRemovableFalseForTheLastRecoverySlotWhileEntangled(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.c = c
+	h.rec.hear(c)
 	t.Cleanup(c.Close)
 	if e := c.OpenVaultFile(vault, "Test vault"); e != nil {
 		t.Fatal(e)

@@ -40,6 +40,7 @@ func TestOpenVaultFileFailureKeepsVault(t *testing.T) {
 // Locked state over an empty path.
 func TestCreateVaultFailureFromNone(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	rec := &recorder{}
 	c, _ := New(Deps{Events: rec, Clock: newFakeClock(), DataDir: filepath.Join(dir, "data")})
 	c.Start()
@@ -104,6 +105,7 @@ func TestAnAddThatWritesNothingCommitsNothing(t *testing.T) {
 // slot (FORMAT.md §6, §18.1).
 func TestCreateVaultTokenEntangled(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	card := newFakeCard("123456")
 	card.mgmt = []byte("0123456789abcdef0123456789abcdef")
 	cards := &fakeCards{card: card}
@@ -336,6 +338,11 @@ func freshCore(t *testing.T, data string) (*Core, *recorder) {
 
 func freshCoreWithCards(t *testing.T, data string, cards *fakeCards) (*Core, *recorder) {
 	t.Helper()
+	// The folder is removed patiently, after the Close registered below, as
+	// a harness's is: a core built here meets the anti-virus's stray copy
+	// as often as one the harness builds (tempdir_test.go). When a harness
+	// was made first in the test, its registration already covers data.
+	removeTempDirs(t, tempDirHolding(data))
 	rec := &recorder{}
 	var cs Cards
 	if cards != nil {
@@ -707,6 +714,7 @@ func TestVerifyBackup(t *testing.T) {
 // first; a wrong PIN says so; a label left empty is the serial number.
 func TestEnrolledKeyProvesItself(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	card := newFakeCard("123456")
 	card.addKey(0x9d, true) // a key from before, as a YubiKey used elsewhere holds
 	cards := &fakeCards{card: card}
@@ -783,6 +791,7 @@ func TestEnrolledKeyProvesItself(t *testing.T) {
 // key is said and asked again; the prompt names the key being enrolled.
 func TestGeneratePathWrongPINIsAskedAgain(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	card := newFakeCard("123456")
 	card.mgmt = []byte("0123456789abcdef0123456789abcdef")
 	cards := &fakeCards{card: card}

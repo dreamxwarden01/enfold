@@ -99,6 +99,10 @@ type recorder struct {
 	// it: the only way to reach a running operation at a known point —
 	// cancelling one mid-add, for instance — without racing it.
 	hook func(name string, payload any)
+	// core is the core this recorder hears, set by the harnesses once the
+	// core is built: what lets a wait for a ceremony's last step also wait
+	// for the ceremony to end (waitCeremony). A bare recorder has none.
+	core *Core
 }
 
 type event struct {
@@ -175,7 +179,61 @@ func (r *recorder) waitCeremony(t *testing.T, step CeremonyStep, needPrompt bool
 		s, ok := p.(CeremonyState)
 		return ok && s.Step == step && (!needPrompt || s.PromptID != "")
 	})
-	return p.(CeremonyState)
+	st := p.(CeremonyState)
+	r.waitCeremonyEnded(t, st)
+	return st
+}
+
+// waitCeremonyEnded waits, after the event st, for the ceremony that sent it
+// to have ended, when st is a step a ceremony ends at: StepDone, StepRecords,
+// or StepRecovery with no prompt (the reveal's one-time URL). A flow sets its
+// last step itself (an unlock's StepDone, the records ceremony's StepRecords
+// with the handle, the reveal's URL; APP.md §2.2, §3 Keys, §13) and only then
+// returns to run, whose deferred closes and finish clear c.cer; the event
+// reaches the test first. A test that went on at once found the ceremony
+// still installed and its next gated call (InspectRecords, InspectFile,
+// MergeRecords, BeginUnlock) refused with ceremony.in_progress (APP.md
+// §2.1). It waits on the ceremony's own done channel, closed after finish,
+// and only for the ceremony that is still at the very event the test saw
+// (same kind, same Seq): one that has moved on, or a later one, is not the
+// one that event came from. StepFailed is left alone, since a parked
+// ceremony stays installed at it until it is cancelled. A recorder with no
+// core waits for nothing.
+func (r *recorder) waitCeremonyEnded(t *testing.T, st CeremonyState) {
+	t.Helper()
+	switch {
+	case st.Step == StepDone, st.Step == StepRecords:
+	case st.Step == StepRecovery && st.PromptID == "":
+	default:
+		return
+	}
+	r.mu.Lock()
+	c := r.core
+	r.mu.Unlock()
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	cer := c.cer
+	if cer != nil && (cer.kind != st.Kind || cer.state.Seq != st.Seq) {
+		cer = nil
+	}
+	c.mu.Unlock()
+	if cer == nil {
+		return
+	}
+	select {
+	case <-cer.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the %s ceremony did not end after its %s event", st.Kind, st.Step)
+	}
+}
+
+// hear tells the recorder which core it hears (waitCeremonyEnded).
+func (r *recorder) hear(c *Core) {
+	r.mu.Lock()
+	r.core = c
+	r.mu.Unlock()
 }
 
 // waitState waits for the vault to reach state.
@@ -739,6 +797,7 @@ func newHarnessEntangled(t *testing.T, cards *fakeCards, hwPub []byte, password 
 		t.Fatal(err)
 	}
 	h.c = c
+	h.rec.hear(c)
 	t.Cleanup(c.Close)
 	if e := c.OpenVaultFile(vault, "Test vault"); e != nil {
 		t.Fatalf("open vault: %v", e)

@@ -530,6 +530,7 @@ func TestProofCancelIsImmediate(t *testing.T) {
 	cards := &fakeCards{card: card}
 	cards.setReaders("Yubico A")
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	rec := &recorder{}
 	c, _ := New(Deps{Cards: cards, Events: rec, Clock: newFakeClock(), DataDir: dir + "/data", Log: t.Logf})
 	c.Start()

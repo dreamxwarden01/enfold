@@ -1565,6 +1565,7 @@ func TestEnrollPasswordAndRemove(t *testing.T) {
 
 func TestCreateVaultShowsRecoveryOnce(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	rec := &recorder{}
 	c, err := New(Deps{Events: rec, Clock: newFakeClock(), DataDir: filepath.Join(dir, "data")})
 	if err != nil {
@@ -1660,6 +1661,7 @@ func TestCreateVaultShowsRecoveryOnce(t *testing.T) {
 
 func TestOpenVaultErrors(t *testing.T) {
 	dir := t.TempDir()
+	removeTempDirs(t, dir) // the core is built by hand: see tempdir_test.go
 	rec := &recorder{}
 	c, _ := New(Deps{Events: rec, Clock: newFakeClock(), DataDir: filepath.Join(dir, "data")})
 	c.Start()

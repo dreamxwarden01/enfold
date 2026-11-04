@@ -6545,3 +6545,41 @@ merged into the spinner's), the repo tour. For the user's eye in the real window
 1.8 s turn reads as calm and the tinted track as a whole circle; two adds at once, the three
 marks turning as one on one line; the compact rail's 10 px ring off the *Archives* icon's corner. Seen the same day: right, but
 1.8 s a turn read as a touch slow; ruled 1.4 s (the old ring's 1 s was too fast).
+
+**Three test flakes in the core's package, found and fixed** (2026-11-04; the user: "do this task
+here"). The first, seen five times in a day across normal and race runs under three test names
+(`TestDiscardRecordsAndLockTriggerDropTheHandle`, `TestMergeOfAForgottenRecordIsAnExplicitRestore`,
+`TestStagedCopyUnlocksPurgeNothing`), always an inspect refused with `ceremony.in_progress` and
+the fake's "locked: exit", never on a rerun. The cause, proved by holding the window open with a
+temporary sleep in `ceremony.run` (twelve tests then failed on the unfixed tree, every one at its
+reported line; all passed with the fix): a ceremony's flow publishes its own last step from
+inside the flow — the records ceremony's `StepRecords`, the unlock's `StepDone`, the reveal's
+recovery URL, create's, import's and verify's `StepDone` — before it returns, and only then do its
+deferred closes run and `finish` clear the installed ceremony; the tests' recorder returned on
+that first event, so the test's next gated call reached the core while the ceremony was still
+installed, in a window the size of a keystore close and a staged file's removal on Windows,
+stretched now and then by the antivirus. Nothing crossed a test boundary; "locked: exit" was the
+failing test's own cleanup closing the core. Fixed in the tests alone: after an ending step the
+recorder waits on that ceremony's own done channel, bounded at five seconds, only while the
+installed ceremony is still the one the event named (its kind and sequence); never on a failed
+step, since a parked ceremony stays installed until it is cancelled. The second, older: tests
+that build a core by hand left their data folder to the test runner's own removal, which does
+not wait for the antivirus's stray copy of a deleted file ("the directory is not empty");
+their shared helper and the ten tests that call `New` themselves now register the harness's
+own `removeTempDirs`, which waits it out (a 300-run stress of the three worst went from two or
+three failures to none). The third, found while verifying under twenty race runs: the sort
+test's "modified" order expected the twelve adds to land within one wall-clock second, since a
+file's `modified_at` is the time it was added, not the source file's; an archive-package clock
+hook in the shape of the keystore's (nil outside tests, returning its restore) now gives each
+add its own second, and the test says what the field is. Measured: twenty race runs and twenty
+plain runs of the package clean after the first fix; the second verified by the stress; the
+third by a hundred race runs of the test; the race detector never reported a data race in any
+of it; an outside read-only audit of the diff (Codex, gpt-6-astra) found nothing: the recorder
+releases both mutexes before it waits, every terminal flow closes the done channel through
+`run`'s deferred close, parked failures are excluded, the hook restores exactly what it
+replaced and has no caller outside tests. Left: the page receives `StepRecords` or `StepDone` a few milliseconds before the ceremony
+clears, so a user's gated call in that window would be refused — only a human could not act
+that fast, and `IncomingRecords`, which the merge dialog calls on its own, is not gated — the
+core's event order is unchanged; if ever it must be guaranteed, `finish` becomes the only
+sender of a final step. Also: a twenty-run race pass of the package takes about fourteen
+minutes, past `go test`'s ten-minute default, so it needs `-timeout=40m`.

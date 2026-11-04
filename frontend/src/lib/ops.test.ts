@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { busyLabel, busyOp, busyOps, busyReason, cancellable, hasBar, opErrorLine, opLabel, plateLow, releasedInside, showsCancel, stopsFirst, stripCount } from "./ops";
+import { busyLabel, busyOp, busyOps, busyReason, cancellable, hasBar, opErrorLine, opLabel, RELEASE_INSET, RELEASE_MS, releasedInside, showsCancel, stopsFirst, stripCount } from "./ops";
 import type { BusyOp } from "./ops";
 import { dragOutCopy } from "./strings";
 
@@ -270,44 +270,38 @@ describe("the busy archive", () => {
 });
 
 // Files held over a busy list (APP.md §6, *The busy archive*; the user's
-// rulings of 2026-11-03): the plate keeps clear of the drag image, and a
-// leave from inside the list is a refused release.
-describe("the plate's half", () => {
-  it("starts in the half the pointer is not in", () => {
-    expect(plateLow(null, 0.8)).toBe(false);
-    expect(plateLow(null, 0.2)).toBe(true);
-    expect(plateLow(null, 0.5)).toBe(false);
-  });
-
-  it("does not flap at the middle: it changes halves past the middle third's far edge only", () => {
-    // In the upper half (the pointer was low): the pointer climbing through
-    // the middle third leaves it there, past a third it goes down.
-    expect(plateLow(false, 0.6)).toBe(false);
-    expect(plateLow(false, 0.4)).toBe(false);
-    expect(plateLow(false, 1 / 3)).toBe(false);
-    expect(plateLow(false, 0.3)).toBe(true);
-    // In the lower half (the pointer was high): the same, mirrored.
-    expect(plateLow(true, 0.4)).toBe(true);
-    expect(plateLow(true, 0.6)).toBe(true);
-    expect(plateLow(true, 2 / 3)).toBe(true);
-    expect(plateLow(true, 0.7)).toBe(false);
-  });
-});
-
-describe("a leave from inside the list", () => {
+// rulings of 2026-11-03): a leave from a busy list is a refused release
+// when the last dragover, or the leave itself, stood well inside the list.
+describe("a leave from a busy list", () => {
   const b = { left: 100, top: 50, right: 600, bottom: 450 };
+  const zero = { x: 0, y: 0 };
 
-  it("is inside only strictly within the box", () => {
-    expect(releasedInside(300, 200, b)).toBe(true);
-    expect(releasedInside(100.5, 449.5, b)).toBe(true);
+  it("is a release when the last dragover stood inside, though the leave says 0,0 (the real window)", () => {
+    expect(releasedInside({ x: 300, y: 200 }, zero, b)).toBe(true);
+    expect(releasedInside({ x: 300, y: 200 }, zero, b, null)).toBe(true);
+    // Exactly the inset from an edge still counts.
+    expect(releasedInside({ x: 100 + RELEASE_INSET, y: 450 - RELEASE_INSET }, zero, b)).toBe(true);
   });
 
-  it("is a plain leave at or beyond the edge", () => {
-    expect(releasedInside(100, 200, b)).toBe(false);
-    expect(releasedInside(600, 200, b)).toBe(false);
-    expect(releasedInside(300, 50, b)).toBe(false);
-    expect(releasedInside(300, 450, b)).toBe(false);
-    expect(releasedInside(700, 200, b)).toBe(false);
-    expect(releasedInside(300, 10, b)).toBe(false);
+  it("is a plain leave when the last dragover was near the edge and the leave outside", () => {
+    expect(releasedInside({ x: 596, y: 200 }, { x: 604, y: 200 }, b)).toBe(false);
+    expect(releasedInside({ x: 300, y: 54 }, { x: 300, y: 46 }, b)).toBe(false);
+    expect(releasedInside({ x: 100 + RELEASE_INSET - 1, y: 200 }, zero, b)).toBe(false);
+    expect(releasedInside({ x: 300, y: 450 - RELEASE_INSET + 0.5 }, zero, b)).toBe(false);
+    expect(releasedInside(null, zero, b)).toBe(false);
+  });
+
+  it("is a release when the leave's own point stands inside, whatever the last dragover", () => {
+    expect(releasedInside({ x: 596, y: 200 }, { x: 300, y: 200 }, b)).toBe(true);
+    expect(releasedInside(null, { x: 300, y: 200 }, b)).toBe(true);
+    // The leave's point on the edge or within the inset is no yes.
+    expect(releasedInside(null, { x: 600, y: 200 }, b)).toBe(false);
+    expect(releasedInside(null, { x: 595, y: 200 }, b)).toBe(false);
+  });
+
+  it("is nothing when a dragover came within RELEASE_MS of the leave", () => {
+    expect(releasedInside({ x: 300, y: 200 }, zero, b, 50)).toBe(false);
+    expect(releasedInside(null, { x: 300, y: 200 }, b, RELEASE_MS - 1)).toBe(false);
+    expect(releasedInside({ x: 300, y: 200 }, zero, b, RELEASE_MS)).toBe(true);
   });
 });

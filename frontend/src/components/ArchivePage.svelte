@@ -37,7 +37,8 @@
   import type { MenuClose } from "../lib/menu";
   import { CLOSING, fileBlankItems, fileRowItems } from "../lib/filemenu";
   import type { FileBlankCmd, FileCmd, Stop } from "../lib/filemenu";
-  import { BUSY_TIP_MS, RELEASE_MS, busyLabel, busyOp, busyOps, busyReason, plateLow, releasedInside, stopsFirst } from "../lib/ops";
+  import { BUSY_TIP_MS, RELEASE_MS, busyLabel, busyOp, busyOps, busyReason, releasedInside, stopsFirst } from "../lib/ops";
+  import type { Point } from "../lib/ops";
   import { clipOf, pastePlan, planOf } from "../lib/paste";
   import type { AddPlan, Clip } from "../lib/paste";
   import { PREVIEW_TEXT_CAP } from "../lib/viewer";
@@ -293,46 +294,46 @@
   // accent's wash under the dashed accent ring — taken; busy, the danger's
   // wash under a solid danger border, with the plate's words — refused.
   let held = $state(false);
-  // Where the plate stands while the list is busy: the half the pointer is
-  // not in, so Explorer's drag image, a card-sized thumbnail under the
-  // pointer, never covers its words (lib/ops.ts plateLow; null until the
-  // drag's first hover says where the pointer is). Wherever held goes
-  // false the half goes back to null with it (holdOff, dropBlank,
-  // dropElsewhere, dragEnded): plateLow keeps the half it is given while the
-  // pointer is in the list's middle third, so a half left from the last
-  // drag would decide the next drag's first hover there, and the plate
-  // could stand in the pointer's own half, under Explorer's drag image.
-  let plateDown = $state<boolean | null>(null);
+  // The point of the last dragover (or dragenter) the list saw, which the
+  // refused release is read from (below); null between drags. Wherever held
+  // goes false it goes back to null with it, so one drag's point never
+  // decides the next drag's leave.
+  let lastOver: Point | null = null;
   // The window's dragend: our own drag ended, wherever it was released.
   function dragEnded() {
     held = false;
-    plateDown = null;
+    lastOver = null;
   }
   function holdOn(e: DragEvent) {
     if (store.dragOut || !e.dataTransfer?.types.includes("Files")) return;
     held = true;
-    const b = listEl?.getBoundingClientRect();
-    if (b && b.height > 0) plateDown = plateLow(plateDown, (e.clientY - b.top) / b.height);
+    lastOver = { x: e.clientX, y: e.clientY };
   }
   // A release over a busy list never arrives as a drop: the list is no drop
-  // target, so the runtime ends the drag with a dragleave. A leave whose
-  // pointer still stands inside the list's box, with no dragover anywhere
-  // in the window within RELEASE_MS, is that release, and it raises the
-  // callout as a drop that still arrived does (the user's ruling of
-  // 2026-11-03: a drop not taken says so, as a paste does). A leave through
-  // the edge or onto another part of the window stands at or beyond the
-  // edge, or is followed by the window's dragover, and says nothing. An Esc
-  // mid-drag also ends it with a leave inside the box, and the callout's
-  // words are as true then (APP.md §6, the callout).
+  // target, so the runtime ends the drag with a dragleave. In the real
+  // window that leave carries no point (0,0: Chromium forwards OLE's
+  // DragLeave without one), so the release is read from the last dragover's
+  // point, which is always real, and from the leave's own as a second yes
+  // (lib/ops.ts releasedInside): either well inside the list's box, with no
+  // dragover anywhere in the window within RELEASE_MS, is that release, and
+  // it raises the callout as a drop that still arrived does (the user's
+  // rulings of 2026-11-03: a drop not taken says so, as a paste does). A
+  // leave through the edge has its last dragover near the edge, since the
+  // runtime sends one every 50 ms or so, and a leave onto another part of
+  // the window is followed by the window's dragover; neither says anything.
+  // An Esc mid-drag, or a fast flick out of the window from deep inside the
+  // list, also raises it, which is accepted: its words are as true then
+  // (APP.md §6, the callout).
   let releaseTimer: ReturnType<typeof setTimeout> | undefined;
   function holdOff(e: DragEvent) {
     const to = e.relatedTarget;
     if (to instanceof Node && listEl?.contains(to)) return;
     const was = held;
+    const last = lastOver;
     held = false;
-    plateDown = null;
+    lastOver = null;
     const b = listEl?.getBoundingClientRect();
-    if (!was || !busy || draining || store.dragOut || !b || !releasedInside(e.clientX, e.clientY, b)) return;
+    if (!was || !busy || draining || store.dragOut || !b || !releasedInside(last, { x: e.clientX, y: e.clientY }, b)) return;
     clearTimeout(releaseTimer);
     releaseTimer = setTimeout(() => raiseTip(busyCopy.dropAgain), RELEASE_MS);
   }
@@ -1370,7 +1371,7 @@
   // the runtime's, as before.
   function dropBlank(e: DragEvent) {
     held = false;
-    plateDown = null;
+    lastOver = null;
     if (store.dragOut && isOver(hereTarget.id, "list")) dropOn(e, hereTarget, "list");
   }
 
@@ -1403,7 +1404,7 @@
   // its paths. A foreign drop ends the flight the same way, as nothing.
   function dropElsewhere(e: DragEvent) {
     held = false;
-    plateDown = null;
+    lastOver = null;
     springer.cancel();
     dropTarget = null;
     const f = store.dragOut;
@@ -2116,21 +2117,20 @@
            words, the copy pointer. Refused, an operation running: the
            danger's wash under a solid danger border, and the two lines on a
            plate, a small card of the surface in the plain ink, so the
-           colours say refused and the words say why; the plate stands in
-           the half of the list the pointer is not in, clear of Explorer's
-           drag image. It takes no pointer, so the drag's events and the
-           runtime's hit test reach the list beneath; it goes with the
+           colours say refused and the words say why; the plate stands
+           centred in the card, always (the user's ruling of 2026-11-03:
+           Explorer's drag image may cover it, accepted). It takes no
+           pointer, so the drag's events and the runtime's hit test reach
+           the list beneath; it goes with the
            drag, and turns from refused to taken if the operation ends
            under the hand. Not while the archive drains with its operation
            running, which closes when it ends: the head says so, and
            nothing could be dropped here later. -->
       <div class="drop-veil" class:refuse={!!busy} role="status" in:fade={motion(MOVE, { easing: enter })} out:fade={motion(LEAVE)}>
         {#if busy}
-          <div class="plate-half" class:low={plateDown === true}>
-            <div class="busy-plate">
-              <span class="busy-what">{busyName}</span>
-              <span class="busy-when">{busyCopy.dropHere}</span>
-            </div>
+          <div class="busy-plate">
+            <span class="busy-what">{busyName}</span>
+            <span class="busy-when">{busyCopy.dropHere}</span>
           </div>
         {/if}
       </div>

@@ -259,20 +259,6 @@ export const BUSY_TIP_MS = 5000;
 // ---- files held over a busy list (APP.md §6, *The busy archive*; the
 // user's rulings of 2026-11-03 after a real Explorer drag) ----------------
 
-// plateLow: whether the veil's plate stands in the lower half of the list,
-// read from where the pointer is (at: its height in the list, 0 at the top,
-// 1 at the bottom) and where the plate stood (was; null at the drag's first
-// hover). Explorer's drag image, a thumbnail the size of a card, hangs
-// under the pointer and covered the plate's two lines mid-list (the judge's
-// risk 5, seen in the real window), so the plate takes the half the pointer
-// is not in. It changes halves only when the pointer crosses the middle
-// third's far edge, so a pointer resting near the middle does not make it
-// flap from half to half.
-export function plateLow(was: boolean | null, at: number): boolean {
-  if (was === null) return at < 0.5;
-  return was ? at <= 2 / 3 : at < 1 / 3;
-}
-
 // A box in the window's CSS px, as getBoundingClientRect gives it.
 export interface Box {
   left: number;
@@ -281,14 +267,40 @@ export interface Box {
   bottom: number;
 }
 
-// releasedInside: whether a dragleave at (x, y) left the list from inside
-// its box — the runtime's answer to a release over a list that is no drop
-// target (it fires dragleave and never drop), and to an Esc mid-drag —
-// rather than through its edge or onto another part of the window, whose
-// leave stands at or beyond the edge. The page waits RELEASE_MS for a
-// dragover anywhere in the window before it calls it a release.
-export function releasedInside(x: number, y: number, b: Box): boolean {
-  return x > b.left && x < b.right && y > b.top && y < b.bottom;
+// A point in the window's CSS px, as a drag event's clientX and clientY.
+export interface Point {
+  x: number;
+  y: number;
+}
+
+// How far inside the list's box, from every edge, a point must stand to
+// read as a release rather than a leave through the edge. Explorer sends a
+// dragover every 50 ms or so, so a pointer that leaves through the edge
+// has its last dragover within a few px of it; 12 px is clear of that and
+// still small beside the list (the user's ruling of 2026-11-03).
+export const RELEASE_INSET = 12;
+
+// insideBy: whether p stands inside the box b by at least m from every edge.
+export function insideBy(p: Point, b: Box, m: number): boolean {
+  return p.x >= b.left + m && p.x <= b.right - m && p.y >= b.top + m && p.y <= b.bottom - m;
+}
+
+// releasedInside: whether a dragleave from a busy list is a refused release
+// (the user's rulings of 2026-11-03), the runtime's answer to a release over
+// a list that is no drop target (it fires dragleave and never drop), rather
+// than a leave through the edge or onto another part of the window.
+// lastOver is the point of the last dragover the list saw (null if none),
+// leaveAt the leave's own point, overAfter the time from the leave to the
+// next dragover anywhere in the window (null while none has come). In the
+// real window the leave carries no point: Chromium's drop target forwards
+// an OLE DragLeave with empty points (WebContentsViewAura::OnDragExited),
+// so the page reads 0,0, outside the box, and the callout never came. The
+// last dragover's point is always real, so it decides; the leave's own
+// point inside is a second yes (CDP's drags carry it). A dragover within
+// RELEASE_MS says the drag goes on, so the leave was no release.
+export function releasedInside(lastOver: Point | null, leaveAt: Point, b: Box, overAfter: number | null = null): boolean {
+  if (overAfter !== null && overAfter < RELEASE_MS) return false;
+  return (lastOver !== null && insideBy(lastOver, b, RELEASE_INSET)) || insideBy(leaveAt, b, RELEASE_INSET);
 }
 
 // How long a leave from inside the list waits for the drag to show itself

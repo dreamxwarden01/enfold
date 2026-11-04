@@ -49,19 +49,25 @@ describe("the busy archive's page", () => {
     const open = "{#if held && !(busy && draining)}";
     const veil = html.slice(html.indexOf(open), html.indexOf("{#if paneOn}"));
     expect(veil).toContain('class="drop-veil" class:refuse={!!busy} role="status"');
-    // The plate only for a refusal, in the half the pointer is not in.
-    expect(veil.indexOf("{#if busy}")).toBeLessThan(veil.indexOf('class="plate-half" class:low={plateDown === true}'));
-    expect(veil).toContain('class="busy-plate"');
+    // The plate only for a refusal, centred in the card and never moved
+    // (the user's ruling of 2026-11-03 retired its two halves).
+    expect(veil.indexOf("{#if busy}")).toBeLessThan(veil.indexOf('class="busy-plate"'));
+    expect(page).not.toMatch(/plateDown|plateLow|plate-half/);
     expect(veil).toContain("{busyName}");
     expect(veil).toContain("{busyCopy.dropHere}");
     // Between the list and the pane, inside the split: the list's cell.
     expect(html.indexOf(open)).toBeGreaterThan(html.indexOf('<div class="tablewrap"'));
-    expect(page).toContain("plateDown = plateLow(plateDown, (e.clientY - b.top) / b.height);");
   });
 
-  it("reads a leave from inside a busy list as a refused release, which any dragover in the window cancels", () => {
+  // The user's real window, 2026-11-03: the leave a release ends with
+  // carries 0,0, so the last dragover's point decides, the leave's own a
+  // second yes.
+  it("reads a leave from a busy list by the last dragover's point as a refused release, which any dragover in the window cancels", () => {
+    const on = page.slice(page.indexOf("function holdOn("), page.indexOf("function holdOff("));
+    expect(on).toContain("lastOver = { x: e.clientX, y: e.clientY };");
     const off = page.slice(page.indexOf("function holdOff("), page.indexOf("function dragGoesOn("));
-    expect(off).toContain("releasedInside(e.clientX, e.clientY, b)");
+    expect(off).toContain("releasedInside(last, { x: e.clientX, y: e.clientY }, b)");
+    expect(off.indexOf("const last = lastOver;")).toBeLessThan(off.indexOf("lastOver = null;"));
     expect(off).toContain("setTimeout(() => raiseTip(busyCopy.dropAgain), RELEASE_MS)");
     expect(off.indexOf("!was || !busy")).toBeGreaterThan(-1);
     expect(html).toContain("ondragover={dragGoesOn}");

@@ -1722,27 +1722,18 @@ button.crumb:active { background: var(--fill-2); transition-duration: 0s; }
    solid 2 px border in the danger ink, and the plate's words. The rows
    still show through both, dimmed (the measured alphas). A change from one
    to the other under the hand, an operation ending, eases over the move
-   duration, at once under reduced motion. */
+   duration, at once under reduced motion. The plate stands centred in the
+   card both ways and never moves (the user's ruling of 2026-11-03, which
+   retired its two halves: Explorer's drag image may cover it, accepted). */
 .drop-veil {
   grid-area: 1 / 1; position: relative; z-index: 4; margin: 1px; border-radius: calc(var(--r-card) - 1px);
   min-width: 0; min-height: 0; pointer-events: none;
+  display: grid; place-items: center; padding: var(--s3) var(--s4);
   border: 2px dashed var(--accent);
   background-color: color-mix(in srgb, var(--accent-wash) 70%, transparent);
   transition: background-color var(--dur-move) var(--ease-enter), border-color var(--dur-move) var(--ease-enter);
 }
 .drop-veil.refuse { border-style: solid; border-color: var(--danger); background-color: color-mix(in srgb, var(--danger-wash) 80%, transparent); }
-/* The plate stands centred in the half of the list the pointer is not in
-   (lib/ops.ts plateLow), so Explorer's drag image, a thumbnail the size of
-   a card that hangs under the pointer, never covers its words (the judge's
-   risk 5, seen in the real window). The half is the upper one, moved down
-   by its own height for the lower; the move between them is a transform
-   over the move duration, at once under reduced motion. */
-.drop-veil .plate-half {
-  position: absolute; left: 0; right: 0; top: 0; height: 50%;
-  display: grid; place-items: center; padding: var(--s3) var(--s4); min-width: 0;
-  transition: transform var(--dur-move) var(--ease-enter);
-}
-.drop-veil .plate-half.low { transform: translateY(100%); }
 /* The plate: a small card of the surface, near opaque, with the card's
    stroke and radius, so its words never meet the rows, the header or the
    empty folder's heading and buttons beneath, and keep 4.5:1 and more over

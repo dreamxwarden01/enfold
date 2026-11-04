@@ -2513,11 +2513,14 @@ line of this archive's operation, its tail on the line's name, a box of the surf
 flyout's stroke and shadow at the card's radius, one line of body ink, "Paste again when it
 ends." — "Drop again when it ends." for a drop that still arrived and for **a release over the busy
 list** (the user's ruling of 2026-11-03: a drop not taken says so, as a paste does), which never
-arrives as a drop: the runtime ends it with a dragleave, and a leave whose pointer still stands
-strictly inside the list's box with no dragover anywhere in the window within 150 ms is that release
-(`lib/ops.ts` `releasedInside`, `RELEASE_MS`), while a leave at or beyond the box's edge, or onto
-another part of the window, says nothing; an Esc mid-drag ends it the same way, a leave inside the
-box, and so raises it too, which is accepted, its words being as true then — while the running line
+arrives as a drop: the runtime ends it with a dragleave, which in the real window carries no point
+(0,0, Chromium forwarding OLE's leave without one), so a leave from the list is that release when
+the last dragover's point, or the leave's own, stands inside the list's box by 12 px from every edge
+and no dragover comes anywhere in the window within 150 ms (`lib/ops.ts` `releasedInside`,
+`RELEASE_MS`), while a leave through the edge, whose last dragover stands near it, or onto another
+part of the window says nothing; an Esc mid-drag ends it the same way, and a fast flick out of the
+window from deep inside the list may too, so both raise it, which is accepted, its words being as
+true then — while the running line
 itself takes the info tier's fill, the InfoBars' own, so the eye lands on it. It rises over the
 enter duration and goes over the exit one (at once under reduced motion), after 5 s, on Esc,
 which it spends — an Esc the newest error InfoBar took first leaves it standing, one Esc closing
@@ -2568,13 +2571,10 @@ danger's wash (`--danger-wash`, the error InfoBar's fill) at 80 % and a solid 2 
 danger ink, and **a plate**, a small card of the surface at 96 % with the card's stroke and radius,
 holding two lines, the operation's name with the archive in the strong weight, "Adding 20 files to
 Photos 2024", over "Drop here when it ends" in the body weight, both in the plain ink: the colours
-say refused and the words say why. The plate stands centred **in the half of the list the pointer is
-not in** — the pointer in the lower half, the upper half; in the upper half, the lower — read from
-every dragover against the list's box, since Explorer's drag image, a thumbnail the size of a card
-under the pointer, covered its words mid-list in the real window (the judge's risk 5); it changes
-halves only when the pointer crosses the middle third's far edge, so it does not flap at the middle,
-moving over the move duration (a transform, at once under reduced motion), and at the 866 × 554
-minimum each half still holds it whole (`lib/ops.ts` `plateLow`). The words stand on the plate so
+say refused and the words say why. The plate stands **centred in the list's card**, both ways, and
+never moves (the user's ruling of 2026-11-03, which retired the halves it once took to keep clear of
+the pointer); Explorer's drag image, a thumbnail the size of a card under the pointer, may cover it,
+which the user accepts. The words stand on the plate so
 they never meet what is under them — the rows, the header, an empty folder's heading and buttons —
 and keep 4.5:1 and more there in both themes (measured at worst 17:1 light and 12.3:1 dark); the
 rows still show through either veil, dimmed (a name through the taken veil 2.0:1 light and 2.5:1

@@ -6297,3 +6297,28 @@ the red under Explorer's own drag; the plate taking the other half as the pointe
 callout on a release and on Esc, and none on a flick out of the window; the red turning green
 under the hand when the add ends; the empty folder's entrance; a delete's end with nothing
 selected; a high-contrast theme's borders.
+
+**The plate stays put, and the refused release is read from the last dragover** (2026-11-03, the
+user's first real-window look at fc38f2d). Two rulings. The plate on the busy list's veil no
+longer moves between the halves of the list: it stands centred, always, and Explorer's drag
+image may cover it, which the user accepts (the halves, their middle-third rule and their
+transform are gone). And the callout for a refused release did not fire in the real window: a
+real OLE drag's refused release reaches the page as a dragleave with no point — Chromium's drop
+target forwards DragLeave with empty points (`WebContentsViewAura::OnDragExited`), so the event
+carries clientX and clientY 0,0 — while CDP's synthetic drag, which the mock's probes used,
+carries real coordinates, which is why the rule held only in the mock. Ruled and built: the page
+keeps the point of the last dragover it saw on the list; a dragleave on the list, whatever point
+it carries, followed by 150 ms without a dragover anywhere in the window, is a refused release
+when that last point lies inside the list's box by 12 px from every edge, or the leave's own
+point does (`releasedInside` in `lib/ops.ts`, with its cases), and a plain leave otherwise, since
+a leave through the edge has its last dragover near the edge. Esc mid-drag raises the callout
+too, as before, and a fast flick out of the window from deep inside the list may, accepted: the
+words stay true and the callout goes by itself. Measured in the mock with a fresh Edge per
+scene: the 0,0 leave staged two ways (a CDP drop sent at 0,0; a page-made dragleave at 0,0 with
+relatedTarget null, the real window's shape) raises the callout after a beat and drops it after
+5 s; a leave through the right edge with the last dragover 4 px inside, a leave onto the pane and
+a release there raise nothing; an idle release adds the files; the plate's centre equals the
+veil's at every pointer height; 24 checks, 0 failures. For the user's eye in the real window: a
+release mid-list during an add (the callout after a beat), a slow drag out through the edge (no
+callout), and WebView2's leave itself, whose point and relatedTarget the rule no longer depends
+on.

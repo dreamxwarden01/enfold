@@ -6543,4 +6543,5 @@ Measured in the mock at 125 %: a whole circle, outer 16.3 to 18.5 device px agai
 6.6 to 7.9:1 in dark, 14 to 15:1 under both palettes; 1472 frontend tests (two percentage tests
 merged into the spinner's), the repo tour. For the user's eye in the real window: whether the
 1.8 s turn reads as calm and the tinted track as a whole circle; two adds at once, the three
-marks turning as one on one line; the compact rail's 10 px ring off the *Archives* icon's corner.
+marks turning as one on one line; the compact rail's 10 px ring off the *Archives* icon's corner. Seen the same day: right, but
+1.8 s a turn read as a touch slow; ruled 1.4 s (the old ring's 1 s was too fast).

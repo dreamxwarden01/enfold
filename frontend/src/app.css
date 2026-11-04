@@ -149,7 +149,7 @@
   --loop-listen: 1.6s;
   --loop-pulse: 2.4s;
   --loop-ring: 1s;   /* the pending ring's turn */
-  --loop-spin: 1.8s; /* the rail's busy spinner: one turn */
+  --loop-spin: 1.4s; /* the rail's busy spinner: one turn (1.8 s read as slow in the real window, 2026-11-04) */
   --loop-run: 1.4s;  /* the indeterminate progress line's run */
   /* List motion (direction 4, phase 4b; lib/motion.ts WASH): a row an
      operation added wears the accent wash this long, fading out. */
@@ -980,7 +980,7 @@ progress:indeterminate { background: var(--accent-line); }
    it; the pending ring's --accent-line all but vanished on the rail's
    ground, 1.07:1 in light) under an arc of the accent, 2 px with
    round ends, about a quarter of the circle (22 hundredths, near 100° with
-   its ends), turning at a steady pace once every 1.8 s (--loop-spin),
+   its ends), turning at a steady pace once every 1.4 s (--loop-spin),
    slower than the pending ring's turn once a second. Only the dash's
    offset moves: the arc's length never changes. No percentage: it says
    work is running, and the foot says how far. The circles are set in CSS

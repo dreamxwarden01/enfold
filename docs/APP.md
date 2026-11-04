@@ -3137,7 +3137,7 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   circle, a C with uneven ends whose stroke track all but vanished on the rail's ground; a
   spinner, no progress, turning slowly): 14 px across, the whole circle drawn in a pale tint
   of the accent (a quarter of it) under an arc of the accent 2 px wide with round ends,
-  about a quarter of the circle, turning at a steady pace once every 1.8 s (`--loop-spin`), its
+  about a quarter of the circle, turning at a steady pace once every 1.4 s (`--loop-spin`), its
   length never changing (Motion, *Rail*). It says that work runs, not how far — the foot's line on the
   archive's page says that — so there is no percentage, and the 8 px dot it wore for several
   operations or an unknown total is gone with it: one spinner while anything runs (`lib/foot.ts`
@@ -3826,8 +3826,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     row says it; a spinner with no percentage since 2026-11-04, the user's, *The foot*): the
     *Archives* item's own, 14 px in a 16 px box, an arc of the accent with round ends, 22
     hundredths of the circle (about 100° with its ends), over the whole circle in a pale tint
-    of the accent (a quarter of it), turning linearly at a steady pace, once every 1.8 s
-    (`--loop-spin`), slower than the pending ring's turn once a second; only the dash's offset
+    of the accent (a quarter of it), turning linearly at a steady pace, once every 1.4 s
+    (`--loop-spin`; 1.8 s read as slow in the real window, ruled 2026-11-04), slower than the
+    pending ring's turn once a second; only the dash's offset
     moves. Every spinner on screen, the *Archives* item's included, is in one
     phase, each animation anchored to the document timeline's origin (`Rail.svelte` `inPhase`),
     so two or three archives busy at once turn as one; under reduced motion it stands still, the

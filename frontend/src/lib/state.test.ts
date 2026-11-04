@@ -272,6 +272,106 @@ describe("re-reading the archive (refreshArchive)", () => {
   });
 });
 
+// The list fills as an add goes (APP.md §2.3, §6; ruled 2026-11-03): the
+// core commits an add at checkpoints, each with its archive.changed, and the
+// page re-reads the open folder on every one, its own running add's
+// included — the selection kept, the operation still running and the busy
+// state it draws unchanged.
+describe("an add's checkpoints (archive.changed while the page's own add runs)", () => {
+  const running = { id: "op1", archiveId: "a", kind: "add", items: 4, done: 10, total: 40, finished: false, startedAt: 1, results: [] } as unknown as OpView;
+
+  it("re-reads the folder at each one, keeping the selection and the running operation", async () => {
+    vi.useFakeTimers();
+    m.Status.mockReturnValue(new Promise(() => {}));
+    store.boot();
+    await open(["x"]);
+    store.selectClick("x");
+    m.handlers["op.progress"]({ data: running });
+    for (const [seq, rows] of [
+      [2, ["n1", "x"]],
+      [3, ["n1", "n2", "x"]],
+    ] as [number, string[]][]) {
+      m.Stat.mockResolvedValueOnce(stat(seq));
+      m.Page.mockResolvedValueOnce(reply(seq, rows, rows.length));
+      m.handlers["archive.changed"]({ data: { id: "a", seq } });
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      expect(store.page?.rows.map((r) => r.id)).toEqual(rows);
+      expect(store.stat?.seq).toBe(seq);
+      expect([...store.sel.ids]).toEqual(["x"]);
+      expect(store.ops["op1"]?.finished).toBe(false);
+    }
+    expect(m.Stat).toHaveBeenCalledTimes(2);
+    expect(m.Page).toHaveBeenCalledTimes(3);
+  });
+});
+
+// A re-read after archive.changed keeps the listing's depth (the outside
+// audit of 2026-11-03, finding 3): with more than the first page held, the
+// newer listing is read to as many rows before it replaces the old, so the
+// deeper rows, the current row (keyed by id) and the scroll stay. The pages
+// here are two rows, standing for PAGE_LIMIT's thousand.
+describe("a re-read of a listing deeper than one page (refill)", () => {
+  async function twoPages() {
+    vi.useFakeTimers();
+    m.Status.mockReturnValue(new Promise(() => {}));
+    store.boot();
+    await open(["a", "b"], 4);
+    m.Page.mockResolvedValueOnce(reply(1, ["c", "d"], 4));
+    await store.loadMore();
+    expect(store.page?.rows.map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
+    store.selectClick("d"); // the current row, on the second page
+  }
+
+  it("reads the newer listing to the rows held before it replaces them", async () => {
+    await twoPages();
+    m.Stat.mockResolvedValueOnce(stat(2));
+    m.Page.mockResolvedValueOnce(reply(2, ["a", "n"], 5)).mockResolvedValueOnce(reply(2, ["b", "c"], 5));
+    m.Children.mockResolvedValue(["a", "n", "b", "c", "d"].map((id) => row(id)));
+    const seen: string[][] = [];
+    m.handlers["archive.changed"]({ data: { id: "a", seq: 2 } });
+    for (let i = 0; i < 10; i++) {
+      seen.push(store.page?.rows.map((r) => r.id) ?? []);
+      await Promise.resolve();
+    }
+    // Never the first page alone on the way: the old listing stands until
+    // the new one is as deep.
+    expect(seen.every((rows) => rows.length >= 4)).toBe(true);
+    expect(store.page?.seq).toBe(2);
+    expect(store.page?.rows.map((r) => r.id)).toEqual(["a", "n", "b", "c"]);
+    expect(m.Page).toHaveBeenNthCalledWith(3, "a", ROOT, "name", 0, 1000);
+    expect(m.Page).toHaveBeenNthCalledWith(4, "a", ROOT, "name", 2, 1000);
+    expect(m.Page).toHaveBeenCalledTimes(4);
+    expect([...store.sel.ids]).toEqual(["d"]); // still in the folder, though past the rows read
+    // And paging goes on from there.
+    m.Page.mockResolvedValueOnce(reply(2, ["d"], 5));
+    await store.loadMore();
+    expect(store.page?.rows.map((r) => r.id)).toEqual(["a", "n", "b", "c", "d"]);
+  });
+
+  it("starts again when the folder changes under the refill", async () => {
+    await twoPages();
+    m.Stat.mockResolvedValueOnce(stat(2));
+    m.Page.mockResolvedValueOnce(reply(2, ["a", "n"], 5))
+      .mockResolvedValueOnce(reply(3, ["n", "b"], 6)) // a newer Seq: not one listing with the page before
+      .mockResolvedValueOnce(reply(3, ["a", "m"], 6))
+      .mockResolvedValueOnce(reply(3, ["n", "b"], 6));
+    m.handlers["archive.changed"]({ data: { id: "a", seq: 2 } });
+    for (let i = 0; i < 16; i++) await Promise.resolve();
+    expect(store.page?.seq).toBe(3);
+    expect(store.page?.rows.map((r) => r.id)).toEqual(["a", "m", "n", "b"]);
+    expect(m.Page).toHaveBeenCalledTimes(6);
+  });
+
+  it("reads one page when one was held, as before", async () => {
+    await open(["a", "b"], 4);
+    m.Page.mockResolvedValueOnce(reply(2, ["a", "n"], 5));
+    m.Stat.mockResolvedValueOnce(stat(2));
+    await store.refreshArchive();
+    expect(store.page?.rows.map((r) => r.id)).toEqual(["a", "n"]);
+    expect(m.Page).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("going up (focusAfter)", () => {
   const inD = [{ id: ROOT, name: "A" }, { id: "d1", name: "d1" }];
 

@@ -207,8 +207,24 @@ export function doneLine(o: OpView, names: ReadonlyMap<string, string>): DoneLin
         if (n === 0) return { tone: "neutral", text: doneCopy.extractStoppedNone };
         return { tone: "neutral", text: doneCopy.extractStopped(n, of, o.destination ?? ""), action: reveal(o.destination) };
       }
-      case "add":
-        return { tone: "neutral", text: doneCopy.stoppedAdd(name) };
+      case "add": {
+        // The core commits an add at checkpoints and a stop keeps what they
+        // committed (APP.md §2.3, ruled 2026-11-03): the results are the
+        // committed files' outcomes and nothing of the rest, so the line
+        // counts the files added or replaced among them, with Details when
+        // one of them was skipped or failed; nothing committed is "Nothing
+        // was added", as before. The "of" is the files the add set out to
+        // write — items, the plan's adds and replaces (ops.go addTree) — as
+        // the stopped extract's is its plan: a skip is not a file to add
+        // and stays in Details, so it never swells the figure (the owner's
+        // ruling on the outside audit of 2026-11-03, finding 2). Items is
+        // known whenever something was committed, since the plan comes
+        // first; the count itself stands in if it ever is not.
+        const n = (o.results ?? []).filter((r) => !r.isDir && WRITTEN.has(r.outcome)).length;
+        if (n === 0) return { tone: "neutral", text: doneCopy.stoppedAdd(name) };
+        const of = Math.max(o.items > 0 ? o.items : n, n);
+        return { tone: "neutral", text: doneCopy.addStopped(n, of, name), action: hasTrouble(o.results) ? { kind: "details", op: o } : undefined };
+      }
       case "replace":
         return { tone: "neutral", text: doneCopy.stoppedReplace(name) };
       case "verify":

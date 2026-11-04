@@ -514,9 +514,31 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   archiver the user compared; WinRAR's practice). Each Add, Replace, Delete, Rename, Move and
   CreateFolder calls `Begin()`, does its work, and ends in `Commit` → receipt → one
   `Session.UpdateRegistry` (`LastStoredSize`, `LastWrittenAt`, `LastSeq`, `Revision`) →
-  `archive.changed`; nothing is staged between operations. *Cancel* on a running Add or Replace
-  is `Abort`: nothing is published, and the bytes it wrote lie in extents the committed free map
-  still holds free, so nothing is lost and nothing leaks. A Delete asks first, on the page —
+  `archive.changed`; nothing is staged between operations. **An add commits as it goes** (ruled
+  2026-11-03, the user's: "add and replace should be atomic per file, as Explorer does: a file
+  shows in the list as soon as it is added; cancel drops only the queued files and the one being
+  added, and keeps what was added"): `AddFiles` and `AddFolder` commit at **checkpoints** — once
+  a file has been written whole and at least one second has passed since the last commit, or at
+  least 256 MiB of source were written since it, the next file finds the ones before it
+  committed — and at the end as before. A file is never split across two commits; the folders
+  made along the way go with the next commit. Each checkpoint is a commit like any other — the
+  index sealed, the superblock flipped, the snapshot taken again, the receipt (or a receipt
+  owed), `archive.changed` — and a fresh `Begin()` follows on the same operation, which keeps the
+  archive's turn throughout, so the plan made before the first write stays valid. What a commit
+  keeps is bounded — the superblock is two fixed copies that alternate, and the previous index
+  and map are freed into R31's quarantine for one commit, so metadata never builds up past two
+  generations — but its work is not: `Commit` validates, encodes, seals and writes the whole
+  index, and the `Begin()` after it clones the index whole again (an encode and a decode), so a
+  checkpoint's cost grows with the index, two syncs besides (the outside audit of 2026-11-03,
+  finding 5, corrected the earlier "costs the same whatever the archive holds"). That is why
+  checkpoints are rate-limited. A `Replace` replaces one file in one transaction and commits
+  once, at its end; it has no checkpoint. *Cancel* on a running Replace, and on a running Add for
+  the transaction open since its last commit, is `Abort`: nothing more is published, and the
+  bytes it wrote lie in extents the committed free map still holds free, so nothing is lost and
+  nothing leaks; what an add's checkpoints committed stays. An add that fails part way keeps what
+  its checkpoints committed as a cancel does: the open transaction is aborted, the operation ends
+  with its error and the outcomes of the committed files, the error line stands as before, and
+  the list shows what landed. A Delete asks first, on the page —
   "Permanently delete 3 files and 1 folder from ECON 280? A folder takes everything beneath it.
   This cannot be undone." — and then commits; a deleted file is unreachable from then on — no
   live index carries its key — and its bytes leave the file at the next compaction (FORMAT R32,
@@ -526,7 +548,9 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   layer's rule); a commit that frees the tail of the file is followed at once by a second, empty
   commit that truncates it — R31's quarantine lasts one commit, and that commit is this one, so
   the losing superblock never points past the end of the file; and after any commit — and when the last reader holding an extent closes — the core plans a
-  *Reclaiming space* run, FORMAT R40's in-place compaction. The plan is made on the free map in
+  *Reclaiming space* run, FORMAT R40's in-place compaction. An add's checkpoints are the
+  exception: the add still runs and holds the archive's turn, so the run is planned by its final
+  commit, or by the operation's end when nothing was left to commit after the last checkpoint. The plan is made on the free map in
   memory first: live extents in offset order, each into the earliest published hole wholly
   before it that holds it, a file no hole before it holds skipped, an extent a reader holds left
   where it lies for this run. The run happens only when the whole run — the plan dry-run commit by commit in memory, a
@@ -581,7 +605,17 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   written files on disk" — so *Cancel* was withheld from a verify and an extract by choice,
   though the core stops both. *Cancel* is now offered for an add, a replace, a reclaim, a
   *Refresh fingerprint* and an extract, and for a drag out while it stages (§3):
-  - an add or a replace is `Abort`: nothing is published (above);
+  - a replace is `Abort`: nothing is published (above); an add aborts the transaction open
+    since its last checkpoint — the file being written and the queue — and keeps what its
+    checkpoints committed (above); it ends `op.cancelled` with the outcomes of the committed
+    files in its `Results` (added, replaced, skipped and failed as they were) and none for the
+    rest, and the done line counts the files added or replaced among them against the files the
+    add set out to write — the plan's adds and replaces (`Items`), as a stopped extract's second
+    number is its plan, so a skip never counts toward either number and stays in *Details* (the
+    owner's ruling on the outside audit of 2026-11-03): "Stopped. 6 of 20 files were added to
+    Photos 2024", with *Details* when one of the committed was skipped or failed, or "Stopped.
+    Nothing was added to Photos 2024" when no file was committed (§6, *The foot*). A cancel that lands while a checkpoint commits is taken: the
+    commit lands and the add stops after it;
   - a reclaim stops at the next chunk, the archive consistent and less compacted (above);
   - a *Refresh fingerprint* (`Verify`) stops at the next MiB its hash reads, and records nothing:
     `LastCiphertextHash`, `HashAtSeq`, `LastSeq` and `LastStoredSize` stay as they were, so the
@@ -1150,7 +1184,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
   record. Everything the walk found is pre-flighted — names, kinds, the folded matches, and
   R39's depth and joined-path bounds over the deepest record the walk would create — **before**
   the first `Tx.Add`, so the user is asked once for the whole batch; a source that changed
-  underneath between the walk and the add is one `FileOutcome`, not a failed operation.
+  underneath between the walk and the add is one `FileOutcome`, not a failed operation. The
+  files land as the add goes: it commits at checkpoints (§2.3, ruled 2026-11-03), each with its
+  `archive.changed`, so the page lists them while the operation still runs.
   `policy` — `skip | replace | keep-both` — decides what happens when the incoming item and the
   item in the way are the **same kind**. Two files: `skip`, `replace` (`Tx.Replace` on that
   record, never Delete + Add) or `keep-both`. Two directories: the incoming one is **entered**
@@ -1488,14 +1524,18 @@ sentinel of every package with a catch-all `internal` — and services are regis
   Progress is by **bytes**, not by file: an add, a replace and an extract count the bytes read of the file in hand, so a single
   large file moves the bar (at most ten events a second, as before); `Done`/`Total` are plaintext
   bytes. `ArchiveStat` loses `Dirty`, `CapAt` and `SessionAlive` and gains `Records` (live files
-  and directories); `Save`, `Discard` and `KeepOpen` are gone; `CancelOp` on a running Add or
-  Replace aborts its transaction, and on a Verify, an Extract or a reclaim stops the work at its
-  next check (§2.3, *What a cancel means, by kind*; the page offers none for a Compact or a
-  RotateKey) — and a cancel that arrives once the operation has entered its
-  commit is refused with `op.committing` ("The operation is already being saved; it will
+  and directories); `Save`, `Discard` and `KeepOpen` are gone; `CancelOp` on a running Replace
+  aborts its transaction, on a running Add aborts the transaction open since its last checkpoint
+  and keeps what the checkpoints committed, and on a Verify, an Extract or a reclaim stops the
+  work at its next check (§2.3, *What a cancel means, by kind*; the page offers none for a
+  Compact or a RotateKey) — and a cancel that arrives once the operation has entered its
+  final commit is refused with `op.committing` ("The operation is already being saved; it will
   finish."), the operation's own result then being the committed one. The two are one decision
-  under the core's state mutex: either the cancel lands first and nothing is published, or the
-  commit is entered first and the cancel is refused. There is no answer in between.
+  under the core's state mutex: either the cancel lands first and nothing more is published, or
+  the commit is entered first and the cancel is refused. There is no answer in between. An add's
+  checkpoint is not the final commit: a cancel that lands during one is taken, the checkpoint
+  lands, and the add stops after it, keeping it. `archive.changed` comes once per commit, so an
+  add sends one per checkpoint and one at its end.
 
 **Keys**
 - `Slots() []SlotView{RecipientID, Type, Label, CreatedAt, Removable}` — `Removable` says the
@@ -2547,7 +2587,12 @@ anything, since the core emits nothing for an add until its plan is made (`store
 With several, the page names the latest begun on this archive, as the foot's running line does,
 which since 2026-11-03 is this archive's alone (*The foot*). **At rest** nothing stands over the
 page — no veil, no banner — and the foot's running line, the rail's mark and the ring on the
-archive's own row in the rail (*Rail*) say it. Greyed, with the reason as the control's title:
+archive's own row in the rail (*Rail*) say it. During an add the open folder's list fills as the
+add's checkpoints commit (§2.3): the page re-reads it on each `archive.changed`, its own running
+add's included, the selection, the scroll and the current row kept — a listing scrolled past
+its first page is read again to as many rows before it replaces the old (`loadPage`'s refill;
+the outside audit of 2026-11-03, finding 3), the rows keyed by id — the greyed commands and the
+running line unchanged. Greyed, with the reason as the control's title:
 the toolbar's *Add* (the whole button), *Extract…*, *Rename…* and *Delete…*, the pane's
 *Extract…* in its three forms and the viewer's *Extract…*, and an empty folder's two buttons;
 greyed, with the reason as the item's second line: *More*'s *Move to…*, the row menu's
@@ -2912,8 +2957,13 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   (§2.3); "Reclaimed 1.2 GB", said only when something came back; "Fingerprint refreshed for
   Photos 2024"; "Re-keyed Photos 2024"; "4 items left Enfold as ordinary files" for a drag out
   that moved or copied. A user's stop, neutral: "Stopped. 6 of 15 files were written to …"
-  [*Show in Explorer*] or "Stopped. Nothing was written"; "Stopped. Nothing was added to Photos
-  2024"; "Stopped. Nothing was replaced in …"; "Stopped. The fingerprint of Photos 2024 was not
+  [*Show in Explorer*] or "Stopped. Nothing was written"; "Stopped. 6 of 20 files were added to
+  Photos 2024" for an add whose checkpoints committed some, the first number the files added or
+  replaced and the second the files the add set out to write (`Items`, its plan's adds and
+  replaces; a skip is in neither and stays in [*Details*], shown when one of the committed was
+  skipped or failed; §2.3), "Stopped. Nothing was added to Photos 2024" for one that committed
+  no file;
+  "Stopped. Nothing was replaced in …"; "Stopped. The fingerprint of Photos 2024 was not
   refreshed"; "Stopped. Reclaiming space in Photos 2024 did not finish"; "Stopped. Photos 2024
   is as it was" for a compaction or a re-key the core stopped. This retires 2026-10-14's neutral
   "Adding 3 files: Stopped." toast; a reclaim's figure moves from its toast to the line; another

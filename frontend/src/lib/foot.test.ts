@@ -233,6 +233,39 @@ describe("the done line", () => {
     expect(doneLine(none, names)).toEqual({ tone: "neutral", text: "Stopped. Nothing was written" });
   });
 
+  it("says a stopped add in neutral ink, with what its checkpoints kept", () => {
+    // The core keeps the files its checkpoints committed (APP.md §2.3,
+    // ruled 2026-11-03) and reports their outcomes alone.
+    const o = op({ kind: "add", items: 20, error: Code.CodeOpCancelled, results: Array.from({ length: 6 }, () => out({})) });
+    expect(doneLine(o, names)).toEqual({ tone: "neutral", text: "Stopped. 6 of 20 files were added to Photos 2024", action: undefined });
+    const one = op({ kind: "add", items: 20, error: Code.CodeOpCancelled, results: [out({ isDir: true, outcome: "created" }), out({})] });
+    expect(doneLine(one, names)?.text).toBe("Stopped. 1 of 20 files was added to Photos 2024");
+    const replaced = op({ kind: "add", items: 3, error: Code.CodeOpCancelled, results: [out({}), out({ outcome: "replaced" })] });
+    expect(doneLine(replaced, names)?.text).toBe("Stopped. 2 of 3 files were added to Photos 2024");
+    // Trouble among the committed part: the line keeps Details.
+    const trouble = op({ kind: "add", items: 20, error: Code.CodeOpCancelled, results: [out({}), out({ outcome: "skipped" }), out({})] });
+    expect(doneLine(trouble, names)).toEqual({ tone: "neutral", text: "Stopped. 2 of 20 files were added to Photos 2024", action: { kind: "details", op: trouble } });
+    // Nothing committed: as before.
+    const none = op({ kind: "add", items: 20, error: Code.CodeOpCancelled, results: [] });
+    expect(doneLine(none, names)).toEqual({ tone: "neutral", text: "Stopped. Nothing was added to Photos 2024" });
+    expect(doneLine(op({ kind: "add", archiveId: "zz", items: 4, error: Code.CodeOpCancelled, results: [out({})] }), names)?.text).toBe("Stopped. 1 of 4 files was added");
+  });
+
+  it("counts a stopped add against the files it set out to write, its skips not among them", () => {
+    // The outside audit of 2026-11-03, finding 2, and the owner's ruling:
+    // eight files the plan skipped, then two to write; the first committed
+    // at a checkpoint and the stop landed during the second. Items is the
+    // plan's adds and replaces (2); the eight skips stay in Details.
+    const skips = Array.from({ length: 8 }, () => out({ outcome: "skipped" }));
+    const o = op({ kind: "add", items: 2, error: Code.CodeOpCancelled, results: [...skips, out({})] });
+    expect(doneLine(o, names)).toEqual({ tone: "neutral", text: "Stopped. 1 of 2 files was added to Photos 2024", action: { kind: "details", op: o } });
+    // Skips alone committed: nothing was added.
+    const onlySkips = op({ kind: "add", items: 2, error: Code.CodeOpCancelled, results: skips });
+    expect(doneLine(onlySkips, names)?.text).toBe("Stopped. Nothing was added to Photos 2024");
+    // Items unknown (it never is once something committed): the count stands in.
+    expect(doneLine(op({ kind: "add", items: 0, error: Code.CodeOpCancelled, results: [...skips, out({})] }), names)?.text).toBe("Stopped. 1 of 1 file was added to Photos 2024");
+  });
+
   it("says an add, whole or in part", () => {
     expect(doneLine(op({ kind: "add", items: 2, results: [out({}), out({})] }), names)).toEqual({ tone: "ok", text: "Added 2 files to Photos 2024" });
     expect(doneLine(op({ kind: "add", items: 1 }), names)?.text).toBe("Added 1 file to Photos 2024");
@@ -336,7 +369,7 @@ describe("the words around a stop", () => {
   it("says the foot's and the done line's words in the house voice", () => {
     const said = [
       footCopy.cancelling, footCopy.runsToEnd, footCopy.stayUnlocked, footCopy.notices(1), footCopy.notices(2), footCopy.moreLabel(1),
-      doneCopy.extractStopped(6, 15, "D:"), doneCopy.draggedOut(4), doneCopy.stoppedRefresh("Photos 2024"), doneCopy.checked(3, 1), doneCopy.checkedNone,
+      doneCopy.extractStopped(6, 15, "D:"), doneCopy.addStopped(6, 20, "Photos 2024"), doneCopy.draggedOut(4), doneCopy.stoppedRefresh("Photos 2024"), doneCopy.checked(3, 1), doneCopy.checkedNone,
       pendingCopy.opening, resultsCopy.notDoneAndSkipped(2, "file", "added", 1), resultsCopy.skippedReason,
     ];
     for (const s of said) expect(s, s).not.toMatch(/n't|'s |'re |'ll /);

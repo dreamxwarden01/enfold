@@ -39,6 +39,11 @@ import type { Notice, NoticeKind, Pause } from "./infobar";
 
 // How long a done line holds in the foot (direction 4).
 const DONE_MS = 6000;
+// How many times a re-read that fills a long listing back to its depth
+// starts over when the folder changes again under it (loadPage, refill),
+// before it settles for the pages it has: an add's checkpoints come about
+// once a second, and a page is read far faster than that.
+const REFILL_TRIES = 3;
 
 // The acts whose Done moves the backups card: an export's date, a re-key's
 // VaultRekeyed, a replacement's KeysReplaced, and the backup an act takes
@@ -1883,6 +1888,15 @@ class Store {
   // request — the token — and be no older than the pages held; a reply
   // newer than them restarts the listing from zero (lib/paging.ts). The
   // ids survive it: the selection keeps those that still exist.
+  //
+  // A newer reply for the folder and the order held — a re-read after
+  // archive.changed — is filled to as many rows as were held before it is
+  // applied (refill), so a list scrolled past its first page keeps its
+  // depth: the rows are keyed by id, so the current row keeps its element
+  // and its focus, and the scroll its position. It once fell back to the
+  // first page alone, the deeper rows, the focus and the scroll lost, and
+  // an add's checkpoints repeat that re-read every second (the outside
+  // audit of 2026-11-03, finding 3).
   async loadPage(): Promise<void> {
     const id = this.current;
     if (!id) return;
@@ -1895,6 +1909,8 @@ class Store {
     // "" when neither the crumbs nor the folder being entered name it,
     // and the bar says "That folder" (noticeCopy.folderWent).
     let went: string | null = null;
+    // How many times the folder changed again while a refill read it.
+    let moved = 0;
     for (;;) {
       try {
         const reply = await Archive.Page(id, target, this.sortBy, 0, PAGE_LIMIT);
@@ -1902,7 +1918,20 @@ class Store {
         // The pages held are this folder's under this sort, or they are
         // another listing altogether, which the reply replaces whole.
         const same = this.page !== null && shownDir(this.page.crumbs) === target && this.pageSort === this.sortBy;
-        const a = applyReply(same ? this.page : null, reply, 0);
+        let a = applyReply(same ? this.page : null, reply, 0);
+        if (a.kind === "applied" && same && this.page !== null && reply.seq > this.page.seq && this.page.rows.length > a.listing.rows.length) {
+          const filled = await this.refill(id, target, a.listing, this.page.rows.length, t);
+          if (this.current !== id || t !== this.pageToken) return;
+          if (filled === null && moved < REFILL_TRIES) {
+            // The folder changed again under the refill: the first page is
+            // read anew, the listing held still the one to match.
+            moved++;
+            continue;
+          }
+          // Changed again too often: the pages read so far, at one Seq,
+          // stand, and the next archive.changed reads on from them.
+          if (filled !== null) a = { kind: "applied", listing: filled };
+        }
         if (a.kind === "applied") {
           this.page = a.listing;
           this.pageSort = this.sortBy;
@@ -1941,6 +1970,27 @@ class Store {
         target = up;
       }
     }
+  }
+
+  // refill reads the pages past the first of a listing just restarted from
+  // zero, at that first page's Seq, until it holds `want` rows or the
+  // folder's end (loadPage). It answers null when a page came back at a
+  // newer Seq — the folder changed again, so the pages would not be one
+  // listing — and the listing as far as it got when a reply was dropped by
+  // the token, which the caller checks, or held no rows.
+  private async refill(id: string, dir: string, l: Listing, want: number, t: number): Promise<Listing | null> {
+    let listing = l;
+    while (listing.rows.length < Math.min(want, listing.total)) {
+      const offset = nextOffset(listing);
+      const reply = await Archive.Page(id, dir, this.sortBy, offset, PAGE_LIMIT);
+      if (this.current !== id || t !== this.pageToken) return listing;
+      if ((reply.rows ?? []).length === 0) return listing;
+      const a = applyReply(listing, reply, offset);
+      if (a.kind === "restart") return null;
+      if (a.kind !== "applied") return listing;
+      listing = a.listing;
+    }
+    return listing;
   }
 
   // loadMore asks for the next page of the folder shown, when the list has

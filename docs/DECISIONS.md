@@ -6322,3 +6322,65 @@ veil's at every pointer height; 24 checks, 0 failures. For the user's eye in the
 release mid-list during an add (the callout after a beat), a slow drag out through the edge (no
 callout), and WebView2's leave itself, whose point and relatedTarget the rule no longer depends
 on.
+
+## 2026-11-04 — An add commits as it goes
+
+**An add commits at checkpoints** (ruled 2026-11-03, the user's: "add and replace should be atomic
+per file, as Explorer does: a file shows in the list as soon as it is added; cancel drops only
+the queued files and the one being added, and keeps what was added"; the format's costs checked
+first for the user, who asked whether the superblock's cost grows with the number of commits:
+the superblock is two fixed 4 KiB copies that alternate, so its cost is constant; the index is
+sealed whole and placed first-fit, the free map appended, the previous two freed and
+quarantined for one commit, so the metadata kept never passes two generations, while a commit's
+work grows with the index it seals and the two syncs it pays, which is why checkpoints are
+rate-limited). Built: `AddFiles` and
+`AddFolder` commit at checkpoints — as the next file is about to begin, the files written since
+the last commit are committed when at least one second has passed on the core's clock or at
+least 256 MiB of source were written (`addCheckpoint`, a package-level rule with a test hook; the
+decision is lazy so the plan's last file always goes with the final commit and no transaction
+ends empty) — and at the end as before; a file is never split across commits, the folders made
+on the way go with the next. Each checkpoint is a commit like any other (`opTx.publish`: the
+index sealed, the superblock flipped, the snapshot taken again, the receipt or a receipt owed,
+`archive.changed`) followed by a fresh `Begin` on the same operation under the same `opMu`
+(`opTx.checkpoint`), so the plan made before the first write stays valid; R31's quarantine needed
+no archive-layer change — the pool a `Begin` clones leaves out the last commit's loser and
+`assertWritable` refuses it independently — and a test reads the old content back through the
+losing superblock, failing when both guards are switched off. A cancel (`CancelOp`, the lock
+trigger, Close's drain) and a failure abort only the transaction open since the last
+checkpoint and keep what the checkpoints committed; the results are cut back to what they held at
+the last commit (`results[:kept]`), so the operation ends `op.cancelled` (or with its error) with
+the committed files' outcomes and none for the rest; the final commit alone keeps the
+`markCommitting` mark and the `op.committing` refusal, a cancel that lands while a checkpoint
+commits is taken and the add stops after it; a checkpoint never plans the reclaim, the final
+commit or the operation's end does. `ReplaceFile` is one file in one transaction and has no
+checkpoint. The foot's stopped line counts what landed: "Stopped. 6 of 20 files were added to
+Photos 2024", with *Details* when the kept results hold a skip or a failure; the open folder's
+list fills as the checkpoints commit, since the store already re-reads the folder on every
+`archive.changed` of the open archive, its own running add's included (measured in the mock: the
+scroll, the selection and the focused row kept across three checkpoints). Measured: ten new Go
+tests by the builder and three by the reviewer (the bytes rule, the time rule, a stopped
+AddFolder naming exactly the committed records; a cancel landing between a checkpoint's check and
+its flip through a test seam; a Begin failure after a published checkpoint), the race run over
+them clean (one unexplained failure of the internal/app race run in the repair's first attempt,
+its output lost, not reproduced in seven reruns and a 15× loop of the checkpoint tests: watched);
+1419 frontend tests; the repo tour. An outside read-only audit of the Go diff (Codex, gpt-6-astra,
+the user's standing rule for backend changes) found five things, all real and fixed before the
+commit: a panic after a checkpoint reported no outcomes (the recovery passed nil; the committed
+prefix now lives on the operation, set by a hook the moment a commit stands, two tests); the
+stopped add's second number counted the skips (ruled: it is the files the add set out to write,
+`Items`, as the stopped extract's is its plan, skips in neither, "Stopped. 1 of 2 files was
+added"); a refresh of a listing deeper than one page dropped the rows past the first page and the
+focused row with them, which an add's checkpoints would have repeated every second (`refill`
+re-reads the pages held at one sequence before replacing the listing, up to three tries when
+the folder changes mid-way; three store tests); the mock published a checkpoint of failures
+alone; and the record's "a commit costs the same whatever the archive holds" was false (the
+metadata kept is bounded, the work grows with the index). Watched: the internal/app package's
+full test run failed once in the repair and once in the audit fix, both times with only
+"fakes_test.go:670: locked: exit" in the output and no test named, and passed in every rerun
+(six and seven); not reproduced. Left: the accent wash still marks every added row at
+`op.done`, so with checkpoints the rows appear earlier unwashed and wash together at the end (a
+stopped add washes nothing); the mock's `AddFolder` lands its one record at the end, so only
+`AddFiles` stages the filling list; the tail-trim branch of the sequence test is not exercised.
+For the user's eye in the real window: drop several large files and watch the list fill;
+Cancel and read "Stopped. N of M files were added to X"; make one fail part way and see the
+error line stand with the list showing what landed.

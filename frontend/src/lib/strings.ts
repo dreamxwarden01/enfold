@@ -893,6 +893,9 @@ export const doneCopy = {
   // §13) says so, and claims nothing about presence.
   checkedNone: "No archive was checked",
   // A stop the user chose, by kind: what did not happen, in neutral ink.
+  // An add keeps what its checkpoints committed (APP.md §2.3, ruled
+  // 2026-11-03) and says how many, as a stopped extract does.
+  addStopped: (n: number, of: number, archive: string): string => `Stopped. ${n} of ${plural(of, "file")} ${wereWritten(n)} added${archive ? ` to ${archive}` : ""}`,
   stoppedAdd: (archive: string): string => `Stopped. Nothing was added${archive ? ` to ${archive}` : ""}`,
   stoppedReplace: (archive: string): string => `Stopped. Nothing was replaced${archive ? ` in ${archive}` : ""}`,
   stoppedRefresh: (archive: string): string => `Stopped. The fingerprint${archive ? ` of ${archive}` : ""} was not refreshed`,

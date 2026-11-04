@@ -21,7 +21,10 @@ empties it; paste this into the page once to have it dispatch them:
 
 That is what makes an operation visible: an add, a replace or an extract
 here runs for a few seconds, ticking op.progress by bytes the way the core
-does, and publishes nothing until it commits at its end (APP.md 2.3).
+does, and publishes nothing until it commits at its end (APP.md 2.3) -
+but for an AddFiles, which commits each file but the last at a checkpoint
+as the next begins, archive.changed between two op.progress, so the list
+fills as it goes (ruled 2026-11-03).
 POST /mock/preview {"name": "reclaim"} plays the in-place compaction the
 core runs itself after a commit whose plan would give enough of the tail
 back (APP.md 2.3, FORMAT.md R40) - the strip's *Reclaiming space*,
@@ -1070,11 +1073,13 @@ def op_view(op):
 
 
 def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", archive_id=None,
-             policy="", destination="", on_cancel=None, quiet=0.0):
+             policy="", destination="", on_cancel=None, quiet=0.0, on_step=None):
     """An operation is a transaction (APP.md 2.3): it begins, ticks
     op.progress by *bytes* - Done against Total, both plaintext - and
     commits at its end. A Cancel aborts it and publishes nothing: the
-    records the commit would have made are never made. Items is what the
+    records the commit would have made are never made (an add's
+    checkpoints, through on_step, have published theirs already, and
+    on_cancel reports them). Items is what the
     operation planned - the files an add, a replace or an extract will
     write - which is what the strip counts: "Adding 3 files", singular at
     one (APP.md 3, ruled 2026-09-09). An extract's OpView carries its
@@ -1085,7 +1090,8 @@ def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", ar
     It ticks 24 times, or twice a second for a long one, so the foot's
     rate (5 s of samples) can say "about N min left". quiet is how long it
     says nothing first, its plan being made (an add's planSeconds); a
-    cancel then ends it at once."""
+    cancel then ends it at once. on_step, given the step just ticked and
+    the steps in all, runs after each tick: an add's checkpoints."""
     if steps is None:
         steps = max(24, int(seconds * 2))
     state["nextOp"] = state.get("nextOp", 0) + 1
@@ -1117,6 +1123,8 @@ def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", ar
                 return
             op["done"] = total * i // steps
             emit("op.progress", op_view(op))
+            if on_step is not None:
+                on_step(i, steps)
         # A commit with something to report answers its FileOutcomes; the
         # rest answer None and the operation reports nothing.
         out = commit()
@@ -1332,9 +1340,13 @@ def add_one(parent, path, is_dir):
 
 
 def add_files(args):
-    """AddFiles(id, parentID, paths, policy) is one transaction: it runs
-    for a few seconds, ticking by bytes, and the records appear at its
-    commit - a cancel publishes nothing (APP.md 2.3)."""
+    """AddFiles(id, parentID, paths, policy) runs for a few seconds, ticking
+    by bytes, and commits at checkpoints as the core does (APP.md 2.3, ruled
+    2026-11-03): as each file but the last is written whole and the next
+    begins, the files written so far land - their records made, the seq
+    bumped, archive.changed between two op.progress - so the list fills as
+    the add goes; the last lands with the final commit. A cancel keeps what
+    landed and reports those outcomes alone."""
     _, parent, paths = (list(args) + ["", ROOT_ID, []])[:3]
     bad = a_dir(parent)
     if bad:
@@ -1344,13 +1356,17 @@ def add_files(args):
         return Err("params")
 
     fails = dict(state.get("addFails") or {})
+    landed = []  # the outcomes so far, a checkpoint's or the final commit's
+    kept = [0]   # how many of them a checkpoint has published
+    aid = state["stat"]["id"]
 
-    def commit():
+    def land(upto):
         # One FileOutcome per source, as the core reports them (APP.md 3):
         # a source whose leaf POST /mock/state {"addFails": {"thumbs.db":
-        # "io"}} names fails with that code and adds nothing.
-        out = []
-        for p in paths:
+        # "io"}} names fails with that code and adds nothing. Answers how
+        # many were written.
+        wrote = 0
+        for p in paths[len(landed):upto]:
             name = [x for x in p.replace("\\", "/").split("/") if x][-1]
             res = {"path": p, "name": name, "isDir": False, "outcome": "added", "size": ADDED_SIZE, "modifiedAt": NOW}
             if name in fails:
@@ -1358,10 +1374,30 @@ def add_files(args):
                 res["size"] = 0
             else:
                 add_one(parent, p, False)
-            out.append(res)
-        return out
+                wrote += 1
+            landed.append(res)
+        return wrote
 
-    return start_op("add", ADDED_SIZE * len(paths), commit, items=len(paths), **add_timing())
+    def checkpoint(i, steps):
+        # The files written whole by this tick, while another is still to
+        # come: a checkpoint commits them (the last waits for the end). As
+        # in the core, a checkpoint is taken only once a file was written
+        # whole since the last one (ops.go checkpointDue, r.owing): a run of
+        # failures alone publishes nothing, and its outcomes wait for the
+        # next commit (the outside audit of 2026-11-03, finding 4).
+        whole = min(i * len(paths) // steps, len(paths) - 1)
+        if whole > len(landed) and land(whole) > 0:
+            kept[0] = len(landed)
+            bump(aid)
+
+    def commit():
+        land(len(paths))
+        return list(landed)
+
+    # A cancel reports what the checkpoints published and nothing after it,
+    # as the core's abort does (ops.go addTree, results[:kept]).
+    return start_op("add", ADDED_SIZE * len(paths), commit, items=len(paths),
+                    on_cancel=lambda done, steps: landed[:kept[0]], on_step=checkpoint, **add_timing())
 
 
 def add_timing():

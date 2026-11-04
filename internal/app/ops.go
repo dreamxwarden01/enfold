@@ -69,8 +69,17 @@ type op struct {
 	finished   bool
 	err        *Error
 	results    []FileOutcome
-	c          *Core
-	lastEmit   time.Time
+	// committed is the outcomes a commit of this operation has published so
+	// far — an add's at each checkpoint (ruled 2026-11-03) — recorded the
+	// moment the commit stands, before anything after it that can panic, so
+	// that startOp's recovery reports them: the files are in the archive
+	// whatever happens next, and an add that panicked after two checkpoints
+	// once ended with no outcomes at all (the outside audit of 2026-11-03,
+	// finding 1). Nil for an operation that has published nothing. Read and
+	// written on the operation's own goroutine only, the recovery included.
+	committed []FileOutcome
+	c         *Core
+	lastEmit  time.Time
 }
 
 func (o *op) view() OpView {
@@ -181,7 +190,10 @@ func (c *Core) startOpWith(kind, archiveID string, describe func(o *op), fn func
 		defer func() {
 			if r := recover(); r != nil {
 				c.log("op %s panic: %v", kind, r)
-				c.finishOp(o, nil, coded(CodeInternal))
+				// What a commit already published stays in the archive and
+				// is reported, as a failure part way does (APP.md §2.3); nil
+				// when nothing was (op.committed).
+				c.finishOp(o, o.committed, coded(CodeInternal))
 			}
 		}()
 		results, err := fn(ctx, o)
@@ -245,8 +257,12 @@ func (c *Core) finishOp(o *op, results []FileOutcome, e *Error) {
 	})
 }
 
-// CancelOp cancels a running operation. On a running add or replace this is
-// Abort: nothing is published (APP.md §2.3).
+// CancelOp cancels a running operation. On a running replace this is Abort:
+// nothing is published (APP.md §2.3). On a running add it is the Abort of
+// the open transaction — the file being written and the queue — and what
+// the add's checkpoints committed stays (ruled 2026-11-03); a cancel that
+// lands while a checkpoint commits is taken, and the add stops right after
+// it (ops.go checkpoint).
 //
 // An operation that has entered its commit is past that: the commit runs
 // under a context no cancel reaches, so cancelling would publish the change
@@ -257,8 +273,9 @@ func (c *Core) finishOp(o *op, results []FileOutcome, e *Error) {
 // The handover is one critical section: the decision and the cancel that
 // follows it are both under the state mutex, and markCommitting takes the
 // same mutex to look at the context. Either the cancel lands first and the
-// commit is refused — the transaction is aborted and nothing is published —
-// or the commit is entered first and the cancel is refused. There is no
+// commit is refused — the open transaction is aborted and nothing more is
+// published (an add keeps what its checkpoints committed) — or the commit
+// is entered first and the cancel is refused. There is no
 // instant in between in which a cancel is answered nil while the change is
 // published all the same (the outside audit of 2026-09-09, finding 3).
 func (c *Core) CancelOp(id string) *Error {
@@ -719,11 +736,64 @@ func walkSource(ctx context.Context, dir string) (*addNode, error) {
 	return root, nil
 }
 
+// checkpointRule is when an add commits on the way (ruled 2026-11-03, APP.md
+// §2.3): once a file has been written whole and at least the rule's interval
+// (every) has passed since the last commit, or at least its byte figure
+// (bytes) of source was written since it.
+// What a commit keeps is bounded — the superblock is two fixed copies that
+// alternate, and the previous index and map are freed into quarantine for
+// one commit, so metadata never builds up past two generations (FORMAT.md
+// §11-13, R31) — but its work is not: Commit validates, encodes, seals and
+// writes the whole index, and the Begin after a checkpoint clones the index
+// whole again (archive/tx.go cloneIndex), so each commit costs more as the
+// index grows, two syncs besides (the outside audit of 2026-11-03, finding
+// 5). The rule keeps a batch of many small files from paying that per file.
+type checkpointRule struct {
+	every time.Duration
+	bytes uint64
+}
+
+// addCheckpoint is the rule every add reads as it starts: one second or
+// 256 MiB. It is a variable so that the tests can lower it to zero rather
+// than write 256 MiB or wait seconds of real time.
+var addCheckpoint = checkpointRule{every: time.Second, bytes: 256 << 20}
+
+// checkpointFlip, when set, runs on the operation's goroutine at a
+// checkpoint after its cancel check and before its commit: the tests' way to
+// land a cancel inside that window. Nil outside the tests.
+var checkpointFlip func()
+
+// addRun is one add's state as runPlan carries it from item to item: the
+// open transaction, which a checkpoint replaces; the outcomes so far and how
+// many of them a commit has published; and what has been written since the
+// last commit.
+type addRun struct {
+	t       *opTx
+	results []FileOutcome
+	// kept is how many of results stood when the last commit was made: the
+	// outcomes a cancel or a failure leaves standing, since everything
+	// after them was in the transaction it aborts.
+	kept        int
+	done, total uint64
+	wrote       bool // the open transaction holds something to commit
+	// owing is a file written whole into the open transaction; since and
+	// last are the bytes written since the last commit and when it was.
+	owing bool
+	since uint64
+	last  time.Time
+	rule  checkpointRule
+}
+
 // addTree pre-flights the whole walk against the committed view and then
-// runs it inside one transaction: nothing is written until every item has
-// been decided, and the commit at the end is what publishes any of it. An
-// add that wrote nothing after all — every item skipped or refused —
-// publishes nothing rather than committing an empty change.
+// runs it, committing at checkpoints on the way (ruled 2026-11-03, the
+// user's: a file shows in the list as soon as it is added, as Explorer
+// does) and at the end. Nothing is written until every item has been
+// decided; the plan, made once, stays valid across the commits, since the
+// parent ids and names it holds are the committed ones and opMu keeps every
+// other writer out until the add ends. A cancel aborts the open transaction
+// — the file being written and the queue — and keeps what the checkpoints
+// committed. An add that wrote nothing after all — every item skipped or
+// refused — publishes nothing rather than committing an empty change.
 func (c *Core) addTree(ctx context.Context, o *op, oa *openArchive, parentID [16]byte, nodes []*addNode, policy AddPolicy) ([]FileOutcome, error) {
 	oa.opMu.Lock()
 	defer oa.opMu.Unlock()
@@ -764,34 +834,93 @@ func (c *Core) addTree(ctx context.Context, o *op, oa *openArchive, parentID [16
 	if e != nil {
 		return nil, e
 	}
-	defer t.end() // any exit that is not the commit below aborts (APP.md §2.3)
-	results := []FileOutcome{}
-	var done uint64
-	wrote := false
-	err := c.runPlan(ctx, o, oa, t.tx, plan, &results, &done, total, &wrote)
+	defer t.end() // any exit that is not a commit aborts (APP.md §2.3)
+	r := &addRun{t: t, results: []FileOutcome{}, total: total, last: c.now(), rule: addCheckpoint}
+	// Every commit that stands — a checkpoint's or the final one — keeps the
+	// outcomes so far: here for the abort paths below, and on the operation
+	// for startOp's recovery, since a panic after a checkpoint (in a
+	// progress sink, in the events the commit sends) unwinds past this
+	// frame and its locals (op.committed; the outside audit of 2026-11-03,
+	// finding 1). The capacity is cut to the length, so the appends after
+	// it never write into what was recorded.
+	t.stood = func() {
+		r.kept = len(r.results)
+		o.committed = r.results[:r.kept:r.kept]
+	}
+	err := c.runPlan(ctx, o, r, plan)
 	if err == nil {
 		err = ctx.Err()
 	}
-	if err != nil || !wrote {
-		// Cancelled, failed, or nothing to write after all: the transaction
-		// is dropped and nothing is published (APP.md §2.3).
+	if err != nil {
+		// Cancelled or failed: the open transaction is dropped and what the
+		// checkpoints committed stays (APP.md §2.3). The results are the
+		// committed part's — an "added" for a file the abort took away
+		// would be untrue — and say nothing of the rest.
 		t.abort()
-		return results, err
+		return r.results[:r.kept], err
 	}
-	// The commit is not cancellable: the writing is done, and a Cancel that
-	// arrives now would leave the outcome to a race rather than to the user.
-	// It is told so — the operation is committing, and CancelOp says that
-	// rather than answering a cancel it did not perform. A cancel that got
-	// in first wins instead: the transaction is dropped, as on any other
-	// cancel, and nothing is published.
+	if !r.wrote {
+		// Nothing left to write after the last checkpoint, or nothing to
+		// write at all: the empty transaction is dropped and nothing more
+		// is published. A reclaim the checkpoints left unplanned is planned
+		// by finishOp, as at every operation's end.
+		t.abort()
+		return r.results, nil
+	}
+	// The final commit is not cancellable: the writing is done, and a Cancel
+	// that arrives now would leave the outcome to a race rather than to the
+	// user. It is told so — the operation is committing, and CancelOp says
+	// that rather than answering a cancel it did not perform. A cancel that
+	// got in first wins instead: the transaction is dropped, as on any other
+	// cancel, and what the checkpoints committed stays. A checkpoint is not
+	// this commit and takes a cancel (checkpoint, below).
 	if !o.markCommitting(ctx) {
 		t.abort()
-		return results, ctx.Err()
+		return r.results[:r.kept], ctx.Err()
 	}
 	if e := t.commit(context.WithoutCancel(ctx)); e != nil {
-		return results, e
+		return r.results[:r.kept], e
 	}
-	return results, nil
+	return r.results, nil
+}
+
+// checkpointDue says whether the file about to be written should find the
+// files before it committed: one was written whole since the last commit,
+// and the rule's time or its bytes have come.
+func (c *Core) checkpointDue(r *addRun) bool {
+	return r.owing && (c.now().Sub(r.last) >= r.rule.every || r.since >= r.rule.bytes)
+}
+
+// checkpoint commits what the add has written so far and goes on in a fresh
+// transaction. It is taken as the next file is about to begin rather than
+// as the last one ends, so the plan's last file always goes with the final
+// commit — the one a cancel is refused at — and a plan never ends on an
+// empty transaction behind a checkpoint that took everything. The next file
+// begins at once, so nothing waits for the checkpoint but the skips and
+// folders between the two files, and the folders made along the way go
+// with it.
+//
+// A cancel that got in before it wins: nothing is committed, and the
+// caller's abort drops the file written since the last commit. One that
+// lands once that decision is made is taken all the same — CancelOp answers
+// nil, never op.committing — since the commit runs under a context no
+// cancel reaches and the operation stops right after it with that file
+// kept, which is what a stop now is: what was added stays (ruled
+// 2026-11-03). op.committing ("it will finish") would be untrue of it.
+func (c *Core) checkpoint(ctx context.Context, r *addRun) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if checkpointFlip != nil {
+		checkpointFlip()
+	}
+	// A commit that stands moves kept on through the transaction's stood
+	// hook (addTree), the Begin after it failing or not.
+	if e := r.t.checkpoint(context.WithoutCancel(ctx)); e != nil {
+		return e
+	}
+	r.wrote, r.owing, r.since, r.last = false, false, 0, c.now()
+	return ctx.Err()
 }
 
 // planNodes decides one run of siblings and, for a folder that is created or
@@ -942,12 +1071,14 @@ func join(dir, name string) string {
 	return dir + "/" + name
 }
 
-// runPlan writes the pre-flighted walk into the transaction, parents before
-// children. A folder that could not be written takes its subtree with it:
-// one outcome for the folder and nothing beneath it. wrote says whether the
-// transaction holds anything, so an add that changed nothing commits
-// nothing.
-func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, tx *archive.Tx, items []*planItem, results *[]FileOutcome, done *uint64, total uint64, wrote *bool) error {
+// runPlan writes the pre-flighted walk, parents before children, committing
+// at the checkpoints the rule calls for (checkpoint, above). A folder that
+// could not be written takes its subtree with it: one outcome for the folder
+// and nothing beneath it. r.wrote says whether the open transaction holds
+// anything, so an add that changed nothing commits nothing. Every write goes
+// through r.t.tx as it stands at that moment, since a checkpoint replaces
+// it.
+func (c *Core) runPlan(ctx context.Context, o *op, r *addRun, items []*planItem) error {
 	for _, it := range items {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -966,11 +1097,11 @@ func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, tx *archive.
 			if it.code == "" {
 				res.Code = CodeFileName
 			}
-			*results = append(*results, res)
+			r.results = append(r.results, res)
 			continue
 		case "skip":
 			res.Outcome = "skipped"
-			*results = append(*results, res)
+			r.results = append(r.results, res)
 			continue
 		case "enter":
 			it.id, it.written = it.existing, true
@@ -982,34 +1113,40 @@ func (c *Core) runPlan(ctx context.Context, o *op, oa *openArchive, tx *archive.
 			if it.written {
 				res.ID = hexID(it.id)
 			}
-			*results = append(*results, res)
+			r.results = append(r.results, res)
 		case "create":
-			info, err := tx.AddDir(parent, it.name, it.node.modifiedAt)
+			info, err := r.t.tx.AddDir(parent, it.name, it.node.modifiedAt)
 			if err != nil {
 				res.Outcome, res.Code = "failed", classify(err).Code
-				*results = append(*results, res)
+				r.results = append(r.results, res)
 				continue // nothing beneath a folder that was not made
 			}
-			it.id, it.written, *wrote = info.ID, true, true
+			it.id, it.written, r.wrote = info.ID, true, true
 			res.Outcome, res.ID = "created", hexID(info.ID)
-			*results = append(*results, res)
+			r.results = append(r.results, res)
 		case "add", "replace":
-			err := c.addFile(ctx, o, tx, it, parent, &res, *done, total)
-			if res.Outcome == "added" || res.Outcome == "replaced" {
-				*wrote = true
+			if c.checkpointDue(r) {
+				if err := c.checkpoint(ctx, r); err != nil {
+					return err
+				}
 			}
-			*results = append(*results, res)
+			err := c.addFile(ctx, o, r.t.tx, it, parent, &res, r.done, r.total)
+			if res.Outcome == "added" || res.Outcome == "replaced" {
+				r.wrote, r.owing = true, true
+				r.since += uint64(max64(it.node.size, 0))
+			}
+			r.results = append(r.results, res)
 			if err != nil {
 				return err
 			}
-			*done += uint64(max64(it.node.size, 0))
-			o.progress(*done, total, "adding")
+			r.done += uint64(max64(it.node.size, 0))
+			o.progress(r.done, r.total, "adding")
 			continue
 		}
 		if !it.written && it.action == "enter" {
 			continue // the folder it would have entered was not made
 		}
-		if err := c.runPlan(ctx, o, oa, tx, it.children, results, done, total, wrote); err != nil {
+		if err := c.runPlan(ctx, o, r, it.children); err != nil {
 			return err
 		}
 	}

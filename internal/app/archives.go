@@ -1328,7 +1328,10 @@ func (c *Core) Stat(id string) (ArchiveStat, *Error) {
 
 // An operation is a transaction (APP.md §2.3, DECISIONS 2026-09-09): Begin
 // at its start, Commit at its end, then the receipt, one Session.UpdateRegistry
-// and archive.changed; Abort on failure and on Cancel.
+// and archive.changed; Abort of the open transaction on failure and on
+// Cancel (what an add's checkpoints committed stays). An add also commits at
+// its checkpoints (ruled 2026-11-03, ops.go addTree): each is a commit like
+// any other, followed at once by a fresh Begin on the same operation.
 
 // opTx is one operation's transaction together with the guard APP.md §2.3
 // needs behind it. Every caller defers end() the moment beginOp returns, and
@@ -1345,9 +1348,19 @@ type opTx struct {
 	// op is the long operation this transaction belongs to, when it belongs
 	// to one: an add, a replace. A rename, a move, a delete and a folder are
 	// their own call and have none. It is the operation the reclaim after
-	// the commit is allowed to see running, since by then it is over.
-	op   *op
-	over bool // committed or aborted: end() has nothing left to do
+	// the final commit is allowed to see running, since by then it is over;
+	// a checkpoint's commit is not that commit (checkpoint, below).
+	op *op
+	// over: committed or aborted, so end() has nothing left to do. A
+	// checkpoint lowers it again with the transaction it begins, so the one
+	// deferred end() guards whichever transaction is open.
+	over bool
+	// stood, when set, runs the moment a commit has stood — before the
+	// receipt, the events and anything else after it that can panic — so
+	// that what the commit published is on record even if the operation
+	// dies on the way out of it (an add's checkpoints, ops.go addTree; the
+	// outside audit of 2026-11-03, finding 1). Nil for the rest.
+	stood func()
 }
 
 // beginOp opens the transaction one operation runs in; o is the operation it
@@ -1382,9 +1395,52 @@ func (t *opTx) end() {
 // finding 4). Abort after a Commit is a no-op either way — the archive's
 // contract (archive/tx.go Abort) — so the ordinary paths are unchanged.
 func (t *opTx) commit(ctx context.Context) *Error {
+	if e := t.publish(ctx); e != nil {
+		return e
+	}
+	// The tail of the file came back with the commit itself (FORMAT.md R31
+	// as amended); a hole with live data above it is a move's (R40), and
+	// this is where the core decides that a run is worth it (APP.md §2.3).
+	t.c.reclaimIfWorth(t.oa, t.op)
+	return nil
+}
+
+// checkpoint is an add's commit on the way (ruled 2026-11-03, APP.md §2.3):
+// the transaction is published as any commit is — the index sealed, the
+// superblock flipped, the snapshot taken again, the receipt recorded or
+// owed, the sequence advanced, archive.changed — and a fresh transaction is
+// begun at once on the same operation, under the same opMu, for the rest of
+// the plan. It never plans a reclaim: the operation is still running and
+// still holds the handle's turn, so a run started here would be registered
+// beside it and wait behind it; the final commit plans one as every commit
+// does, and an add that ends without one is covered by finishOp's trigger.
+// The bytes the commit freed are R31's quarantine and the new transaction
+// cannot take them: Begin clones the archive's pool, which holds the
+// losing copy's extents back for one commit (archive/archive.go
+// rebuildPool). A Begin that fails after the commit leaves the operation
+// with nothing open and the checkpoint's commit published, which stood has
+// already put on record. Caller holds opMu.
+func (t *opTx) checkpoint(ctx context.Context) *Error {
+	if e := t.publish(ctx); e != nil {
+		return e
+	}
+	tx, err := t.oa.a.Begin()
+	if err != nil {
+		return t.c.fail("begin", err)
+	}
+	t.tx, t.over = tx, false
+	return nil
+}
+
+// publish is the commit's body, shared by the final commit and the add's
+// checkpoints: everything a commit does but the reclaim.
+func (t *opTx) publish(ctx context.Context) *Error {
 	c, oa := t.c, t.oa
 	rec, err := t.tx.Commit(ctx)
 	t.over = true
+	if err == nil && t.stood != nil {
+		t.stood()
+	}
 	c.mu.Lock()
 	if err != nil {
 		if errors.Is(err, archive.ErrIndeterminate) {
@@ -1411,10 +1467,6 @@ func (t *opTx) commit(ctx context.Context) *Error {
 	c.emit(EventArchiveChanged, ArchiveChanged{ID: hexID(oa.id), Seq: seq})
 	c.emitArchivesChanged()
 	c.emitState()
-	// The tail of the file came back with the commit itself (FORMAT.md R31
-	// as amended); a hole with live data above it is a move's (R40), and
-	// this is where the core decides that a run is worth it (APP.md §2.3).
-	c.reclaimIfWorth(oa, t.op)
 	return nil
 }
 

@@ -6511,3 +6511,36 @@ alike. Measured in the mock by the builder (144 shots) and the reviewer at 1086 
 does nothing in Details, as before (a Dialog change if wanted); the 4 px row's plain track for a
 figure not whole is faint, for the user's eye; Details opened while a compaction holds an open
 archive with no figure kept says "Open the archive to see its unused space."
+
+**The rail's busy mark is a plain spinner** (2026-11-04, the user's first look at bd07f6b in the real
+window: everything else right, but the two rings in the rail — beside *Archives* and in the busy
+archive's row — looked odd, a C-shaped arc rather than a whole circle, and the user wanted a
+plain spinner, no progress, turning more slowly, in a style that looks right). The cause: the
+14 px ring was a conic gradient filled to the percentage and cut to a ring by a radial mask,
+whose edges do not come out clean at 125 %, over a track in the stroke token that all but
+vanishes on the rail's ground (1.0 to 1.3:1 measured), so only the arc showed. Three styles were
+mocked on the real page as frame strips: an SVG quarter arc turning over a neutral track, the
+WinUI indeterminate ring's breathing arc without a track, and the conic approach repaired; the
+designer picked the breathing arc, the review found it faster, not slower (its ends sweep at up
+to 2.8 and 3.6 turns a second at their peak against the old ring's steady one, and it never
+closes into a circle, a 40° dash at its shortest), and the repair ruled the plain ring. Built:
+an SVG circle of radius 6 in a 16 px box with a 2 px stroke and round ends — the arc 22/100 of
+the circle, about 100° with its caps, in the accent, turning at a steady pace once every 1.8 s
+(the head at 0.56 turns a second) over a whole circle in a pale tint of the accent (1.35 to
+1.38:1 in light and 1.7:1 in dark, enough to draw the circle under the arc without reading as a
+second ink; a GrayText track outweighed the arc under forced colours, so there the arc stands
+alone, Highlight, HighlightText while hovering); the compact rail's 10 px mark the same at
+radius 4.25 and a 1.5 px stroke. It is the one busy mark everywhere: the *Archives* item's mark
+while anything runs (the accent dot and the ring filled to the percentage are retired), the busy
+archive's row in place of its close button, and the compact mark; every spinner in phase
+(`inPhase` anchors each `rail-spin` animation to the document timeline's origin, now through the
+SVG subtree, measured within 7 of 765 between two rows); a still quarter from twelve o'clock
+under reduced motion; the three marks on one vertical line (they stood 6 px apart). Gone with the
+fill: `--pct` and its registered property, the conic and mask rules, `railMark`'s ring and dot
+branches (now busy or not) and the rows' ring field; the pending ring's own turn is untouched.
+Measured in the mock at 125 %: a whole circle, outer 16.3 to 18.5 device px against the nominal
+17.5, the stroke about 2.5; the arc 3.7:1 on the item's fill and 4.3:1 on the ground in light,
+6.6 to 7.9:1 in dark, 14 to 15:1 under both palettes; 1472 frontend tests (two percentage tests
+merged into the spinner's), the repo tour. For the user's eye in the real window: whether the
+1.8 s turn reads as calm and the tinted track as a whole circle; two adds at once, the three
+marks turning as one on one line; the compact rail's 10 px ring off the *Archives* icon's corner.

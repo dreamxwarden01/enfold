@@ -141,18 +141,14 @@ describe("which operation the foot names", () => {
 
 describe("the rail's mark", () => {
   it("is nothing while nothing runs", () => {
-    expect(railMark([])).toBe("none");
-    expect(railMark([op({ finished: true, done: 1, total: 2 })])).toBe("none");
+    expect(railMark([])).toBe(false);
+    expect(railMark([op({ finished: true, done: 1, total: 2 })])).toBe(false);
   });
 
-  it("is a ring at the percentage while exactly one runs with a known total", () => {
-    expect(railMark([op({ finished: false, done: 58, total: 100 })])).toEqual({ ring: 58 });
-    expect(railMark([op({ finished: false, done: 2 * GB, total: 3 * GB })])).toEqual({ ring: 67 });
-  });
-
-  it("is the dot when the total is not known, or more than one runs", () => {
-    expect(railMark([op({ finished: false, total: 0 })])).toBe("dot");
-    expect(railMark([op({ finished: false, done: 1, total: 4 }), op({ id: "op2", finished: false, done: 1, total: 4 })])).toBe("dot");
+  it("is the spinner while anything runs, with no percentage", () => {
+    expect(railMark([op({ finished: false, done: 58, total: 100 })])).toBe(true);
+    expect(railMark([op({ finished: false, total: 0 })])).toBe(true);
+    expect(railMark([op({ finished: true }), op({ id: "op2", finished: false, done: 1, total: 4 })])).toBe(true);
   });
 });
 

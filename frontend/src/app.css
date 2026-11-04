@@ -149,6 +149,7 @@
   --loop-listen: 1.6s;
   --loop-pulse: 2.4s;
   --loop-ring: 1s;   /* the pending ring's turn */
+  --loop-spin: 1.8s; /* the rail's busy spinner: one turn */
   --loop-run: 1.4s;  /* the indeterminate progress line's run */
   /* List motion (direction 4, phase 4b; lib/motion.ts WASH): a row an
      operation added wears the accent wash this long, fading out. */
@@ -972,37 +973,45 @@ progress:indeterminate { background: var(--accent-line); }
 .rail-item[aria-current="page"]::before { transform: scaleY(1); }
 .rail-item[aria-current="page"] .i { color: var(--accent-ink); }
 .rail-gap { flex: 1; }
-/* The rail's mark while anything runs (direction 4): an 8 px accent dot at
-   the item's right edge, inside its 36 px row and centred on it; while
-   exactly one operation runs with a known total, a 14 px ring, 2 px
-   thick, filled from the top to its percentage — a conic gradient from
-   the accent to the stroke on --pct — the quiet fill vanished on the
-   current item's own fill, so a quarter ring read as a spinner — cut to a
-   ring by a mask (the
-   mask's colour is its opacity, not a colour on screen). */
-@property --pct { syntax: "<number>"; inherits: false; initial-value: 0; }
-.rail-mark { position: absolute; right: var(--s3); top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
-.rail-mark.ring { width: 14px; height: 14px; margin-top: -7px; }
-.rail-mark.ring, .rail-ring {
-  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--stroke) 0);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-  transition: --pct var(--dur-fast) var(--ease-enter);
-}
+/* The rail's spinner (ruled 2026-11-04, the user's: the ring filled to a
+   percentage read as a broken circle, a C with uneven ends, its stroke
+   track all but gone on the rail's ground; a plain spinner, no progress,
+   turning slowly). A whole circle in a pale tint of the accent (a quarter of
+   it; the pending ring's --accent-line all but vanished on the rail's
+   ground, 1.07:1 in light) under an arc of the accent, 2 px with
+   round ends, about a quarter of the circle (22 hundredths, near 100° with
+   its ends), turning at a steady pace once every 1.8 s (--loop-spin),
+   slower than the pending ring's turn once a second. Only the dash's
+   offset moves: the arc's length never changes. No percentage: it says
+   work is running, and the foot says how far. The circles are set in CSS
+   (14 px across: r 6 and 2 px of stroke in a 16 px box), the arc's on
+   pathLength 100, the svg turned a quarter back so the arc starts at 12
+   o'clock. Every spinner on screen is in one phase (Rail.svelte inPhase).
+   Under reduced motion it stands still, the arc from 12 o'clock.
+   The Archives item's mark, while anything runs: centred 14 px in from
+   the item's right edge, on the line of the rows' spinners below it, in
+   its 36 px row. */
+.rail-mark { position: absolute; right: calc(var(--s1) + 2px); top: 50%; width: 16px; height: 16px; margin-top: -8px; }
 /* An open archive's row while an operation runs on it (APP.md §6, Rail;
    ruled 2026-11-03, the user's): its 20 px × gives its place to the same
-   ring, 14 px and 2 px of the accent over the stroke, filled from the top
-   to the operation's percentage, in the ×'s box — 3 px round it, centred
-   where the × was, and 4 px from the name as the × stands (the button's
-   own 8 px gap taken back), so the name's room does not change. While the
-   total is not known a quarter of it turns, once a second as the pending
-   ring does, every turning ring on screen in one phase (Rail.svelte
-   inPhase); under reduced motion the quarter stands still. */
-.rail-ring { flex: none; width: 14px; height: 14px; border-radius: 50%; margin: 3px 3px 3px calc(3px + var(--s1) - var(--s2)); }
-.rail-ring.turning { --pct: 25; animation: ring-turn var(--loop-ring) linear infinite; }
+   spinner, in the ×'s box — 2 px round its 16, centred where the × was,
+   and 4 px from the name as the × stands (the button's own 8 px gap taken
+   back), so the name's room does not change. */
+.rail-ring { flex: none; width: 16px; height: 16px; margin: 2px 2px 2px calc(2px + var(--s1) - var(--s2)); }
 .rail-child.busy .rail-go .ellipsis { flex: 1; }
+.spin { display: block; width: 100%; height: 100%; overflow: visible; transform: rotate(-90deg); }
+.spin circle { cx: 8px; cy: 8px; r: 6px; fill: none; stroke-width: 2px; }
+.spin .track { stroke: color-mix(in srgb, var(--accent) 25%, transparent); }
+.spin .arc {
+  stroke: var(--accent); stroke-linecap: round; stroke-dasharray: 22 78;
+  animation: rail-spin var(--loop-spin) linear infinite;
+}
+@keyframes rail-spin {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -100; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .rail-ring.turning { animation: none; }
+  .spin .arc { animation: none; }
 }
 .rail-foot { padding: var(--s2) 0 0; border-top: 1px solid var(--stroke); margin-top: var(--s2); }
 /* The vault head (direction 10, ruled 2026-10-18): the vault's name in the
@@ -1060,11 +1069,11 @@ progress:indeterminate { background: var(--accent-line); }
 .rail-ico { position: relative; display: grid; place-items: center; }
 /* On the compact rail's 16 px Archives glyph the mark sits off its
    top-right corner, not on it: the 14 px ring over the glyph's lid read
-   as a clipped icon (the final shoot of phase 4a), so the compact ring is
-   10 px, still 2 px thick, and stands out past the corner by most of its
-   size. */
-.rail.compact .rail-mark { right: -6px; top: -5px; margin-top: 0; width: 7px; height: 7px; }
-.rail.compact .rail-mark.ring { right: -9px; top: -8px; width: 10px; height: 10px; }
+   as a clipped icon (the final shoot of phase 4a), so the compact spinner
+   is 10 px across, 1.5 px thick, in a 12 px box, and stands out past the
+   corner by most of its size. */
+.rail.compact .rail-mark { right: -10px; top: -9px; margin-top: 0; width: 12px; height: 12px; }
+.rail.compact .spin circle { cx: 6px; cy: 6px; r: 4.25px; stroke-width: 1.5px; }
 /* The flyout the toggle opens (NavigationView's labels): the menu's
    surface and shadow, to the right of the rail, holding the expanded
    rail's rows — the vault head, the items, the open archives by name —
@@ -2632,15 +2641,16 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
   .seg span.seg-hl { background: Highlight; border-color: Highlight; }
   .seg button.seg-btn.on { forced-color-adjust: none; color: HighlightText; }
 
-  /* The rail's op mark: a Highlight dot. The ring is a measure drawn as a
-     gradient, which forcing drops, so it opts out to keep it, in system
-     colours alone: the one opt-out with no text over its Highlight. A busy
-     archive's row ring is the same ring (ruled 2026-11-03). On a hovered
-     item both turn to HighlightText. */
-  .rail-mark { background: Highlight; }
-  .rail-mark.ring, .rail-ring { forced-color-adjust: none; background: conic-gradient(Highlight calc(var(--pct) * 1%), GrayText 0); }
-  .rail-item:hover .rail-mark { background: HighlightText; }
-  .rail-item:hover :is(.rail-mark.ring, .rail-ring) { background: conic-gradient(HighlightText calc(var(--pct) * 1%), color-mix(in srgb, HighlightText 40%, Highlight) 0); }
+  /* The rail's spinner, the Archives item's and a busy archive's row's
+     alike (ruled 2026-11-04): an SVG stroke is not forced, so the arc is
+     named in Highlight, the system's own mark for work in hand, and stands
+     alone: a GrayText track (the pending ring's) in a palette's other hue
+     outweighed the arc it was under at 2 px. On a hovered item, whose
+     fill is Highlight, the arc turns to HighlightText. */
+  .spin { forced-color-adjust: none; }
+  .spin .track { stroke: transparent; }
+  .spin .arc { stroke: Highlight; }
+  .rail-item:hover .spin .arc { stroke: HighlightText; }
   /* The busy plate and the callout, opaque in the Canvas with the text's
      ink and a CanvasText stroke (the engine would keep a fill's alpha);
      the veil under the plate is the Canvas at its own alpha, as forced.

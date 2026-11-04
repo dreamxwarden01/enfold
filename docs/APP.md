@@ -2701,7 +2701,7 @@ chosen yet; and from the moment `AddFiles` or `AddFolder` answers until that ope
 anything, since the core emits nothing for an add until its plan is made (`store.starting`).
 With several, the page names the latest begun on this archive, as the foot's running line does,
 which since 2026-11-03 is this archive's alone (*The foot*). **At rest** nothing stands over the
-page — no veil, no banner — and the foot's running line, the rail's mark and the ring on the
+page — no veil, no banner — and the foot's running line, the rail's mark and the spinner on the
 archive's own row in the rail (*Rail*) say it. During an add the open folder's list fills as the
 add's checkpoints commit (§2.3): the page re-reads it on each `archive.changed`, its own running
 add's included, the selection, the scroll and the current row kept — a listing scrolled past
@@ -3031,7 +3031,7 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   an archive's page, and that archive the one it holds (ruled 2026-11-03, the user's; it showed
   every running operation on whichever page was up): on the Archives page, *Vault*, *Settings*
   and another archive's page the foot draws no running line for it, the archive's row in the
-  rail wearing the ring in its ×'s place (*Rail*, below) and *Archives* its mark (`lib/foot.ts`
+  rail wearing the spinner in its ×'s place (*Rail*, below) and *Archives* its mark (`lib/foot.ts`
   `latestOp`, `pageOps`); the foot still follows every operation's bytes and its *Cancelling…*,
   so the line comes back as it was. Then a 160 × 3 px progress line, the accent filling
   `--fill-2` by bytes, a moving 40 px segment while the total is not known and a still pale line
@@ -3130,15 +3130,22 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   through the runtime's clipboard (`Clipboard.SetText`) and raises "Details
   copied", a success InfoBar, in the dialog (*InfoBars*, below). It closes on the backdrop as well, its one act being *Close* (ruled 2026-10-18: it was
   *What happened*, the count first, rows as "name — reason", with *Close* the accent).
-- **The rail's mark**: while anything runs, the rail's *Archives* item wears an 8 px accent dot
-  at its right edge, 12 px in and centred in its 36 px row, seen from every page — a 48 GB
-  extract started before going to the Vault page stays in sight; while exactly one runs with a
-  known total, the dot is instead a 14 px ring, 2 px wide, filled to its percentage (the accent
-  over `--fill-2`, moving over the fast duration). On the compact rail (Motion, *Rail*) the mark
-  sits just off the Archives icon's top-right corner, clear of the glyph: a 7 px dot, or a 10 px
-  ring still 2 px wide (ruled 2026-10-18; the 14 px ring over the glyph's lid read as a clipped
-  icon). The busy archive's own row on the expanded rail wears the same 14 px ring in its ×'s
-  place, turning while the total is not known (*Rail*; ruled 2026-11-03).
+- **The rail's mark**: while anything runs, the rail's *Archives* item wears **the rail's
+  spinner** at its right edge, centred 14 px in, on the line of the busy rows' spinners, and in its 36 px row, seen from every page — a
+  48 GB extract started before going to the Vault page stays in sight. The spinner is a plain
+  turning ring (ruled 2026-11-04, the user's: the ring filled to a percentage read as a broken
+  circle, a C with uneven ends whose stroke track all but vanished on the rail's ground; a
+  spinner, no progress, turning slowly): 14 px across, the whole circle drawn in a pale tint
+  of the accent (a quarter of it) under an arc of the accent 2 px wide with round ends,
+  about a quarter of the circle, turning at a steady pace once every 1.8 s (`--loop-spin`), its
+  length never changing (Motion, *Rail*). It says that work runs, not how far — the foot's line on the
+  archive's page says that — so there is no percentage, and the 8 px dot it wore for several
+  operations or an unknown total is gone with it: one spinner while anything runs (`lib/foot.ts`
+  `railMark`). On the compact rail (Motion, *Rail*) it
+  sits just off the Archives icon's top-right corner, clear of the glyph, 10 px across and
+  1.5 px wide (ruled 2026-10-18; a 14 px mark over the glyph's lid read as a clipped icon). The
+  busy archive's own row on the expanded rail wears the same spinner in its ×'s place (*Rail*;
+  ruled 2026-11-03).
 - **The pending ring**: a wait the user started marks the control that started it only once it
   has lasted 300 ms, so a quick answer never flashes anything (`lib/pending.ts`, one primitive):
   the 14 px ring — 2 px of the accent on its pale line, one turn a second, still under reduced
@@ -3675,7 +3682,8 @@ the fade of a row an operation added, *Lists* below; ruled 2026-10-26). Entering
 which is what a ghost is. Nothing travels more than 12 px; one thing moves at a time, staggered
 by at most 40 ms; nothing loops but the touch rings, the 14 px waiting ring of a preview on
 its way (ruled 2026-10-14) and of every other wait the user started (the pending ring, *The
-foot*, ruled 2026-10-18), the foot's moving segment while an operation's total is not known, and the YubiKey's LED on the lock screen while it listens (ruled
+foot*, ruled 2026-10-18), the foot's moving segment while an operation's total is not known, the
+rail's spinner while anything runs (*Rail*, below; ruled 2026-11-04), and the YubiKey's LED on the lock screen while it listens (ruled
 2026-10-17: there the motion is the state), each standing still under reduced motion.
 `prefers-reduced-motion` zeroes every duration — the script reads the media query when a
 transition starts, the tokens collapse to 0 — and the settle with them.
@@ -3813,17 +3821,21 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     something still holds it, since a second leave does nothing and *Force close* is the head's
     and the Archives page's. While an operation runs on the archive — any kind, a reclaim
     included, but a drag out in its hover, and an add the page started that has said nothing
-    yet (the Archive page's own rule, `lib/ops.ts` `busyOp`) — the × gives its place to **a
-    ring** (ruled 2026-11-03, the user's: one archive does one thing at a time, so its row says
-    it): the *Archives* item's own 14 px ring, 2 px of the accent over the stroke, filled from
-    the top to the operation's percentage while its total is known, and a quarter of it turning
-    once a second, as the pending ring turns, while it is not; every turning ring on screen
-    turns in one phase, each turn anchored to the document timeline's origin (`Rail.svelte`
-    `inPhase`), so two or three archives busy at once turn as one; under reduced motion the
-    quarter stands still. It stands centred where the × stood, the name's room unchanged, and is
-    hidden from a reader: the row's tooltip, shown whether or not the name is cut, and its name
+    yet (the Archive page's own rule, `lib/ops.ts` `busyOp`) — the × gives its place to **the
+    rail's spinner** (ruled 2026-11-03, the user's: one archive does one thing at a time, so its
+    row says it; a spinner with no percentage since 2026-11-04, the user's, *The foot*): the
+    *Archives* item's own, 14 px in a 16 px box, an arc of the accent with round ends, 22
+    hundredths of the circle (about 100° with its ends), over the whole circle in a pale tint
+    of the accent (a quarter of it), turning linearly at a steady pace, once every 1.8 s
+    (`--loop-spin`), slower than the pending ring's turn once a second; only the dash's offset
+    moves. Every spinner on screen, the *Archives* item's included, is in one
+    phase, each animation anchored to the document timeline's origin (`Rail.svelte` `inPhase`),
+    so two or three archives busy at once turn as one; under reduced motion it stands still, the
+    arc from 12 o'clock. Under a contrast theme the arc is Highlight with no track (a GrayText one
+    outweighed it), HighlightText on a hovered item (§6, Controls). It stands centred where the × stood, the name's room unchanged,
+    and is hidden from a reader: the row's tooltip, shown whether or not the name is cut, and its name
     say the archive and the operation, "Photos 2024 · Adding 20 files" (a busy reason's words
-    without its tail, `lib/rail.ts` `rowBusy`). The row still opens the archive, from its ring
+    without its tail, `lib/rail.ts` `rowBusy`). The row still opens the archive, from its spinner
     too; the × comes back when the operation ends, and the head's *Close* stays as it was,
     draining (§2.3);
   - *Vault*; the gap; and under a stroke, *Settings*.
@@ -3834,8 +3846,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   seen in both themes (ruled 2026-10-14; `--surface-alt` was not); a press is instant (4%, the
   text to `--ink-2`); the current item's pill grows from its middle (160 ms, *out*; ruled
   2026-10-14, it was 180 ms) and the previous one's shrinks. While an operation runs, *Archives*
-  wears the dot or the ring of *The foot* (above; ruled 2026-10-18) at its right edge, whose
-  ring moves to its percentage over the fast duration. **Compact**, below a 1008 px window
+  wears the spinner of *The foot* (above; ruled 2026-10-18, a spinner since 2026-11-04) at its
+  right edge, in phase with the busy rows'. **Compact**, below a 1008 px window
   (NavigationView's LeftCompact; `--rail-w-compact`, 48 px; the same query on `.shell`), it is a
   column of icons on its middle line, with no brand (ruled 2026-11-01; the mark
   stood alone under the toggle): a 32 px toggle (the hamburger, "Open navigation"),
@@ -3843,7 +3855,7 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   otherwise, whose press is the foot's own act (*Lock now* while unlocked, *Unlock* while locked,
   in any other state the lock scene, which says what comes first) and whose name and tooltip say
   the vault, its state and that act, "Personal vault · Unlocked · Lock now" — then the items as
-  40 px icons, each open archive as its glyph indented under *Archives* with no × and no ring
+  40 px icons, each open archive as its glyph indented under *Archives* with no × and no spinner
   (the *Archives* icon's mark says it), so nothing on the compact rail closes an archive by
   accident (the page's *Close* is the way), the operation's
   mark off the *Archives* icon's corner (*The foot*), and *Settings* at the foot. The toggle opens
@@ -4338,8 +4350,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   corner and the key art's port in GrayText, and the key art's LED in Highlight; the lock
   stage's card and the boot failure's are opaque Canvas in a CanvasText stroke, with no
   shadow, and the layer is opaque Canvas. Nothing opts out of the system's forcing but
-  what puts Highlight behind text and the rail's progress ring, whose measure is a gradient; the
-  touch does not: its green gives way to Highlight rings round a CanvasText glyph, so the
+  what puts Highlight behind text and the rail's spinner, its arc in Highlight with no track
+  (HighlightText on a hovered item; ruled 2026-11-04; it was a progress ring, whose measure
+  was a gradient); the touch does not: its green gives way to Highlight rings round a CanvasText glyph, so the
   palette the user chose to read by wins. A
   dialog is two parts: its body — the title 20/28, 24 px all round — which scrolls when the
   window is short, and a foot band a step below the surface, behind a stroke, 20 px above and

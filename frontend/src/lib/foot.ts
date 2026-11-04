@@ -114,19 +114,13 @@ export function latestOp<T extends Running>(ops: readonly T[], archiveId: string
 
 // ---- the rail's mark --------------------------------------------------------
 //
-// While anything runs the Archives item wears an 8 px accent dot; while
-// exactly one runs and its total is known, a 14 px ring filled to its
-// percentage. It is seen from every page, so a 48 GB extract started
-// before going to the Vault page is still in sight.
-export type RailMark = "none" | "dot" | { ring: number };
-
-export function railMark(ops: readonly Pick<OpView, "finished" | "done" | "total">[]): RailMark {
-  const running = ops.filter((o) => !o.finished);
-  if (running.length === 0) return "none";
-  if (running.length === 1 && running[0].total > 0) {
-    return { ring: Math.round((Math.max(0, Math.min(running[0].done, running[0].total)) / running[0].total) * 100) };
-  }
-  return "dot";
+// While anything runs the Archives item wears the rail's spinner (an arc
+// of the accent that turns and breathes, no percentage; ruled 2026-11-04,
+// the user's: the ring filled to a percentage read as a broken circle). It
+// is seen from every page, so a 48 GB extract started before going to the
+// Vault page is still in sight.
+export function railMark(ops: readonly Pick<OpView, "finished">[]): boolean {
+  return ops.some((o) => !o.finished);
 }
 
 // ---- the countdown's last minute ------------------------------------------

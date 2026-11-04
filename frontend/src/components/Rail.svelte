@@ -36,9 +36,9 @@
   // tip under one covered the next — the open archive under *Archives*,
   // the item drawn current under a row's ×.
 
-  // Work in progress, seen from every page (direction 4): an accent dot on
-  // Archives while anything runs, a ring filled to the percentage while
-  // exactly one runs with a known total (lib/foot.ts railMark).
+  // Work in progress, seen from every page (direction 4): the rail's
+  // spinner on Archives while anything runs, with no percentage (ruled
+  // 2026-11-04, the user's; lib/foot.ts railMark).
   const mark = $derived(railMark(store.runningOps));
   const head = $derived(vaultHead(store.status, store.vaultName));
   const headLabel = $derived(vaultButtonLabel(head));
@@ -48,34 +48,32 @@
   const currentName = $derived(store.page?.crumbs?.[0]?.name || store.archives.find((a) => a.id === store.current)?.name || "");
   const children = $derived(railChildren(store.current, currentName, store.status?.opened));
   // Each open archive's row while an operation runs on it (lib/rail.ts
-  // rowBusy; ruled 2026-11-03, the user's): the ring in place of its ×, and
-  // the operation in its tooltip and name. The compact rail draws no ×, so
-  // it keeps the Archives icon's mark alone.
+  // rowBusy; ruled 2026-11-03, the user's): the spinner in place of its ×,
+  // and the operation in its tooltip and name. The compact rail draws no ×,
+  // so it keeps the Archives icon's mark alone.
   const busyRows = $derived(new Map(children.map((c) => [c.id, rowBusy(store.runningOps, store.starting[c.id] ?? [], c.id)])));
 
-  // inPhase keeps every turning ring on screen in one phase (ruled
-  // 2026-11-03): two or three archives busy at once turn as one, whenever
-  // each row's ring began. Each ring-turn animation is anchored to the
-  // document timeline's origin (startTime 0), so its angle is the
-  // timeline's time modulo a turn — the same for every ring, across mounts
-  // and across a ring that stops and turns again. It is anchored as the
-  // action starts or its ring starts turning, and again as the browser
-  // starts the animation (animationstart), which covers a ring whose
-  // animation the stylesheet restarts. Under reduced motion there is none
-  // to anchor: the quarter stands still.
-  function inPhase(node: HTMLElement, turning: boolean) {
+  // inPhase keeps every spinner on screen in one phase (ruled 2026-11-03):
+  // the Archives item's and two or three busy archives' turn as one,
+  // whenever each began. Each rail-spin animation (on the spinner's arc,
+  // inside the node) is anchored to the document timeline's origin
+  // (startTime 0), so its phase is the timeline's time modulo a cycle — the
+  // same for every spinner, across mounts and across one that stops and
+  // starts again. It is anchored as the action starts, and again as the
+  // browser starts the animation (animationstart, which bubbles from the
+  // circle), which covers one the stylesheet restarts — the compact rail's
+  // mark, say. Under reduced motion there is none to anchor: the quarter
+  // stands still.
+  function inPhase(node: HTMLElement) {
     const anchor = () => {
       if (typeof node.getAnimations !== "function") return;
-      for (const a of node.getAnimations()) {
-        if ((a as CSSAnimation).animationName === "ring-turn" && a.startTime !== 0) a.startTime = 0;
+      for (const a of node.getAnimations({ subtree: true })) {
+        if ((a as CSSAnimation).animationName === "rail-spin" && a.startTime !== 0) a.startTime = 0;
       }
     };
     node.addEventListener("animationstart", anchor);
-    if (turning) anchor();
+    anchor();
     return {
-      update(t: boolean) {
-        if (t) anchor();
-      },
       destroy() {
         node.removeEventListener("animationstart", anchor);
       },
@@ -181,8 +179,8 @@
       <button type="button" class="rail-item" aria-current={here === it.route ? "page" : undefined} aria-label={it.label} use:tip={{ text: it.label, side: "end" }} onclick={() => store.go(it.route)}>
         <span class="rail-ico">
           <svg class="i"><use href="#{it.icon}" /></svg>
-          {#if it.route === "archives" && mark !== "none"}
-            <span class="rail-mark" class:ring={typeof mark === "object"} style:--pct={typeof mark === "object" ? mark.ring : null} aria-hidden="true"></span>
+          {#if it.route === "archives" && mark}
+            <span class="rail-mark" aria-hidden="true" use:inPhase><svg class="spin"><circle class="track" /><circle class="arc" pathLength="100" /></svg></span>
           {/if}
         </span>
       </button>
@@ -242,8 +240,8 @@
     {#each items as it (it.route)}
       <button type="button" class="rail-item" aria-current={here === it.route ? "page" : undefined} onclick={() => store.go(it.route)}>
         <svg class="i"><use href="#{it.icon}" /></svg>{it.label}
-        {#if it.route === "archives" && mark !== "none"}
-          <span class="rail-mark" class:ring={typeof mark === "object"} style:--pct={typeof mark === "object" ? mark.ring : null} aria-hidden="true"></span>
+        {#if it.route === "archives" && mark}
+          <span class="rail-mark" aria-hidden="true" use:inPhase><svg class="spin"><circle class="track" /><circle class="arc" pathLength="100" /></svg></span>
         {/if}
       </button>
       {#if it.route === "archives"}
@@ -257,20 +255,20 @@
           {@const said = b ? railCopy.busyRow(name, b.what) : ""}
           <div class="rail-item rail-child" class:current={here === `archive:${c.id}`} class:busy={!!b} data-tip-anchor>
             <!-- While busy the row's tooltip, always shown, and its name say
-                 the archive and the operation; the ring, which says nothing
-                 to a reader, is hidden from one. The ring stands inside the
+                 the archive and the operation; the spinner, which says nothing
+                 to a reader, is hidden from one. The spinner stands inside the
                  row's button, so the whole row still opens the archive. -->
             <button type="button" class="rail-go" aria-current={here === `archive:${c.id}` ? "page" : undefined} aria-label={b ? said : undefined} use:tip={b ? { text: said, side: "end" } : { text: name, cut: true, side: "end" }} onclick={() => showArchive(c.id)}>
               <svg class="i"><use href="#i-box" /></svg><span class="ellipsis">{name}</span>
               {#if b}
-                <span class="rail-ring" class:turning={b.ring === null} style:--pct={b.ring} aria-hidden="true" use:inPhase={b.ring === null}></span>
+                <span class="rail-ring" aria-hidden="true" use:inPhase><svg class="spin"><circle class="track" /><circle class="arc" pathLength="100" /></svg></span>
               {/if}
             </button>
             <!-- Gone once a Close has left it and something still holds
                  it: a second Leave does nothing, and the kill switch is
                  the head's or the inspector's *Force close* (the review of
                  2026-10-18). Gone too while an operation runs on it, the
-                 ring standing in its place until the operation ends (ruled
+                 spinner standing in its place until the operation ends (ruled
                  2026-11-03); the head's *Close* stays, and drains. -->
             {#if !b && !store.leftHeld(c.id)}
               <button type="button" class="rail-x" aria-label={railCopy.closeArchive(name)} use:tip={{ text: railCopy.closeArchive(name), side: "end" }} onclick={() => void store.closeArchive(c.id)}>

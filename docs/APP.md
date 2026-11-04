@@ -1706,7 +1706,10 @@ calls behind an unexported `Hooks` value the shell supplies, so nothing of Wails
 drop: the window is created with `EnableFileDrop`, and Wails delivers a drop only over an element
 marked `data-file-drop-target` — the Archive page's file list, while no operation runs on its
 archive (ruled 2026-11-03, §6, *The busy archive*: a busy list is no target, so Windows' no-drop
-pointer stands over it and a release drops nothing, nothing queued behind the operation), and the Archives page's body,
+pointer stands over it and a release drops nothing, nothing queued behind the operation; while files
+are held over it the list says the drop's two answers in colour, the accent's wash under the dashed
+accent ring where it takes them and the danger's wash under a solid danger border where it is busy,
+and a release over the busy list says so in the foot's callout, as a paste does), and the Archives page's body,
 which carries no ids and makes a drop with no `data-archive-id` that the page opens as §14 says
 (ruled 2026-10-14); the shell re-emits the dropped paths and the drop target's `data-archive-id` / `data-dir-id` —
 the id the page is showing, from `Page`'s `dirID` and `Crumbs`, never a path — to the frontend,
@@ -1880,9 +1883,11 @@ state word stands at the top right, and beside it, at rest and at first run, a g
 Settings, which needs no vault — the lock scene steps aside for the Settings page until the
 route moves on or the vault's state changes (ruled 2026-10-17); the notices — the warnings, the
 "workstation-lock detection unavailable" one among them (the BitLocker warnings went with §9's
-checks, 2026-09-13), the archives still open — above the panel at its width, never below its
+checks, 2026-09-13) — above the panel at its width, never below its
 buttons, ranked by tier, danger first (*Notices and their tiers*, below; ruled 2026-10-18), and
-above them the InfoBars, in flow (*InfoBars*, below; ruled 2026-10-26). **The step line** draws the states of §2.2 that an unlock passes through: a YubiKey's
+above them the InfoBars, in flow (*InfoBars*, below; ruled 2026-10-26); under them, over the step
+line, the quiet line for the archives the lock left open (*Archives open while the vault is
+locked*, below; ruled 2026-11-03). **The step line** draws the states of §2.2 that an unlock passes through: a YubiKey's
 three steps, *YubiKey · PIN and password · Touch* (*PIN* alone on a vault that asks for no
 password; the PIN's step is named in its fields' order, ruled 2026-10-17, it read *Password and
 PIN* live and *PIN* at rest), or the recovery key's two, *Recovery key · Unlock*. It is a caption
@@ -2278,7 +2283,9 @@ root by the archive's name), *Add files…* and *Add a folder…* as standard bu
 greyed while the archive drains, and while an operation runs on it with that operation's reason
 (*The busy archive*, below) — and "or drop files here" in the caption, which an add running on
 the archive turns into "The files appear here once they are added" and any other operation
-hides (ruled 2026-11-03); the whole list stays the drop target while the archive is idle; then the
+hides (ruled 2026-11-03); the whole list stays the drop target while the archive is idle, and its
+entrance, the slide of a change of folder, shows no sideways bar along the card's foot (Motion,
+*Lists*; it flashed one, the user, 2026-11-03); then the
 rows in `sort`'s order (§3), directories first; **four columns — Name, Size, Type, Modified**
 (*Stored as* is gone from the list; the preview's facts keep it as *Compressed*, "71% smaller"
 or "No, stored as is", never the method — ruled 2026-10-17): a folder shows no size and the type
@@ -2330,10 +2337,13 @@ one row's height of empty space under its last row, also when it scrolls, so the
 brought clear of the pane's edge; **the list moves only in its body** — a change of folder fades
 the rows in from the side they came from, a row an operation added wears a fading wash, a row a
 Delete takes fades out first (Motion, *Lists*; ruled 2026-10-26, phase 4b of direction 4) — and
-**a Delete keeps the place**: the row after the last one deleted takes the selection and the
-keyboard focus, else the nearest row before, and with no row left `..` takes the focus, or the
-empty folder's first command at the root (`lib/listkeys.ts` `survivor`; Explorer's habit — the
-focus fell to the page's body); **the preview pane** (264 px) **describes where you are**
+**a Delete leaves nothing selected** (ruled 2026-11-03, the user's, from the real window: the row
+after the last one deleted, else the nearest before, took the selection, which after a run of files
+was the folder above them and read as the delete choosing it; `store.deleted`): once it is done the
+selection and its anchor are empty and no row waits to select itself, and the keyboard focus stays
+in the list — on the folder's first row once the listing lands, a focus and not a selection, or with
+no row left on the empty folder's first command — and never on `..`, where Enter would go up (the
+focus had fallen to the page's body before 2026-10-26); **the preview pane** (264 px) **describes where you are**
 (ruled 2026-10-18, phase 4a of direction 3; at rest it was a grey "Select a file" over a greyed
 accent slab, and a file it could not show said "Extract…" as if that were the cure) — shown or
 hidden by *View › Preview pane* (Alt+P), `Settings.PreviewPane` (§3), true by default, a choice
@@ -2501,7 +2511,13 @@ operation ended meanwhile, the paste runs. The callout (the user's ruling of 202
 of an InfoBar) points at what the paste waits for: WinUI's TeachingTip over the foot's running
 line of this archive's operation, its tail on the line's name, a box of the surface with the
 flyout's stroke and shadow at the card's radius, one line of body ink, "Paste again when it
-ends." — "Drop again when it ends." for a drop that still arrived — while the running line
+ends." — "Drop again when it ends." for a drop that still arrived and for **a release over the busy
+list** (the user's ruling of 2026-11-03: a drop not taken says so, as a paste does), which never
+arrives as a drop: the runtime ends it with a dragleave, and a leave whose pointer still stands
+strictly inside the list's box with no dragover anywhere in the window within 150 ms is that release
+(`lib/ops.ts` `releasedInside`, `RELEASE_MS`), while a leave at or beyond the box's edge, or onto
+another part of the window, says nothing; an Esc mid-drag ends it the same way, a leave inside the
+box, and so raises it too, which is accepted, its words being as true then — while the running line
 itself takes the info tier's fill, the InfoBars' own, so the eye lands on it. It rises over the
 enter duration and goes over the exit one (at once under reduced motion), after 5 s, on Esc,
 which it spends — an Esc the newest error InfoBar took first leaves it standing, one Esc closing
@@ -2542,21 +2558,32 @@ never wait. The keys of the greyed commands do nothing, as a greyed command's ke
 does not lift for a drag out, an extract by another gesture; and a self-drop's *Move* is refused
 in place. **The drop**: while the archive is busy the list is no drop target (§3), so Windows'
 no-drop pointer stands over it and a release drops nothing. While files from outside are held
-over the list — from the drag's first hover until it leaves the list, is let go or ends — an idle
-list wears its dashed accent ring, steady across the rows, and a busy one **a veil**: the list's
-card alone, never the pane or the page, takes its own surface at 80 %, 1 px inside its stroke,
-over the move duration (at once under reduced motion), and centred on it **a plate**, a small card
-of the surface at 96 % with the card's stroke and radius, holds two lines, the operation's name
-with the archive in the strong weight, "Adding 20 files to Photos 2024", over "Drop here when it
-ends" in the body weight, both in the ink. The words stand on the plate so they never meet what
-is under them — the rows, the header, an empty folder's heading and buttons — and keep 4.5:1 and
-more there in both themes (measured at worst about 17:1 light and 12:1 dark, by what lies under
-the plate); the veil round the plate still shows the list faintly (1.5:1 light, 1.8:1 dark),
-which reads as a veil where the study's 90 % read as a sheet. No ring, no glyph, no accent; it is a
-status. It goes with the drag, a refused release included, and if the operation ends while the files
-are held the list takes the drop again under the hand and the veil gives way to the ring. Under a
-contrast theme the plate is the Canvas, opaque, in CanvasText with a CanvasText stroke, and the veil
-the Canvas at its alpha.
+over the list — from the drag's first hover until it leaves the list, is let go or ends — **the
+list says the drop's two answers in colour** (the user's ruling of 2026-11-03, after a real
+Explorer drag during an add): the list's card alone, never the pane or the page, takes **a veil**
+1 px inside its stroke, over the move duration (at once under reduced motion), steady across the
+rows. **Taken**, the archive idle: the accent's wash (`--accent-wash`) at 70 % over the rows and the
+dashed accent ring, 2 px, with no words and the copy pointer. **Refused**, the archive busy: the
+danger's wash (`--danger-wash`, the error InfoBar's fill) at 80 % and a solid 2 px border in the
+danger ink, and **a plate**, a small card of the surface at 96 % with the card's stroke and radius,
+holding two lines, the operation's name with the archive in the strong weight, "Adding 20 files to
+Photos 2024", over "Drop here when it ends" in the body weight, both in the plain ink: the colours
+say refused and the words say why. The plate stands centred **in the half of the list the pointer is
+not in** — the pointer in the lower half, the upper half; in the upper half, the lower — read from
+every dragover against the list's box, since Explorer's drag image, a thumbnail the size of a card
+under the pointer, covered its words mid-list in the real window (the judge's risk 5); it changes
+halves only when the pointer crosses the middle third's far edge, so it does not flap at the middle,
+moving over the move duration (a transform, at once under reduced motion), and at the 866 × 554
+minimum each half still holds it whole (`lib/ops.ts` `plateLow`). The words stand on the plate so
+they never meet what is under them — the rows, the header, an empty folder's heading and buttons —
+and keep 4.5:1 and more there in both themes (measured at worst 17:1 light and 12.3:1 dark); the
+rows still show through either veil, dimmed (a name through the taken veil 2.0:1 light and 2.5:1
+dark, through the refused one 1.6:1 and 1.8:1). It is a status. It goes with the drag; a release
+over the busy list raises the foot's callout (*Paste*, above); and if the operation ends while the
+files are held the list takes the drop again under the hand and the veil turns from refused to
+taken. Under a contrast theme the veil is a plain Canvas at its alpha with its border in Highlight
+for taken and in CanvasText for refused, and the plate the Canvas, opaque, in CanvasText with a
+CanvasText stroke.
 
 **The viewer** (ruled 2026-10-26, phase 4b of direction 7; `Viewer.svelte`, `lib/viewer.ts`) is
 a file looked at large inside the window — the long look, where the pane is the quick one —
@@ -3214,8 +3241,10 @@ shows no placeholder at all (ruled 2026-10-14).
 was one amber bar, so a possible attack, a weakened guarantee and a repair that heals itself
 looked alike). A notice has one of three tiers, fixed by its code (`lib/notices.ts`). The tier
 sets its colour, and sets its icon (`tierIcon`: the error circle, the warning triangle, the info
-circle) unless the notice carries its own: the locked lines and the archives-open notice carry the
-closed padlock, and the backups card's bar carries the backup icon. It sets nothing else:
+circle) unless the notice carries its own: the locked lines carry the closed padlock, and the
+backups card's bar carries the backup icon (the lock screen's archives-open line is no tier
+notice; it carries the padlock as its own glyph, *Archives open while the vault is locked*
+below). It sets nothing else:
 - *danger* — the danger wash and line, the error circle: the vault file may have been changed
   outside Enfold. `vault.tampered` and its two reasons, `vault.tampered_hash` and
   `vault.tampered_generation`.
@@ -3240,9 +3269,9 @@ slot-region hash (§13, `IncomingFile.Tampered`; it was attention), for the reas
 banner is danger. The recovery key's dialog, told that its one-time link was already used, says so
 on the plain bar: it only informs.
 The state sets the place. On the lock screen the notices stand above the panel at its width in
-one ranked list — danger, then attention, then info, the core's order kept within a tier — and
-the archives still open rank among them as attention, under the Tampered banner and above an info
-line. **On a page they stand in its notice slot** (ruled 2026-10-26, phase 4b of the design
+one ranked list — danger, then attention, then info, the core's order kept within a tier; the
+archives still open are not among them but a quiet line under them (ruled 2026-11-03; they ranked
+among them as attention, under the Tampered banner and above an info line). **On a page they stand in its notice slot** (ruled 2026-10-26, phase 4b of the design
 review's direction 4; `NoticeSlot`): one place for what a page has to say, between its commands
 and its list on the Archives and Archive pages, and first in the column on the Vault page and
 Settings (the Settings page's banners and bars now stand in its 760 px column, as the Vault
@@ -3263,7 +3292,8 @@ notice* button, whose popover lists them in this ranked order with each tier's i
 arrives meanwhile is marked by an InfoBar (below). The notices
 that carry a lead open with their first sentence in the strong weight (600, the ink), the rest
 following in the body weight: the Tampered banner, the locked lines of the Archives page and an
-archive's page, the archives-open notice and the backups card's bar. The split is written into
+archive's page and the backups card's bar; the lock screen's archives-open line sets the name,
+or the count, alone in it. The split is written into
 their copy (`strings.ts` `Lead`) and never found by searching for a full stop, since an archive's
 name may hold one. Every other notice is drawn unsplit in the body weight, whatever its length:
 the lock screen's warnings other than the Tampered one (`vault.stale`, `settings.unsaved`,
@@ -3361,20 +3391,46 @@ Archives page's *New archive…* (in the command bar and in the empty list), *Im
 backup…*, *Forget archive…*, *Delete archive…* and *Restore* carry no title for it (*Forget
 archive…* and *Delete archive…* show the compaction's title while one runs; the others none).
 
-**Archives open while the vault is locked** (attention, with the closed padlock) are named from
+**Archives open while the vault is locked** (attention, with the closed padlock, on the Archives
+and Archive pages; on the lock screen a quiet line in the ground's second ink, with the closed
+padlock) are named from
 `VaultStatus.Opened` (§3) and said for what they are — decrypted, and still saving, since every
 operation on an open archive commits to its file and owes the vault its receipt (§2.3, *What
 stays usable after a lock*; ruled 2026-10-18: the lock screen said "browsing works, saving needs
 the vault", the Archives page "Open archives can still be browsed; everything else needs the
 vault" and the Archive page "This archive stays open while you are here", each understating what
 an open archive still does). One archive is named, several are counted, in three places:
-- the lock screen, among the notices: "**<name> is still open in Enfold, decrypted.** Changes to
-  it are still saved." or "**<n> archives are still open in Enfold, decrypted.** Changes to them
-  are still saved.", and under it *Show* (a hyperlink button: to the archive's page when one is
-  shown, else to the Archives page), then *Close it* or *Close them* (a small standard button:
-  the graceful leave, `Archives.Leave` of the one or of each; once every archive it names is
-  still held after that leave, *Force close* or *Force close them*, `Archives.Close` of the one,
-  `Archives.CloseAll` of several — §2.3, ruled 2026-10-19);
+- the lock screen, as one quiet line (ruled 2026-11-03, the user in the real window: the
+  attention bar that said it stood above the ceremony's card through the PIN and over the touch's
+  green; the fact stays, since an archive decrypted behind a locked vault is what a user locking
+  it must know): no bar and no box, one caption line on the painted ground in its second ink
+  (`--ink-2-ground`, 6.0:1 on the ground in light and 7.0:1 in dark, measured), centred at the
+  card's width, 32 px tall, 24 px under the mark and 16 over the step line (under a notice, the
+  notices' 12): the closed padlock at 16 px, "**<name>** is still open, decrypted" or "**<n>
+  archives** are still open, decrypted" (the name in the strong weight and the ink, and cut with
+  an ellipsis before anything else is), then on the same line *Show* (to the archive's page when
+  one is shown, else to the Archives page) and *Close it* or *Close them* (the graceful leave,
+  `Archives.Leave` of the one or of each; once every archive it names is still held after that
+  leave, *Force close* or *Force close them*, `Archives.Close` of the one, `Archives.CloseAll` of
+  several — §2.3, ruled 2026-10-19), both text buttons in the accent ink with a 32 px hit height.
+  The whole notice, "<name> is still open in Enfold, decrypted. Changes to it are still saved."
+  (*them* for several), is the line's tooltip (the app's) and its name for a reader, so the
+  sentence the line drops is not lost. It stands at rest and through the unlock's first step
+  (the YubiKey's, or the opening of any way in), and from the second step on — the PIN and
+  password, the recovery key — through the touch, the derivation and Done it fades out over the
+  exit duration (160 ms, the exit's curve) and leaves the tab order, and from the same moment its
+  room folds over the move duration (220 ms, the entering curve, as every height moves), so the
+  card rises by the line's 64 px to where it stands without an open archive; the room clips
+  what it holds while it folds, and both happen at once under reduced motion (the owner,
+  2026-11-03: the room had been kept so the card never moved, which left 64 empty px between
+  the mark and the step line through the PIN and the touch and scrolled the smallest window's
+  PIN step by 62 px and its touch by 48). A YubiKey pulled after its PIN or a failure does not
+  bring it back; the rest view a cancel returns to does, the room opening over the same 220 ms
+  as the line fades in over 160, clipped until it has opened. It is never drawn on the touch's
+  green. Its room also opens and closes when the archives come or go, at once while it is
+  folded. With it the card's top stands at 236 px at rest and through the first step, and from
+  the PIN's step on at 172, where it stands without it, so neither the PIN's step nor the touch
+  scrolls the smallest window (measured at 1086 × 694 and 866 × 554, light and dark);
 - the Archives page, its 40 px locked line: "**The vault is locked.** <name> is still open:
   decrypted, and changes to it are still saved." or "**The vault is locked.** <n> archives are
   still open: decrypted, and changes to them are still saved.", with *Close archive* or *Close
@@ -3468,6 +3524,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     the same 220 ms as a scene change, on the entering curve, what overhangs it clipped at its
     stroke meanwhile; between crossings it is the view's own, so a line arriving inside a view
     moves nothing late (ruled 2026-10-17; the bottom edge jumped at once to the taller view).
+    With an archive the lock left open, its line fades as the PIN's step comes in and its room
+    folds, the card rising 64 px over the same 220 ms (*Archives open while the vault is locked*).
   - *A wrong PIN*: "Wrong PIN." cross-fades into the field's reserved line, 140 ms; nothing below
     moves.
   - *The PIN accepted, the touch*: an overlay with the touch's gradient fades in over the whole
@@ -3542,6 +3600,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
     each snapped to 1/dpr px and held), since a body painted at a fractional offset drew a seam
     at every cell's edge across the selection's wash and the focus ring. The Archives list does
     the same for a change of view: into the Forgotten view from the right, back from the left.
+    The file list's table clips its own sideways overflow, so a body coming in from the right
+    never makes the card scroll sideways: it stood 8 px past the card's edge for the 140 ms and a
+    sideways bar flashed along the card's foot on every way into a folder, an empty one's most
+    plainly (the user, 2026-11-03); the list never scrolls sideways, and the clip makes no scroll
+    box of the table, so the header still sticks.
   - *A row an operation added* — an add's added and created records on the archive shown, the
     folder *Create folder…* made — wears half the selection's wash (`color-mix` at 50% with
     nothing) fading out over *wash*, 1200 ms, on the exit's curve. It is a layer over the row's

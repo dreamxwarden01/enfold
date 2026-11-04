@@ -1362,6 +1362,57 @@ tbody tr[aria-selected="true"] > td:first-child::before { content: ""; position:
 .unlock .stage-mark { transition: opacity var(--dur-out) var(--ease-exit); }
 .unlock.green .stage-mark { opacity: 0; transition: opacity var(--dur-move) var(--ease-enter); }
 .notices { width: min(var(--stage-w), 100%); display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s3); }
+/* The line for the archives the lock left open (Lock.svelte; APP.md §6,
+   Archives open while the vault is locked; ruled 2026-11-03, replacing the
+   attention bar that stood among the notices): no box and no wash, one
+   caption line on the painted ground in its second ink (--ink-2-ground
+   under .unlock, as the step line's passed steps), centred at the card's
+   width. 24 px under the mark (the mark's own 8 and 16) and 16 over the
+   step line; under a notice the notices' 12 stand between. It is 32 px
+   tall, the hit height of its two text buttons, whose words take the
+   line's caption type in the accent ink (.btn.link, the house's text
+   button). The name alone is cut, with an ellipsis, so the fact and its
+   buttons always show; the whole notice is the line's tooltip. Off (from
+   the ceremony's second step on) it fades over the exit duration and
+   then leaves the tab order and the reader (inert, visibility), and its
+   room folds (.shut) from the same moment over the move duration on the
+   entering curve, the curve every height in the house moves on (unfold),
+   so the card rises by the line's 64 px to where it stands without an
+   open archive (the owner, 2026-11-03: the room kept left 64 empty px
+   over the PIN and the touch and scrolled the smallest window). The fade
+   ends first, so the words are gone before the room under them is; the
+   room clips while it is folded and until it has opened again, so a line
+   fading in never overhangs the step line. The return is the same in
+   reverse: the room opens over the move duration as the line fades in
+   over the exit's. On the touch's green it is never drawn. The durations
+   are 0 under reduced motion (:root). In a contrast theme the text is
+   the system's ink and the buttons the system's link colours: nothing
+   here paints a fill. */
+.openfold {
+  width: min(var(--stage-w), 100%);
+  transition: grid-template-rows var(--dur-move) var(--ease-enter), overflow 0s linear var(--dur-move) allow-discrete;
+}
+.openfold.shut, .unlock.green .openfold {
+  grid-template-rows: minmax(0, 0fr); overflow: hidden;
+  transition: grid-template-rows var(--dur-move) var(--ease-enter), overflow 0s allow-discrete;
+}
+.u-stage > .openfold > .openline { margin: var(--s4) 0; }
+.u-stage > .notices + .openfold > .openline { margin-top: 0; }
+.openline {
+  display: flex; align-items: center; justify-content: center; gap: var(--s2); height: 32px;
+  font: var(--t-cap); color: var(--ink-2); white-space: nowrap;
+  transition: opacity var(--dur-out) var(--ease-enter), visibility 0s;
+}
+.openline.off, .unlock.green .openline {
+  opacity: 0; visibility: hidden;
+  transition: opacity var(--dur-out) var(--ease-exit), visibility 0s linear var(--dur-out);
+}
+.openline > .i { flex: none; width: 16px; height: 16px; }
+.openline .ol-text { display: flex; column-gap: 0.3em; min-width: 0; flex: 0 1 auto; }
+.openline .ol-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--ink); }
+.openline .ol-rest { flex: none; }
+.openline .ol-acts { display: flex; flex: none; gap: var(--s1); margin-left: var(--s1); }
+.openline .btn.link { font: inherit; height: 32px; margin: 0; padding: 0 var(--s1); }
 /* The step line: a caption, the done steps in the second ink behind an
    accent disc with a check, the live one in ink at 600, the rest in the
    third ink. Its 16 px are kept when it is empty. */
@@ -1644,32 +1695,59 @@ button.crumb:active { background: var(--fill-2); transition-duration: 0s; }
 .file-split { display: grid; grid-template-columns: 1fr var(--pane-w-files); gap: var(--s4); flex: 1; min-height: 0; padding-bottom: var(--s3); container: files / inline-size; }
 /* View › Preview pane off (direction 3): the list takes the whole width. */
 .file-split.bare { grid-template-columns: minmax(0, 1fr); }
-/* Files from outside held over an idle list (ArchivePage held): the dashed
-   ring, steady while the drag crosses the rows, since held ends only when
-   the drag leaves the list (it went out over the rows when any dragleave
-   ended it, the busy-archive study's probe). */
-.file-split.held .tablewrap { outline: 2px dashed var(--accent); outline-offset: -2px; }
-/* The list and the pane hold their cells, so the busy veil, a third child
+/* The list and the pane hold their cells, so the drop veil, a third child
    in the list's cell, never pushes them on through the grid's
    auto-placement (the study's first run found it). */
 .file-split > .tablewrap { grid-area: 1 / 1; }
 .file-split > aside.preview { grid-area: 1 / 2; }
-/* Files held over a busy list (the busy archive, ruled 2026-11-03): the
-   list's card alone takes a veil of its own surface, 1 px inside its
-   stroke, under the notice slot's bars and over the sticky header; it
-   takes no pointer, so the drag's events and the runtime's hit test reach
-   the list under it. Its words stand on the plate: a small card of the
-   surface, near opaque, with the card's stroke and radius, centred in the
-   list, so they never meet the rows, the header or the empty folder's
-   heading and buttons beneath. The veil is lighter than the study's 90 %
-   since the plate carries the words; the two alphas are the measured ones
-   (the veil still reads as one round the plate, and the words keep 4.5:1
-   and more over anything beneath). No ring, no glyph, no accent. */
-.busy-veil {
+/* A change of folder slides the list's body in 8 px from the side it came
+   from (Motion, *Lists*; lib/motion.ts slideIn), and a body coming in from
+   the right stood 8 px past the card's edge for the slide's 140 ms, which
+   the card read as content to scroll to: a sideways bar flashed along its
+   foot on every way into a folder, an empty one's most plainly (the user,
+   2026-11-03). The table clips its own sideways overflow, which a slide
+   alone makes: the list never scrolls sideways, its columns giving way from
+   the right and a long name cut (APP.md §6), and clip makes no scroll box
+   of the table, so the header still sticks to the card's top. */
+.file-split table { overflow-x: clip; }
+/* Files from outside held over the list (ArchivePage held; the user's
+   ruling of 2026-11-03): the list's card alone takes a veil that says the
+   drop's two answers in colour, 1 px inside its stroke, under the notice
+   slot's bars and over the sticky header, steady while the drag crosses the
+   rows, since held ends only when the drag leaves the list. It takes no
+   pointer, so the drag's events and the runtime's hit test reach the list
+   under it. Taken (the archive idle): the accent's wash over the rows and
+   the dashed accent ring, 2 px, the ring the list wore alone before; no
+   words. Refused (an operation running, .refuse): the danger's wash and a
+   solid 2 px border in the danger ink, and the plate's words. The rows
+   still show through both, dimmed (the measured alphas). A change from one
+   to the other under the hand, an operation ending, eases over the move
+   duration, at once under reduced motion. */
+.drop-veil {
   grid-area: 1 / 1; position: relative; z-index: 4; margin: 1px; border-radius: calc(var(--r-card) - 1px);
-  display: grid; place-items: center; padding: var(--s4); min-width: 0; min-height: 0; pointer-events: none;
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  min-width: 0; min-height: 0; pointer-events: none;
+  border: 2px dashed var(--accent);
+  background-color: color-mix(in srgb, var(--accent-wash) 70%, transparent);
+  transition: background-color var(--dur-move) var(--ease-enter), border-color var(--dur-move) var(--ease-enter);
 }
+.drop-veil.refuse { border-style: solid; border-color: var(--danger); background-color: color-mix(in srgb, var(--danger-wash) 80%, transparent); }
+/* The plate stands centred in the half of the list the pointer is not in
+   (lib/ops.ts plateLow), so Explorer's drag image, a thumbnail the size of
+   a card that hangs under the pointer, never covers its words (the judge's
+   risk 5, seen in the real window). The half is the upper one, moved down
+   by its own height for the lower; the move between them is a transform
+   over the move duration, at once under reduced motion. */
+.drop-veil .plate-half {
+  position: absolute; left: 0; right: 0; top: 0; height: 50%;
+  display: grid; place-items: center; padding: var(--s3) var(--s4); min-width: 0;
+  transition: transform var(--dur-move) var(--ease-enter);
+}
+.drop-veil .plate-half.low { transform: translateY(100%); }
+/* The plate: a small card of the surface, near opaque, with the card's
+   stroke and radius, so its words never meet the rows, the header or the
+   empty folder's heading and buttons beneath, and keep 4.5:1 and more over
+   anything there; in the plain ink, since the veil's colours say refused
+   and the words say why. No glyph, no accent. */
 .busy-plate {
   display: flex; flex-direction: column; align-items: center; gap: var(--s1); max-width: 100%; min-width: 0;
   padding: var(--s3) var(--s5); text-align: center; overflow-wrap: anywhere;
@@ -2515,6 +2593,12 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
      The washed line, whose fill the theme turns into the Canvas it stands
      on, takes a CanvasText outline instead. */
   .busy-plate, .foot-tip, .foot-tip::after { background-color: Canvas; color: CanvasText; border-color: CanvasText; box-shadow: none; }
+  /* The drop veil: a plain Canvas at its own alpha, as the engine forces a
+     fill, and its border in the system's terms, Highlight for taken and
+     CanvasText for refused, which the engine would otherwise make one
+     CanvasText for both. */
+  .drop-veil { border-color: Highlight; }
+  .drop-veil.refuse { border-color: CanvasText; }
   .layer-foot .fit.washed { box-shadow: none; outline: 1px solid CanvasText; }
   /* The foot's notices dot, a fill in its tier's ink. */
   .layer-foot .notice-btn :is(.att-dot, .att-dot.info) { background: CanvasText; }

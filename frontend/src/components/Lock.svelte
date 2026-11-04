@@ -9,19 +9,20 @@
   import { CeremonyStep, Keys, Shell, Vault, VaultState, errorOf, stageGreen } from "../lib/api";
   import { store } from "../lib/state.svelte";
   import { ceremonyCopy, codeText, commandCopy, dialogCopy, firstMethodCopy, lockCopy, retriesText, sinceText, stepText, vaultCopy, warningCopy } from "../lib/strings";
-  import { OPENED, lockNotices, tier, tierIcon } from "../lib/notices";
+  import { lockNotices, tier, tierIcon } from "../lib/notices";
+  import { tip } from "../lib/tip";
   import { closeButton } from "../lib/leave";
   import { date, leaf } from "../lib/format";
   import { fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import { prefersReducedMotion } from "svelte/motion";
   import { onMount, untrack } from "svelte";
-  import { motion, delay, FAST, GAP, LEAVE, MOVE, OUT } from "../lib/motion";
+  import { motion, delay, unfold, FAST, GAP, LEAVE, MOVE, OUT } from "../lib/motion";
   import { NO_TRACK, key as formKey, track } from "../lib/pinform";
   import { middlePath, samePath } from "../lib/paths";
   import { firstRunCard, retiredAt } from "../lib/firstrun";
   import { wordedForToken } from "../lib/outcome";
-  import { NO_PHASE, derivingOf, discs, finishGreyed, green, insertLed, lastTry, lineKind, markAfter, padlockOpen as padlockOpenOf, phaseAfter, pinLeads, retriesTone, viewOf, wayOf } from "../lib/lockscreen";
+  import { NO_PHASE, derivingOf, discs, finishGreyed, green, insertLed, lastTry, lineKind, markAfter, openLineAfter, padlockOpen as padlockOpenOf, phaseAfter, pinLeads, retriesTone, viewOf, wayOf } from "../lib/lockscreen";
   import { HeldView } from "../lib/stage.svelte";
   import type { Mark, View, Way } from "../lib/lockscreen";
   import SecretInput from "./SecretInput.svelte";
@@ -129,7 +130,11 @@
   // The archives the lock left open, by name (VaultStatus.opened): the
   // notice above the panel names one and counts several (direction 9).
   const openedNames = $derived((st?.opened ?? []).map((a) => a.name));
-  const openedLead = $derived(lockCopy.openWhileLockedLead(openedNames));
+  // The line that says so (ruled 2026-11-03; it was an attention bar among
+  // the notices): the name or the count strong, then the fact, with the
+  // whole notice, the sentence the line drops included, as its tooltip.
+  const openedLine = $derived(lockCopy.openLine(openedNames));
+  const openedWhole = $derived(lockCopy.openWhileLocked(openedNames));
 
   let importing = $state(false);
   let importPrefill = $state("");
@@ -422,6 +427,20 @@
     const next = markAfter(prev, shown, card, c?.kind);
     if (next !== prev) markKind = next;
   });
+  // The line for the archives the lock left open stands at rest and
+  // through the first step, and goes from the second step on until the
+  // rest view comes back (lib/lockscreen openLineAfter; APP.md §6, ruled
+  // 2026-11-03). Its room folds with it, so the card rises by the line's
+  // 64 px as it goes and settles back as it returns (app.css .openfold;
+  // the owner, 2026-11-03: the room kept left 64 empty px between the mark
+  // and the step line through the PIN and the touch, and scrolled the
+  // smallest window). A page that joins a ceremony after a reload draws
+  // it on the views of the first step, where it may be read.
+  let lineOn = $state(untrack(() => openLineAfter(true, shown)));
+  $effect.pre(() => {
+    const next = openLineAfter(untrack(() => lineOn), shown);
+    if (next !== untrack(() => lineOn)) lineOn = next;
+  });
   let phased = $state(NO_PHASE);
   $effect(() => {
     const next = phaseAfter(untrack(() => phased), line, c);
@@ -680,12 +699,12 @@
   }
 
   const warnings = $derived(st?.warnings ?? []);
-  // The notices in tier order (lib/notices.ts): the open-archives notice is
-  // not a core warning but ranks as one, attention, so it stands under the
-  // tampered banner and above an info line (direction 9).
+  // The notices in tier order (lib/notices.ts). The archives the lock left
+  // open are no longer among them: they are the quiet line under the
+  // notices (ruled 2026-11-03), so the list is asked without them.
   // The Tampered banner is drawn from the pages' one predicate
   // (store.tampered), once, whichever fact raised it (lib/notices.ts).
-  const noticeList = $derived(lockNotices(warnings, store.tampered, openedNames.length > 0));
+  const noticeList = $derived(lockNotices(warnings, store.tampered));
 
   // The Tampered banner's *Replace with a copy…* pressed on a page locked
   // the vault and came here (store.askReplaceVault): at rest, the import
@@ -787,32 +806,42 @@
         <!-- Ranked by tier, danger first, each in its tier's colour and
              icon (lib/notices.ts; direction 9, ruled 2026-10-18). -->
         {#each noticeList as n (n)}
-          {@const t = n === OPENED ? "attention" : tier(n)}
+          {@const t = tier(n)}
           {#if t === "danger"}
             <!-- The Tampered banner, first (TamperedBar): here its fix
                  opens the import dialog this screen runs. -->
             <TamperedBar reason={st?.tamperedReason} onreplace={() => openImport()} />
-          {:else if n === OPENED}
-            <!-- The archives the lock left open (direction 9, ruled
-                 2026-10-18): attention, since they are still decrypted
-                 and still save (APP.md §2.3), with the closed padlock;
-                 ranked with the other attention notices, above the info
-                 ones. Show goes there, then the close, as the mock draws
-                 them; the sentence over the row, as in the tampered bar. -->
-            <div class="bar attention">
-              <svg class="i"><use href="#i-lock" /></svg>
-              <div class="grow notice-body">
-                <span class="num"><strong>{openedLead.head}</strong> {openedLead.rest}</span>
-                <div class="row">
-                  <button type="button" class="btn link" onclick={() => store.go(store.current ? "archive" : "archives")}>{vaultCopy.show}</button>
-                  <button type="button" class="btn sm" onclick={closeOpened}>{noticeClose.label}</button>
-                </div>
-              </div>
-            </div>
           {:else}
             <div class="bar {t}"><svg class="i"><use href="#{tierIcon(t)}" /></svg><span>{warningCopy(n, st?.tamperedReason)}</span></div>
           {/if}
         {/each}
+      </div>
+    {/if}
+    {#if !firstRun && openedNames.length > 0}
+      <!-- The archives the lock left open (APP.md §6, ruled 2026-11-03,
+           the user in the real window: the attention bar that said it
+           stood above the card through the PIN and over the touch's green). The
+           fact stays, since an archive decrypted behind a locked vault is
+           what the user locking it must know, but quiet: one caption line
+           on the ground in its second ink, the closed padlock, the name
+           strong and cut before anything else is, and Show and the close
+           as text buttons on the same line. The sentence it drops, that
+           changes still save, is in its tooltip, the whole notice. It
+           stands at rest and through the first step and fades from the
+           second on, its room folding with it so the card rises to where
+           it stands without the line, and opening again with the line at
+           rest. It opens and closes its height when the archives come or
+           go too, at once while it is folded: the transition would draw
+           the room open before the folded rule closed it again. -->
+      <div class="fold openfold" class:shut={!lineOn} transition:unfold={{ duration: lineOn ? undefined : 0 }}>
+        <div class="openline" class:off={!lineOn} inert={!lineOn} role="group" aria-label={openedWhole}>
+          <svg class="i" aria-hidden="true"><use href="#i-lock" /></svg>
+          <span class="ol-text" use:tip={openedWhole}><strong class="ol-name">{openedLine.head}</strong><span class="ol-rest">{openedLine.rest}</span></span>
+          <span class="ol-acts">
+            <button type="button" class="btn link" onclick={() => store.go(store.current ? "archive" : "archives")}>{vaultCopy.show}</button>
+            <button type="button" class="btn link" onclick={closeOpened}>{noticeClose.label}</button>
+          </span>
+        </div>
       </div>
     {/if}
 
@@ -1262,7 +1291,4 @@
   .gear { margin: -2px 0 -2px var(--s1); padding: 0 var(--s1); color: inherit; }
   .lockbox { position: relative; width: 16px; height: 16px; display: inline-block; }
   .lockbox .padlock { position: absolute; inset: 0; }
-  /* The open-archives notice: the sentence, then its close and its Show
-     on a row under it, 8 apart, as the tampered bar's (TamperedBar). */
-  .notice-body { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); min-width: 0; }
 </style>

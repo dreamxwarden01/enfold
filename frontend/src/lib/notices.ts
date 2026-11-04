@@ -20,18 +20,13 @@ import { Code } from "./api";
 
 export type Tier = "danger" | "attention" | "info";
 
-// OPENED stands for the lock screen's own notice that archives the lock
-// left open are still decrypted and still save (APP.md §2.3): not a code
-// the core raises, but ranked among them, as attention.
-export const OPENED = "ui.archives_open";
-
 const DANGER = new Set<string>([Code.CodeVaultTampered, Code.CodeTamperedHash, Code.CodeTamperedGeneration]);
 const INFO = new Set<string>([Code.CodeVaultStale, "vault.timeouts_clamped"]);
 
 export function tier(code: string): Tier {
   if (DANGER.has(code)) return "danger";
   if (INFO.has(code)) return "info";
-  return "attention"; // OPENED, the attention codes, and every unclassified one
+  return "attention"; // the attention codes, and every unclassified one
 }
 
 // The icon each tier wears (Icons.svelte): the error circle, the
@@ -65,8 +60,10 @@ export function tamperedShown(st: { tampered?: boolean; warnings?: readonly stri
 
 // lockNotices is the lock screen's list, ranked: the Tampered banner once
 // (whichever danger code or fact raised it), then the core's other
-// warnings and the open-archives notice by tier.
-export function lockNotices(warnings: readonly string[], tampered: boolean, opened: boolean): string[] {
+// warnings by tier. The archives a lock left open are no notice here: the
+// lock screen says them in its own quiet line under the notices (APP.md
+// §6, Archives open while the vault is locked; ruled 2026-11-03).
+export function lockNotices(warnings: readonly string[], tampered: boolean): string[] {
   const rest = warnings.filter((w) => tier(w) !== "danger");
-  return ranked([...(tampered ? [Code.CodeVaultTampered as string] : []), ...rest, ...(opened ? [OPENED] : [])]);
+  return ranked([...(tampered ? [Code.CodeVaultTampered as string] : []), ...rest]);
 }

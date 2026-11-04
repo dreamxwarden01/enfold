@@ -6,7 +6,7 @@ import { samePath } from "./paths";
 import { firstRunCard, retiredAt } from "./firstrun";
 import type { VaultStatus } from "./api";
 import { VaultState } from "./api";
-import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, choosesVaultPassword, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, markAfter, nothingChanged, offersRecoverySwitch, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
+import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, choosesVaultPassword, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, markAfter, nothingChanged, offersRecoverySwitch, openLineAfter, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
 import { codeText } from "./strings";
 import type { Mark, View, Way } from "./lockscreen";
 
@@ -874,5 +874,32 @@ describe("pinLeads", () => {
     expect(pinLeads("unlock", "both")).toBe(false);
     expect(pinLeads("create", "password")).toBe(false);
     expect(pinLeads("create", "none")).toBe(false);
+  });
+});
+
+describe("openLineAfter", () => {
+  // Folds the views of one sequence, from the rest view, into the line's
+  // state after each.
+  const run = (views: View[]): boolean[] => {
+    let on = false;
+    return views.map((v) => (on = openLineAfter(on, v)));
+  };
+  it("stands at rest and through a YubiKey's first step, and goes at its PIN", () => {
+    expect(run(["rest", "hold", "insert", "edge", "insert", "secret", "touch", "opening", "done"])).toEqual([true, true, true, true, true, false, false, false, false]);
+  });
+  it("goes at the recovery key, the second page of that way in", () => {
+    expect(run(["rest", "hold", "wait", "recovery", "opening"])).toEqual([true, true, true, false, false]);
+  });
+  it("stays gone when a YubiKey is pulled after its PIN, or the unlock fails after it", () => {
+    expect(run(["rest", "insert", "secret", "insert", "failed"])).toEqual([true, true, false, false, false]);
+    expect(run(["rest", "insert", "secret", "blocked"])).toEqual([true, true, false, false]);
+  });
+  it("keeps what it was on a failure of the first step, and comes back with the rest view a cancel returns to", () => {
+    expect(run(["rest", "insert", "failed", "rest"])).toEqual([true, true, true, true]);
+    expect(run(["rest", "insert", "secret", "touch", "rest"])).toEqual([true, true, false, false, true]);
+  });
+  it("is never drawn on the touch's green or at the first run", () => {
+    expect(openLineAfter(true, "touch")).toBe(false);
+    expect(openLineAfter(true, "firstrun")).toBe(false);
   });
 });

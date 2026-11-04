@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { busyLabel, busyOp, busyOps, busyReason, cancellable, hasBar, opErrorLine, opLabel, showsCancel, stopsFirst, stripCount } from "./ops";
+import { busyLabel, busyOp, busyOps, busyReason, cancellable, hasBar, opErrorLine, opLabel, plateLow, releasedInside, showsCancel, stopsFirst, stripCount } from "./ops";
 import type { BusyOp } from "./ops";
 import { dragOutCopy } from "./strings";
 
@@ -266,5 +266,48 @@ describe("the busy archive", () => {
   it("lets Delete archive… stop what the foot can cancel, and not a compaction or a re-key", () => {
     for (const k of ["add", "replace", "extract", "reclaim", "verify"]) expect(stopsFirst(op("o", k, 1)), k).toBe(true);
     for (const k of ["compact", "rotate"]) expect(stopsFirst(op("o", k, 1)), k).toBe(false);
+  });
+});
+
+// Files held over a busy list (APP.md §6, *The busy archive*; the user's
+// rulings of 2026-11-03): the plate keeps clear of the drag image, and a
+// leave from inside the list is a refused release.
+describe("the plate's half", () => {
+  it("starts in the half the pointer is not in", () => {
+    expect(plateLow(null, 0.8)).toBe(false);
+    expect(plateLow(null, 0.2)).toBe(true);
+    expect(plateLow(null, 0.5)).toBe(false);
+  });
+
+  it("does not flap at the middle: it changes halves past the middle third's far edge only", () => {
+    // In the upper half (the pointer was low): the pointer climbing through
+    // the middle third leaves it there, past a third it goes down.
+    expect(plateLow(false, 0.6)).toBe(false);
+    expect(plateLow(false, 0.4)).toBe(false);
+    expect(plateLow(false, 1 / 3)).toBe(false);
+    expect(plateLow(false, 0.3)).toBe(true);
+    // In the lower half (the pointer was high): the same, mirrored.
+    expect(plateLow(true, 0.4)).toBe(true);
+    expect(plateLow(true, 0.6)).toBe(true);
+    expect(plateLow(true, 2 / 3)).toBe(true);
+    expect(plateLow(true, 0.7)).toBe(false);
+  });
+});
+
+describe("a leave from inside the list", () => {
+  const b = { left: 100, top: 50, right: 600, bottom: 450 };
+
+  it("is inside only strictly within the box", () => {
+    expect(releasedInside(300, 200, b)).toBe(true);
+    expect(releasedInside(100.5, 449.5, b)).toBe(true);
+  });
+
+  it("is a plain leave at or beyond the edge", () => {
+    expect(releasedInside(100, 200, b)).toBe(false);
+    expect(releasedInside(600, 200, b)).toBe(false);
+    expect(releasedInside(300, 50, b)).toBe(false);
+    expect(releasedInside(300, 450, b)).toBe(false);
+    expect(releasedInside(700, 200, b)).toBe(false);
+    expect(releasedInside(300, 10, b)).toBe(false);
   });
 });

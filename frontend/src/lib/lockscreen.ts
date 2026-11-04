@@ -258,6 +258,37 @@ export function green(v: View): boolean {
   return v === "touch";
 }
 
+// openLineAfter is whether the lock screen's line for the archives the
+// lock left open is drawn once the panel shows `shown`, `prev` whether it
+// was (APP.md §6, Archives open while the vault is locked; ruled
+// 2026-11-03). The user locking the vault must know an archive is still
+// decrypted behind it, so the line stands at rest and through the
+// ceremony's first step, the YubiKey's (insert, edge) or the hold and the
+// wait that open a way in, where the user may still turn to it. From the
+// second step on (the PIN and password, the recovery key) through the
+// touch, the derivation and Done the pages are the ceremony's and the line
+// has been read, so it goes and stays gone, its room folding with it so
+// that the card rises to where it stands without the line (app.css
+// .openfold; the owner, 2026-11-03): a YubiKey pulled after its PIN
+// is drawn on the insert view again and does not bring it back, and
+// neither does a failure, which keeps what it found. It comes back with
+// the rest view, which a cancel returns to. The first run has no vault to
+// lock and so no line.
+export function openLineAfter(prev: boolean, shown: View): boolean {
+  switch (shown) {
+    case "rest":
+      return true;
+    case "insert":
+    case "edge":
+    case "hold":
+    case "wait":
+    case "failed":
+      return prev;
+    default:
+      return false;
+  }
+}
+
 // Mark is the stage's mark (fork D; APP.md §6, ruled 2026-11-01): the
 // 128 px sheet of the first run ("first") or the 96 px one in its 72 px
 // box ("stage").

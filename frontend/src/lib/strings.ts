@@ -2332,6 +2332,18 @@ export const lockCopy = {
     names.length === 1
       ? { head: `${names[0]} is still open in Enfold, decrypted.`, rest: "Changes to it are still saved." }
       : { head: `${plural(names.length, "archive")} are still open in Enfold, decrypted.`, rest: "Changes to them are still saved." },
+  // The lock screen's line for them (ruled 2026-11-03, the user in the
+  // real window: the attention bar stood above the ceremony's card through
+  // the PIN and over the touch's green). One quiet caption on the ground:
+  // the name, or the count, in the strong weight, then the fact. No full
+  // stop, since its buttons follow on the same line. The second sentence
+  // is dropped from the line and kept whole in its tooltip, which is
+  // openWhileLocked: the name uncut, and that changes still save (APP.md
+  // §2.3, What stays usable after a lock).
+  openLine: (names: readonly string[]): Lead =>
+    names.length === 1
+      ? { head: names[0], rest: "is still open, decrypted" }
+      : { head: plural(names.length, "archive"), rest: "are still open, decrypted" },
   // The notice's close is the graceful leave; *Force close* / *Force
   // close them* once a leave has left the archives still held (APP.md
   // §2.3, ruled 2026-10-19; lib/leave.ts).

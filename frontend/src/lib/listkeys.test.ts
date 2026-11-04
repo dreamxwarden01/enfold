@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, locksNow, pageRows, survivor, target, typeahead } from "./listkeys";
+import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, locksNow, pageRows, target, typeahead } from "./listkeys";
 import type { Intent, KeyCtx, KeyIn } from "./listkeys";
 
 // The lists' keys (direction 7; APP.md §6): one keymap, Explorer's habits.
@@ -378,22 +378,5 @@ describe("locksNow, the foot's Ctrl+L on every page", () => {
   it("leaves a field its keys and a dialog its own", () => {
     expect(locksNow(key({}), { inField: true, dialogUp: false })).toBe(false);
     expect(locksNow(key({}), { inField: false, dialogUp: true })).toBe(false);
-  });
-});
-
-describe("survivor, the row that keeps the place after a Delete", () => {
-  const ids = ["a", "b", "c", "d", "e"];
-  it("is the first row after the last one gone", () => {
-    expect(survivor(ids, new Set(["b"]))).toBe("c");
-    expect(survivor(ids, new Set(["b", "d"]))).toBe("e");
-  });
-  it("is the nearest before when nothing stays after", () => {
-    expect(survivor(ids, new Set(["e"]))).toBe("d");
-    expect(survivor(ids, new Set(["c", "d", "e"]))).toBe("b");
-  });
-  it("is none when every row goes or none of them is listed", () => {
-    expect(survivor(ids, new Set(ids))).toBeNull();
-    expect(survivor(ids, new Set(["z"]))).toBeNull();
-    expect(survivor([], new Set(["a"]))).toBeNull();
   });
 });

@@ -293,6 +293,27 @@ describe("going up (focusAfter)", () => {
   });
 });
 
+describe("after a Delete (deleted)", () => {
+  // The user's real window, 2026-11-03: a run of files deleted below a
+  // folder left the folder selected. A Delete leaves nothing selected, no
+  // anchor, and no row waiting to select itself when the list is re-read.
+  it("leaves the selection empty, with no anchor and no row waited for", async () => {
+    store.current = "a";
+    m.Page.mockResolvedValueOnce(reply(1, [], 0, [{ id: ROOT, name: "A" }, { id: "d1", name: "d1" }]));
+    await store.enterDir("d1", "d1");
+    m.Page.mockResolvedValueOnce(reply(1, ["x", "y", "z"], 4)); // the parent, d1 on a later page
+    await store.goUp();
+    expect(store.focusAfter).toBe("d1");
+    store.selectClick("y");
+    store.selectClick("z", { shift: true });
+    expect(store.sel.ids.size).toBe(2);
+    store.deleted();
+    expect(store.sel.ids.size).toBe(0);
+    expect(store.sel.anchor).toBeNull();
+    expect(store.focusAfter).toBeNull();
+  });
+});
+
 describe("the boot gate (booted)", () => {
   it("opens when the first Status call has answered, not on an event that lands first — and draws the newest status", async () => {
     vi.useFakeTimers();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OPENED, lockNotices, ranked, tamperedShown, tier, tierIcon } from "./notices";
+import { lockNotices, ranked, tamperedShown, tier, tierIcon } from "./notices";
 
 // The three tiers (direction 9, ruled 2026-10-18): danger for the
 // Tampered state's codes, info for what heals itself or only informs,
@@ -33,11 +33,6 @@ describe("the order the notices are drawn in", () => {
   it("keeps the core's order within a tier", () => {
     expect(ranked(["settings.unsaved", "vault.stale", "token.reset_failed", "vault.timeouts_clamped"])).toEqual(["settings.unsaved", "token.reset_failed", "vault.stale", "vault.timeouts_clamped"]);
   });
-  it("ranks the lock screen's open-archives notice as attention, above info", () => {
-    expect(tier(OPENED)).toBe("attention");
-    expect(ranked(["vault.tampered", "token.reset_failed", "vault.stale", OPENED])).toEqual(["vault.tampered", "token.reset_failed", OPENED, "vault.stale"]);
-    expect(ranked(["vault.stale", OPENED])).toEqual([OPENED, "vault.stale"]);
-  });
   it("leaves the list it was given alone", () => {
     const given = ["vault.stale", "vault.tampered"];
     ranked(given);
@@ -69,12 +64,12 @@ describe("whether the Tampered banner is shown (tamperedShown)", () => {
 
 describe("the lock screen's notices (lockNotices)", () => {
   it("draws the Tampered banner once, first, whichever fact raised it", () => {
-    expect(lockNotices(["vault.stale", "vault.tampered", "token.reset_failed"], true, false)).toEqual(["vault.tampered", "token.reset_failed", "vault.stale"]);
-    expect(lockNotices(["vault.stale"], true, true)).toEqual(["vault.tampered", OPENED, "vault.stale"]);
-    expect(lockNotices(["vault.tampered_hash", "vault.tampered"], true, false)).toEqual(["vault.tampered"]);
+    expect(lockNotices(["vault.stale", "vault.tampered", "token.reset_failed"], true)).toEqual(["vault.tampered", "token.reset_failed", "vault.stale"]);
+    expect(lockNotices(["vault.stale"], true)).toEqual(["vault.tampered", "vault.stale"]);
+    expect(lockNotices(["vault.tampered_hash", "vault.tampered"], true)).toEqual(["vault.tampered"]);
   });
   it("draws no Tampered banner when it is not shown", () => {
-    expect(lockNotices(["vault.stale", "token.reset_failed"], false, true)).toEqual(["token.reset_failed", OPENED, "vault.stale"]);
-    expect(lockNotices([], false, false)).toEqual([]);
+    expect(lockNotices(["vault.stale", "token.reset_failed"], false)).toEqual(["token.reset_failed", "vault.stale"]);
+    expect(lockNotices([], false)).toEqual([]);
   });
 });

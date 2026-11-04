@@ -255,3 +255,44 @@ export function stopsFirst(o: BusyOp): boolean {
 // How long the busy callout stands at the foot's running line when nothing
 // sends it away sooner (APP.md §6, Paste; ruled 2026-11-03).
 export const BUSY_TIP_MS = 5000;
+
+// ---- files held over a busy list (APP.md §6, *The busy archive*; the
+// user's rulings of 2026-11-03 after a real Explorer drag) ----------------
+
+// plateLow: whether the veil's plate stands in the lower half of the list,
+// read from where the pointer is (at: its height in the list, 0 at the top,
+// 1 at the bottom) and where the plate stood (was; null at the drag's first
+// hover). Explorer's drag image, a thumbnail the size of a card, hangs
+// under the pointer and covered the plate's two lines mid-list (the judge's
+// risk 5, seen in the real window), so the plate takes the half the pointer
+// is not in. It changes halves only when the pointer crosses the middle
+// third's far edge, so a pointer resting near the middle does not make it
+// flap from half to half.
+export function plateLow(was: boolean | null, at: number): boolean {
+  if (was === null) return at < 0.5;
+  return was ? at <= 2 / 3 : at < 1 / 3;
+}
+
+// A box in the window's CSS px, as getBoundingClientRect gives it.
+export interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+// releasedInside: whether a dragleave at (x, y) left the list from inside
+// its box — the runtime's answer to a release over a list that is no drop
+// target (it fires dragleave and never drop), and to an Esc mid-drag —
+// rather than through its edge or onto another part of the window, whose
+// leave stands at or beyond the edge. The page waits RELEASE_MS for a
+// dragover anywhere in the window before it calls it a release.
+export function releasedInside(x: number, y: number, b: Box): boolean {
+  return x > b.left && x < b.right && y > b.top && y < b.bottom;
+}
+
+// How long a leave from inside the list waits for the drag to show itself
+// again (a dragover anywhere in the window) before it is read as a refused
+// release. The runtime fires dragover every 50 ms or so while a drag is
+// held, so three of them is a drag that has ended.
+export const RELEASE_MS = 150;

@@ -31,13 +31,13 @@
   import { POPOVER_ATTR, dialogIsUp } from "../lib/dialogs";
   import { pending } from "../lib/pending";
   import { compacting } from "../lib/archlist";
-  import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, pageRows, survivor, target, typeahead } from "../lib/listkeys";
+  import { TYPEAHEAD_MS, controlKeepsKeys, intent, isTextEntry, jump, listScoped, pageRows, target, typeahead } from "../lib/listkeys";
   import type { Intent } from "../lib/listkeys";
   import { KEY_ECHO_MS, keyAnchor } from "../lib/menu";
   import type { MenuClose } from "../lib/menu";
   import { CLOSING, fileBlankItems, fileRowItems } from "../lib/filemenu";
   import type { FileBlankCmd, FileCmd, Stop } from "../lib/filemenu";
-  import { BUSY_TIP_MS, busyLabel, busyOp, busyOps, busyReason, stopsFirst } from "../lib/ops";
+  import { BUSY_TIP_MS, RELEASE_MS, busyLabel, busyOp, busyOps, busyReason, plateLow, releasedInside, stopsFirst } from "../lib/ops";
   import { clipOf, pastePlan, planOf } from "../lib/paste";
   import type { AddPlan, Clip } from "../lib/paste";
   import { PREVIEW_TEXT_CAP } from "../lib/viewer";
@@ -287,16 +287,61 @@
   // it — and by a drop, here or anywhere on the window. A crossing from
   // the blank area onto a row keeps it: the row's dragenter comes before
   // the blank area's dragleave, and that leave's next element is the row
-  // (today's ring, which any dragleave cleared, went out over the rows).
-  // Idle and held: the dashed ring. Busy and held: the veil.
+  // (a ring any dragleave cleared went out over the rows).
+  // Held, the list's card takes the veil, which says the drop's two
+  // answers in colour (the user's ruling of 2026-11-03): idle, the
+  // accent's wash under the dashed accent ring — taken; busy, the danger's
+  // wash under a solid danger border, with the plate's words — refused.
   let held = $state(false);
-  function holdOn(e: DragEvent) {
-    if (!store.dragOut && e.dataTransfer?.types.includes("Files")) held = true;
+  // Where the plate stands while the list is busy: the half the pointer is
+  // not in, so Explorer's drag image, a card-sized thumbnail under the
+  // pointer, never covers its words (lib/ops.ts plateLow; null until the
+  // drag's first hover says where the pointer is). Wherever held goes
+  // false the half goes back to null with it (holdOff, dropBlank,
+  // dropElsewhere, dragEnded): plateLow keeps the half it is given while the
+  // pointer is in the list's middle third, so a half left from the last
+  // drag would decide the next drag's first hover there, and the plate
+  // could stand in the pointer's own half, under Explorer's drag image.
+  let plateDown = $state<boolean | null>(null);
+  // The window's dragend: our own drag ended, wherever it was released.
+  function dragEnded() {
+    held = false;
+    plateDown = null;
   }
+  function holdOn(e: DragEvent) {
+    if (store.dragOut || !e.dataTransfer?.types.includes("Files")) return;
+    held = true;
+    const b = listEl?.getBoundingClientRect();
+    if (b && b.height > 0) plateDown = plateLow(plateDown, (e.clientY - b.top) / b.height);
+  }
+  // A release over a busy list never arrives as a drop: the list is no drop
+  // target, so the runtime ends the drag with a dragleave. A leave whose
+  // pointer still stands inside the list's box, with no dragover anywhere
+  // in the window within RELEASE_MS, is that release, and it raises the
+  // callout as a drop that still arrived does (the user's ruling of
+  // 2026-11-03: a drop not taken says so, as a paste does). A leave through
+  // the edge or onto another part of the window stands at or beyond the
+  // edge, or is followed by the window's dragover, and says nothing. An Esc
+  // mid-drag also ends it with a leave inside the box, and the callout's
+  // words are as true then (APP.md §6, the callout).
+  let releaseTimer: ReturnType<typeof setTimeout> | undefined;
   function holdOff(e: DragEvent) {
     const to = e.relatedTarget;
-    if (!(to instanceof Node) || !listEl?.contains(to)) held = false;
+    if (to instanceof Node && listEl?.contains(to)) return;
+    const was = held;
+    held = false;
+    plateDown = null;
+    const b = listEl?.getBoundingClientRect();
+    if (!was || !busy || draining || store.dragOut || !b || !releasedInside(e.clientX, e.clientY, b)) return;
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => raiseTip(busyCopy.dropAgain), RELEASE_MS);
   }
+  // Any dragover in the window: the drag goes on, so the leave was no
+  // release.
+  function dragGoesOn() {
+    clearTimeout(releaseTimer);
+  }
+  $effect(() => () => clearTimeout(releaseTimer));
 
   function fail(e: unknown) {
     store.notice(codeText(errorOf(e).code), "error");
@@ -1325,6 +1370,7 @@
   // the runtime's, as before.
   function dropBlank(e: DragEvent) {
     held = false;
+    plateDown = null;
     if (store.dragOut && isOver(hereTarget.id, "list")) dropOn(e, hereTarget, "list");
   }
 
@@ -1357,6 +1403,7 @@
   // its paths. A foreign drop ends the flight the same way, as nothing.
   function dropElsewhere(e: DragEvent) {
     held = false;
+    plateDown = null;
     springer.cancel();
     dropTarget = null;
     const f = store.dragOut;
@@ -1448,31 +1495,27 @@
   // event, which re-reads the list, cannot take them before they have
   // faded. A refusal brings them back with its InfoBar.
   //
-  // The place is kept (the motion keeps the focus where it was): the row
-  // after the last one taken — else the nearest before — is selected and
-  // takes the focus as soon as the Delete is done, through the same
-  // store.focusAfter the way up uses (lib/listkeys.ts survivor; Explorer's
-  // habit). With no row left it is `..`, or the empty folder's first
-  // command once the listing lands. The final shoot of phase 4b found the
-  // focus dropped to the body and the selection empty.
+  // Done, nothing is selected (the user's ruling of 2026-11-03, from the
+  // real window: the selection had fallen to the nearest row before, which
+  // after a run of files was the folder above them, and read as the delete
+  // choosing it; store.deleted). The keyboard's focus stays in the list:
+  // on the folder's first row once the listing lands, a focus and not a
+  // selection, or with no row left on the empty folder's first command;
+  // never on `..`, where Enter would go up. The final shoot of phase 4b
+  // found the focus dropped to the body.
   async function doDelete() {
     const d = deleting;
     deleting = null;
     if (!d) return;
-    const gone = new Set(d.ids);
-    const keep = survivor(rows.map((r) => r.id), gone);
-    leaving = gone;
+    leaving = new Set(d.ids);
     await new Promise((r) => setTimeout(r, delay(LEAVE)));
     try {
       await Archive.Delete(id, d.ids);
-      store.clearSelection();
-      if (keep) store.focusAfter = keep;
+      store.deleted();
       await store.refreshArchive();
-      if (!keep) {
-        await tick();
-        const el = listEl?.querySelector<HTMLElement>("tr.up") ?? listEl?.querySelector<HTMLElement>("button, [tabindex='0']");
-        el?.focus();
-      }
+      await tick();
+      const el = listEl?.querySelector<HTMLElement>("tbody tr[data-id]") ?? listEl?.querySelector<HTMLElement>(".empty-folder button:not(:disabled)");
+      el?.focus({ preventScroll: true });
     } catch (e) {
       leaving = new Set();
       fail(e);
@@ -1793,7 +1836,7 @@
   const noPreview = $derived(!!one && !one.isDir && (kind === "none" || previewFailed));
 </script>
 
-<svelte:window onkeydown={onKey} ondrop={dropElsewhere} onkeydowncapture={tipKey} onpointerdowncapture={tipPress} ondragend={() => (held = false)} />
+<svelte:window onkeydown={onKey} ondrop={dropElsewhere} ondragover={dragGoesOn} onkeydowncapture={tipKey} onpointerdowncapture={tipPress} ondragend={dragEnded} />
 
 <!-- While the viewer is up the page under it is inert: no key, no click,
      no tab stop reaches it (the viewer is over it). -->
@@ -1940,9 +1983,8 @@
     {/if}
   </NoticeSlot>
   <!-- View › Preview pane off gives the list the whole width (direction 3).
-       held: files from outside are held over an idle list, which wears the
-       dashed ring (app.css); over a busy one the veil stands instead. -->
-  <div class="file-split" class:held={held && !busy} class:bare={!paneOn}>
+       Files from outside held over the list: the veil, below. -->
+  <div class="file-split" class:bare={!paneOn}>
     <!-- A click on the list's blank area — under the last row, or in the
          container beside the table — clears the selection and the anchor
          (APP.md §6); a click that lands on a row is the row's. The drop
@@ -2066,23 +2108,31 @@
       {/if}
     </div>
 
-    {#if held && busy && !draining}
-      <!-- The veil (the busy archive; the user's ruling of 2026-11-03 on
-           its words): files held over a busy list veil the list's card
-           alone, never the pane or the page, in its own surface 1 px
-           inside its stroke, and the two lines stand on a plate, a small
-           card of the surface, so they never meet what is under them — the
-           rows, the header, the empty folder's heading and buttons. It
-           takes no pointer, so the drag's events and the runtime's hit
-           test reach the list beneath; it goes with the drag, and gives way
-           to the ring if the operation ends under the hand. Not while the
-           archive drains, which closes when its operation ends: the head
-           says so, and nothing could be dropped here later. -->
-      <div class="busy-veil" role="status" in:fade={motion(MOVE, { easing: enter })} out:fade={motion(LEAVE)}>
-        <div class="busy-plate">
-          <span class="busy-what">{busyName}</span>
-          <span class="busy-when">{busyCopy.dropHere}</span>
-        </div>
+    {#if held && !(busy && draining)}
+      <!-- The veil: files held over the list say the drop's two answers in
+           colour on the list's card alone, never the pane or the page, 1 px
+           inside its stroke (the user's ruling of 2026-11-03). Taken, the
+           archive idle: the accent's wash under the dashed accent ring, no
+           words, the copy pointer. Refused, an operation running: the
+           danger's wash under a solid danger border, and the two lines on a
+           plate, a small card of the surface in the plain ink, so the
+           colours say refused and the words say why; the plate stands in
+           the half of the list the pointer is not in, clear of Explorer's
+           drag image. It takes no pointer, so the drag's events and the
+           runtime's hit test reach the list beneath; it goes with the
+           drag, and turns from refused to taken if the operation ends
+           under the hand. Not while the archive drains with its operation
+           running, which closes when it ends: the head says so, and
+           nothing could be dropped here later. -->
+      <div class="drop-veil" class:refuse={!!busy} role="status" in:fade={motion(MOVE, { easing: enter })} out:fade={motion(LEAVE)}>
+        {#if busy}
+          <div class="plate-half" class:low={plateDown === true}>
+            <div class="busy-plate">
+              <span class="busy-what">{busyName}</span>
+              <span class="busy-when">{busyCopy.dropHere}</span>
+            </div>
+          </div>
+        {/if}
       </div>
     {/if}
 

@@ -6237,3 +6237,63 @@ the ring's --stroke track on the current row in dark, where a low percentage is 
 contrast theme on the row's ring; the compact rail's glyph naming only the archive (a nit to
 take: the words of the busy row on the glyph and the flyout's row); Narrator reading the
 question's sentence only when it changes.
+
+**The lock screen's open-archive notice is one quiet line** (2026-11-03). The user, in the real
+window, at the PIN step and over the touch's green: the yellow attention bar "test is still open
+in Enfold, decrypted. Changes to it are still saved." with *Show* and *Close it* stood above the
+ceremony's card; take it away or redesign it. Ruled: the fact stays — an archive decrypted in
+memory behind a locked vault is what a user who locked the vault must know — but as one quiet
+line on the painted ground, not a bar and not a box: the closed padlock at 16 px, the archive's
+name in the strong weight ("N archives" for several), "is still open, decrypted", then *Show* and
+*Close it* (*Close them*) as text buttons in the accent ink with a 32 px hit height, on one line
+centred at the card's width, 24 px under the mark and 16 over the step strip, in the ground's
+second ink (measured 6.0:1 in light and 7.0:1 in dark on the worst ground pixel); the dropped
+sentence is the line's tooltip and its name for a reader. It stands at rest and through the
+unlock's first step, and from the second step on — the PIN and password, the recovery key —
+through the touch it fades out and its room folds, the card rising to where it stands without an
+open archive (the builder had kept the room so the card never moves, which left a 64 px gap
+through the ceremony and scrolled the smallest window's PIN step by 62 px; ruled the other way);
+a cancel's return to the rest view brings it back with its room; it is never drawn on the
+touch's green. The notice is no longer among the tier notices (it ranked as attention under the
+Tampered banner); the Archives and Archive pages' own open-archive lines keep their attention
+tier. The builder also shot the page with the line removed, the user's other choice, for the
+user's eye. Left: `lib/notices.ts`'s `OPENED` and `lockNotices`' third parameter were dead after
+this and are removed with the follow-up; the name on the line is drawn in the first ink at the
+strong weight, mirroring the step strip's live step, which the reviewer left for the user's eye.
+
+**A drop's two answers in colour, the plate off the drag image, the refused release's callout,
+and two list bugs** (2026-11-03, the user's first real-window look at the busy archive). The
+user, with a real Explorer drag during an add: the drag image, a thumbnail the size of a card,
+covered the plate's two lines; and a drop should show both its answers, "a light green or blue
+for taken, a light red for refused, on the veil, with a border in the same", and a refused drop
+should say so at the foot as a refused paste does. Ruled and built: files held over an idle list
+veil the card in the accent's wash (70 %) under the dashed 2 px accent ring, now a border 1 px
+inside the card's stroke; held over a busy list, the danger's wash (80 %) under a solid 2 px
+border in the danger ink, the plate's two lines in the plain ink, so the colours say refused and
+the words say why; under forced colours the veil is plain Canvas at the same alpha and the
+border Highlight when taken, CanvasText when refused. The plate stands in the half of the list
+the pointer is not in, read from each dragover, and changes halves only past the middle third's
+far edge, so it does not flap, whole in either half at the 866 × 554 minimum. A release over the
+busy list never arrives as a drop (the runtime fires dragleave), so a dragleave whose pointer is
+still inside the list's box with no dragover anywhere in the next 150 ms is read as a refused
+release and raises the foot's callout "Drop again when it ends." as a drop that still arrives
+does; a leave through the edge, onto the pane, the head, the foot or the rail, or out of the
+window, says nothing; Esc mid-drag fires the same dragleave inside the box and raises the callout
+too, accepted (the words stay true; CDP cannot send it, so it is a real-window check, as is a fast
+flick out of the window whose last point is still inside the box). Two bugs: after a
+multi-selection's delete the folder above came out selected — `doDelete` had handed the focus
+to the nearest surviving row before the deleted run, the folder's row, whose focus effect
+selected it; now a delete empties the selection, the anchor and the pending focus
+(`store.deleted`), and the keyboard focus goes to the folder's first row or, if none is left, the
+empty folder's first button, never `..`. And a horizontal scrollbar flashed along the list's
+foot on the way into a folder, not only an empty one: the folder-change slide (`lib/motion.ts`
+`slideIn`, translateX 8 px on the table body) pushed the body 8 px past the card for about 23
+frames; the table now clips its own sideways overflow (`.file-split table { overflow-x: clip }`,
+on the element that overflows, not on the card, which still scrolls), and 0 of 217 sampled
+frames show a bar. Measured by the builder and the reviewer in the mock at both sizes, light,
+dark and both contrast palettes, with CDP drags, releases inside the box, leaves through every
+edge and out of the window; 1421 tests. For the user's eye in the real window: the green and
+the red under Explorer's own drag; the plate taking the other half as the pointer moves; the
+callout on a release and on Esc, and none on a flick out of the window; the red turning green
+under the hand when the add ends; the empty folder's entrance; a delete's end with nothing
+selected; a high-contrast theme's borders.

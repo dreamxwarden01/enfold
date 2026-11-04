@@ -353,6 +353,12 @@ describe("the receipts' words", () => {
   it("says what a lock left open is: decrypted, and still saving", () => {
     expect(lockCopy.openWhileLocked(["Photos 2024"])).toBe("Photos 2024 is still open in Enfold, decrypted. Changes to it are still saved.");
     expect(lockCopy.openWhileLocked(["Photos 2024", "Family videos"])).toBe("2 archives are still open in Enfold, decrypted. Changes to them are still saved.");
+    // The lock screen's quiet line (ruled 2026-11-03): the name or the
+    // count strong, the fact after it, no full stop; the whole notice is
+    // its tooltip, so nothing the line drops is lost.
+    expect(lockCopy.openLine(["Photos 2024"])).toEqual({ head: "Photos 2024", rest: "is still open, decrypted" });
+    expect(leadText(lockCopy.openLine(["Photos 2024", "Family videos"]))).toBe("2 archives are still open, decrypted");
+    expect(lockCopy.openLine(["Vol. 2"]).head).toBe("Vol. 2");
     expect(archivesCopy.lockedBanner(["Photos 2024"])).toBe("The vault is locked. Photos 2024 is still open: decrypted, and changes to it are still saved.");
     expect(archivesCopy.lockedBanner(["Photos 2024", "Family videos"])).toBe("The vault is locked. 2 archives are still open: decrypted, and changes to them are still saved.");
     expect(archivesCopy.lockedBanner([])).toBe("The vault is locked.");

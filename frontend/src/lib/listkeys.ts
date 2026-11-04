@@ -326,23 +326,3 @@ export function jump(names: readonly string[], buffer: string, from: number | nu
 export function locksNow(k: KeyIn, ctx: { inField: boolean; dialogUp: boolean }): boolean {
   return intent(k, { list: "archives", onUp: false, ...ctx }).kind === "lock";
 }
-
-// survivor names the row that takes the focus and the selection when the
-// rows `gone` leave the list (a Delete): the first row after the last one
-// gone that stays, else the nearest before the first one gone, else none —
-// Explorer's habit, so a keyboard user keeps their place (direction 4,
-// list motion: the focus is kept across the motion; the final shoot of
-// phase 4b found it dropped to the body).
-export function survivor(ids: readonly string[], gone: ReadonlySet<string>): string | null {
-  let last = -1;
-  let first = -1;
-  ids.forEach((id, i) => {
-    if (!gone.has(id)) return;
-    if (first < 0) first = i;
-    last = i;
-  });
-  if (first < 0) return null;
-  for (let i = last + 1; i < ids.length; i++) if (!gone.has(ids[i])) return ids[i];
-  for (let i = first - 1; i >= 0; i--) if (!gone.has(ids[i])) return ids[i];
-  return null;
-}

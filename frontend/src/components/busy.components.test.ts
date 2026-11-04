@@ -6,9 +6,10 @@
 // CDP and measures the veil, the plate and the callout). What is pinned
 // here is the wiring a refactor could undo without a unit test noticing:
 // that the list stops being a drop target while busy, that one held state
-// drives the ring and the veil, that the reason reaches every place the
-// draining reason did, and where the callout and the delete's sentence are
-// drawn.
+// drives the veil's two answers, that a refused release raises the
+// callout, that the reason reaches every place the draining reason did,
+// where the callout and the delete's sentence are drawn, and what a Delete
+// leaves selected.
 import { describe, expect, it } from "vitest";
 
 const sources = import.meta.glob(["./ArchivePage.svelte", "./LayerFoot.svelte", "./DeleteArchiveDialog.svelte", "./ArchivesPage.svelte"], {
@@ -35,22 +36,46 @@ describe("the busy archive's page", () => {
     expect(html).not.toContain('data-file-drop-target="true"');
   });
 
-  it("drives the ring and the veil by one held state, which a crossing onto a row does not end", () => {
+  it("drives the veil's two answers by one held state, which a crossing onto a row does not end", () => {
     expect(page).not.toMatch(/let dropping|dropping = |class:dropping/);
-    expect(html).toContain("class:held={held && !busy}");
+    // The ring the split once wore is the veil's taken border now.
+    expect(html).not.toContain("class:held=");
     expect(html).toContain("ondragenter={holdOn}");
     expect(html).toContain("ondragleave={holdOff}");
     expect(page).toContain("listEl?.contains(to)");
   });
 
-  it("draws the veil in the list's own cell, a status, its words on the plate", () => {
-    const veil = html.slice(html.indexOf("{#if held && busy && !draining}"), html.indexOf("{#if paneOn}"));
-    expect(veil).toContain('class="busy-veil" role="status"');
+  it("draws the veil in the list's own cell, a status, refused while busy with its words on a plate", () => {
+    const open = "{#if held && !(busy && draining)}";
+    const veil = html.slice(html.indexOf(open), html.indexOf("{#if paneOn}"));
+    expect(veil).toContain('class="drop-veil" class:refuse={!!busy} role="status"');
+    // The plate only for a refusal, in the half the pointer is not in.
+    expect(veil.indexOf("{#if busy}")).toBeLessThan(veil.indexOf('class="plate-half" class:low={plateDown === true}'));
     expect(veil).toContain('class="busy-plate"');
     expect(veil).toContain("{busyName}");
     expect(veil).toContain("{busyCopy.dropHere}");
     // Between the list and the pane, inside the split: the list's cell.
-    expect(html.indexOf("{#if held && busy && !draining}")).toBeGreaterThan(html.indexOf('<div class="tablewrap"'));
+    expect(html.indexOf(open)).toBeGreaterThan(html.indexOf('<div class="tablewrap"'));
+    expect(page).toContain("plateDown = plateLow(plateDown, (e.clientY - b.top) / b.height);");
+  });
+
+  it("reads a leave from inside a busy list as a refused release, which any dragover in the window cancels", () => {
+    const off = page.slice(page.indexOf("function holdOff("), page.indexOf("function dragGoesOn("));
+    expect(off).toContain("releasedInside(e.clientX, e.clientY, b)");
+    expect(off).toContain("setTimeout(() => raiseTip(busyCopy.dropAgain), RELEASE_MS)");
+    expect(off.indexOf("!was || !busy")).toBeGreaterThan(-1);
+    expect(html).toContain("ondragover={dragGoesOn}");
+  });
+
+  // The user's real window, 2026-11-03: a run of files deleted below a
+  // folder left the folder selected (the survivor rule's nearest row
+  // before). A Delete leaves nothing selected and keeps the focus on the
+  // folder's first row, never on `..`.
+  it("leaves nothing selected after a Delete, the focus on the first row and never on ..", () => {
+    const del = page.slice(page.indexOf("async function doDelete("), page.indexOf("function extractCommand("));
+    expect(del).toContain("store.deleted();");
+    expect(del).not.toMatch(/survivor|focusAfter|selectClick|tr\.up/);
+    expect(del).toContain('listEl?.querySelector<HTMLElement>("tbody tr[data-id]")');
   });
 
   it("greys by one reason wherever the draining reason reached, Delete archive… apart", () => {

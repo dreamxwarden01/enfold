@@ -2054,6 +2054,18 @@ class Store {
     this.sel = emptySelection();
   }
 
+  // deleted: what a Delete leaves of the selection once it is done (APP.md
+  // §6, ruled 2026-11-03 from the user's real window): nothing. The deleted
+  // rows are gone, and no row inherits the selection — it had fallen to the
+  // nearest row before, which after a run of files was the folder above
+  // them, and read as the delete choosing it. A row still waited for after
+  // going up (focusAfter) is dropped too, since it would select itself into
+  // the empty selection when the re-read listing brought it.
+  deleted(): void {
+    this.sel = emptySelection();
+    this.focusAfter = null;
+  }
+
   // selectFolder ticks the whole folder — every id Children answers,
   // loaded or not (APP.md §6): the header's tick and Ctrl+A.
   async selectFolder(): Promise<void> {

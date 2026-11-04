@@ -72,16 +72,56 @@ func (s *space) insert(e extent) {
 }
 
 // union adds whatever part of e the set does not already hold. It tolerates
-// overlap, which is what extents taken from a file need.
+// overlap, which is what extents taken from a file need. Only the extents
+// that touch e are looked at — the first that ends at or after e begins and
+// those up to the last that begins at or before e ends, found by binary
+// search — and they are folded into one with e, so the set stays coalesced.
+// It subtracted the whole set from e until 2026-11-03, which made every call
+// linear in the set and a plan over 50 000 holes take 71 s (the reclaim
+// study's analyst, metadata-and-figures.md section 2).
 func (s *space) union(e extent) {
 	if e.Len == 0 {
 		return
 	}
-	t := newSpace([]extent{e})
-	t.subtract(s)
-	for _, p := range t.x {
-		s.insert(p)
+	// i: the first extent that is not wholly before e and apart from it.
+	i := sort.Search(len(s.x), func(i int) bool { return end(s.x[i]) >= e.Off })
+	// j: the first extent at or after i that lies wholly after e and apart.
+	j := i + sort.Search(len(s.x)-i, func(k int) bool { return s.x[i+k].Off > end(e) })
+	if i == j {
+		s.x = append(s.x, extent{})
+		copy(s.x[i+1:], s.x[i:])
+		s.x[i] = e
+		return
 	}
+	lo, hi := min(e.Off, s.x[i].Off), max(end(e), end(s.x[j-1]))
+	s.x[i] = extent{Off: lo, Len: hi - lo}
+	s.x = append(s.x[:i+1], s.x[j:]...)
+}
+
+// spaceOf is the union of extents in any order, overlapping or not: sorted
+// once and coalesced in one pass, so that a set built from every live file
+// of an archive costs n log n rather than n insertions into the middle of a
+// growing slice (reclaimTail, followUpAt and the plan's step build theirs
+// this way).
+func spaceOf(extents []extent) *space {
+	xs := make([]extent, 0, len(extents))
+	for _, e := range extents {
+		if e.Len != 0 {
+			xs = append(xs, e)
+		}
+	}
+	sort.Slice(xs, func(i, j int) bool { return xs[i].Off < xs[j].Off })
+	out := &space{x: xs[:0]}
+	for _, e := range xs {
+		if n := len(out.x); n > 0 && e.Off <= end(out.x[n-1]) {
+			if last := &out.x[n-1]; end(e) > end(*last) {
+				last.Len = end(e) - last.Off
+			}
+			continue
+		}
+		out.x = append(out.x, e)
+	}
+	return out
 }
 
 // merged returns s ∪ o as a fresh set, in one linear pass over the two
@@ -118,7 +158,11 @@ func (s *space) merged(o *space) *space {
 	return out
 }
 
-// remove takes e out; e must lie within one extent of the set.
+// remove takes e out; e must lie within one extent of the set. What is left
+// of the host is written in its place, and an extent taken whole is dropped
+// from the nearer end of the slice: a plan takes its holes lowest first, and
+// shifting everything above the lowest hole for every one it spends made a
+// step over many holes quadratic.
 func (s *space) remove(e extent) bool {
 	if e.Len == 0 {
 		return true
@@ -128,14 +172,32 @@ func (s *space) remove(e extent) bool {
 		return false
 	}
 	host := s.x[i]
-	s.x = append(s.x[:i], s.x[i+1:]...)
-	if e.Off > host.Off {
-		s.insert(extent{Off: host.Off, Len: e.Off - host.Off})
-	}
-	if end(e) < end(host) {
-		s.insert(extent{Off: end(e), Len: end(host) - end(e)})
+	left := extent{Off: host.Off, Len: e.Off - host.Off}
+	right := extent{Off: end(e), Len: end(host) - end(e)}
+	switch {
+	case left.Len > 0 && right.Len > 0:
+		s.x[i] = left
+		s.x = append(s.x, extent{})
+		copy(s.x[i+2:], s.x[i+1:])
+		s.x[i+1] = right
+	case left.Len > 0:
+		s.x[i] = left
+	case right.Len > 0:
+		s.x[i] = right
+	default:
+		s.drop(i)
 	}
 	return true
+}
+
+// drop deletes the i-th extent, moving whichever side of it is shorter.
+func (s *space) drop(i int) {
+	if i < len(s.x)/2 {
+		copy(s.x[1:i+1], s.x[:i])
+		s.x = s.x[1:]
+		return
+	}
+	s.x = append(s.x[:i], s.x[i+1:]...)
 }
 
 // contains reports whether e lies within one extent of the set.
@@ -200,11 +262,41 @@ func (s *space) exactOrFirstFit(n uint64) (extent, bool) {
 	return s.firstFit(n)
 }
 
-// subtract removes every part of s that lies within o.
+// subtract removes every part of s that lies within o, in one pass over the
+// two sorted sets: each extent of s is cut by the extents of o that overlap
+// it, which a pointer into o finds without going back, since both are
+// sorted. It removed o's extents one at a time until 2026-11-03, a binary
+// search and a shift of the slice each — the cost union paid on every call
+// (above). What is left of a coalesced set stays coalesced: cutting only
+// opens gaps.
 func (s *space) subtract(o *space) {
-	for _, e := range o.x {
-		s.removeOverlap(e)
+	if len(s.x) == 0 || len(o.x) == 0 {
+		return
 	}
+	out := make([]extent, 0, len(s.x))
+	j := 0
+	for _, a := range s.x {
+		cur, stop := a.Off, end(a)
+		// Nothing of o that ends at or before a begins can cut a, or any
+		// extent of s after it.
+		for j < len(o.x) && end(o.x[j]) <= cur {
+			j++
+		}
+		for k := j; k < len(o.x) && o.x[k].Off < stop && cur < stop; k++ {
+			b := o.x[k]
+			if b.Len == 0 {
+				continue
+			}
+			if b.Off > cur {
+				out = append(out, extent{Off: cur, Len: b.Off - cur})
+			}
+			cur = max(cur, end(b))
+		}
+		if cur < stop {
+			out = append(out, extent{Off: cur, Len: stop - cur})
+		}
+	}
+	s.x = out
 }
 
 // removeOverlap removes the intersection of e with the set, whatever shape

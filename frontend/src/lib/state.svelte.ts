@@ -3,7 +3,7 @@
 // subscribed in boot() before the first fetch (APP.md §2.4).
 import { Events } from "@wailsio/runtime";
 import { Archive, Archives, Keys, Settings, Shell, Vault, errorOf, Code, submitSecret } from "./api";
-import type { ArchiveDetails, ArchiveStat, ArchiveSummary, BackupStatus, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, SettingsView, SlotView, VaultStatus } from "./api";
+import type { ArchiveDetails, ArchiveStat, ArchiveSummary, BackupStatus, CeremonyState, EntangledState, IncomingRecord, OpenRequest, OpView, ReclaimView, SettingsView, SlotView, VaultStatus } from "./api";
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, moreNotOpened, noticeCopy, openElsewhereText, purgedText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
@@ -2430,6 +2430,44 @@ class Store {
   // next press in a page's body (LayerFoot) is the user moving on from it.
   clearDone(): void {
     this.turnDone(nextDone({ shown: this.done, waiting: this.doneWaiting }));
+  }
+
+  // reclaimOf: the in-place run's last figure for an open archive (APP.md
+  // §2.3, ArchiveStat.Reclaim), the later of the list row's and the one a
+  // Stat carried (given). A plan lands after the commit that called for
+  // it and is announced by archives.changed alone, which refreshes the
+  // list and not the page's Stat (ops.go planLoop: archive.changed would
+  // read the listing again for nothing), so the Archive page's pane takes
+  // the figure from the row; the Stat's stands until the row has one at
+  // least as fresh. Null for a closed archive and before the first plan.
+  reclaimOf(archiveId: string, fromStat?: ReclaimView | null): ReclaimView | null {
+    const row = this.archives.find((a) => a.id === archiveId && a.open)?.reclaim ?? null;
+    const st = fromStat ?? null;
+    if (!row) return st;
+    if (!st) return row;
+    return st.atSeq > row.atSeq ? st : row;
+  }
+
+  // reclaimSpace is *Reclaim space* (APP.md §2.3, §6): the user's in-place
+  // run of an open archive, which the core starts at once and refuses only
+  // when its last whole plan says nothing comes back. The answered id is
+  // held as the reclaim it is until the core's own op.progress replaces
+  // it, so the archive is busy from the press, with the run's own reason
+  // ("Reclaiming space… wait for it to end"), and not from its first
+  // event — starting (below) would name it an add. One the core has
+  // already spoken of is left as heard. A refusal is an error InfoBar in
+  // the code's words; the answer says whether the run began.
+  async reclaimSpace(archiveId: string): Promise<boolean> {
+    try {
+      const opId = await Archives.ReclaimSpace(archiveId);
+      if (opId && !(opId in this.ops)) {
+        this.ops[opId] = { id: opId, kind: "reclaim", archiveId, done: 0, total: 0, items: 0, dragItems: 0, phase: "", startedAt: Math.floor(Date.now() / 1000), finished: false, returned: 0, requested: true, moved: 0 } as OpView;
+      }
+      return true;
+    } catch (e) {
+      this.notice(codeText(errorOf(e).code), "error");
+      return false;
+    }
   }
 
   // noteStarting records an operation the Archive page started, by the id

@@ -35,6 +35,7 @@ export type {
     OpenRequest,
     Page,
     Reader,
+    ReclaimView,
     Settings,
     SlotBrief,
     SlotView,

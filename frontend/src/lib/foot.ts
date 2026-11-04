@@ -230,7 +230,10 @@ export function doneLine(o: OpView, names: ReadonlyMap<string, string>): DoneLin
       case "verify":
         return { tone: "neutral", text: doneCopy.stoppedRefresh(name) };
       case "reclaim":
-        return { tone: "neutral", text: doneCopy.stoppedReclaim(name) };
+        // Every commit the run made stands (APP.md §2.3), so the stop says
+        // what came back so far: "Stopped reclaiming space in Photos 2024
+        // · 1.1 GB given back".
+        return { tone: "neutral", text: doneCopy.stoppedReclaim(name, o.returned > 0 ? bytes(o.returned) : "") };
     }
     return { tone: "neutral", text: doneCopy.stoppedOther(name) };
   }
@@ -273,8 +276,12 @@ export function doneLine(o: OpView, names: ReadonlyMap<string, string>): DoneLin
     case "compact":
       return { tone: "ok", text: o.returned > 0 ? doneCopy.compactedBack(name, bytes(o.returned)) : doneCopy.compacted(name) };
     case "reclaim":
-      // Nothing given back is nothing to say: the run was the core's own.
-      return o.returned > 0 ? { tone: "ok", text: reclaimedText(o.returned) } : null;
+      // "Reclaimed 2.9 GB in Photos 2024". Nothing given back is nothing to
+      // say for the core's own run, which no press asked for; the user's
+      // *Reclaim space* (Requested) always says what came back, nothing
+      // included (APP.md §2.3).
+      if (o.returned > 0) return { tone: "ok", text: reclaimedText(o.returned, name) };
+      return o.requested ? { tone: "neutral", text: doneCopy.reclaimedNone(name) } : null;
     case "verify":
       return { tone: "ok", text: doneCopy.refreshed(name) };
     case "rotate":

@@ -240,12 +240,25 @@ const (
 	CodeOpCommitting Code = "op.committing"
 	CodeOpRunning    Code = "op.in_progress"
 	CodeTooSlow      Code = "op.too_slow_for_session"
-	// CodeReclaimIncomplete: a move commit of the reclaim the core runs
-	// after an edit failed. The edit itself committed and stays committed;
-	// the reclaim's own operation ends with this, and the next qualifying
-	// commit takes the run up again (APP.md §2.3). "Saved. Reclaiming space
-	// did not finish."
+	// CodeReclaimIncomplete: a move commit of a reclaim failed, the one the
+	// core runs after an edit or the user's Reclaim space. What committed
+	// stays committed; the reclaim's own operation ends with this. A failure
+	// is not a cancel and holds nothing off, but the core takes the run up
+	// again by itself only after a later commit whose plan the cheap rule
+	// passes (ops.go reclaimRule); a larger run waits for the user's
+	// Reclaim space (APP.md §2.3). "Saved. Reclaiming space did not finish."
 	CodeReclaimIncomplete Code = "archive.reclaim_incomplete"
+	// CodeNothingToReclaim: *Reclaim space* was asked for and the archive's
+	// last plan, made at its current state and walked to its end, says no
+	// move would give the file system anything back (APP.md §2.3, ops.go
+	// ReclaimSpace). Only Compact reaches what unused space there is.
+	CodeNothingToReclaim Code = "archive.nothing_to_reclaim"
+	// CodeCompactNoSpace: the drive the archive is on has less free space
+	// than the compaction's fresh copy needs, about the file's size less its
+	// unused space (FORMAT.md R33; ops.go Compact, ruled 2026-11-04). The
+	// error carries Needed, Free and Volume, so the page can say "needs
+	// about 45 GB free on D:; 12 GB is free".
+	CodeCompactNoSpace Code = "archive.compact_no_space"
 
 	// The drag out of the window (APP.md §3, dragout.go). CodeDragUnsupported:
 	// OLE could not be initialised on the window's thread, or this is not
@@ -270,6 +283,15 @@ type Error struct {
 	// and Slot are — a path the user themselves named a copy of, never a
 	// path of Enfold's own.
 	Path string `json:"path,omitempty"`
+	// Needed, Free and Volume: archive.compact_no_space, the bytes the
+	// compaction's fresh copy needs, the bytes free on the drive, and the
+	// drive as Windows names it ("D:"), measured as the refusal was made.
+	// Free is a pointer, as Retries is, so a drive with nothing free — the
+	// very case the refusal is for — still sends "free": 0 while every other
+	// code sends no such field.
+	Needed uint64  `json:"needed,omitempty"`
+	Free   *uint64 `json:"free,omitempty"`
+	Volume string  `json:"volume,omitempty"`
 }
 
 func (e *Error) Error() string { return string(e.Code) }

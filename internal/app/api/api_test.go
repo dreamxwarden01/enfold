@@ -49,6 +49,7 @@ func TestBoundSurface(t *testing.T) {
 			"Locate(string, string) error",
 			"Open(string) (app.ArchiveStat, error)",
 			"OpenPath(string) (app.OpenPathResult, error)",
+			"ReclaimSpace(string) (string, error)",
 			"Rename(string, string) error",
 			"Restore(string) error",
 			"RotateKey(string) (string, error)",

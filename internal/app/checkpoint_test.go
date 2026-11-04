@@ -670,8 +670,9 @@ func TestTheReclaimWaitsForTheAddsEnd(t *testing.T) {
 	h.unlockWithPassword()
 	// A hole under live data, made while no run is worth it: a large first
 	// file deleted below a smaller one.
-	h.lowerRule(reclaimRule{floor: 1 << 62, share: 1, budget: 64 << 20})
+	h.lowerRule(reclaimRule{floor: 1 << 62, share: 1, budget: 64 << 20, cheap: 256 << 20})
 	id, _, _ := h.holed(t, "Hole", 1<<20, 256<<10)
+	h.planned(t, id) // the delete's own plan, under the old rule
 	h.lowerRule(smallRule)
 	paths, _ := h.sources(t, "few", 4, 4<<10)
 

@@ -1316,3 +1316,75 @@ func TestARunLevelStepMovesIntoWhatAnEarlierStepFreed(t *testing.T) {
 	insideTheFile(t, a)
 	disjoint(t, a)
 }
+
+// A plan made while a transaction is open is the committed archive's: an
+// add on its way has appended its ciphertext already, past every live file,
+// and the plan must not count that as a tail to give back (the outside
+// audit of 2026-11-04, finding 2). The figures equal those made before the
+// transaction began, and the transaction goes on to commit as it would.
+func TestAPlanDuringATransactionExcludesWhatItAppended(t *testing.T) {
+	a, _ := newFixture(t, Options{NoCompression: true})
+	hole := add(t, a, root, "hole.bin", noise(64<<10, 440))
+	add(t, a, root, "small.bin", noise(16<<10, 441))
+	add(t, a, root, "big.bin", noise(256<<10, 442))
+	if _, err := a.Delete(ctx, hole.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := a.PlanReclaim(0)
+	if before.RunTailReturned != 0 || before.ReadersHeld {
+		t.Fatalf("the committed plan: back %d, held %v; a big tail file anchors the tail", before.RunTailReturned, before.ReadersHeld)
+	}
+	size0, _, _ := a.Stat()
+	tx, err := a.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	late := noise(1<<20, 443)
+	lateInfo, err := tx.Add(ctx, root, "late.bin", bytes.NewReader(late), int64(len(late)))
+	if err != nil {
+		tx.Abort()
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	grown := a.size
+	a.mu.Unlock()
+	if grown < size0+uint64(len(late)) {
+		tx.Abort()
+		t.Fatalf("the add appended nothing: %d -> %d", size0, grown)
+	}
+	during := a.PlanReclaim(0)
+	if during.TailReturned != before.TailReturned || during.RunTailReturned != before.RunTailReturned ||
+		during.RunBytesToMove != before.RunBytesToMove || during.RunComplete != before.RunComplete {
+		tx.Abort()
+		t.Fatalf("the plan during the add: back %d (first commit %d), move %d; before it: back %d (%d), move %d",
+			during.RunTailReturned, during.TailReturned, during.RunBytesToMove,
+			before.RunTailReturned, before.TailReturned, before.RunBytesToMove)
+	}
+	if _, err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := extract(t, a, lateInfo.ID); !bytes.Equal(got, late) {
+		t.Error("the file the add committed")
+	}
+	insideTheFile(t, a)
+	disjoint(t, a)
+}
+
+// A plan made while a reader holds an extent says so, and one made after
+// the reader has closed does not (PlanReclaim's ReadersHeld): the caller
+// keeping its figure makes it again when a reader goes (ops.go planLoop).
+func TestAPlanSaysWhenAReaderHeldAnExtent(t *testing.T) {
+	a, _ := newFixture(t, Options{NoCompression: true})
+	f := add(t, a, root, "f.bin", noise(16<<10, 450))
+	r, err := a.OpenReader(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.PlanReclaim(0).ReadersHeld {
+		t.Error("a plan made under a reader says nothing held")
+	}
+	r.Close()
+	if a.PlanReclaim(0).ReadersHeld {
+		t.Error("a plan made after the reader closed says something is held")
+	}
+}

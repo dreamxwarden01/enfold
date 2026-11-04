@@ -109,6 +109,19 @@ describe("a row's menu on the list", () => {
     expect(archCommands(facts({ unlocked: false, rekeying: true })).destroy[1].title).toBe(why.locked);
   });
 
+  // Both runs grey the commands in 1.0 (ruled 2026-11-04): Compact… waits
+  // for a reclaim of the archive, the user's or the core's own, while
+  // Delete archive… stops it first, as it stops any operation it can.
+  it("greys Compact… while a reclaim runs, and keeps Delete archive… live", () => {
+    const r = archCommands(facts({ open: true, running: true, reclaiming: true }));
+    expect(r.verbs.find((i) => i.cmd === "compact")).toMatchObject({ disabled: true, title: why.reclaiming });
+    expect(r.verbs.find((i) => i.cmd === "refreshFingerprint")?.disabled).toBe(false);
+    expect(r.destroy.find((i) => i.cmd === "delete")?.disabled).toBe(false);
+    expect(why.reclaiming).toBe("Wait until reclaiming space ends");
+    // The vault's and the row's reasons come first.
+    expect(archCommands(facts({ unlocked: false, reclaiming: true })).verbs[1].title).toBe(why.locked);
+  });
+
   it("greys Show in Explorer for another system's path", () => {
     expect(archCommands(facts({ foreign: true })).reveal[0]).toMatchObject({ disabled: true, title: why.foreign });
   });

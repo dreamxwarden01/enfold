@@ -22,14 +22,27 @@
   // and reads N/A while it is all zeros — no commit yet. The modal scrolls
   // as a whole, and the versions table shows three rows before it scrolls
   // on its own.
+  //
+  // Above the IDs, the block *Unused space* (APP.md §6; the reclaim
+  // study's ruling of 2026-11-03, its placement D): the one surface wide
+  // enough for a bar that carries information, with both ways to give the
+  // space back and what each costs — *Reclaim space*, the in-place run, and
+  // *Compact…*, which opens the Archives page's own confirm over this
+  // dialog. Both are standard buttons: Close keeps the dialog's accent and
+  // Enter (the owner's ruling of 2026-11-04), so Enter never starts a run
+  // that moves gigabytes. The states and the words are SpaceBar.svelte's
+  // spaceBlock.
   import { Clipboard } from "@wailsio/runtime";
-  import type { ArchiveDetails } from "../lib/api";
+  import { Archive, errorOf } from "../lib/api";
+  import type { ArchiveDetails, ArchiveSummary, OpView, ReclaimView } from "../lib/api";
   import { bytes, date, dateTime, hashText, labelledText } from "../lib/format";
   import { methodWord } from "../lib/method";
   import { purgeAfter } from "../lib/retention";
-  import { archivesCopy, chipCopy, dialogCopy, technicalCopy } from "../lib/strings";
+  import { store } from "../lib/state.svelte";
+  import { archivesCopy, chipCopy, codeText, commandCopy, dialogCopy, footCopy, spaceCopy, technicalCopy } from "../lib/strings";
   import ContextMenu from "./ContextMenu.svelte";
   import Dialog from "./Dialog.svelte";
+  import SpaceBar, { spaceBlock } from "./SpaceBar.svelte";
 
   interface Props {
     d: ArchiveDetails;
@@ -41,9 +54,86 @@
     // not taken yet. A format fact, so it left the pane for here (ruled
     // 2026-10-17).
     receiptOwed?: boolean;
+    // The block's figures: the list's row, which carries an open
+    // archive's (ArchiveSummary.Reclaim, CompactNeeds; storedSize is the
+    // open handle's size) and only the registry's for a closed one.
+    space?: ArchiveSummary | null;
+    // A reclaim of the archive running, requested or the core's own, and
+    // its busy reason; another operation holding it, by its reason; the
+    // vault's stops for each action (lib/archcmds.ts).
+    run?: OpView | null;
+    runWhy?: string;
+    busyWhy?: string;
+    reclaimWhy?: string;
+    compactWhy?: string;
+    // Compact… opens the page's own confirm, over this dialog.
+    oncompact?: () => void;
     onclose: () => void;
   }
-  let { d, keyVersion, receiptOwed = false, onclose }: Props = $props();
+  let { d, keyVersion, receiptOwed = false, space = null, run = null, runWhy, busyWhy, reclaimWhy, compactWhy, oncompact, onclose }: Props = $props();
+
+  // A compaction holds the handle and the row carries no figure while it
+  // runs (ArchiveSummary.Reclaim is nil while compacting), so the block
+  // keeps the last figures it was shown until the reopen refreshes them
+  // (the judge's table, "Whole-file Compact running").
+  interface Fig {
+    id: string;
+    size: number;
+    freeSpace: number;
+    reclaim: ReclaimView | null;
+    compactNeeds: number;
+  }
+  let lastFig = $state<Fig | null>(null);
+  const live = $derived(!!space?.open && space.state !== "compacting" && space.state !== "needs_reopen");
+  $effect(() => {
+    if (space && live) lastFig = { id: space.id, size: space.storedSize, freeSpace: space.freeSpace, reclaim: space.reclaim ?? null, compactNeeds: space.compactNeeds ?? 0 };
+  });
+  const block = $derived.by(() => {
+    if (!space) return null;
+    const kept = !live && space.state === "compacting" && lastFig?.id === space.id ? lastFig : null;
+    const fig = live ? { size: space.storedSize, freeSpace: space.freeSpace, reclaim: space.reclaim ?? null, compactNeeds: space.compactNeeds ?? 0 } : kept;
+    return spaceBlock({
+      open: !!fig,
+      held: !fig && !!space.open && space.state === "compacting",
+      size: fig?.size ?? space.storedSize,
+      freeSpace: fig?.freeSpace ?? 0,
+      reclaim: fig?.reclaim ?? null,
+      compactNeeds: fig?.compactNeeds ?? 0,
+      path: space.path,
+      run: run ? { done: run.done, total: run.total, returned: run.returned } : null,
+      runWhy,
+      busyWhy,
+      reclaimWhy,
+      compactWhy,
+    });
+  });
+
+  // The press is answered at once: the button stays greyed until the
+  // core has answered, and the run's own operation greys it after that.
+  let asking = $state(false);
+  async function reclaim() {
+    if (!space || asking) return;
+    asking = true;
+    try {
+      await store.reclaimSpace(space.id);
+    } finally {
+      asking = false;
+    }
+  }
+  // Cancel, as the foot's: once pressed it waits for the run to stop, and
+  // a refusal (the commit in hand) gives the button back.
+  let cancelling = $state("");
+  async function cancel() {
+    const id = run?.id;
+    if (!id || cancelling === id) return;
+    cancelling = id;
+    try {
+      await Archive.CancelOp(id);
+    } catch (e) {
+      cancelling = "";
+      store.notice(codeText(errorOf(e).code), "error");
+    }
+  }
 
   // The menu the right-click opened: where it is, and what it copies.
   let menu = $state<{ x: number; y: number; text: string } | null>(null);
@@ -116,6 +206,36 @@
   {#if d.description}<p class="t-sub">{d.description}</p>{/if}
   {#if purge}
     <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span>{chipCopy.forgottenOn(date(d.forgottenAt))}. Its key is dropped at the first unlock after {date(purge)}.</span></div>
+  {/if}
+
+  {#if block}
+    {@const b = block}
+    <!-- Unused space (APP.md §6): the head and its share, the bar, one
+         line, the legend of the segments drawn, then each action with its
+         hint beside it, linked by aria-describedby. The bar is aria-hidden:
+         the line says it. A greyed button's hint is its reason. -->
+    <section class="spaceblock" aria-labelledby="sb-title">
+      <div class="sb-head"><span class="sb-title" id="sb-title">{spaceCopy.title}</span>{#if b.share}<span class="sb-share">{b.share}</span>{/if}</div>
+      {#if b.bar}<SpaceBar size={b.bar.size} freeSpace={b.bar.freeSpace} back={b.bar.back} complete={b.bar.complete} tall />{/if}
+      {#if b.strong || b.rest}<p class="sb-line">{#if b.strong}<strong>{b.strong}</strong>{/if}{b.rest}</p>{/if}
+      {#if b.legend.length > 0}
+        <div class="spacelegend">{#each b.legend as l (l.kind)}<span><i class={l.kind} aria-hidden="true"></i>{l.label}</span>{/each}</div>
+      {/if}
+      <div class="sb-acts">
+        {#if b.reclaim?.cancel}
+          <button type="button" class="btn" disabled={cancelling === run?.id} aria-describedby="sb-reclaim-hint" onclick={cancel}>{cancelling === run?.id ? footCopy.cancelling : footCopy.cancel}</button>
+          <span class="sb-run" id="sb-reclaim-hint">
+            <span class="fprog" class:indet={b.progress === null} role="progressbar" aria-label={spaceCopy.panelRunning} aria-valuemin={0} aria-valuemax={100} aria-valuenow={b.progress == null ? undefined : Math.round(b.progress * 100)}><i style:width={b.progress == null ? undefined : `${b.progress * 100}%`}></i></span>
+            <span class="sb-hint">{b.reclaim.hint}</span>
+          </span>
+        {:else if b.reclaim}
+          <button type="button" class="btn" disabled={b.reclaim.disabled || asking} title={b.reclaim.disabled ? b.reclaim.hint : undefined} aria-describedby="sb-reclaim-hint" onclick={reclaim}>{spaceCopy.reclaim}</button>
+          <span class="sb-hint" id="sb-reclaim-hint">{b.reclaim.hint}</span>
+        {/if}
+        <button type="button" class="btn" disabled={b.compact.disabled || !oncompact} title={b.compact.disabled ? b.compact.hint : undefined} aria-describedby="sb-compact-hint" onclick={() => oncompact?.()}>{commandCopy.compact}</button>
+        <span class="sb-hint" id="sb-compact-hint">{b.compact.hint}</span>
+      </div>
+    </section>
   {/if}
 
   <!-- The record's values in the one label · value list (APP.md §6, Type

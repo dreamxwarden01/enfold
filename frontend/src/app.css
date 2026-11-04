@@ -1145,6 +1145,57 @@ progress:indeterminate { background: var(--accent-line); }
 @media (prefers-reduced-motion: reduce) {
   .fprog.indet > i { width: 100%; margin-left: 0; animation: none; background: var(--accent-line); }
 }
+/* The unused-space bar (SpaceBar.svelte; APP.md §6, *Unused space*; the
+   reclaim study's ruling of 2026-11-03): one flex row, a segment per kind
+   by its share of the file, a 1 px gap of the surface it stands on
+   between two segments so two fills never touch, rounded ends. The data
+   in the strong stroke, what Reclaim gives back in the accent (at least
+   3 px, so a small figure still shows), what only Compact reaches in the
+   accent's stripes at 135° — 1.5 px on, 2.5 px off, inside a 1 px accent
+   edge — where the bar is tall enough (the Details dialog), else plain
+   track. Information, as .fprog is, so the accent is the fill; never red.
+   No transition: it is redrawn when the status refreshes, so reduced
+   motion changes nothing. */
+.spacebar { --spacebar-gap: var(--surface); display: flex; gap: 1px; height: 4px; border-radius: 2px; overflow: hidden; background: var(--spacebar-gap); }
+.spacebar.tall { height: 8px; border-radius: 4px; }
+.spacebar > .seg { display: block; flex: 1 1 0; min-width: 0; height: 100%; }
+.spacebar > .seg.live, .spacelegend i.live { background: var(--stroke-strong); }
+.spacebar > .seg.back, .spacelegend i.back, .spacelegend i.unsplit { background: var(--accent); }
+.spacebar > .seg.back { min-width: 3px; }
+.spacebar > .seg.only, .spacelegend i.only { background: repeating-linear-gradient(135deg, var(--accent) 0 1.5px, transparent 1.5px 4px); box-shadow: inset 0 0 0 1px var(--accent); }
+.spacebar > .seg.only { min-width: 3px; }
+.spacebar > .seg.track { background: var(--fill-2); }
+/* The Details dialog's block *Unused space* (D): a surface-alt card under
+   the description and above the IDs, so at 866 × 554 it is the first
+   thing the dialog's own scroll shows. The head with the share at its
+   right, the 8 px bar, one line, the legend, then each action with its
+   hint beside it — Reclaim space a standard button, since Close keeps the
+   dialog's accent and Enter (the owner's ruling of 2026-11-04). */
+.spaceblock { display: grid; gap: var(--s2); margin: 0 0 var(--s2); padding: var(--s3) var(--s4) var(--s4); border: 1px solid var(--stroke); border-radius: var(--r-card); background: var(--surface-alt); }
+.spaceblock .spacebar { --spacebar-gap: var(--surface-alt); }
+.spaceblock .sb-head { display: flex; align-items: baseline; gap: var(--s2); }
+.spaceblock .sb-title { font: var(--t-strong); color: var(--ink); }
+.spaceblock .sb-share { margin-left: auto; font: var(--t-strong); color: var(--ink); font-variant-numeric: tabular-nums; }
+.spaceblock .sb-line { margin: 0; font: var(--t-body); color: var(--ink); font-variant-numeric: tabular-nums; }
+.spaceblock .sb-line strong { font-weight: 600; }
+.spacelegend { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); font: var(--t-cap); color: var(--ink-2); }
+.spacelegend span { display: inline-flex; align-items: center; gap: 6px; }
+.spacelegend i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.spaceblock .sb-acts { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: var(--s2) var(--s3); margin-top: var(--s1); }
+.spaceblock .sb-acts .btn { min-width: 132px; justify-content: center; }
+.spaceblock .sb-hint { min-width: 0; font: var(--t-cap); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.spaceblock .sb-run { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.spaceblock .sb-run .fprog { width: 96px; }
+/* The pane's row *Unused space* (P1) and the Archives panel's open facts:
+   the figure with the share at the right in the caption type, the 4 px
+   bar under them, then one line — the Reclaim space link, "(Compact to
+   reclaim)" or the run's note — which wraps under the bar at 866 × 554. */
+.spacerow { display: grid; gap: 3px; min-width: 0; }
+.spacerow .sr-fig { display: flex; align-items: baseline; gap: var(--s2); }
+.spacerow .sr-share { margin-left: auto; font: var(--t-cap); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.spacerow .spacebar { margin: 2px 0 1px; }
+.spacerow .btn.link { justify-self: start; font: var(--t-cap); }
+.spacerow .sr-note { font: var(--t-cap); color: var(--ink-2); }
 /* A popover over the foot (direction 4): the running operations' flyout
    at the left, the standing notices at the right. The menu's surface,
    its stroke and its shadow, 360 px wide, 4 px above the foot's edge. */
@@ -1882,7 +1933,6 @@ tbody tr.up .fname { color: var(--ink-2); }
 .pane-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pane-head .t-section { overflow-wrap: anywhere; }
 .pane-facts { padding-top: var(--s3); border-top: 1px solid var(--stroke); }
-.pane-facts .hint { font: var(--t-cap); color: var(--ink-2); white-space: nowrap; }
 /* A folder, or a file the pane cannot show: its type's icon at 48 px in
    the third ink, the name, and what is so in caption, centred; the facts
    follow as for any file. The icon's stroke is thinned to the 16 px
@@ -2468,6 +2518,19 @@ tbody tr.leaving { opacity: 0; transition: opacity var(--dur-leave) var(--ease-e
   .btn.accent:hover:not(:disabled), .btn.danger-fill:hover:not(:disabled) { background: HighlightText; color: Highlight; }
   /* A hyperlink button and the How-this-works disclosure are links. */
   .btn.link:not(:disabled), details.how > summary, details.how > summary:hover { color: LinkText; }
+  /* The unused-space bar (SpaceBar.svelte), as the reclaim study measured
+     it (14.37:1 and 15.13:1): an empty Canvas track inside a CanvasText
+     frame — the gaps and the edge in CanvasText — what Reclaim gives back
+     in Highlight, what only Compact reaches in Highlight stripes over the
+     Canvas. The bar and the legend's swatches alone opt out of forcing:
+     they hold no text, so nothing hides the system's ink. */
+  .spacebar, .spacelegend i { forced-color-adjust: none; }
+  .spacebar, .spaceblock .spacebar { background: CanvasText; outline: 1px solid CanvasText; }
+  .spacebar > :is(.seg.live, .seg.track), .spacelegend i.live { background: Canvas; }
+  .spacelegend i.live { box-shadow: inset 0 0 0 1px CanvasText; }
+  .spacebar > .seg.back, .spacelegend i:is(.back, .unsplit) { background: Highlight; }
+  .spacebar > .seg.only, .spacelegend i.only { background: repeating-linear-gradient(135deg, Highlight 0 1.5px, Canvas 1.5px 4px); box-shadow: inset 0 0 0 1px Highlight; }
+  .spaceblock { border-color: CanvasText; }
   /* An item greyed by aria-disabled is not :disabled, so the engine does
      not grey it. Its reason and its key are read, so they keep the text
      colour, under the pointer and the keyboard too, where the hover's

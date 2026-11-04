@@ -116,6 +116,18 @@ export function OpenPath(path: string): $CancellablePromise<app$0.OpenPathResult
 }
 
 /**
+ * ReclaimSpace is *Reclaim space* (APP.md §2.3): the in-place run of
+ * FORMAT.md R40 the user starts, for an open archive — it opens nothing by
+ * itself (archive.not_open) — refused only when the archive's last whole
+ * plan says nothing comes back (archive.nothing_to_reclaim) or a reclaim
+ * of it already runs (archive.busy). It answers the operation's id; the
+ * run is a reclaim with Requested set, and Cancel stops it at any chunk.
+ */
+export function ReclaimSpace(id: string): $CancellablePromise<string> {
+    return $Call.ByID(2422192787, id);
+}
+
+/**
  * Rename writes the registry's trusted name (FORMAT.md §7.4); no ceremony.
  */
 export function Rename(id: string, name: string): $CancellablePromise<void> {

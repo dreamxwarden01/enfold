@@ -33,7 +33,7 @@ import (
 // smallRule is the rule these tests measure against: a few kilobytes of the
 // tail back, still a quarter of what moves, and a budget no test reaches
 // except the one that lowers it.
-var smallRule = reclaimRule{floor: 4 << 10, share: 4, budget: 64 << 20}
+var smallRule = reclaimRule{floor: 4 << 10, share: 4, budget: 64 << 20, cheap: 256 << 20}
 
 // metadataSlack is what the file may hold beyond its live data once the run
 // is over: the index and the free map of the follow-up commit, and the
@@ -104,6 +104,36 @@ func (h *harness) runningReclaim() string {
 
 // reclaimRunning reports whether a reclaim of any archive is on the books.
 func (h *harness) reclaimRunning() bool { return h.runningReclaim() != "" }
+
+// planned waits for the plan the last change asked for to land (ops.go
+// planLoop): no plan in hand, the figures made at the archive's current
+// state, and no run being registered on them. The plan is made off the
+// commit's own call since 2026-11-03, so a test that asks whether a run
+// started must first wait for the decision, or it proves nothing. It
+// answers the figures.
+func (h *harness) planned(t *testing.T, id string) ReclaimView {
+	t.Helper()
+	aid, _ := parseID(id)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		h.c.mu.Lock()
+		oa := h.c.archives[aid]
+		if oa == nil {
+			h.c.mu.Unlock()
+			t.Fatal("the archive is not open")
+		}
+		if !oa.planning && !oa.reclaiming && oa.fig != nil && oa.fig.AtSeq == oa.seq {
+			f := *oa.fig
+			h.c.mu.Unlock()
+			return f
+		}
+		h.c.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("the plan never landed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
 
 // open is the core's handle on an open archive, for what the page cannot
 // see: the file's own sequence and its layout.
@@ -308,7 +338,7 @@ func TestEachReclaimCommitHasItsReceipt(t *testing.T) {
 	// map the add appended was the tail, and freeing it gave the tail back
 	// — so no empty commit opens the run; a replace is where one does
 	// (TestAReplaceLeavesAQuarantinedHoleAndTheRunPublishesFirst).
-	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 256 << 10})
+	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 256 << 10, cheap: 256 << 20})
 
 	var mu sync.Mutex
 	var commits int
@@ -417,10 +447,13 @@ func TestAReplaceLeavesAQuarantinedHoleAndTheRunPublishesFirst(t *testing.T) {
 func TestADeleteUnderTheFloorStartsNoReclaim(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	h.lowerRule(reclaimRule{floor: 1 << 20, share: 4, budget: 64 << 20}) // a megabyte, over what this leaves
+	h.lowerRule(reclaimRule{floor: 1 << 20, share: 4, budget: 64 << 20, cheap: 256 << 20}) // a megabyte, over what this leaves
 
 	h.rec.reset()
 	id, _, before := h.holed(t, "Kept", 200<<10, 100<<10)
+	if f := h.planned(t, id); !f.Complete || f.Back < 200<<10-metadataSlack || f.Back >= 1<<20 {
+		t.Errorf("the figures under the floor: %+v", f)
+	}
 	if h.reclaimRunning() {
 		t.Fatal("a reclaim started under the floor")
 	}
@@ -501,6 +534,7 @@ func TestTheQuarterRuleRefusesASmallGainForALargeMove(t *testing.T) {
 	}
 	h.rec.reset()
 	id, stay, before := h.holed(t, "Quarter", size, behind...)
+	h.planned(t, id)
 	// The plan is what the rule measured: over the floor, under the quarter,
 	// at run level — a single commit's figures would refuse it for the floor
 	// instead, which is a different rule and a different test.
@@ -522,6 +556,7 @@ func TestTheQuarterRuleRefusesASmallGainForALargeMove(t *testing.T) {
 	if e := h.c.RenameRecord(id, stay[0].ID, "renamed.bin"); e != nil {
 		t.Fatalf("rename: %v", e)
 	}
+	h.planned(t, id)
 	if h.reclaimRunning() {
 		t.Fatal("a later commit started the refused reclaim")
 	}
@@ -560,6 +595,7 @@ func TestAReaderHoldingASourceDelaysTheReclaimUntilItCloses(t *testing.T) {
 	if e := h.c.DeleteRecords(id, []string{drop.ID}); e != nil {
 		t.Fatalf("delete: %v", e)
 	}
+	h.planned(t, id)
 	if h.reclaimRunning() {
 		t.Fatal("a reclaim started while a reader held the tail")
 	}
@@ -606,13 +642,16 @@ func (h *harness) cancelReclaimAfterCommits(n int, cancel func(opID string)) {
 
 // A cancel between two commits leaves the archive consistent — the files
 // moved so far where they went, the rest where they were, every one
-// readable — and the next commit takes the run up again to the end.
-func TestACancelledReclaimIsResumedByTheNextCommit(t *testing.T) {
+// readable — and nothing takes the run up by itself (ruled 2026-11-03): the
+// next commit makes the figures again and starts nothing, though the layout
+// is as worth a run as it was. *Reclaim space* is what takes it up, and it
+// finishes.
+func TestACancelledReclaimIsNotResumedByTheNextCommit(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	// One file per commit, so that a cancel lands with some moved and some
 	// not.
-	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10})
+	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10, cheap: 256 << 20})
 
 	// Cancel once the second move has landed: one file is still where it
 	// was.
@@ -625,8 +664,13 @@ func TestACancelledReclaimIsResumedByTheNextCommit(t *testing.T) {
 	id, stay, _ := h.holed(t, "Cancelled", 2<<20, 512<<10, 512<<10, 512<<10)
 	o := h.waitReclaim(t)
 	h.rec.onEvent(nil)
-	if o.Error != CodeOpCancelled {
+	if o.Error != CodeOpCancelled || o.Requested {
 		t.Fatalf("the cancelled reclaim ended %+v", o)
+	}
+	// What the two commits moved is said, beside what came back, for the
+	// foot's "Stopped reclaiming space" line; why it ended is the cancel's.
+	if o.Moved < 1<<20 || o.Moved > 1<<20+metadataSlack || o.Ended != "" {
+		t.Errorf("the cancelled run says it moved %d and ended %q", o.Moved, o.Ended)
 	}
 	// The archive is still open — a reclaim is a follow-on the core started
 	// while the user was browsing — consistent, and less compacted than the
@@ -644,17 +688,37 @@ func TestACancelledReclaimIsResumedByTheNextCommit(t *testing.T) {
 	h.readsBack(t, id, stay)
 	h.receiptCurrent(t, id, "after the cancel")
 
-	// The next commit plans again and finishes the run.
+	// The next commit makes the figures again, worth a run, and starts none.
 	h.rec.reset()
 	if e := h.c.RenameRecord(id, stay[0].ID, "renamed.bin"); e != nil {
 		t.Fatalf("rename: %v", e)
 	}
-	if o := h.waitReclaim(t); o.Error != "" {
-		t.Fatalf("the reclaim after the rename: %+v", o)
+	f := h.planned(t, id)
+	if !f.Complete || f.Back < smallRule.floor {
+		t.Errorf("the figures after the rename: %+v", f)
+	}
+	if h.reclaimRunning() {
+		t.Fatal("the next commit took the cancelled run up")
+	}
+	if st := h.stat(t, id); st.Size <= live+metadataSlack {
+		t.Errorf("the run went on after the cancel: %+v", st)
+	}
+
+	// The user's *Reclaim space* takes it up, and it finishes.
+	opID, e := h.c.ReclaimSpace(id)
+	if e != nil {
+		t.Fatalf("reclaim space: %v", e)
+	}
+	o = h.rec.waitOp(t, opID)
+	if o.Error != "" || !o.Requested || o.Ended != "finished" || o.Returned == 0 {
+		t.Fatalf("the user's run ended %+v", o)
+	}
+	if o.Moved == 0 || o.Done < o.Moved {
+		t.Errorf("the user's run says it moved %d, its progress %d of %d", o.Moved, o.Done, o.Total)
 	}
 	st = h.stat(t, id)
 	if st.Size > live+metadataSlack {
-		t.Errorf("the file stood at %d for %d live bytes after the resumed run", st.Size, live)
+		t.Errorf("the file stood at %d for %d live bytes after the user's run", st.Size, live)
 	}
 	h.extractsAll(t, id, stay)
 }
@@ -665,7 +729,7 @@ func TestACancelledReclaimIsResumedByTheNextCommit(t *testing.T) {
 func TestCloseArchiveCancelsAReclaim(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10})
+	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10, cheap: 256 << 20})
 
 	// The hook runs on the reclaim's own goroutine, which holds the
 	// handle's turn that Close waits for: the close is asked for from
@@ -790,6 +854,7 @@ func TestNoReclaimWhileAnotherOperationRuns(t *testing.T) {
 	// started before the test asks.
 	h.rec.reset()
 	id, stay, _ := h.holed(t, "Busy", 1<<20, 300<<10)
+	h.planned(t, id)
 	if h.reclaimRunning() {
 		t.Fatal("a reclaim started before the rule was lowered")
 	}
@@ -815,6 +880,7 @@ func TestNoReclaimWhileAnotherOperationRuns(t *testing.T) {
 	if e := h.c.RenameRecord(id, stay[0].ID, "renamed.bin"); e != nil {
 		t.Fatalf("rename: %v", e)
 	}
+	h.planned(t, id)
 	if h.reclaimRunning() {
 		t.Fatal("a reclaim started under a running operation")
 	}
@@ -841,19 +907,24 @@ func TestNoReclaimWhileAnotherOperationRuns(t *testing.T) {
 // last case is the layout that started this — [hole S][A: S][B: S], where the
 // commit the plan answers for moves A for no gain at all.
 func TestReclaimRuleArithmetic(t *testing.T) {
-	r := reclaimRule{floor: 64 << 20, share: 4, budget: 64 << 20}
+	r := reclaimRule{floor: 64 << 20, share: 4, budget: 64 << 20, cheap: 256 << 20}
 	cases := []struct {
 		plan  archive.ReclaimPlan
 		worth bool
 	}{
-		{archive.ReclaimPlan{RunTailReturned: 64 << 20, RunBytesToMove: 256 << 20}, true},
-		{archive.ReclaimPlan{RunTailReturned: 64<<20 - 1, RunBytesToMove: 1}, false},
-		{archive.ReclaimPlan{RunTailReturned: 64 << 20, RunBytesToMove: 256<<20 + 1}, false},
-		{archive.ReclaimPlan{RunTailReturned: 100 << 20}, true}, // a free tail, nothing to move
+		// The cheap rule's four corners (ruled 2026-11-03): whole, at the
+		// floor, at the bound — and each of the three missed by one.
+		{archive.ReclaimPlan{RunTailReturned: 64 << 20, RunBytesToMove: 256 << 20, RunComplete: true}, true},
+		{archive.ReclaimPlan{RunTailReturned: 64 << 20, RunBytesToMove: 256 << 20}, false}, // cut short
+		{archive.ReclaimPlan{RunTailReturned: 64<<20 - 1, RunBytesToMove: 1, RunComplete: true}, false},
+		{archive.ReclaimPlan{RunTailReturned: 1 << 30, RunBytesToMove: 256<<20 + 1, RunComplete: true}, false}, // over the bound, whatever comes back
+		{archive.ReclaimPlan{RunTailReturned: 64 << 20, RunBytesToMove: 256<<20 + 1, RunComplete: true}, false},
+		{archive.ReclaimPlan{RunTailReturned: 100 << 20, RunComplete: true}, true}, // a free tail, nothing to move
+		{archive.ReclaimPlan{RunTailReturned: 10 << 30, RunComplete: true}, true},  // at any size
 		{archive.ReclaimPlan{}, false},
 		// The one-commit figures are not what is weighed, either way.
-		{archive.ReclaimPlan{TailReturned: 100 << 20, BytesToMove: 1}, false},
-		{archive.ReclaimPlan{TailReturned: 0, BytesToMove: 64 << 20, RunTailReturned: 64 << 20, RunBytesToMove: 128 << 20}, true},
+		{archive.ReclaimPlan{TailReturned: 100 << 20, BytesToMove: 1, RunComplete: true}, false},
+		{archive.ReclaimPlan{TailReturned: 0, BytesToMove: 64 << 20, RunTailReturned: 64 << 20, RunBytesToMove: 128 << 20, RunComplete: true}, true},
 	}
 	for _, c := range cases {
 		if got := r.worth(c.plan); got != c.worth {
@@ -888,7 +959,7 @@ func TestAReclaimStopsWhenItsMovesOutrunWhatComesBack(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
 	// One file per commit, so that the guard is weighed between two of them.
-	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10})
+	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10, cheap: 256 << 20})
 	id := h.openArchive(t, "Outrun")
 	first := h.src(t, "outrun-first.bin", string(incompressible(t, 2<<20)))
 	one := h.src(t, "outrun-a.bin", string(incompressible(t, 512<<10)))
@@ -1013,6 +1084,7 @@ func TestTheRunStartsWhenTheOperationARunningPreviewClosedUnderEnds(t *testing.T
 	if e := h.c.DeleteRecords(id, []string{drop.ID}); e != nil {
 		t.Fatalf("delete: %v", e)
 	}
+	h.planned(t, id)
 	if h.reclaimRunning() {
 		t.Fatal("a reclaim started while a preview held the tail")
 	}
@@ -1060,15 +1132,14 @@ func TestTheRunStartsWhenTheOperationARunningPreviewClosedUnderEnds(t *testing.T
 	h.receiptCurrent(t, id, "after the run")
 }
 
-// A reclaim's own end is not a trigger (APP.md §2.3): a run the user
-// cancelled is taken up by the next qualifying commit and never by itself,
-// or the cancel would be a pause of one instant. The layout is worth a run
-// the whole time it is left alone, which is what the commit at the end
-// proves.
+// A reclaim's own end starts nothing (APP.md §2.3): a run the user
+// cancelled is never taken up by itself, or the cancel would be a pause of
+// one instant. The layout is worth a run the whole time it is left alone,
+// which is what the user's run at the end proves.
 func TestACancelledReclaimDoesNotStartItselfAgain(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	h.unlockWithPassword()
-	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10})
+	h.lowerRule(reclaimRule{floor: 4 << 10, share: 4, budget: 512 << 10, cheap: 256 << 20})
 
 	h.rec.reset()
 	h.cancelReclaimAfterCommits(1, func(opID string) {
@@ -1093,17 +1164,24 @@ func TestACancelledReclaimDoesNotStartItselfAgain(t *testing.T) {
 		t.Errorf("the run finished after all: %+v for %d live bytes", st, live)
 	}
 
-	// The next commit is what takes it up, and it finishes: the layout was
-	// worth a run for every one of those milliseconds.
-	h.rec.reset()
-	if e := h.c.RenameRecord(id, stay[0].ID, "renamed.bin"); e != nil {
-		t.Fatalf("rename: %v", e)
+	// Its own end made the figures again, and the layout was worth a run for
+	// every one of those milliseconds: only the user's *Reclaim space*
+	// takes it up now (ruled 2026-11-03).
+	if f := h.planned(t, id); !f.Complete || f.Back < smallRule.floor {
+		t.Errorf("the figures after the cancel: %+v", f)
 	}
-	if o := h.waitReclaim(t); o.Error != "" {
-		t.Fatalf("the reclaim after the rename: %+v", o)
+	if h.reclaimRunning() {
+		t.Fatal("the cancelled reclaim started itself again")
+	}
+	opID, e := h.c.ReclaimSpace(id)
+	if e != nil {
+		t.Fatalf("reclaim space: %v", e)
+	}
+	if o := h.rec.waitOp(t, opID); o.Error != "" || !o.Requested {
+		t.Fatalf("the user's run: %+v", o)
 	}
 	if st := h.stat(t, id); st.Size > live+metadataSlack {
-		t.Errorf("the file stood at %d for %d live bytes after the resumed run", st.Size, live)
+		t.Errorf("the file stood at %d for %d live bytes after the user's run", st.Size, live)
 	}
 	h.extractsAll(t, id, stay)
 }

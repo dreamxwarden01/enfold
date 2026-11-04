@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CeremonyStep, Code } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
 import * as strings from "./strings";
 import * as validate from "./validate";
-import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, collisionCopy, commandCopy, compareCopy, compressedText, conflictCopy, refusedCopy, lockedOpenText, dialogCopy, doneTitleOf, extensionNames, extractCopy, importCopy, lockCopy, phaseLeadOf, purgedText, reclaimedText, replaceCopy, retireHeld, retireLeadOf, retriesText, revealCopy, sinceText, stepCopy, tamperedCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
+import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, collisionCopy, commandCopy, compareCopy, compressedText, conflictCopy, refusedCopy, lockedOpenText, dialogCopy, doneCopy, doneTitleOf, extensionNames, extractCopy, importCopy, lockCopy, phaseLeadOf, purgedText, reclaimedText, replaceCopy, retireHeld, retireLeadOf, retriesText, revealCopy, sinceText, spaceCopy, stepCopy, tamperedCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
 
 // ---- One word per thing (APP.md §7, ruled 2026-10-17) -------------------
 //
@@ -785,8 +785,47 @@ describe("retries", () => {
 });
 
 describe("what a finished reclaim says", () => {
-  it("names the bytes the file system got back", () => {
+  it("names the bytes the file system got back, and the archive", () => {
     expect(reclaimedText(1.2 * 1024 * 1024 * 1024)).toBe("Reclaimed 1.2 GB");
+    expect(reclaimedText(2.9 * 1024 * 1024 * 1024, "Photos 2024")).toBe("Reclaimed 2.9 GB in Photos 2024");
+  });
+  it("says a stop with what came back, and the user's run that gave nothing", () => {
+    expect(doneCopy.stoppedReclaim("Photos 2024", "1.1 GB")).toBe("Stopped reclaiming space in Photos 2024 · 1.1 GB given back");
+    expect(doneCopy.stoppedReclaim("Photos 2024", "")).toBe("Stopped reclaiming space in Photos 2024");
+    expect(doneCopy.reclaimedNone("Photos 2024")).toBe("Reclaimed no space in Photos 2024: the files that remain cannot move lower");
+  });
+});
+
+// Unused space (APP.md §6; the reclaim study's words, 2026-11-03): the
+// space inside the file is never "free" — that word names the disk's
+// alone, in Compact's hint and its confirm (ruled 2026-10-14).
+describe("the unused space's words", () => {
+  it("says the block, the row and the panel in the judge's words", () => {
+    expect(spaceCopy.title).toBe("Unused space");
+    expect(spaceCopy.share("6 %")).toBe("6 % unused");
+    expect("2.9 GB" + spaceCopy.unusedOf("48 GB") + spaceCopy.allBack).toBe("2.9 GB unused of 48 GB · Reclaim space gives all of it back");
+    expect("3.1 GB" + spaceCopy.unusedOf("8.3 GB") + spaceCopy.someBack("1.2 GB")).toBe("3.1 GB unused of 8.3 GB · Reclaim space gives back 1.2 GB; only Compact reaches the rest");
+    expect(spaceCopy.underFloor("48 GB")).toBe("No unused space worth reclaiming · 48 GB");
+    expect(spaceCopy.closed).toBe("Open the archive to see its unused space.");
+    expect(spaceCopy.legend).toEqual({ live: "Archive data", back: "Reclaim gives back", only: "Only Compact reaches", unsplit: "Unused" });
+    expect(spaceCopy.reclaimHint("11 GB")).toBe("Moves about 11 GB inside the file. Adding and extracting wait until it ends; you can cancel it.");
+    expect(spaceCopy.reclaimHintOpen).toBe("Moves files inside the archive until no more space comes back. You can cancel it.");
+    expect([spaceCopy.nothingToReclaim, spaceCopy.nothingBack]).toEqual(["Nothing to reclaim", "Moving files would give nothing back"]);
+    expect(spaceCopy.compactHint("45 GB", "D:")).toBe("Rewrites the whole file; needs about 45 GB free on D:");
+    expect(spaceCopy.running("4.5 GB", "11 GB", "1.1 GB")).toBe("Reclaiming space · 4.5 GB of 11 GB moved · 1.1 GB back so far");
+    expect(spaceCopy.linkTitle("11 GB")).toBe("Moves about 11 GB inside the file");
+    expect(spaceCopy.rowRunning("1.1 GB")).toBe("Reclaiming · 1.1 GB back so far");
+    expect([spaceCopy.reclaimable("2.9 GB"), spaceCopy.panelRunning]).toEqual(["2.9 GB reclaimable", "Reclaiming space"]);
+  });
+  it("calls only the disk's space free", () => {
+    const inside = [spaceCopy.title, spaceCopy.share("6 %"), spaceCopy.unusedOf("1 GB"), spaceCopy.allBack, spaceCopy.someBack("1 GB"), spaceCopy.noneBack, spaceCopy.underFloor("1 GB"), spaceCopy.closed, ...Object.values(spaceCopy.legend), spaceCopy.reclaimHint("1 GB"), spaceCopy.reclaimHintOpen, spaceCopy.rowRunning("1 GB"), spaceCopy.reclaimable("1 GB")];
+    for (const s of inside) expect(s).not.toMatch(/\bfree\b/i);
+    expect(dialogCopy.compact.needs("45 GB", "D:")).toBe("It needs about 45 GB free on D: while it runs.");
+    expect(dialogCopy.compact.noSpace("45 GB", "12 GB", "D:")).toBe("Only 12 GB is free on D: and Compact needs about 45 GB. Make room on the drive, then try again.");
+  });
+  it("names the two new refusals in their own words", () => {
+    expect(codeText("archive.nothing_to_reclaim")).toBe("Moving files would give no space back. Only Compact reaches the unused space that is left.");
+    expect(codeText("archive.compact_no_space")).toBe("There is not enough free space on the drive for the compacted copy.");
   });
 });
 

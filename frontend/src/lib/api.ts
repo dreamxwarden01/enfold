@@ -22,6 +22,12 @@ export interface AppError {
   // archive.open_elsewhere: the file the archive is already open from
   // (APP.md §14).
   path?: string;
+  // archive.compact_no_space (APP.md §2.3, §3): the bytes the fresh copy
+  // needs, the bytes free on the drive — sent even when 0 — and the drive
+  // as Windows names it ("D:").
+  needed?: number;
+  free?: number;
+  volume?: string;
 }
 
 // errorOf reads the coded error out of a rejected call. Wails attaches the

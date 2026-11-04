@@ -34,6 +34,7 @@ const m = vi.hoisted(() => ({
   SettingsSet: vi.fn(),
   CheckFiles: vi.fn(),
   CancelOp: vi.fn(),
+  ReclaimSpace: vi.fn(),
 }));
 
 vi.mock("@wailsio/runtime", () => ({
@@ -54,7 +55,7 @@ vi.mock("./api", async () => {
   return {
     ...actual,
     Archive: { Stat: m.Stat, Page: m.Page, Children: m.Children, CancelOp: m.CancelOp },
-    Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath, Close: m.Close, CloseAll: m.CloseAll, CheckFiles: m.CheckFiles },
+    Archives: { List: m.List, Leave: m.Leave, Open: m.Open, OpenPath: m.OpenPath, Close: m.Close, CloseAll: m.CloseAll, CheckFiles: m.CheckFiles, ReclaimSpace: m.ReclaimSpace },
     Shell: { DragOut: m.DragOut, CloseDecided: m.CloseDecided, QuitDecided: m.QuitDecided, PendingOpen: m.PendingOpen },
     Vault: { Status: m.Status, Activity: vi.fn(), LastExportAt: m.LastExportAt, Lock: m.Lock, BackupStatus: m.BackupStatus },
     Keys: { Slots: m.Slots, EntangledState: never },
@@ -124,6 +125,7 @@ beforeEach(async () => {
   m.SettingsGet.mockReset().mockImplementation(() => new Promise(() => {}));
   m.SettingsSet.mockReset().mockResolvedValue(undefined);
   m.CancelOp.mockReset().mockResolvedValue(undefined);
+  m.ReclaimSpace.mockReset();
   store = (await import("./state.svelte")).store;
 });
 afterEach(() => {
@@ -2775,5 +2777,51 @@ describe("Delete archive…'s stop (stopOps)", () => {
     await booted();
     await store.stopOps("a");
     expect(m.CancelOp).not.toHaveBeenCalled();
+  });
+});
+
+// Reclaim space (APP.md §2.3, §6; the reclaim study's ruling of
+// 2026-11-03): the figure the pane reads, the later of the row's and the
+// Stat's, and the user's run, busy from the press.
+describe("the in-place run's figure and Reclaim space", () => {
+  const fig = (atSeq: number, back: number) => ({ back, move: back * 4, complete: true, atSeq });
+  const summary = (id: string, open: boolean, reclaim: ReturnType<typeof fig> | null) => ({ id, name: id, open, reclaim }) as unknown as ArchiveSummary;
+
+  it("takes the later of the list row's figure and the Stat's, and none for a closed archive", () => {
+    store.archives = [summary("a", true, fig(4, 100)), summary("b", false, fig(9, 5))];
+    expect(store.reclaimOf("a")?.atSeq).toBe(4);
+    expect(store.reclaimOf("a", fig(3, 7))?.atSeq).toBe(4); // the row's is fresher
+    expect(store.reclaimOf("a", fig(5, 7))?.back).toBe(7); // the Stat's is
+    expect(store.reclaimOf("b")).toBeNull(); // closed: no figure, whatever the row says
+    expect(store.reclaimOf("b", fig(2, 1))?.atSeq).toBe(2);
+    expect(store.reclaimOf("zz")).toBeNull();
+  });
+
+  it("holds the run as a reclaim from the press, until the core's own event replaces it", async () => {
+    store.boot();
+    m.ReclaimSpace.mockResolvedValueOnce("op7");
+    expect(await store.reclaimSpace("a")).toBe(true);
+    expect(m.ReclaimSpace).toHaveBeenCalledWith("a");
+    // Busy as the reclaim it is, never as an add that has said nothing.
+    expect(store.starting).toEqual({});
+    expect(store.runningOps.map((o) => [o.id, o.kind, o.archiveId, o.requested])).toEqual([["op7", "reclaim", "a", true]]);
+    m.handlers["op.progress"]({ data: { id: "op7", kind: "reclaim", archiveId: "a", done: 5, total: 10, items: 0, dragItems: 0, phase: "moving", startedAt: 1, finished: false, returned: 3, requested: true, moved: 5 } });
+    expect(store.runningOps.map((o) => [o.id, o.done, o.returned])).toEqual([["op7", 5, 3]]);
+    expect(store.notices.length).toBe(0);
+  });
+
+  it("leaves a run the core has already spoken of as it was heard", async () => {
+    store.boot();
+    m.handlers["op.progress"]({ data: { id: "op8", kind: "reclaim", archiveId: "a", done: 9, total: 10, items: 0, dragItems: 0, phase: "moving", startedAt: 1, finished: false, returned: 4, requested: true, moved: 9 } });
+    m.ReclaimSpace.mockResolvedValueOnce("op8");
+    await store.reclaimSpace("a");
+    expect(store.runningOps.map((o) => [o.id, o.done])).toEqual([["op8", 9]]);
+  });
+
+  it("says a refusal in the code's words and starts nothing", async () => {
+    m.ReclaimSpace.mockRejectedValueOnce({ message: "archive.nothing_to_reclaim", cause: { code: "archive.nothing_to_reclaim" } });
+    expect(await store.reclaimSpace("a")).toBe(false);
+    expect(store.starting).toEqual({});
+    expect(store.notices.map((t) => [t.kind, t.text])).toEqual([["error", "Moving files would give no space back. Only Compact reaches the unused space that is left."]]);
   });
 });

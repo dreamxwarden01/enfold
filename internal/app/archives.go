@@ -78,11 +78,39 @@ type openArchive struct {
 	// (APP.md §2.3). The core's own reclaim never sets it: a move copies an
 	// extent a reader may be reading and retargets nothing (FORMAT.md R40).
 	quiesced bool
-	// reclaiming: a reclaim has been found due and is being planned or
-	// registered (ops.go reclaimIfWorth), so that two commits ending at
-	// once — or a commit and a reader's end — start one run, not two. The
-	// ops map answers for the run from its registration on.
+	// reclaiming: a reclaim has been found due and is being registered
+	// (ops.go planLoop, ReclaimSpace), so that two commits ending at once —
+	// or a commit and a reader's end — start one run, not two. The ops map
+	// answers for the run from its registration on.
 	reclaiming bool
+	// The in-place run's figures (APP.md §2.3 "Space comes back", ruled
+	// 2026-11-03): the plan is made off the commit's own call, on a
+	// goroutine of its own, one at a time per archive (ops.go planReclaim).
+	// fig is the last plan that landed, nil until one has; planning says a
+	// plan is being made, and replan that a newer trigger came while it was,
+	// so the plan in hand is dropped and made again rather than a second
+	// one started beside it; planAuto is whether the plan may start the
+	// automatic run, and planSelf the operation whose own commit asked for
+	// it, which is not one of the operations that hold a run off.
+	fig      *ReclaimView
+	planning bool
+	replan   bool
+	planAuto bool
+	planSelf *op
+	// figHeld: fig was made while a preview reader held an extent, which
+	// the plan left where it lies (archive.ReclaimPlan.ReadersHeld). Such a
+	// figure saying nothing comes back is not final: a reader's end that
+	// is not the last is then a trigger too (releaseReader), so that
+	// neither the page's figure nor ReclaimSpace's refusal stands on a zero
+	// a reader that has gone caused (the outside audit of 2026-11-04,
+	// finding 3).
+	figHeld bool
+	// reclaimHeld: a run on this handle was cancelled, and the core starts
+	// none by itself until the user asks for one (ReclaimSpace) or the
+	// archive is opened again — a cancel is not a pause the next commit
+	// undoes (the owner's softening, 2026-11-03). The figures go on being
+	// made.
+	reclaimHeld bool
 }
 
 // owedReceipt is a commit's receipt a lock stranded (APP.md §2.3).
@@ -182,6 +210,7 @@ func (c *Core) decorateLocked(s *ArchiveSummary, id [16]byte) {
 		if oa.size > 0 {
 			s.StoredSize = oa.size
 		}
+		s.Reclaim, s.CompactNeeds = oa.figLocked(), oa.compactNeeds()
 	}
 	if oa.copyMismatch && s.Note == "" {
 		s.Note = CodeArchiveCopyMismatch
@@ -608,6 +637,9 @@ func (c *Core) envelopeAt(path string) (*format.Envelope, *Error) {
 //     barrier would make, or before the next Session's derivation after a
 //     landed commit; what it returns fails that step in place of the call,
 //     and nil lets the call run.
+//   - planning: on the plan's own goroutine, before the dry run is made
+//     (ops.go planLoop): a test holds the plan here to show the commit that
+//     asked for it has already returned.
 //
 // Every field is nil in every build but a test's.
 type seams struct {
@@ -619,6 +651,7 @@ type seams struct {
 	committed  func()
 	created    func()
 	failAt     func(point string) error
+	planning   func()
 }
 
 // fail is failAt's answer for point, nil when no test set the seam.
@@ -872,6 +905,10 @@ func (c *Core) openReserved(aid [16]byte, mounted bool, res *opening) (ArchiveSt
 	c.mu.Unlock()
 	c.emitArchivesChanged()
 	c.emitState()
+	// The figures for the pane and the panel, made off this call as after a
+	// commit. An open starts no run: only a commit, the end of an operation
+	// or the last reader's close does (APP.md §2.3).
+	c.planReclaim(oa, nil, false)
 	return st, nil
 }
 
@@ -1013,16 +1050,29 @@ func (c *Core) settleArchive(oa *openArchive) {
 // reader was the last thing holding a page the user has left (APP.md §2.3).
 // The last reader of an archive that stays open is where a reclaim is
 // planned again: an extent a reader held was left where it lay for the
-// run, and may move now (§2.3, FORMAT.md R40). A release that lands while
-// an operation of the archive is registered plans nothing here — a run
-// under another operation would only wait on the handle — and is not lost
-// either: that operation's own end plans one (ops.go finishOp).
+// run, and may move now (§2.3, FORMAT.md R40); so is any reader's end
+// while the figure is a zero readers may have caused (openArchive.figHeld).
+// A release that lands while an operation of the archive is registered
+// plans nothing here — a run under another operation would only wait on
+// the handle — and is not lost either: that operation's own end plans one
+// (ops.go finishOp).
 func (c *Core) releaseReader(oa *openArchive) {
 	c.mu.Lock()
 	if oa.readers > 0 {
 		oa.readers--
 	}
 	last := oa.readers == 0
+	// A reader that is not the last plans again only when the figure in
+	// hand is a zero made while readers held extents, on an archive with
+	// unused space to give: that zero may have been this reader's doing,
+	// and while it stands the page offers no Reclaim space and
+	// ReclaimSpace refuses (archive.nothing_to_reclaim) — with the other
+	// reader still open, the last reader's close would come too late, or
+	// never (the outside audit of 2026-11-04, finding 3). Any other
+	// figure is left for the last reader: a preview streams in many
+	// requests, and a plan per request on a figure that already offers the
+	// run, or on an archive without a hole, is work for nothing.
+	zeroHeld := !last && oa.fig != nil && oa.figHeld && oa.fig.Complete && oa.fig.Back == 0 && oa.free > 0
 	closed := c.dropIfUnheldLocked(oa)
 	c.mu.Unlock()
 	if closed {
@@ -1030,7 +1080,7 @@ func (c *Core) releaseReader(oa *openArchive) {
 		c.emitState()
 		return
 	}
-	if last {
+	if last || zeroHeld {
 		c.reclaimIfWorth(oa, nil)
 	}
 }
@@ -1302,8 +1352,31 @@ func (c *Core) statLocked(oa *openArchive) ArchiveStat {
 	st := ArchiveStat{ID: hexID(oa.id), Name: oa.name, Seq: oa.seq, KeyVersion: oa.keyVersion, State: oa.state, LastSavedAt: oa.lastSavedAt, ReceiptOwed: oa.receiptOwed, CopyMismatch: oa.copyMismatch}
 	if oa.state != "needs_reopen" && oa.state != "compacting" {
 		st.Size, st.Files, st.Records, st.FreeSpace = oa.size, oa.files, oa.records, oa.free
+		st.Reclaim, st.CompactNeeds = oa.figLocked(), oa.compactNeeds()
 	}
 	return st
+}
+
+// figLocked is a copy of the handle's last figures, nil before the first
+// plan has landed. A copy, since the view leaves the state mutex. Caller
+// holds the state mutex.
+func (oa *openArchive) figLocked() *ReclaimView {
+	if oa.fig == nil {
+		return nil
+	}
+	f := *oa.fig
+	return &f
+}
+
+// compactNeeds is what a whole-file Compact needs free beside the archive:
+// the fresh copy holds everything the file holds but its holes, so about
+// the size less the unused space (FORMAT.md R33; the free map and the header
+// the figure leaves out are a few kilobytes). Caller holds the state mutex.
+func (oa *openArchive) compactNeeds() uint64 {
+	if oa.free >= oa.size {
+		return 0
+	}
+	return oa.size - oa.free
 }
 
 // Stat is the open archive's status strip.

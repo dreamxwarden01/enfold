@@ -20,10 +20,10 @@
   import { Archives, Code, Shell, errorOf } from "../lib/api";
   import type { ArchiveSummary } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivesCopy, busyCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, keyHint, keyTitles, pendingCopy, sinceText, vaultCopy } from "../lib/strings";
+  import { archivesCopy, busyCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, keyHint, keyTitles, pendingCopy, sinceText, spaceCopy, vaultCopy } from "../lib/strings";
   import { bytes, date, dateTime, plural } from "../lib/format";
   import { chipKinds, compacting, fingerprintOf, folderOf, rowRefusal, runningKind, vaultFigures, viewRows } from "../lib/archlist";
-  import { busyLabel, busyOp, busyOps, stopsFirst } from "../lib/ops";
+  import { busyLabel, busyOp, busyOps, busyReason, stopsFirst } from "../lib/ops";
   import type { ChipKind, ListView } from "../lib/archlist";
   import { fold, folded } from "../lib/cmdbar";
   import { KEY_ECHO_MS, groups, keyAnchor } from "../lib/menu";
@@ -53,6 +53,7 @@
   import SaveBar from "./SaveBar.svelte";
   import type { PendingItem } from "./SaveBar.svelte";
   import ArchiveDetailsDialog from "./ArchiveDetailsDialog.svelte";
+  import SpaceBar, { barOf, panelLine, spaceRow, spaceView, volumeOf } from "./SpaceBar.svelte";
   import DeleteArchiveDialog from "./DeleteArchiveDialog.svelte";
   import TamperedBar from "./TamperedBar.svelte";
   import NoticeSlot from "./NoticeSlot.svelte";
@@ -182,7 +183,38 @@
   // A consequence dialog (the dialog template, ruled 2026-10-17): the
   // question, the body, the primary that repeats the command's verb, and
   // the mechanism, when there is one worth saying, behind *How this works*.
-  let confirm = $state<null | { title: string; names?: string[]; body: string; how?: string; button: string; run: () => Promise<unknown> }>(null);
+  // A Compact's confirm says what the fresh copy needs on the drive (note)
+  // and keeps itself up through the call (stays): the core checks the
+  // drive before it writes a byte, and a refusal for room is said in the
+  // dialog with both figures (refused) rather than as an InfoBar after it
+  // closed (the owner's ruling of 2026-11-04).
+  let confirm = $state<null | { title: string; names?: string[]; body: string; how?: string; note?: string; refused?: string; stays?: boolean; path?: string; button: string; run: () => Promise<unknown> }>(null);
+  let confirming = $state(false);
+  async function confirmPrimary() {
+    const c = confirm;
+    if (!c || confirming) return;
+    if (!c.stays) {
+      confirm = null;
+      void run(c.run());
+      return;
+    }
+    confirming = true;
+    try {
+      await c.run();
+      if (confirm === c) confirm = null;
+    } catch (e) {
+      const err = errorOf(e);
+      if (err.code === Code.CodeCompactNoSpace && confirm === c) {
+        // free is sent even when 0; a missing one is read as 0.
+        confirm = { ...c, refused: dialogCopy.compact.noSpace(bytes(err.needed ?? 0), bytes(err.free ?? 0), err.volume || volumeOf(c.path ?? "")) };
+      } else {
+        if (confirm === c) confirm = null;
+        fail(e);
+      }
+    } finally {
+      confirming = false;
+    }
+  }
   let showDetails = $state(false);
   // The Forget/Delete dialog runs off a snapshot of the record, never off
   // the live row: a forgotten record leaves the list the moment the write
@@ -1370,9 +1402,47 @@
     if (one) void run(Archives.Verify(one.id));
   }
 
+  // Compact…, from the bar, a menu or the Details dialog's block. An open
+  // archive's row carries what the fresh copy needs (CompactNeeds), said
+  // before the press; a closed one's need is only known to the core.
   function askCompact() {
     const a = one;
-    if (a) confirm = { title: dialogCopy.compact.title(a.name), names: [a.name], body: dialogCopy.compact.body, button: dialogCopy.compact.primary, run: () => Archives.Compact(a.id) };
+    if (!a) return;
+    const note = a.open && (a.compactNeeds ?? 0) > 0 ? dialogCopy.compact.needs(bytes(a.compactNeeds), volumeOf(a.path)) : undefined;
+    confirm = { title: dialogCopy.compact.title(a.name), names: [a.name], body: dialogCopy.compact.body, note, stays: true, path: a.path, button: dialogCopy.compact.primary, run: () => Archives.Compact(a.id) };
+  }
+
+  // ---- the selected archive's unused space (APP.md §6, *Unused space*) ----
+  // The reclaim of it that runs, the user's or the core's own; another
+  // operation holding it, by its reason; the figure, for an open archive
+  // only (the row's; a closed one has none, since it needs the index).
+  const reclaimRun = $derived(one ? (store.runningOps.find((o) => o.kind === "reclaim" && o.archiveId === one.id) ?? null) : null);
+  const reclaimWhy = $derived(reclaimRun ? busyReason(reclaimRun) : undefined);
+  const otherBusy = $derived.by((): string | undefined => {
+    if (!one) return undefined;
+    const o = busyOp(store.runningOps.filter((x) => x.kind !== "reclaim"), store.starting[one.id] ?? [], one.id);
+    return o ? busyReason(o) : compactStop ? codeText(Code.CodeArchiveCompacting) : undefined;
+  });
+  const paneSpace = $derived(one?.open && one.state !== "compacting" && one.state !== "needs_reopen" ? spaceView({ size: one.storedSize, freeSpace: one.freeSpace, reclaim: one.reclaim }) : null);
+  // Changes off (Tampered) does not grey the run: the freeze is the vault
+  // file's, and an in-place reclaim commits to the archive's file alone, as
+  // an add or a delete does (APP.md §2.3, *Tampered is a state*), so the
+  // core takes it and the Archive page's row offers it alike.
+  const paneRow = $derived(paneSpace ? spaceRow(paneSpace, reclaimRun, otherBusy) : null);
+  // The collapsed panel's words after the name: "2.9 GB reclaimable", or
+  // the run; nothing for a closed archive.
+  const panelWords = $derived(one?.open ? panelLine(paneSpace, !!reclaimRun) : "");
+  // Reclaim space from the panel's row: the store's (lib/state.svelte.ts).
+  let reclaimAsking = $state(false);
+  async function reclaimHere() {
+    const a = one;
+    if (!a || reclaimAsking) return;
+    reclaimAsking = true;
+    try {
+      await store.reclaimSpace(a.id);
+    } finally {
+      reclaimAsking = false;
+    }
   }
 
   function askRekey() {
@@ -1396,6 +1466,7 @@
           running: store.runningOps.some((o) => o.archiveId === one.id),
           forgotten: hideStop,
           compacting: compactStop,
+          reclaiming: !!reclaimRun,
           rekeying: runningKind(one, store.runningOps) === "rotate",
           hidden: !!one.hidden,
           missing: one.note === "archive.file_missing",
@@ -1759,7 +1830,7 @@
       <button type="button" class="btn subtle" data-bar="fixed" title={keyTitles.openFile} onclick={() => void openFile()}><svg class="i"><use href="#i-file" /></svg>{archivesCopy.openFile}</button>
       {#if kept > 0}<div class="sep"></div>{/if}
       {#if kept > 0}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={refreshFingerprint}><svg class="i"><use href="#i-check" /></svg>{commandCopy.refreshFingerprint}</button>{/if}
-      {#if kept > 1}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={askCompact}><svg class="i"><use href="#i-compact" /></svg>{commandCopy.compact}</button>{/if}
+      {#if kept > 1}<button type="button" class="btn subtle" disabled={verbStop || !!reclaimRun} title={verbStop ? verbWhy : reclaimWhy} onclick={askCompact}><svg class="i"><use href="#i-compact" /></svg>{commandCopy.compact}</button>{/if}
       {#if kept > 2}<button type="button" class="btn subtle" disabled={verbStop} title={verbWhy} onclick={askRekey}><svg class="i"><use href="#i-rotate" /></svg>{commandCopy.rekeyArchive}</button>{/if}
       <div class="barslot" data-bar="fixed"><MenuButton id="arch-more" label={archivesCopy.more} title={one ? archivesCopy.more : archivesCopy.selectFirst} icon="i-more" iconOnly disabled={!one} items={barMore} /></div>
       <div class="grow"></div>
@@ -1981,7 +2052,7 @@
               aria-expanded={narrow ? bar.open : undefined}
               aria-disabled={narrow && !canExpand(bar) ? "true" : undefined}
               aria-controls={narrow ? "arch-details-body" : undefined}
-              aria-label={narrow ? headLabel : undefined}
+              aria-label={narrow ? (headLabel && panelWords ? `${headLabel}, ${panelWords}` : headLabel) : undefined}
               onclick={headTap}
               onkeydown={headKey}
               bind:this={headEl}
@@ -1991,7 +2062,7 @@
                    summary, its head as the side pane's (the final shoot
                    of phase 4a: below the threshold it was an empty
                    "Selected" line and the summary was nowhere). -->
-              <div class="head-line" aria-hidden={pane ? "true" : undefined} bind:this={lineEl}>{#if pane || !narrow}<span class="eyebrow">{archivesCopy.panelEyebrow}</span><span class="hname">{pane?.name ?? ""}</span>{:else}<span class="hsum">{@render sumHead()}</span>{/if}</div>
+              <div class="head-line" aria-hidden={pane ? "true" : undefined} bind:this={lineEl}>{#if pane || !narrow}<span class="eyebrow">{archivesCopy.panelEyebrow}</span><span class="hname">{pane?.name ?? ""}</span>{#if panelWords}<span class="hreclaim">{panelWords}</span>{/if}{:else}<span class="hsum">{@render sumHead()}</span>{/if}</div>
               <svg class="i chev" class:up={!bar.open}><use href="#i-chevdown" /></svg>
             </div>
             {#if narrow && pane}
@@ -2036,6 +2107,10 @@
                      Details dialog's. -->
                 <dl class="kv pfacts">
                   <div><dt>{archivesCopy.facts.size}</dt><dd class="num">{pane.storedSize ? bytes(pane.storedSize) : "—"}</dd></div>
+                  <!-- Unused space, an open archive's only (the reclaim
+                       study's ruling: the figure needs the index): the
+                       Archive page's row, its link the user's run. -->
+                  {#if paneSpace && paneRow}<div><dt>{archivesCopy.facts.unused}</dt><dd>{@render spaceRowOf(paneSpace, paneRow)}</dd></div>{/if}
                   <div><dt>{archivesCopy.facts.lastSaved}</dt><dd class="num">{dateTime(pane.lastWrittenAt)}</dd></div>
                   <div><dt>{archivesCopy.facts.created}</dt><dd class="num">{det ? dateTime(det.createdAt) : "—"}</dd></div>
                   <div><dt>{archivesCopy.facts.compression}</dt><dd>{methodWord(pane.method)}</dd></div>
@@ -2163,6 +2238,25 @@
   </div>
 {/snippet}
 
+<!-- The row *Unused space* (APP.md §6), as the Archive page's pane draws
+     it: the figure and its share, the 4 px bar, then one line. Below the
+     floor the figure alone, no bar and no link (spaceRow). -->
+{#snippet spaceRowOf(v: ReturnType<typeof spaceView>, r: NonNullable<typeof paneRow>)}
+  {#if r.bar}
+    <span class="spacerow">
+      <span class="sr-fig"><span class="num">{bytes(v.freeSpace)}</span><span class="sr-share">{r.share}</span></span>
+      <SpaceBar {...barOf(v)} />
+      {#if r.line?.kind === "link"}
+        <button type="button" class="btn link" disabled={r.line.disabled || reclaimAsking} title={r.line.title} onclick={reclaimHere}>{spaceCopy.reclaim}</button>
+      {:else if r.line}
+        <span class="sr-note">{r.line.text}</span>
+      {/if}
+    </span>
+  {:else}
+    <span class="num">{bytes(v.freeSpace)}</span>
+  {/if}
+{/snippet}
+
 <!-- The selected archive's two actions (direction 6): the pane's foot,
      or the panel's header row, never both. -->
 {#snippet actions(where: string, small: boolean)}
@@ -2194,9 +2288,39 @@
   </Dialog>
 {/if}
 
+<!-- Details stands before the consequence dialog in the page, so that a
+     Compact… opened from its block draws over it (the dialog stack makes
+     the later one topmost: lib/dialogs.ts). -->
+{#if showDetails && det}
+  <!-- The block Unused space (APP.md §6): the row's figures, the run, and
+       the stops — Compact's as the bar's Compact… (a lock, changes off, a
+       forgotten record, a compaction); Reclaim has no stop of the vault's,
+       as on the Archive page (paneRow, above). -->
+  <ArchiveDetailsDialog
+    d={det}
+    keyVersion={pane?.keyVersion ?? 0}
+    receiptOwed={pane?.receiptOwed ?? false}
+    space={pane}
+    run={reclaimRun}
+    runWhy={reclaimWhy}
+    busyWhy={otherBusy}
+    compactWhy={verbStop ? verbWhy : undefined}
+    oncompact={askCompact}
+    onclose={() => (showDetails = false)}
+  />
+{/if}
+
 {#if confirm}
   <Dialog title={confirm.title} names={confirm.names} onclose={() => (confirm = null)}>
     <p>{confirm.body}</p>
+    <!-- The note (Compact's need) gives way to the refusal, which says
+         the need again with what is free, so that it is said once. -->
+    {#if confirm.note && !confirm.refused}<p>{confirm.note}</p>{/if}
+    {#if confirm.refused}
+      <!-- archive.compact_no_space: nothing was written, and the dialog
+           stays for a second try once room is made. -->
+      <div class="bar attention" role="alert"><svg class="i"><use href="#i-warn" /></svg><span>{confirm.refused}</span></div>
+    {/if}
     {#if confirm.how}
       <!-- The mechanism, for whoever asks (the dialog template, ruled
            2026-10-17): shut by default, never the body's second voice.
@@ -2207,15 +2331,12 @@
       </details>
     {/if}
     {#snippet actions()}
-      <button type="button" class="btn accent" onclick={() => { const c = confirm; confirm = null; if (c) void run(c.run()); }}>{confirm?.button}</button>
+      <button type="button" class="btn accent" disabled={confirming} onclick={confirmPrimary}>{confirm?.button}</button>
       <button type="button" class="btn" onclick={() => (confirm = null)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
 {/if}
 
-{#if showDetails && det}
-  <ArchiveDetailsDialog d={det} keyVersion={pane?.keyVersion ?? 0} receiptOwed={pane?.receiptOwed ?? false} onclose={() => (showDetails = false)} />
-{/if}
 
 {#if del}
   <DeleteArchiveDialog
@@ -2333,6 +2454,9 @@
   .sum-row { display: flex; align-items: center; gap: var(--s2); min-height: 32px; padding: var(--s1) var(--s1) var(--s1) var(--s2); border: 1px solid transparent; border-radius: var(--r-card); font: var(--t-body); color: var(--ink); min-width: 0; }
   .sum-row > .grow { flex: 1 1 auto; min-width: 0; }
   .details-head .sum-row { min-height: 28px; padding-top: 0; padding-bottom: 0; }
+  /* The collapsed line's unused-space words after the name (the reclaim
+     study's ruling): the caption type in the second ink, kept whole. */
+  .hreclaim { flex: none; font: var(--t-cap); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .hsum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
   .hsum strong { font: var(--t-strong); color: var(--ink); }
   .sum-row .i { flex: none; color: var(--ink-3); }

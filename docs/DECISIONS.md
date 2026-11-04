@@ -6384,3 +6384,130 @@ stopped add washes nothing); the mock's `AddFolder` lands its one record at the 
 For the user's eye in the real window: drop several large files and watch the list fill;
 Cancel and read "Stopped. N of M files were added to X"; make one fail part way and see the
 error line stand with the list showing what landed.
+
+## 2026-11-04 — Reclaim space: a delete stays instant, the reclaim is cheap or the user's, and the archive says what a run would give back
+
+**Delete does not compact; the reclaim runs by itself only when cheap, and the user starts the
+rest** (ruled 2026-11-03 after an investigation and an outside critique; built 2026-11-04). The
+user asked whether a delete should become "delete and compact", as WinRAR makes the user wait on
+every delete. Investigated first (a Claude research agent and Codex gpt-6-astra, cross-checked;
+the notes kept with the session): 7-Zip and WinRAR rewrite the whole archive to a temp file on
+every delete because their formats have no free map (7-Zip even deletes the original before the
+move; a 7z solid block that lost an item is re-encoded whole; WinRAR 7.20's partial repack broke
+RAR4 archives and was reverted by 7.22), and their users complain about the per-delete wait and
+the temp space; the containers that never shrink (VeraCrypt, SQLite's default) draw the other
+complaint, that space does not come back; nobody asks to wait. For this format a delete is an
+index-only commit, and the in-place reclaim (R40) copies ciphertext without recompression at a
+cost that grows with the live bytes above the hole, not with the deleted file, so "always
+compact" could cost minutes per delete on a hard disk and would hold the archive's turn for the
+run; the critique ranked C > B > A (C: instant delete with the tail trim, interior relocation on
+the user's word with the figures shown; B: today's automatic run when worth it, whose hidden
+ratio could start a long involuntary wait right after a delete; A: always). Ruled C with one
+softening, and the analysis of the core that followed (the same day, for the UI study) found
+that "a delete is instant" was not yet true: the dry-run plan that decides whether a run is
+worth it ran synchronously inside `DeleteRecords` and the other edits under the archive's turn,
+0.35 to 3.7 s at 200 to 1,000 holes and 71 s at 50,000, because `space.union` subtracted the
+whole set from every extent, a quadratic the tail trim paid on every commit as well; and that
+the estimate, cut short at its bounds, reported 0 back in silence. Built: the set operations in
+`internal/archive/space.go` are a binary search plus a fold and a sorted single pass (a plan
+over 50,000 holes in 45 ms, the every-tenth-deleted layout in 50 ms), checked against the old
+implementation as an oracle at scale; the estimate says whether it walked the run to its end
+(`RunComplete`); the plan runs on a goroutine after a commit, an operation's end, an open and the
+last reader's close, one plan at a time per archive, a newer trigger superseding the plan in
+hand, a plan whose archive moved on without a new trigger dropped, its figures kept on the open
+archive as `ArchiveStat.Reclaim` and `ArchiveSummary.Reclaim` `{Back, Move, Complete, AtSeq}`
+(never in the registry; none for a closed archive) and announced by `archives.changed` only when
+the figure changed. The core starts a run by itself only when the plan is whole, moves 256 MiB
+at most and gives back 64 MiB at least (the quarter share is then implied; a free tail with
+nothing to move stays automatic; the 64 MiB batch and the in-loop guard stay); a cancelled run
+is held on the open handle — the next commit only makes the figures again — until the user's
+`ReclaimSpace` or a reopen, while a run the guard stopped is not held. The user's run,
+`Archives.ReclaimSpace(id)`: refused with `archive.not_open`, `archive.nothing_to_reclaim`
+(the figure at the archive's current state is whole with nothing back) or `archive.busy` (a
+reclaim already registered); no worth gate; a budget per commit of 64 MiB or eight times the
+sealed index, whichever is larger, so the per-batch reseal stays at an eighth of the work; the
+guard's share the rule's or the ratio the first whole plan promised, whichever is larger, and a
+stop once it has moved half again what that plan said; Cancel at any chunk; `Requested`,
+`Moved`, `Ended` and a running `Returned` on the operation for the foot. Both runs grey the
+commands with "Reclaiming space… wait for it to end" (ruled for 1.0; `Requested` is kept so a
+later ruling can let the core's own cheap run yield). Compact's gate checks the archive's drive
+before it writes a byte for about `Size − FreeSpace` free (`GetDiskFreeSpaceEx`; a drive that
+cannot be measured is not refused on a guess) and refuses with `archive.compact_no_space`
+carrying `Needed`, `Free` (present at 0) and `Volume`. The user also asked whether Compact should
+tidy the metadata as it goes: nothing worth tidying in 1.0 — the free map is always coalesced,
+the trim's follow-up already reseals the index at the lowest place it can sit, R31 fixes when
+the quarantine is spent, the index is rewritten whole every commit, the tombstones are kept by
+R32 and R33, no dictionary is ever installed, and the receipts live in the vault; the real
+metadata costs were the two performance faults above, now fixed. Measured: the plan over
+50,000 holes 54 ms and over 100,000 separated runs 58 ms by the reviewer; the cheap rule's
+corners, the hold after a cancel, never two reclaims at once under concurrent calls, a refused
+Compact letting go of the handle it opened, the union against the old implementation at scale,
+a remove not reaching a clone; the race run clean (one run failed on the known flake, this time
+`TestStagedCopyUnlocksPurgeNothing` with "ceremony.in_progress" and "locked: exit", the third
+test name it has worn, and passed on the rerun). An outside read-only audit of the Go diff
+(Codex, gpt-6-astra, the standing rule for backend changes) found four things, all real and
+fixed before the commit: Compact measured the drive's room before it held the archive's turn,
+so an add queued ahead of it could grow the need past what was measured (the need and the room
+are measured again under the turn, before the temp file); a plan triggered by an open or a
+reader's close while an add's transaction was open counted the appended, uncommitted bytes as
+an unused tail, since a transaction grows the file at once while the index still describes the
+committed files (the snapshot now uses the committed size); a whole plan that said nothing comes
+back while a reader pinned the tail stayed the refusal of `ReclaimSpace` after that reader
+closed, since only the last reader's close planned again (a cached zero is made again before it
+refuses); and the user's run's bound was read as none when the first whole plan promised a tail
+with nothing to move, so a reader's release could let the run go on unbounded (a bound set is
+kept apart from its value; the share guard had still capped such a run at four times what
+came back). Left: a refusal of Compact on its own turn reaches the page as the code alone, since
+`OpView` carries no figures, so the dialog's "Only 11 GB is free" line is said only by the
+first check; `firstFitBefore` still scans holes
+from the lowest, so a layout of many small holes below large files is quadratic in the step; the
+estimate's bounds (1,024 steps, 2^20 visits) are unchanged, so the every-tenth layout stays
+"not whole" (raising the visit bound to about 2^23 would likely complete it in a few hundred
+ms, the owner's call); the background plan uses the rule's 64 MiB budget while the user's run
+plans with its own, so the shown figure can differ a little from what the run does.
+
+**Where the archive says what a reclaim would give back** (ruled 2026-11-04 from a design study
+of five placements mocked on the real pages and judged; built the same day). The user wanted a
+concise bar-style indicator taken in at one look, certainly in Details, perhaps in the Archives
+list, the selected archive's panel or the archive page's foot. Ruled, the judge's pick: the
+Details dialog's "Unused space" block above the IDs — the `SpaceBar` (8 px: archive data in the
+strong stroke, what a run gives back in the accent with a 3 px minimum, what only Compact
+reaches as accent stripes, drawn only at 64 MiB or more and folded into the accent below; a 1 px
+gap of the ground between segments; aria-hidden, the words carrying it; no width animation; never
+red; under forced colours an empty Canvas track in a CanvasText frame with Highlight fills),
+the unused share at the right, one line of words, a legend of the segments present, then
+*Reclaim space* and *Compact…* as standard buttons with their hints beside them — *Close*
+keeping the dialog's accent and Enter (Enter must never start an 11 GB run); the archive page's
+pane, where the "Unused space" fact grows a 4 px bar under its figure, the share at its right,
+and a *Reclaim space* link (title "Moves about 11 GB inside the file") when a run would give
+back 64 MiB or more and the figure is whole, "(Compact to reclaim)" when only Compact reaches
+it, "Reclaiming · 1.1 GB back so far" during a run, and the link with the title "Moves files
+inside the archive until no more space comes back" and a plain-track bar while the figure is
+not whole; below today's floor the row keeps its figure alone, no bar and no link — hidden,
+never greyed (the user first asked for a greyed control there and withdrew it the same day: the
+pane's frame must look the same whenever nothing can be given back); and the Archives page's
+bottom panel, whose open facts reuse the row and whose collapsed line says "2.9 GB reclaimable"
+or "Reclaiming space". Not built: a chip in the list row (noise beside Open and Missing, and a
+closed archive has no figure), a segment in the foot (3.8 device pixels at 6 %, a dot beside the
+lock indicator, a second bar beside the running line) and an InfoBar (loud, repeating the pane,
+back every session). The words: "6 % unused"; "2.9 GB unused of 48 GB · Reclaim space gives all
+of it back"; "3.1 GB unused of 8.3 GB · Reclaim space gives back 1.2 GB; only Compact reaches the
+rest"; "No unused space worth reclaiming · 48 GB"; "Open the archive to see its unused space.";
+the legend "Archive data" · "Reclaim gives back" · "Only Compact reaches" ("Unused" for the
+unsplit segment of a figure not whole); the hints "Moves about 11 GB inside the file. Adding and
+extracting wait until it ends; you can cancel it." and "Rewrites the whole file; needs about
+45 GB free on D:" (the figure the core gives; "up to 48 GB" for a closed archive, the file's size
+bounding the need); the refusal "Only 11 GB is free on D: and Compact needs about 45 GB. Make
+room on the drive, then try again."; the run line "Reclaiming space · 4.5 GB of 11 GB moved ·
+1.1 GB back so far"; the foot's "Reclaimed 2.9 GB in Photos 2024", "Stopped reclaiming space in
+Photos 2024 · 1.1 GB given back" and "Reclaimed no space in Photos 2024: the files that remain
+cannot move lower"; never "free" for the space inside the file. *Compact…* is greyed on the bar,
+in the menus and in the block while a reclaim runs; *Delete archive…* stays live and stops the
+run first, by the earlier ruling; *Reclaim space* is not greyed while changes are off (the
+Tampered freeze is the vault file's, and the core does not refuse a reclaim), on every page
+alike. Measured in the mock by the builder (144 shots) and the reviewer at 1086 × 694 and
+866 × 554, light, dark and both contrast palettes: the words 6.2:1 or better, the accent fill
+3.67:1 (light) and 4.72:1 (dark) against the archive-data segment; nothing overflows. Left: Enter
+does nothing in Details, as before (a Dialog change if wanted); the 4 px row's plain track for a
+figure not whole is faint, for the user's eye; Details opened while a compaction holds an open
+archive with no figure kept says "Open the archive to see its unused space."

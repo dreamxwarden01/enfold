@@ -46,7 +46,14 @@ type op struct {
 	// — the file's size before the run less its size after — set as the run
 	// ends and zero for every other kind (OpView.Returned).
 	returned atomic.Uint64
-	phase    atomic.Value // string
+	// requested, moved and ended are a reclaim's (OpView.Requested, Moved,
+	// Ended): requested is fixed before the operation is registered; moved
+	// is the ciphertext its commits have moved, and ended why it stopped
+	// when it was neither cancelled nor failed.
+	requested bool
+	moved     atomic.Uint64
+	ended     atomic.Value // string
+	phase     atomic.Value // string
 	// dragResult is a drag out's end — self_drop | cancelled | refused |
 	// moved | copied | failed — set as the drag reports it and empty for
 	// every other kind (OpView.DragResult, dragout.go).
@@ -89,6 +96,10 @@ func (o *op) view() OpView {
 		DragItems: int(o.dragItems.Load()),
 		StartedAt: o.startedAt.Unix(), Finished: o.finished, Results: o.results,
 		Policy: o.policy, Destination: o.destination, Returned: o.returned.Load(),
+		Requested: o.requested, Moved: o.moved.Load(),
+	}
+	if e, ok := o.ended.Load().(string); ok {
+		v.Ended = e
 	}
 	if p, ok := o.phase.Load().(string); ok {
 		v.Phase = p
@@ -243,11 +254,13 @@ func (c *Core) finishOp(o *op, results []FileOutcome, e *Error) {
 	// that ends while another operation is registered is refused there and
 	// then (reclaimDueLocked), with nothing left to remember it by. The
 	// operation is over, so it is not one of the operations that hold a run
-	// off. A reclaim's own end is not a trigger: a run the user cancelled is
-	// resumed by the next qualifying commit and never by itself, and one
-	// that ended of its own accord has nothing left to plan.
-	if oa != nil && !closed && o.kind != "reclaim" {
-		c.reclaimIfWorth(oa, o)
+	// off. A reclaim's own end plans the figures again and starts nothing:
+	// a run that was cancelled is not taken up by itself (ruled 2026-11-03,
+	// openArchive.reclaimHeld), and one that ended of its own accord has
+	// nothing left to start. A compaction's end plans for the handle its
+	// reopen made, which has no figures yet.
+	if oa != nil && !closed {
+		c.planReclaim(oa, o, o.kind != "reclaim")
 	}
 	// Keep finished ops for a while so a rebuilt window sees the outcome.
 	c.deps.Clock.AfterFunc(5*time.Minute, func() {
@@ -1764,9 +1777,11 @@ func (c *Core) Verify(id string) (string, *Error) {
 
 // Compact rewrites the archive without free space (APP.md §2.3): the
 // archive is opened for the operation when its page is not open (§2.3, ruled
-// 2026-09-10), gated on the session, and it waits its turn on the handle
-// like every other operation; previews are quiesced; the handle is finished
-// by the call and the path reopened.
+// 2026-09-10), gated on the session, on the time it would take and on the
+// room its fresh copy needs on the archive's drive (ruled 2026-11-04,
+// compactionRoomFor), and it waits its turn on the handle like every other
+// operation; previews are quiesced; the handle is finished by the call and
+// the path reopened.
 func (c *Core) Compact(id string) (string, *Error) {
 	if e := c.refuseIfForgotten(id); e != nil {
 		return "", e
@@ -1786,9 +1801,48 @@ func (c *Core) Compact(id string) (string, *Error) {
 		c.releaseClaim(oa)
 		return "", coded(CodeTooSlow)
 	}
+	need, path := oa.compactNeeds(), oa.path
+	c.mu.Unlock()
+	// The drive is asked without the state mutex: it is a call into the
+	// file system, and a network drive can take its time answering. This
+	// is the answer the user gets at once; the operation asks again once
+	// the handle is its own (startCompaction), since what runs before it
+	// on the handle can grow the archive.
+	if e := c.compactionRoomFor(path, need); e != nil {
+		c.releaseClaim(oa)
+		return "", e
+	}
+	c.mu.Lock()
 	oa.quiesced = true
 	c.mu.Unlock()
 	return c.startCompaction(oa), nil
+}
+
+// compactionRoomFor is the check a compaction is refused on before it
+// writes a byte (ruled 2026-11-04): its fresh copy is written beside the
+// archive, on the same drive, and holds everything the file holds but its
+// holes — need, about the size less the unused space (ArchiveStat
+// .CompactNeeds) — so a drive with less free than that would fill up part
+// way and fail the compaction after minutes of writing, with the disk full
+// for everything else meanwhile. The refusal carries the two figures and
+// the drive's name, for the page's sentence. A drive that cannot be
+// measured is not refused: the compaction's own write fails cleanly if the
+// room is not there (FORMAT.md R33), and a refusal on a guess would stop
+// one that fits.
+func (c *Core) compactionRoomFor(path string, need uint64) *Error {
+	measure := c.diskFree
+	if measure == nil {
+		measure = platformDiskFree
+	}
+	volume, free, err := measure(path)
+	if err != nil {
+		c.log("compact: the free space beside the archive could not be measured: %v", err)
+		return nil
+	}
+	if free >= need {
+		return nil
+	}
+	return &Error{Code: CodeCompactNoSpace, Needed: need, Free: &free, Volume: volume}
 }
 
 // compactionFitsLocked is the rough estimate a compaction is refused on: the
@@ -1832,6 +1886,30 @@ func (c *Core) startCompaction(oa *openArchive) string {
 		if c.archives[oa.id] != oa {
 			// The archive was closed between the gate and the operation's
 			// turn on the handle.
+			oa.quiesced = false
+			c.mu.Unlock()
+			return nil, coded(CodeArchiveNotOpen)
+		}
+		// The drive is asked again now that the handle is this operation's:
+		// the check in Compact measured the archive as it stood when the
+		// user asked, and an add that held the handle meanwhile may have
+		// committed gigabytes the fresh copy must also hold, or the drive
+		// filled up from elsewhere. Measured against that first figure the
+		// compaction would write until the disk was full instead of being
+		// refused (the outside audit of 2026-11-04, finding 1). The need is
+		// the committed state's, which no other operation can change while
+		// opMu is held; the measurement is made without the state mutex, as
+		// in Compact.
+		need, path := oa.compactNeeds(), oa.path
+		c.mu.Unlock()
+		if e := c.compactionRoomFor(path, need); e != nil {
+			c.mu.Lock()
+			oa.quiesced = false
+			c.mu.Unlock()
+			return nil, e
+		}
+		c.mu.Lock()
+		if c.archives[oa.id] != oa {
 			oa.quiesced = false
 			c.mu.Unlock()
 			return nil, coded(CodeArchiveNotOpen)
@@ -1894,104 +1972,223 @@ func (c *Core) startCompaction(oa *openArchive) string {
 }
 
 // Reclaiming space (APP.md §2.3 "Space comes back" as amended on
-// 2026-09-10, FORMAT.md R40, DECISIONS 2026-09-10). The archive layer gives
-// the file's tail back with the commit that frees it (R31 as amended), but
-// a hole with live data above it stays where it is, and an archive emptied
-// by a delete stood at the size of what it had held. So the core lowers the
-// live data itself: after any commit — and when the last reader holding an
-// extent closes — it plans R40's in-place compaction on the free map in
-// memory (archive.PlanReclaim) and, when the run would give the file system
-// enough back, moves live extents down into the holes before them, a budget
-// of bytes per commit, as a follow-on operation the strip shows as
-// Reclaiming space. The rule is weighed on the run and not on the first of
-// its commits — a plan is one commit deep, and the run of two commits that
-// the first of three equal files deleted needs would never have been begun
-// on what that first commit alone promises. No second file, never twice the
-// size on disk, and a Cancel ends it between two chunks of a copy — the
-// archive consistent and simply less compacted, the run resumed by the next
-// qualifying commit.
+// 2026-09-10 and on 2026-11-03, FORMAT.md R40, DECISIONS 2026-09-10). The
+// archive layer gives the file's tail back with the commit that frees it
+// (R31 as amended), but a hole with live data above it stays where it is,
+// and an archive emptied by a delete stood at the size of what it had held.
+// So the core lowers the live data itself, moving live extents down into
+// the holes before them, a budget of bytes per commit, as an operation the
+// strip shows as Reclaiming space.
+//
+// After any commit — and at the end of an operation, at the last reader's
+// close and at an open — the core plans R40's run on the free map in memory
+// (archive.PlanReclaim), off the call that committed: on a goroutine of its
+// own, one plan at a time per archive, a newer trigger superseding the plan
+// in hand (planReclaim). The plan's figures are kept on the open archive and
+// shown (ArchiveStat.Reclaim); the plan was made on the edit's own call
+// until 2026-11-03, under the handle's turn, and a delete on a fragmented
+// archive stalled for seconds behind it. The rule is weighed on the run and
+// not on the first of its commits — a plan is one commit deep, and the run
+// of two commits that the first of three equal files deleted needs would
+// never have been begun on what that first commit alone promises.
+//
+// The core starts a run by itself only when it is cheap (the owner's
+// softening of 2026-11-03): the dry run walked to its end, it gives back
+// the floor or more, and it moves 256 MiB at most — under a second on an
+// SSD, half a minute on a slow disk at worst. Anything larger waits for the
+// user's *Reclaim space* (ReclaimSpace), which the page offers beside the
+// figures. No second file, never twice the size on disk, and a Cancel ends
+// either between two chunks of a copy — the archive consistent and simply
+// less compacted, and nothing starts again by itself on that handle until
+// the user asks.
 const (
-	// reclaimFloor is what a run must give the file system back before it
-	// is worth its moves, and reclaimShare the share of the bytes it would
-	// have to move that the gain must also be: a quarter, where lowering
-	// the live data is worth the tail it returns — a 64 MiB hole at the head
-	// of a 100 GB archive is not, and that is what Compact is for, on
-	// request. Both measure bytes returned, never the size of any hole,
-	// since a hole filled behind a file that cannot move returns nothing.
-	// reclaimBudget is the ciphertext one commit moves at most, so that an
-	// archive of many small files does not pay one index rewrite per file.
-	// All three are the rule, not a setting; reclaimRule is what the core
-	// measures against, so that a test can lower them.
+	// reclaimFloor is what a run must give the file system back before the
+	// core makes it by itself, and reclaimShare the share of the bytes it
+	// would move that the gain must also be: a quarter. reclaimCheap is the
+	// most the core moves by itself in one run; with the floor at 64 MiB the
+	// quarter is then implied, and both stay in the rule so that a test
+	// lowering one does not lose the other. All measure bytes returned,
+	// never the size of any hole, since a hole filled behind a file that
+	// cannot move returns nothing. reclaimBudget is the ciphertext one
+	// commit moves at most, so that an archive of many small files does not
+	// pay one index rewrite per file. They are the rule, not a setting;
+	// reclaimRule is what the core measures against, so that a test can
+	// lower them.
 	reclaimFloor  uint64 = 64 << 20
 	reclaimShare  uint64 = 4
 	reclaimBudget uint64 = 64 << 20
+	reclaimCheap  uint64 = 256 << 20
 )
 
-// reclaimRule is the three as one value, so the seam is one field.
-type reclaimRule struct{ floor, share, budget uint64 }
+// reclaimRule is the four as one value, so the seam is one field.
+type reclaimRule struct{ floor, share, budget, cheap uint64 }
 
-// worth answers whether a plan earns its run: the tail the run gives back is
-// at or over the floor and at least the rule's share of what the run would
-// move. It is the run that is measured, never its first commit — a plan is
-// one commit deep, and the first of three equal files deleted leaves [hole S]
-// [A: S][B: S], whose first commit moves A behind a tail B still anchors and
-// returns nothing at all, while the run returns S (archive.ReclaimPlan's
-// RunTailReturned and RunBytesToMove). With nothing to move the tail is a
-// free run an interrupted follow-up left, which one empty commit gives back.
+// worth answers whether a plan earns the run the core makes by itself: the
+// dry run walked the run to its end — a figure cut short is a floor, never
+// a reason — the tail it gives back is at or over the floor and at least
+// the rule's share of what it would move, and what it would move is within
+// the cheap bound. It is the run that is measured, never its first commit:
+// the first of three equal files deleted leaves [hole S][A: S][B: S], whose
+// first commit moves A behind a tail B still anchors and returns nothing at
+// all, while the run returns S (archive.ReclaimPlan's RunTailReturned and
+// RunBytesToMove). With nothing to move the tail is a free run an
+// interrupted follow-up left, which one empty commit gives back.
 func (r reclaimRule) worth(plan archive.ReclaimPlan) bool {
-	return plan.RunTailReturned >= r.floor && plan.RunTailReturned*r.share >= plan.RunBytesToMove
+	return plan.RunComplete && plan.RunBytesToMove <= r.cheap &&
+		plan.RunTailReturned >= r.floor && plan.RunTailReturned*r.share >= plan.RunBytesToMove
 }
 
-// batch is the leading moves of a plan that fit the budget of source
+// requestedBudget is the budget per commit of the run the user starts: the
+// rule's, or eight times the sealed index when that is more. Every move
+// commit reseals the whole index, and on an archive of many files the
+// reseal of a 64 MiB batch can be half the batch again; at eight times the
+// index it stays at or under an eighth of the work (the reclaim study's
+// analyst, 2026-11-03). The core's own cheap run keeps the rule's budget,
+// since it moves 256 MiB at most.
+func (r reclaimRule) requestedBudget(indexLen uint64) uint64 {
+	return max(r.budget, 8*indexLen)
+}
+
+// batch is the leading moves of a plan that fit the rule's budget.
+func (r reclaimRule) batch(moves []archive.Move) []archive.Move {
+	return batchWithin(moves, r.budget)
+}
+
+// batchWithin is the leading moves of a plan that fit a budget of source
 // bytes: at least one, so that a file larger than the budget still moves,
 // on its own. A plan answers for one commit — its moves free their sources
 // into quarantine and the commit's own index takes a hole — so the rest of
 // the plan is never used: the run plans again after the commit.
-func (r reclaimRule) batch(moves []archive.Move) []archive.Move {
+func batchWithin(moves []archive.Move, budget uint64) []archive.Move {
 	var n int
 	var bytes uint64
-	for n < len(moves) && (n == 0 || bytes+moves[n].From.Len <= r.budget) {
+	for n < len(moves) && (n == 0 || bytes+moves[n].From.Len <= budget) {
 		bytes += moves[n].From.Len
 		n++
 	}
 	return moves[:n]
 }
 
-// reclaimIfWorth is what every commit ends with, and what the last reader
-// of an archive ends with: the run is planned and started when it has
-// earned it. The commit's own operation is not one of the operations that
-// hold it off — it is over — and the session is not asked: a move is a
-// commit like any other, the archive key is in memory, and the receipt it
-// owes waits for the session (APP.md §2.3). The plan is asked for with the
-// budget the run will commit by, so that the run it weighs is the run it
-// would make: the commits are budgeted, and a budget moves the placements
-// and not only the moment (archive.PlanReclaim). It is read outside the
-// state mutex, since it takes the archive's own; a claim keeps the handle
-// meanwhile, as at any other start of an operation. Caller holds opMu or
-// nothing; the run's own goroutine waits for it.
+// reclaimIfWorth is what every commit ends with: the plan is asked for, and
+// the run started when it is cheap enough to make by itself (worth). It
+// returns at once — the plan is made off the caller's path (planReclaim) —
+// so a delete answers the page before the dry run has begun. self is the
+// operation whose own commit this is, which is not one of the operations
+// that hold a run off. Caller holds opMu or nothing.
 func (c *Core) reclaimIfWorth(oa *openArchive, self *op) {
-	c.mu.Lock()
-	if !c.reclaimDueLocked(oa, self) {
-		c.mu.Unlock()
-		return
-	}
-	rule := c.reclaim
-	oa.reclaiming = true
-	oa.claims++ // released once the operation is registered, or below
-	c.mu.Unlock()
-	plan := oa.a.PlanReclaim(rule.budget)
-	if !rule.worth(plan) {
-		c.mu.Lock()
-		oa.reclaiming = false
-		c.mu.Unlock()
-		c.releaseClaim(oa)
-		return
-	}
-	c.log("archive %s: reclaiming %d bytes of the tail for %d bytes moved over %d commits", oa.name, plan.RunTailReturned, plan.RunBytesToMove, plan.Commits)
-	c.startReclaim(oa)
+	c.planReclaim(oa, self, true)
 }
 
-// reclaimDueLocked answers whether a run may be planned at all: the handle
+// planReclaim asks for the archive's plan, off the caller's path: the
+// snapshot is copied under the archive's own mutex as PlanReclaim always
+// copied it, and the walk runs on a goroutine of its own. One plan runs at a
+// time per archive: a trigger that comes while one is being made marks it
+// superseded, and the goroutine drops what it has and plans again, so the
+// figure that lands is the newest commit's. auto is whether the plan may
+// start the core's own run: a commit, an operation's end and the last
+// reader's close may; the end of a reclaim and an open may not — a run that
+// ended has nothing left to start by itself, and an open changes nothing. A
+// trigger that may joins one in hand that may not. Nothing is
+// planned for a handle that is not the open one, that compacts, or that has
+// a reclaim registered — that run plans for itself, and its end plans
+// again.
+func (c *Core) planReclaim(oa *openArchive, self *op, auto bool) {
+	c.mu.Lock()
+	if !c.plannableLocked(oa) {
+		c.mu.Unlock()
+		return
+	}
+	if oa.planning {
+		oa.replan = true
+		oa.planAuto = oa.planAuto || auto
+		oa.planSelf = self
+		c.mu.Unlock()
+		return
+	}
+	oa.planning, oa.replan, oa.planAuto, oa.planSelf = true, false, auto, self
+	c.mu.Unlock()
+	go c.planLoop(oa)
+}
+
+// plannableLocked answers whether a plan for the handle is worth making
+// now. Caller holds the state mutex.
+func (c *Core) plannableLocked(oa *openArchive) bool {
+	if c.closed || c.archives[oa.id] != oa || oa.state != "open" || oa.quiesced || oa.reclaiming {
+		return false
+	}
+	id := hexID(oa.id)
+	for _, o := range c.ops {
+		if !o.finished && o.archiveID == id && o.kind == "reclaim" {
+			return false
+		}
+	}
+	return true
+}
+
+// planLoop makes the archive's plan until one stands for the newest
+// trigger, keeps its figures on the handle, announces them with
+// archives.changed — the list's ArchiveSummary carries them, and the page's
+// Stat — and starts the core's own run when the plan is cheap enough
+// (worth). A plan that a newer trigger overtook is dropped and made again;
+// one whose archive changed without a trigger — an add's checkpoint, whose
+// final commit or end will ask again — is dropped and nothing more is done
+// here. The run is registered under the state mutex's decision and a claim,
+// as at any other start of an operation.
+func (c *Core) planLoop(oa *openArchive) {
+	for {
+		c.mu.Lock()
+		rule := c.reclaim
+		atSeq := oa.seq
+		c.mu.Unlock()
+		if c.seams.planning != nil {
+			c.seams.planning()
+		}
+		plan := oa.a.PlanReclaim(rule.budget)
+		c.mu.Lock()
+		if !c.plannableLocked(oa) {
+			oa.planning, oa.replan, oa.planSelf = false, false, nil
+			c.mu.Unlock()
+			return
+		}
+		if oa.replan {
+			oa.replan = false
+			c.mu.Unlock()
+			continue
+		}
+		auto, self := oa.planAuto, oa.planSelf
+		oa.planning, oa.planSelf = false, nil
+		if oa.seq != atSeq {
+			c.mu.Unlock()
+			return
+		}
+		fig := ReclaimView{Back: plan.RunTailReturned, Move: plan.RunBytesToMove, Complete: plan.RunComplete, AtSeq: atSeq}
+		// The window is told only when what it shows changed: a plan made
+		// again at the same state (an extract's or a verify's end, an open,
+		// the last preview reader's close) lands the same figure, and each
+		// archives.changed costs the window a refresh of the list and of
+		// the backup page. AtSeq is compared with the rest, since a figure
+		// whose AtSeq has caught up with Seq is no longer pending (types.go
+		// ReclaimView).
+		changed := oa.fig == nil || *oa.fig != fig
+		oa.fig, oa.figHeld = &fig, plan.ReadersHeld
+		start := auto && !oa.reclaimHeld && rule.worth(plan) && c.reclaimDueLocked(oa, self)
+		if start {
+			oa.reclaiming = true
+			oa.claims++ // released once the operation is registered
+		}
+		c.mu.Unlock()
+		if changed {
+			c.emitArchivesChanged()
+		}
+		if start {
+			c.log("archive %s: reclaiming %d bytes of the tail for %d bytes moved over %d commits", oa.name, plan.RunTailReturned, plan.RunBytesToMove, plan.Commits)
+			c.startReclaim(oa, false)
+		}
+		return
+	}
+}
+
+// reclaimDueLocked answers whether a run may be started at all: the handle
 // is the open one and nothing else is running on it — a run started under
 // another operation would only wait on the handle, and one started under a
 // reclaim would be recursive. Caller holds the state mutex.
@@ -2008,6 +2205,67 @@ func (c *Core) reclaimDueLocked(oa *openArchive, self *op) bool {
 	return true
 }
 
+// ReclaimSpace is *Reclaim space*, the run the user starts (APP.md §2.3,
+// ruled 2026-11-03): the same operation as the core's own, of kind reclaim
+// with Requested set, for an archive that is open — it opens nothing by
+// itself, since the figure it acts on needs the open archive
+// (archive.not_open otherwise, archive.compacting and archive.needs_reopen
+// as the page's own calls answer). It has no worth gate: the user saw the
+// figures. It is refused only when the last plan, made at the archive's
+// current state and walked to its end, says nothing comes back
+// (archive.nothing_to_reclaim), and while a reclaim of the archive is
+// already registered (archive.busy). A figure that is pending or cut
+// short does not refuse it: the run plans for itself and says what came
+// back, nothing included. Otherwise it waits its turn on the handle like
+// any operation, and lifts the hold a cancel put on the core's own run.
+func (c *Core) ReclaimSpace(id string) (string, *Error) {
+	aid, ok := parseID(id)
+	if !ok {
+		return "", coded(CodeParams)
+	}
+	c.mu.Lock()
+	oa := c.archives[aid]
+	switch {
+	case oa == nil:
+		c.mu.Unlock()
+		return "", coded(CodeArchiveNotOpen)
+	case oa.state == "compacting" || oa.quiesced:
+		c.mu.Unlock()
+		return "", coded(CodeArchiveCompacting)
+	case oa.state == "needs_reopen":
+		c.mu.Unlock()
+		return "", coded(CodeArchiveNeedsReopen)
+	case oa.state != "open":
+		c.mu.Unlock()
+		return "", coded(CodeArchiveNotOpen)
+	}
+	if oa.reclaiming || c.reclaimRunningLocked(oa) {
+		c.mu.Unlock()
+		return "", coded(CodeArchiveBusy)
+	}
+	if f := oa.fig; f != nil && f.AtSeq == oa.seq && f.Complete && f.Back == 0 {
+		c.mu.Unlock()
+		return "", coded(CodeNothingToReclaim)
+	}
+	oa.reclaimHeld = false
+	oa.reclaiming = true
+	oa.claims++ // released once the operation is registered
+	c.mu.Unlock()
+	return c.startReclaim(oa, true), nil
+}
+
+// reclaimRunningLocked reports whether a reclaim of the archive is
+// registered and not over. Caller holds the state mutex.
+func (c *Core) reclaimRunningLocked(oa *openArchive) bool {
+	id := hexID(oa.id)
+	for _, o := range c.ops {
+		if !o.finished && o.archiveID == id && o.kind == "reclaim" {
+			return true
+		}
+	}
+	return false
+}
+
 // errReclaimIncomplete is the reclaim's own outcome when a move commit
 // fails: the edit that started it committed and stays committed, and the
 // page says "saved; reclaim incomplete", never that the edit failed.
@@ -2017,38 +2275,54 @@ var errReclaimIncomplete = errors.New("app: reclaiming space did not finish")
 // a time, each on a plan made afresh under the handle's turn — Publish when
 // the hole the plan wants is still under R31's quarantine, else the leading
 // moves that fit the budget — with the registry receipt after every commit
-// as every commit has, until a plan has no moves. Readers are not quiesced:
-// a move copies a source a reader may be reading and never retargets it,
-// and the plan leaves a held extent where it lies. Progress is by bytes
-// moved over what the first plan said the whole run would move, which a
-// later plan may raise; the cancel reaches every chunk of the copy through
-// ctx, and Close archive cancels the same way. What came back is measured on
-// the file — its size before against after — and said separately from what
-// was moved (OpView.Returned).
+// as every commit has, until a plan has no moves. requested is the user's
+// run (ReclaimSpace) rather than the core's own (OpView.Requested). Readers
+// are not quiesced: a move copies a source a reader may be reading and
+// never retargets it, and the plan leaves a held extent where it lies.
+// Progress is by bytes moved over what the first plan said the whole run
+// would move, which a later plan may raise; the cancel reaches every chunk
+// of the copy through ctx, and Close archive cancels the same way. What came
+// back is measured on the file — its size before against after — and said
+// separately from what was moved, after every commit as well as at the end
+// (OpView.Returned, Moved).
 //
 // The rule is a guard over the run as well as the gate before it: before
 // every commit the fresh plan is weighed against what the run has cost so
 // far, and a run whose moves have outrun what has come back plus what is
-// still promised stops where it is — the same share, measured on the same
-// two figures. An estimate answers for the layout it walked, and neither a
-// bound it was cut short at nor a reader that arrived since is a reason to
-// go on moving bytes for a tail that will not come. Stopping is not a
-// failure: every commit made is committed, the archive is consistent and
-// simply less compacted, and the next qualifying commit takes the run up
-// again (APP.md §2.3). Caller has set oa.reclaiming and taken a claim on the
-// handle under the state mutex.
-func (c *Core) startReclaim(oa *openArchive) string {
-	return c.startOp("reclaim", hexID(oa.id), func(ctx context.Context, o *op) ([]FileOutcome, error) {
+// still promised stops where it is — the rule's share, measured on the same
+// two figures. The user's run is weighed against the bargain the user was
+// shown: its share is the rule's or the ratio its first plan promised,
+// whichever is larger, so that a run the user chose at nine bytes moved for
+// one back is not stopped at four; it also stops once it has moved half
+// again what that plan said it would, so it never silently does far more
+// than it said; and both are weighed only on plans walked to their end,
+// since a figure cut short is a floor. Either run stops when a plan walked
+// to its end promises nothing more back: the files that remain cannot move
+// lower. Stopping is not a failure: every commit made is committed, and the
+// archive is consistent and simply less compacted (OpView.Ended says why).
+// A cancel holds the core's own run off on this handle until the user asks
+// (openArchive.reclaimHeld). Caller has set oa.reclaiming and taken a claim
+// on the handle under the state mutex.
+func (c *Core) startReclaim(oa *openArchive, requested bool) string {
+	return c.startOpWith("reclaim", hexID(oa.id), func(o *op) { o.requested = requested }, func(ctx context.Context, o *op) ([]FileOutcome, error) {
 		c.releaseClaim(oa) // the operation is registered: it holds the handle now
 		c.mu.Lock()
 		oa.reclaiming = false // the ops map says so from here
 		c.mu.Unlock()
 		oa.opMu.Lock()
 		defer oa.opMu.Unlock()
+		// A cancel holds the core's own run off until the user asks; a run
+		// that stopped of its own accord or failed does not.
+		cancelled := func(err error) error {
+			c.mu.Lock()
+			oa.reclaimHeld = true
+			c.mu.Unlock()
+			return err
+		}
 		if err := ctx.Err(); err != nil {
 			// A Close archive that took the handle's turn first cancelled
 			// the run before it began, as it does any operation.
-			return nil, err
+			return nil, cancelled(err)
 		}
 		c.mu.Lock()
 		if c.archives[oa.id] != oa || oa.state != "open" {
@@ -2060,11 +2334,14 @@ func (c *Core) startReclaim(oa *openArchive) string {
 		rule := c.reclaim
 		before := oa.size
 		c.mu.Unlock()
-		// Whatever ends the run — the last plan, the guard below, a cancel, a
+		// Whatever ends the run — the last plan, a guard, a cancel, a
 		// failure — the file has shrunk by what the commits so far gave back.
 		defer func() { o.returned.Store(c.returnedSoFar(oa, before)) }()
 
 		var total, moved uint64
+		budget := rule.budget
+		g := runGuard{requested: requested, share: rule.share}
+		first := true
 		o.progress(0, 0, "moving")
 		// A plan the archive has moved on from is refused whole and writes
 		// nothing (archive.ErrStalePlan): it is made again, a bounded number
@@ -2074,27 +2351,33 @@ func (c *Core) startReclaim(oa *openArchive) string {
 		stale, published := 0, 0
 		for {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, cancelled(err)
 			}
-			plan := oa.a.PlanReclaim(rule.budget)
+			plan := oa.a.PlanReclaim(budget)
+			if first {
+				first = false
+				if requested {
+					// The budget is the index's to set, which the first
+					// plan reads; the run is planned again under it, since
+					// a budget moves the placements and not only the moment
+					// (archive.PlanReclaim).
+					if b := rule.requestedBudget(plan.IndexLen); b != budget {
+						budget = b
+						plan = oa.a.PlanReclaim(budget)
+					}
+					g = g.bargain(plan)
+				}
+			}
 			if total == 0 {
 				// The whole run's bytes, not this commit's: the progress bar
 				// is the run's, and the run is what the rule weighed.
 				total = plan.RunBytesToMove
 			}
-			// The rule, measured again on the run as it now stands: what has
-			// come back so far and what this fresh plan still promises,
-			// against what the moves have cost. An estimate is an estimate —
-			// it is cut short on a long layout, and a reader that arrived
-			// since can hold the tail where it lies — so the rule is a guard
-			// over the run and not only a gate before it. Over it, the run
-			// stops where it is: not a failure, since every commit it made is
-			// committed and the archive is consistent and simply less
-			// compacted, and the next qualifying commit takes it up again
-			// (APP.md §2.3).
-			if back := c.returnedSoFar(oa, before); moved > rule.share*(back+plan.RunTailReturned) {
-				c.log("archive %s: the reclaim stopped after %d bytes moved for %d back; what is left promises %d",
-					oa.name, moved, back, plan.RunTailReturned)
+			back := c.returnedSoFar(oa, before)
+			if why := g.stop(plan, moved, back); why != "" {
+				c.log("archive %s: the reclaim stopped after %d bytes moved for %d back; what is left promises %d (%s)",
+					oa.name, moved, back, plan.RunTailReturned, why)
+				o.ended.Store(why)
 				return nil, nil
 			}
 			var rec archive.Receipt
@@ -2106,14 +2389,16 @@ func (c *Core) startReclaim(oa *openArchive) string {
 				// the empty commit that publishes the one gives back the
 				// other.
 				if published++; published > 3 {
-					c.log("archive %s: the reclaim's plan still wants a quarantined hole after %d empty commits; left for the next commit", oa.name, published-1)
+					c.log("archive %s: the reclaim's plan still wants a quarantined hole after %d empty commits; left for a later run", oa.name, published-1)
+					o.ended.Store("guard")
 					return nil, nil
 				}
 				rec, err = oa.a.Publish(ctx)
 			case len(plan.Moves) == 0:
+				o.ended.Store("finished")
 				return nil, nil
 			default:
-				batch := rule.batch(plan.Moves)
+				batch := batchWithin(plan.Moves, budget)
 				var bytes uint64
 				for _, m := range batch {
 					bytes += m.From.Len
@@ -2124,12 +2409,13 @@ func (c *Core) startReclaim(oa *openArchive) string {
 				})
 				if err == nil {
 					moved += bytes
+					o.moved.Store(moved)
 					published = 0
 				}
 			}
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					return nil, err
+					return nil, cancelled(err)
 				}
 				if errors.Is(err, archive.ErrStalePlan) && stale < 3 {
 					stale++
@@ -2138,8 +2424,71 @@ func (c *Core) startReclaim(oa *openArchive) string {
 				return nil, c.reclaimFailed(oa, err)
 			}
 			c.reclaimCommitted(oa, rec)
+			// What has come back so far, for the foot's running line.
+			o.returned.Store(c.returnedSoFar(oa, before))
 		}
 	})
+}
+
+// runGuard is the rule a run is weighed against before each of its commits
+// (startReclaim). share is the most the run may have moved for each byte
+// that has come back or is still promised; bound, for the user's run, the
+// most it may move in all when bounded is set. The two are kept apart
+// because 0 is a bound like any other: a first plan walked to its end may
+// promise only a free tail and no move at all, and a run bounded at 0
+// moves nothing — read as "no bound", that run went on to move whatever a
+// reader's end exposed after the tail came back, past the bargain the user
+// was shown (the outside audit of 2026-11-04, finding 4).
+type runGuard struct {
+	requested bool
+	share     uint64
+	bound     uint64
+	bounded   bool
+}
+
+// bargain is the guard of the user's run, set from its first plan: the
+// figures the user was shown. When that plan was walked to its end, the
+// share is the rule's or the ratio the plan promised, whichever is larger —
+// a run the user chose at nine bytes moved for one back is not stopped at
+// four — and the bound is half again what it said it would move (the
+// reclaim study's analyst, 2026-11-03). A plan cut short sets neither: its
+// figures are a floor, and the run goes on until no more space comes back
+// or the user cancels it.
+func (g runGuard) bargain(plan archive.ReclaimPlan) runGuard {
+	if !plan.RunComplete {
+		return g
+	}
+	g.bound, g.bounded = plan.RunBytesToMove+plan.RunBytesToMove/2, true
+	if back := plan.RunTailReturned; back > 0 {
+		g.share = max(g.share, (plan.RunBytesToMove+back-1)/back)
+	}
+	return g
+}
+
+// stop answers why the run stops before the commit the fresh plan stands
+// for, or "" to go on. finished: walked to its end, the run gives nothing
+// more back — the files that remain cannot move lower, or not so that the
+// tail comes back. guard: the rule measured again on the run as it now
+// stands — what has come back so far and what this plan still promises,
+// against what the moves have cost. An estimate is an estimate — it is cut
+// short on a long layout, and a reader that arrived since can hold the tail
+// where it lies — so the rule is a guard over the run and not only a gate
+// before it; the user's run is weighed only on a plan walked to its end,
+// since a figure cut short promises less than the run gives. bound: the
+// user's run has moved half again what it said it would — or, said it
+// would move nothing, and this commit would move something: half again of
+// nothing is nothing, so such a run ends with the commit that gave its
+// tail back.
+func (g runGuard) stop(plan archive.ReclaimPlan, moved, back uint64) string {
+	switch {
+	case plan.RunComplete && plan.RunTailReturned == 0:
+		return "finished"
+	case moved > g.share*(back+plan.RunTailReturned) && (!g.requested || plan.RunComplete):
+		return "guard"
+	case g.bounded && (moved > g.bound || g.bound == 0 && len(plan.Moves) > 0):
+		return "bound"
+	}
+	return ""
 }
 
 // returnedSoFar is what a run has given the file system back by now: the

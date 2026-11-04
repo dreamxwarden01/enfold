@@ -100,7 +100,8 @@ type Core struct {
 
 	// reclaim is APP.md §2.3's rule for the in-place compaction the core
 	// runs itself after a commit — 64 MiB of the tail given back, at least
-	// a quarter of what it would have to move, and 64 MiB moved per commit.
+	// a quarter of what it would have to move, 256 MiB moved at most, and
+	// 64 MiB moved per commit.
 	// It is held here rather than read from the constants so that a test
 	// can lower it: a test that had to make a 64 MiB archive would prove
 	// nothing more.
@@ -111,6 +112,11 @@ type Core struct {
 	// extractFS is where an extract touches the destination (extract.go);
 	// the zero value is the platform's own, and a test sets a stand-in.
 	extractFS extractFS
+	// diskFree answers the free space on the drive a path is on, and the
+	// drive's name, for Compact's check (ops.go compactionRoomFor); nil is
+	// the platform's own answer (diskfree_*.go), and a test sets a stand-in
+	// so that a full drive need not be made.
+	diskFree func(path string) (volume string, free uint64, err error)
 	// seams are the moments of an open and a close a test can stand in
 	// (archives.go, APP.md §14), so that an interleaving is ordered
 	// rather than raced. Nil in every build but a test's, and set before
@@ -178,7 +184,7 @@ func New(d Deps) (*Core, error) {
 		return nil, fmt.Errorf("app: DataDir is required")
 	}
 	c := &Core{deps: d, archives: map[[16]byte]*openArchive{}, opening: map[[16]byte]*opening{}, ops: map[string]*op{}, owed: map[[16]byte]owedReceipt{}}
-	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare, budget: reclaimBudget}
+	c.reclaim = reclaimRule{floor: reclaimFloor, share: reclaimShare, budget: reclaimBudget, cheap: reclaimCheap}
 	c.lockWait = lockCloseBudget
 	c.names = newNameCollator()
 	c.vault.state = StateNone

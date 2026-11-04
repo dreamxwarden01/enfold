@@ -101,6 +101,30 @@ type ReclaimPlan struct {
 	// the dry run's bound.
 	RunBytesToMove  uint64
 	RunTailReturned uint64
+	// RunComplete reports that the dry run walked the run to its end — a
+	// step with no moves and no quarantine in its way — rather than stopping
+	// at its bounds (reclaimEstimateSteps, reclaimEstimateExtents). A run cut
+	// short is answered for what was walked, which on a long or fragmented
+	// layout is often nothing back at all for gigabytes moved: the figures
+	// are then a floor and not an answer, and the page shows no in-place
+	// figure rather than a low one (APP.md §2.3, the reclaim study's ruling
+	// of 2026-11-03).
+	RunComplete bool
+	// Seq is the commit the plan was made on — the sequence the snapshot was
+	// copied at — so that a caller planning off the commit's own path can
+	// tell a plan a newer commit has overtaken.
+	Seq uint64
+	// IndexLen is the sealed index's length, tag included, as the snapshot
+	// found it: every move commit reseals it whole, which is what a budget
+	// per commit is weighed against (ops.go, the user's own run).
+	IndexLen uint64
+	// ReadersHeld reports that a Reader held an extent when the snapshot was
+	// copied: the plan left it where it lies, so its figures may be lower
+	// than the same layout gives once that reader closes. A caller keeping
+	// a figure for a refusal or for a page (ops.go planLoop) makes it again
+	// when a reader goes, rather than holding a zero a reader caused (the
+	// outside audit of 2026-11-04, finding 3).
+	ReadersHeld bool
 	// Commits is how many commits that run would take, the empty ones among
 	// them: for a log line and for a test, never for a decision. It counts
 	// the run's plans, not its writes — a caller with a budget per commit
@@ -157,7 +181,8 @@ func (a *Archive) PlanReclaim(budget uint64) ReclaimPlan {
 	if newSize < s.size {
 		plan.TailReturned = s.size - newSize
 	}
-	plan.RunBytesToMove, plan.RunTailReturned, plan.Commits = s.estimateRun(budget)
+	plan.Seq, plan.IndexLen, plan.ReadersHeld = s.seq, s.ilen, len(s.held.x) > 0
+	plan.RunBytesToMove, plan.RunTailReturned, plan.Commits, plan.RunComplete = s.estimateRun(budget)
 	return plan
 }
 
@@ -186,6 +211,7 @@ type reclaimState struct {
 	ilen     uint64   // the index and its tag, which a move does not resize
 	mapFloor uint64   // the map on disk: no step's map is taken to be smaller
 	keepMin  uint64   // the data start, or the last byte a reader holds
+	seq      uint64   // the commit the model was copied at
 }
 
 // reclaimSnapshot copies the model under a.mu, and answers nil for a handle
@@ -196,21 +222,39 @@ func (a *Archive) reclaimSnapshot() *reclaimState {
 	if a.usable() != nil {
 		return nil
 	}
+	// The committed size, not the file's length: a transaction that is open
+	// — an add or a replace on its way — has appended its ciphertext
+	// already (Tx.alloc grows a.size at once), while the index and the map
+	// copied below are still the committed ones. Planned against the
+	// length, that uncommitted data stood past every live file and was
+	// counted as a tail to give back (the outside audit of 2026-11-04,
+	// finding 2). size0 is the length at Begin; a release that truncated
+	// the file below it since is honoured too, since what is not in the
+	// file cannot come back.
+	size := a.size
+	if a.tx != nil {
+		size = min(size, a.tx.size0)
+	}
 	s := &reclaimState{
-		size:     a.size,
+		size:     size,
 		holes:    a.free.clone(),
 		retired:  a.retired.clone(),
 		held:     newSpace(nil),
 		ilen:     a.sb.IndexLen + format.TagSize,
 		mapFloor: a.sb.FreeMapLen,
 		keepMin:  format.ArchiveDataStart,
+		seq:      a.sb.Seq,
 	}
 	// What readers hold is neither a hole to fill nor a source to move, and
 	// no truncation passes it.
+	held := make([]extent, 0, len(a.held))
 	for e := range a.held {
-		s.held.union(e)
-		s.holes.removeOverlap(e)
+		held = append(held, e)
 		s.keepMin = max(s.keepMin, end(e))
+	}
+	if len(held) > 0 {
+		s.held = spaceOf(held)
+		s.holes.subtract(s.held)
 	}
 	for i := range a.index.Files {
 		r := &a.index.Files[i]
@@ -247,7 +291,6 @@ func (a *Archive) reclaimSnapshot() *reclaimState {
 // to give back.
 func (s *reclaimState) step(holes *space, budget uint64) (moves []Move, layout []source, keepEnd, newSize uint64) {
 	layout = make([]source, 0, len(s.live))
-	placed := newSpace(nil)
 	keepEnd = s.keepMin
 	var spent uint64
 	full := false
@@ -269,10 +312,17 @@ func (s *reclaimState) step(holes *space, budget uint64) (moves []Move, layout [
 			}
 		}
 		layout = append(layout, source{id: f.id, e: at})
-		placed.union(at)
 		keepEnd = max(keepEnd, end(at))
 	}
 	byOffset(layout)
+	// The layout as a set, built once from the sorted layout: a union per
+	// file made the step quadratic in the files (space.union until
+	// 2026-11-03).
+	placedAt := make([]extent, len(layout))
+	for i := range layout {
+		placedAt[i] = layout[i].e
+	}
+	placed := spaceOf(placedAt)
 	return moves, layout, keepEnd, keepEnd + s.ilen + max(mapLenBelow(keepEnd, placed), s.mapFloor)
 }
 
@@ -319,7 +369,13 @@ const (
 // A freed, and the files between move after all. The unbudgeted figure is
 // then not on the low side at all, and the caller's worth rule rests on it
 // (the outside review of 2026-09-10, finding 1).
-func (s *reclaimState) estimateRun(budget uint64) (moved, returned uint64, commits int) {
+//
+// complete is whether the walk reached the run's end. A walk stopped by its
+// bounds answers for what it saw and says so, since what it saw is a floor:
+// the layout of 10 000 files of 4 MiB with every tenth deleted is cut short
+// with 3.7 GB moved and nothing back, and the whole run gives about 4 GB
+// back (the reclaim study's analyst, 2026-11-03).
+func (s *reclaimState) estimateRun(budget uint64) (moved, returned uint64, commits int, complete bool) {
 	run := *s
 	run.live = append([]source(nil), s.live...)
 	// What may be allocated now, and what R31 holds back for one commit.
@@ -349,13 +405,14 @@ func (s *reclaimState) estimateRun(budget uint64) (moved, returned uint64, commi
 			_, _, keepEnd, newSize = run.step(newSpace(nil), budget)
 			avail, pending = avail.merged(pending), newSpace(nil)
 		case len(moves) == 0:
-			return moved, returned, commits
+			return moved, returned, commits, true
 		default:
-			freed := newSpace(nil)
-			for _, m := range moves {
+			from := make([]extent, len(moves))
+			for i, m := range moves {
 				moved += m.From.Len
-				freed.union(m.From)
+				from[i] = m.From
 			}
+			freed := spaceOf(from)
 			// The holes the moves did not spend, the quarantine of the step
 			// before spent with this commit; what this one freed waits.
 			run.live, avail, pending = layout, holes, freed
@@ -371,7 +428,7 @@ func (s *reclaimState) estimateRun(budget uint64) (moved, returned uint64, commi
 			pending.removeOverlap(above)
 		}
 	}
-	return moved, returned, commits
+	return moved, returned, commits, false
 }
 
 // mapLenBelow is the encoded size of a free map of the holes under limit —
@@ -397,16 +454,17 @@ func mapLenBelow(limit uint64, live *space) uint64 {
 // tail. Caller holds a.mu.
 func (a *Archive) followUpAt(index *format.Index, ilen uint64) extent {
 	keepEnd := uint64(format.ArchiveDataStart)
-	live := newSpace(nil)
+	exts := make([]extent, 0, len(index.Files))
 	for i := range index.Files {
 		r := &index.Files[i]
 		if r.State != format.FileLive || r.StoredSize == 0 {
 			continue
 		}
 		e := extent{Off: r.DataOff, Len: r.StoredSize}
-		live.union(e)
+		exts = append(exts, e)
 		keepEnd = max(keepEnd, end(e))
 	}
+	live := spaceOf(exts)
 	for e := range a.held {
 		keepEnd = max(keepEnd, end(e))
 	}

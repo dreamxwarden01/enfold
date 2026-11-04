@@ -524,10 +524,17 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeOpRunning]: "An operation is still writing the vault. Wait for it to finish.",
   // The cap cannot be extended (APP.md §2.2): the way out is a fresh session.
   [Code.CodeTooSlow]: "This would not finish before the session ends. Lock and unlock to start a fresh session, then try again.",
-  // A move commit of the reclaim the core runs after an edit failed: the
-  // edit itself is saved, and the next qualifying commit takes the run up
+  // A move commit of a reclaim failed — the core's own after an edit, or
+  // the user's *Reclaim space*: the edit itself is saved, a cheap run is
+  // taken up by a later commit and a larger one waits for *Reclaim space*
   // again (APP.md §2.3). Never "the edit failed".
   [Code.CodeReclaimIncomplete]: "Saved. Reclaiming space did not finish.",
+  // *Reclaim space* when the last whole plan says no move gives anything
+  // back (APP.md §2.3): what unused space there is, only Compact reaches.
+  [Code.CodeNothingToReclaim]: "Moving files would give no space back. Only Compact reaches the unused space that is left.",
+  // Compact refused before it writes (ruled 2026-11-04). The dialog says it
+  // with the figures the error carries; this is the line without them.
+  [Code.CodeCompactNoSpace]: "There is not enough free space on the drive for the compacted copy.",
   // The two refusals of a destination (APP.md §3, ruled 2026-09-10): the
   // final name refused on placement, where a shorter one may do, and the
   // folder's path, where no name helps. The page asks per record in its
@@ -723,8 +730,9 @@ export function typePlural(label: string): string {
 export const paneCopy = {
   // An empty folder is "0 items", with no size beside it to say.
   figures: (n: number, total: number | null): string => (total === null || n === 0 ? plural(n, "item") : `${plural(n, "item")} · ${bytes(total)}`),
-  // After the Unused space figure, when the strip would show it too
-  // (lib/status.ts freeWorthShowing): Compact is the Archives page's.
+  // After the Unused space figure, when only a whole-file Compact reaches
+  // the unused space (the pane's row, SpaceBar.svelte spaceRow): Compact
+  // is the Archives page's.
   compactHint: "(Compact to reclaim)",
   noPreview: (name: string): string => {
     const label = typeLabel(name, false);
@@ -798,11 +806,64 @@ export const railCopy = {
 // reclaimedText is what a finished *Reclaiming space* says: the bytes the
 // file system got back — the archive's own shrinking (OpView.Returned) —
 // said apart from the bytes the run moved, since the two are never the same
-// figure (APP.md §2.3). Its caller decides when there is anything to say
-// (ops.ts reclaimedLine).
-export function reclaimedText(returned: number): string {
-  return `Reclaimed ${bytes(returned)}`;
+// figure (APP.md §2.3), and the archive, since the run may be the core's
+// own and the foot is on another page: "Reclaimed 2.9 GB in Photos 2024".
+// Its caller decides when there is anything to say (lib/foot.ts doneLine).
+export function reclaimedText(returned: number, archive = ""): string {
+  return `Reclaimed ${bytes(returned)}${archive ? ` in ${archive}` : ""}`;
 }
+
+// The unused space inside an archive's file and the two ways to give it
+// back (APP.md §6, *Unused space*; the reclaim study's ruling of
+// 2026-11-03): the Details dialog's block, the Archive page's row and the
+// Archives page's panel. The space inside the file is never "free", which
+// names only the disk's (ruled 2026-10-14); every figure is bytes()'s,
+// handed in already written. The words are SpaceBar.svelte's to choose
+// between (spaceBlock, spaceRow, panelLine).
+export const spaceCopy = {
+  title: "Unused space",
+  // The share at the head's right: "6 % unused", "<1 % unused".
+  share: (pct: string): string => `${pct} unused`,
+  // The block's one line: the unused figure strong, then the rest.
+  unusedOf: (size: string): string => ` unused of ${size}`,
+  allBack: " · Reclaim space gives all of it back",
+  someBack: (back: string): string => ` · Reclaim space gives back ${back}; only Compact reaches the rest`,
+  // All of it is space a move cannot give back (a file larger than every
+  // hole before it): Compact alone reaches it.
+  noneBack: " · only Compact reaches it",
+  underFloor: (size: string): string => `No unused space worth reclaiming · ${size}`,
+  closed: "Open the archive to see its unused space.",
+  // The legend: only the segments the bar draws. The unsplit segment of a
+  // figure cut short or not planned yet is the unused space as a whole,
+  // since what a run would give back is not known.
+  legend: { live: "Archive data", back: "Reclaim gives back", only: "Only Compact reaches", unsplit: "Unused" },
+  reclaim: "Reclaim space",
+  reclaimHint: (move: string): string => `Moves about ${move} inside the file. Adding and extracting wait until it ends; you can cancel it.`,
+  reclaimHintOpen: "Moves files inside the archive until no more space comes back. You can cancel it.",
+  nothingToReclaim: "Nothing to reclaim",
+  nothingBack: "Moving files would give nothing back",
+  // Compact's hint: the core's figure (ArchiveStat.CompactNeeds, about
+  // Size less FreeSpace) and the archive's drive; a closed archive has no
+  // figure, so the file's size bounds it.
+  compactHint: (needs: string, volume: string): string => `Rewrites the whole file; needs about ${needs} free on ${volume}`,
+  compactHintClosed: (size: string, volume: string): string => `Rewrites the whole file; needs up to ${size} free on ${volume}`,
+  // A drive the path does not name (a mount folder, another system's).
+  itsDrive: "its drive",
+  // The run, in the block: what it has moved of what it set out to, and
+  // what has come back.
+  running: (moved: string, total: string, back: string): string =>
+    `Reclaiming space · ${total ? `${moved} of ${total}` : moved} moved · ${back} back so far`,
+  // The pane's row and the panel's open facts: the link's title, and the
+  // line in its place while a run goes on.
+  linkTitle: (move: string): string => `Moves about ${move} inside the file`,
+  // The link's title while the figure is pending or cut short: what the
+  // run does, since how much it moves is not known (the judge's P1 table).
+  linkTitleOpen: "Moves files inside the archive until no more space comes back",
+  rowRunning: (back: string): string => `Reclaiming · ${back} back so far`,
+  // The panel's collapsed line, after the name.
+  reclaimable: (back: string): string => `${back} reclaimable`,
+  panelRunning: "Reclaiming space",
+};
 
 // The drag out of the window in the layer's foot (APP.md §3, ruled
 // 2026-09-11 after the first real drag; the foot since direction 4):
@@ -899,7 +960,12 @@ export const doneCopy = {
   stoppedAdd: (archive: string): string => `Stopped. Nothing was added${archive ? ` to ${archive}` : ""}`,
   stoppedReplace: (archive: string): string => `Stopped. Nothing was replaced${archive ? ` in ${archive}` : ""}`,
   stoppedRefresh: (archive: string): string => `Stopped. The fingerprint${archive ? ` of ${archive}` : ""} was not refreshed`,
-  stoppedReclaim: (archive: string): string => `Stopped. Reclaiming space${archive ? ` in ${archive}` : ""} did not finish`,
+  // A reclaim keeps every commit it made (APP.md §2.3), so its stop says
+  // what came back; nothing back says nothing more.
+  stoppedReclaim: (archive: string, back: string): string => `Stopped reclaiming space${archive ? ` in ${archive}` : ""}${back ? ` · ${back} given back` : ""}`,
+  // The user's *Reclaim space* that gave nothing back (APP.md §2.3): it
+  // always says what came back, nothing included.
+  reclaimedNone: (archive: string): string => `Reclaimed no space${archive ? ` in ${archive}` : ""}: the files that remain cannot move lower`,
   stoppedOther: (archive: string): string => `Stopped. ${archive || "The archive"} is as it was`,
 };
 
@@ -1369,6 +1435,9 @@ export const archivesCopy = {
     // the end (APP.md §2.3), so the delete, which stops what it can first,
     // cannot stop this one.
     rekeying: "Wait until its re-key ends",
+    // *Compact…* while a reclaim of the archive runs (lib/archcmds.ts):
+    // both runs grey the commands in 1.0 (ruled 2026-11-04).
+    reclaiming: "Wait until reclaiming space ends",
     // *Show in Explorer* on a record whose last path is another system's
     // (lib/paths.ts foreignPath): this machine has no such place to show.
     foreign: "Last seen on another system",
@@ -1784,6 +1853,14 @@ export const dialogCopy = {
   compact: {
     title: (name: string): string => `Compact ${name}?`,
     body: "Rewrites the file to give back its unused space; the files inside do not change, and a big archive takes a while. It runs to the end once started.",
+    // What the fresh copy needs on the drive (ArchiveStat.CompactNeeds),
+    // said before the press for an open archive (ruled 2026-11-04).
+    needs: (needs: string, volume: string): string => `It needs about ${needs} free on ${volume} while it runs.`,
+    // archive.compact_no_space, with the error's figures: the dialog
+    // stays up and says it, nothing written, in place of the note above
+    // (ArchivesPage drops the note once refused, so the need is said once).
+    noSpace: (needed: string, free: string, volume: string): string =>
+      `Only ${free} is free on ${volume} and Compact needs about ${needed}. Make room on the drive, then try again.`,
     primary: "Compact archive",
   },
   // Registry first, then the file (FORMAT.md R33).

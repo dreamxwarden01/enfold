@@ -547,17 +547,35 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   ruled 2026-09-10): a cancelled add's appended bytes are truncated at `Abort` (the archive
   layer's rule); a commit that frees the tail of the file is followed at once by a second, empty
   commit that truncates it — R31's quarantine lasts one commit, and that commit is this one, so
-  the losing superblock never points past the end of the file; and after any commit — and when the last reader holding an extent closes — the core plans a
-  *Reclaiming space* run, FORMAT R40's in-place compaction. An add's checkpoints are the
+  the losing superblock never points past the end of the file; and after any commit — and when the last reader holding an extent closes (or any reader, while the figure is a zero made with readers holding extents on an archive with unused space: that zero may be the reader's doing; the outside audit of 2026-11-04), when an operation ends and when the archive is opened — the core plans a
+  *Reclaiming space* run, FORMAT R40's in-place compaction. The plan is made **off the commit's own call**
+  (ruled 2026-11-03; it ran on the edit's path under the handle's turn until then, and a delete on a fragmented archive stalled for
+  seconds behind it): the snapshot is copied under the archive's own mutex as before and the dry run walks on a goroutine of
+  its own, one plan at a time per archive, a newer trigger superseding the plan in hand, which is dropped and made again. Its
+  figures are kept on the open archive, never in the registry, and shown: `ArchiveStat.Reclaim` and `ArchiveSummary.Reclaim`
+  (§3) — what the whole run would give back, what it would move, whether the dry run walked it to its end (a run longer than the
+  walk's bounds is answered for what was walked, which is a floor, and the page then shows no in-place figure rather than a low
+  one), and the change it was made at — announced by `archives.changed`. A closed archive has none; what only *Compact* reaches
+  is `FreeSpace` less what the run gives back. An add's checkpoints are the
   exception: the add still runs and holds the archive's turn, so the run is planned by its final
   commit, or by the operation's end when nothing was left to commit after the last checkpoint. The plan is made on the free map in
   memory first: live extents in offset order, each into the earliest published hole wholly
   before it that holds it, a file no hole before it holds skipped, an extent a reader holds left
-  where it lies for this run. The run happens only when the whole run — the plan dry-run commit by commit in memory, a
+  where it lies for this run. The core starts the run by itself only when the whole run — the plan dry-run commit by commit in memory, a
   source one commit frees becoming a hole for the commits after the next (R31's quarantine), so
   that deleting the first of three equal files counts the two moves it takes and not the one
-  the first commit can make — would give the file system back **64 MiB or more** of the tail and that is at least a quarter
-  of what it would have to move; the dry run takes the same budgeted steps the run will, since a
+  the first commit can make — was walked to its end, would give the file system back **64 MiB or more** of the tail, is at least a quarter
+  of what it would have to move, and moves **256 MiB at most** (the owner's softening, 2026-11-03: under a second on an SSD,
+  half a minute on a slow disk at worst; the quarter is then implied, and kept); a free tail with nothing to move stays
+  automatic. A larger run waits for the user's **Reclaim space** (`ReclaimSpace`, §3), which the page offers beside the figures:
+  the same operation with `Requested` set, for an archive that is open — it opens nothing by itself — refused only when the
+  last whole plan at the archive's current state says nothing comes back (`archive.nothing_to_reclaim`), with no worth gate,
+  a budget per commit of 64 MiB or eight times the sealed index when that is more (so the reseal each commit makes stays at or
+  under an eighth of the work), its guard's share the rule's or the ratio its first whole plan promised, whichever is larger,
+  and a stop once it has moved half again what that plan said it would (a whole first plan that promised a tail and no move bounds the run at
+  nothing moved: it gives the tail back and stops before any move, the outside audit of 2026-11-04); a first plan cut short sets neither, and the run goes
+  on until no more space comes back or the user cancels. Both runs grey the commands as before (ruled for 1.0, 2026-11-04);
+  the operation keeps `Requested` so a later ruling can let the core's own run yield. The dry run takes the same budgeted steps the run will, since a
   budget changes which holes coalesce and so which files move, and the run itself stops, as a
   run cut short and not as a failure, if what it has moved ever exceeds four times what has come
   back and what the fresh plan still promises (the outside review of the implementation) — the floor measures bytes returned, not the size of any hole, since a hole filled
@@ -572,13 +590,16 @@ Closed ──Open──▶ Open ──operation──▶ Busy ──commit / abo
   publishing one, places its own index outside the run that follow-up will cut, appending it
   if no other hole holds it, so what comes back is never less than the plan promised (the
   adversarial proof of 2026-09-10). Progress is by bytes moved, and what came back is said
-  separately, as `OpView.Returned` (§3) in the foot's done line ("Reclaimed 1.2 GB"; a run that
-  gave nothing back says nothing, since the run was the core's own — §6, *The foot*; it was a
-  toast until 2026-10-18); a cancel is honoured at any chunk of the copy — an aborted
+  separately, as `OpView.Returned` (§3) in the foot's done line ("Reclaimed 1.2 GB in Photos 2024"; a run of the core's own that
+  gave nothing back says nothing — §6, *The foot*; it was a
+  toast until 2026-10-18 — while the user's run always says what came back, nothing included: "Reclaimed no space in Photos
+  2024: the files that remain cannot move lower"); `Returned` and `Moved` are kept current after every commit, so the foot can
+  say what has come back so far, and `Ended` says why a run stopped that was neither cancelled nor failed; a cancel is honoured at any chunk of the copy — an aborted
   commit leaves the originals live and its copies in free space — and *Force close* (the kill
-  switch, below) cancels it too, the archive consistent and simply less compacted, the run
-  resumed by the next
-  qualifying commit. A reclaim that fails after the user's own edit committed reports the edit
+  switch, below) cancels it too, the archive consistent and simply less compacted, and **nothing takes the run up
+  by itself** (ruled 2026-11-03; the next qualifying commit resumed it until then): on that handle the next commit only makes
+  the figures again, until the user asks for *Reclaim space* or the archive is opened again; a run the guard stopped is not
+  held, and the next qualifying commit may start one. A reclaim that fails after the user's own edit committed reports the edit
   saved and the reclaim incomplete, never the edit failed; a move commit's own metadata may
   leave the file larger for a moment (the free map is always appended), which the follow-up
   commit takes back. The whole-file *Compact* stays on the Archives page for what a move cannot
@@ -758,7 +779,13 @@ which takes it to the tray and destroys it, §2.4 — calls `LeaveAll` in the sh
   state without touching the handle; progress is coalesced to ~10 Hz; any return from `Compact`
   means the handle is finished: `Close`, reopen the path, decide from the file (the new hash and
   size go to the registry with `HashAtSeq = LastSeq`). Compact is refused when the estimate
-  (live bytes over measured throughput) does not fit before the absolute cap. **A compaction
+  (live bytes over measured throughput) does not fit before the absolute cap, and — before it writes a byte (ruled 2026-11-04)
+  — when the drive the archive is on has less free than the fresh copy needs, about `Size − FreeSpace`
+  (`ArchiveStat.CompactNeeds`): `archive.compact_no_space`, the error carrying `Needed`, `Free` and `Volume` so the dialog can
+  say "Only 12 GB is free on D: and Compact needs about 45 GB". The drive is measured again, against the committed size, once the
+  operation has the handle and before the fresh file is created, since an add that held the handle meanwhile can have grown the
+  archive past the room (the outside audit of 2026-11-04): that refusal is the operation's outcome (`OpView.Error`
+  `archive.compact_no_space`, the archive left open as it was). A drive that cannot be measured is not refused on a guess. **A compaction
   says what it gave back** (ruled 2026-10-18; only a reclaim did): its `OpView.Returned` (§3) is
   the file's size as the compaction started less the fresh file's, recorded once the fresh
   file's receipt is and before the reopen, so a reopen that fails does not lose it — 0 for a
@@ -1025,7 +1052,7 @@ one way. The root is a directory only where a directory is *named* — `Page`'s 
 `params`, so the root is never renamed, moved, previewed or tombstoned. An id that is not 32 hex
 digits is `params`. A well-formed id that names nothing live in the merged view, or names a file
 where a directory is wanted, is `file.not_found`, and no call ever falls back to the root when an
-id does not resolve. Times are Unix seconds; sizes are `uint64`. **Every service method returns `*app.Error`** — `{Code, Retries?, Slot?, Path?}` (`Path` only with `archive.open_elsewhere`, §14: the file the archive is open from)
+id does not resolve. Times are Unix seconds; sizes are `uint64`. **Every service method returns `*app.Error`** — `{Code, Retries?, Slot?, Path?, Needed?, Free?, Volume?}` (`Path` only with `archive.open_elsewhere`, §14: the file the archive is open from; `Needed`, `Free` and `Volume` only with `archive.compact_no_space`, §2.3: the bytes the fresh copy needs, the bytes free on the drive — sent even when 0 — and the drive as Windows names it)
 whose `Error()` is the code and nothing else, produced by one `classify(err)` over every
 sentinel of every package with a catch-all `internal` — and services are registered with a
 `MarshalError` that emits only that shape; the original error goes to the core-side log.
@@ -1116,7 +1143,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
 - `List(showHidden) []ArchiveSummary{ID, Name, Description, Path, StoredSize, LastWrittenAt,
   KeyVersion, Open, Dirty, ReceiptOwed, NoCompression, ForgottenAt, Note Code}` — hidden and
   forgotten records are filtered unless `showHidden`. `Open(id)`, `Leave(id)` (the graceful leave — *Close*, the rail's ×, another archive opened: close, or wait for its own operation, or drain while a body is in flight, §2.3), `Close(id)` (the kill switch, *Force close*), `Create(path,
-  name, noCompression)`, `Hide(id)`, `Unhide(id)`, `Locate(id, newPath)`, `Compact(id) opID`,
+  name, noCompression)`, `Hide(id)`, `Unhide(id)`, `Locate(id, newPath)`, `Compact(id) opID` (§2.3: `archive.compact_no_space`, with `Needed`, `Free` and `Volume`, when the drive has less free than the fresh copy needs), `ReclaimSpace(id) opID` (§2.3:
+  the user's in-place run for an open archive — `archive.not_open` when it is not, `archive.nothing_to_reclaim` when its last
+  whole plan says nothing comes back, `archive.busy` while a reclaim of it is registered),
   `RotateKey(id) opID`, `Verify(id) opID`, `CloseAll()`, `OpenPath(path) OpenPathResult{ArchiveID, Relocated}` (§14: the archive whose envelope's `archive_id` names a record is opened as a double-click would, its `last_path` moved to this path when it differs — the same write as `Locate` — with `archive.key_not_in_vault` when no record has the id, `archive.not_an_archive` when the file is not one or is not there, `needs_unlock` while the vault is Locked) — `Create(path, name, method)` takes the
   compression method, `store` · `fastest` · `normal` · `better` · `best`, written into the
   record's policy (FORMAT §7.1 bits 2–5) and applied to every later open of the archive on any
@@ -1129,7 +1158,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   ended, with what the pass measured and what it found), where
   Forget and Delete — the registry record holds the only copy of the archive keys, so dropping
   it destroys the archive — are specified with their brakes.
-- Events: `archives.changed`, `op.progress {OpID, Done, Total, Phase}`, `op.done {OpID, Error,
+  `ArchiveSummary` carries, for an open archive only, `Reclaim *ReclaimView{Back, Move, Complete, AtSeq}` — the last dry run
+  of the in-place run (§2.3), nil until one has landed and for a closed archive — and `CompactNeeds`, what a *Compact* needs
+  free on the drive.
+- Events: `archives.changed` (also when a plan's figures land, §2.3), `op.progress {OpID, Done, Total, Phase}`, `op.done {OpID, Error,
   Results []FileOutcome}`.
 
 **Archive** (an open one)
@@ -1168,7 +1200,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   went. A live directory with nothing in it is not that case — it answers zero rows with `Total`
   zero, which is what an empty folder is. `Compact` and `RotateKey` change no id (FORMAT R33),
   so a reopen leaves the page where it was.
-  `Stat(id) ArchiveStat`.
+  `Stat(id) ArchiveStat`. `ArchiveStat.Reclaim` is the same `ReclaimView` as the list's: `Back` the bytes the whole run would
+  give the file system back, `Move` the ciphertext it would copy, `Complete` whether the dry run walked it to its end, `AtSeq`
+  the `Seq` the plan was made at — a figure behind `Seq` is pending, and the page keeps the last whole one meanwhile;
+  `ArchiveStat.CompactNeeds` is `Size − FreeSpace`, what *Compact*'s fresh copy needs free beside the archive (§2.3).
 - `CreateFolder(id, parentID, name) recordID` commits a directory record at once (empty is fine —
   it is a record, FORMAT R39, its name validated and matched like any other's); `AddFiles(id, parentID,
   paths, policy) opID`, `AddFolder(id, parentID, path, policy) opID` — every directory the walk
@@ -1519,8 +1554,13 @@ sentinel of every package with a catch-all `internal` — and services are regis
   compaction gave the file system back once it ended: the file's size before less its size
   after, never the bytes moved or written; 0 for every other kind, for a run that ended before
   its first commit, for a compaction that failed and for one whose file did not come out smaller
-  (§2.3). The done line says it ("Reclaimed 1.2 GB", "Compacted Photos 2024: 2.9 GB given
-  back").
+  (§2.3). The done line says it ("Reclaimed 1.2 GB in Photos 2024", "Compacted Photos 2024: 2.9 GB given
+  back"). A reclaim's `Returned` is kept current after each of its commits, and it carries `Requested` (the user's
+  `ReclaimSpace` run, false for the core's own), `Moved` (the ciphertext its commits have moved) and `Ended` — `finished`,
+  nothing more can move lower; `guard`, the fresh plan no longer promised enough for what the moves cost; `bound`, the user's
+  run moved half again what its plan said — empty for a cancel or a failure, which `Error` says: the inputs of "Reclaimed 2.9 GB
+  in Photos 2024", "Stopped reclaiming space in Photos 2024 · 1.1 GB given back" and "Reclaimed no space in Photos 2024: the
+  files that remain cannot move lower".
   Progress is by **bytes**, not by file: an add, a replace and an extract count the bytes read of the file in hand, so a single
   large file moves the bar (at most ten events a second, as before); `Done`/`Total` are plaintext
   bytes. `ArchiveStat` loses `Dirty`, `CapAt` and `SessionAlive` and gains `Records` (live files
@@ -2212,7 +2252,13 @@ nothing is selected → the line is the vault's summary, the chevron dim, and a
 click does nothing: the panel opens only on a selected row, its motion being built around one.
 The panel's header row carries the row's two actions, [Details…] [More ▾], and its
 body is two columns — the facts; the file with the name and description — and one column under
-520 px of body. The body is `inert` from the first frame of a collapse, and a focus inside it goes to
+520 px of body. For an open archive the facts carry *Unused space* under *Size*, the Archive
+page's row (*Unused space*, below) with its *Reclaim space* link; a closed archive has no figure
+there, since the figure needs the index, and says nothing of it, never "0 B". The collapsed line
+says after the name, in the caption type and the second ink, "2.9 GB reclaimable" when the last
+whole plan gives back 64 MiB or more in place, "Reclaiming space" while a reclaim of it runs, and
+nothing otherwise — no bar there, where a 6 % share would be a dot (the reclaim study's ruling of
+2026-11-03). The body is `inert` from the first frame of a collapse, and a focus inside it goes to
 the header. The list is reconciled, not left behind: a sort, a filter or a refresh that moves
 the selected row while the panel is up brings it clear of the edge again, as a click does (a row
 the filter took out of the list leaves the panel open at its height, nothing to push); a resize
@@ -2255,7 +2301,16 @@ forgotten record and on an archive being compacted — a running Compact of it, 
 `compacting` state — and Hide on a forgotten one, and a double-click or Enter on such a row
 does nothing; on an archive being compacted Close, Forget archive… and Delete archive… are greyed
 too, with the same words, since the close they need is refused while a compaction runs; a
-menu says each reason in a few words under its item (§6, *Menus*); the bar's Open is the one
+menu says each reason in a few words under its item (§6, *Menus*); *Compact…* is greyed too while
+a reclaim of the archive runs, the user's or the core's own, "Reclaiming space… wait for it to
+end" on the bar and "Wait until reclaiming space ends" under the menu's item — both runs grey the
+commands in 1.0 (ruled 2026-11-04) — while *Delete archive…* stays live and stops the run first;
+*Compact…*'s confirm says, for an open archive, what the fresh copy needs ("It needs about 45 GB
+free on D: while it runs.", `ArchiveStat.CompactNeeds` and the path's drive) and stays up through
+the call, so a refusal for room (`archive.compact_no_space`) is said in it with both figures, in
+the need's place so that it is said once — "Only 12 GB is free on D: and Compact needs about
+45 GB. Make room on the drive, then try again." — nothing written, and the dialog left for a
+second try; the bar's Open is the one
 accent and the pane has no second Open (ruled 2026-10-18);
 a vault with no records at all, hidden and forgotten ones included, shows the 72 px open box
 (*Identity*, above; ruled 2026-11-01, it was the 20 px Archives glyph) over "No archives in
@@ -2392,9 +2447,26 @@ hidden, the list takes the whole width. **At rest**, nothing selected: the folde
 section size (the root by the archive's name) and its count, "3 items · 9.3 KB" — the bytes
 only once every row of the folder is loaded, the count alone while it pages, "0 items" for an
 empty folder (`lib/archpane.ts`); under a stroke the archive's facts as a label · value list,
-*Size*, *Last saved*, *Unused space* — with "(Compact to reclaim)" after the figure, kept whole
-on its own line when it does not fit, whenever the figure is worth showing
-(`lib/status.ts` `freeWorthShowing`) — and *Compression* (the method's word); then a standard
+*Size*, *Last saved*, *Unused space* and *Compression* (the method's word). **Unused space** (the
+reclaim study's ruling of 2026-11-03, its placement P1; `SpaceBar.svelte` `spaceRow`) is the
+figure with its share of the file at the right in the caption type and the second ink ("6 %",
+"<1 %" below one percent), the 4 px bar under them (`SpaceBar`, below), then one line: the hyperlink
+button *Reclaim space*, titled "Moves about 11 GB inside the file", when the last whole plan
+gives back 64 MiB or more in place; today's "(Compact to reclaim)" when only Compact reaches the
+unused space; "Reclaiming · 1.1 GB back so far" while a reclaim of the archive runs; and, while
+the figure is pending or the plan was cut short (`ArchiveStat.Reclaim` nil, or not `Complete`),
+*Reclaim space* titled "Moves files inside the archive until no more space comes back", as the
+Details dialog offers it, over a bar that draws the unused space as plain track rather than the
+accent fill — the row has no legend, and the page shows no in-place figure rather than a low one
+(the judge's P1 table and risk 1). The link is greyed with the busy reason while another
+operation holds the archive, and by nothing of the vault's: changes off freezes the vault file,
+and a reclaim commits to the archive's file alone, as an add or a delete does (§2.3, *Tampered
+is a state*), so neither this row, the Archives page's panel nor the Details dialog greys it then. Below the floor (64 MiB, `lib/status.ts`
+`freeWorthShowing`) the row is the figure alone, as before: no bar and no link, the control hidden
+there and never greyed, so the pane's frame looks the same whenever nothing can be given back
+(the owner's ruling of 2026-11-04). The figure is the list row's (`ArchiveSummary.Reclaim`, which
+`archives.changed` refreshes as a plan lands) when it is fresher than the Stat's, and a plan made
+before the last change is kept until the next lands, so nothing flickers. Then a standard
 *Extract…* that opens the extract dialog on *Everything*, greyed as the toolbar's while the
 archive holds no record. **Several selected**: "4 items · 830 MB" (the bytes only when every
 selected id is a loaded row) and the pane's one accent, *Extract 4 items…*, the dialog on the
@@ -2498,6 +2570,49 @@ vault** and that the user then brought in through the key-not-in-vault dialog's 
 archives from a backup…* is opened once a merge succeeds and its dialog closes (ruled
 2026-10-18, direction 3; it was left unopened), and forgotten by a picker or a merge dialog
 closed without a merge, a lock, or any newer open).
+
+**Unused space** (the reclaim study's ruling of 2026-11-03, its placements D and P1 and the
+Archives panel; the owner's rulings of 2026-11-04; `SpaceBar.svelte`). One bar for the three
+places: a flex row of one segment per kind with a 1 px gap of the surface it stands on and
+rounded ends — the archive's data in the strong stroke (`--stroke-strong`), what *Reclaim space*
+gives back in the accent (at least 3 px), and what only a whole-file *Compact* reaches
+(`FreeSpace` less `Back`, drawn from 64 MiB, a smaller remainder folded into the accent) in
+accent stripes at 135° — 1.5 px on, 2.5 px off inside a 1 px accent edge — where the bar is 8 px
+tall (the Details dialog), plain track at 4 px elsewhere, where stripes blur. A plan cut short or
+not made yet draws its unused space unsplit. Never red, and no width animation: it is redrawn
+when the status refreshes. It is `aria-hidden`, since the words beside it say it; in a contrast
+theme it alone opts out of forcing — an empty Canvas track inside a CanvasText frame, what comes
+back in Highlight, the stripes Highlight over the Canvas (14.37:1 and 15.13:1). The share is
+`FreeSpace` over the size in whole percent, "<1 %" below one, and every figure goes through
+`bytes()`; the space inside the file is never "free", which names the disk's alone. **The Details
+dialog's block** *Unused space* stands under the description and above the IDs, a surface-alt
+card that is the first thing the dialog's scroll shows at 866 × 554: the head with the share at
+its right ("6 % unused"), the 8 px bar, one line, a legend of the segments drawn (*Archive data*
+· *Reclaim gives back* · *Only Compact reaches*, or *Unused* for an unsplit one), then two rows,
+each a standard button with its hint beside it linked by `aria-describedby` — *Reclaim space*
+(the user's run, `ReclaimSpace`) and *Compact…*, which opens the Archives page's own confirm over
+the dialog. Close keeps the dialog's accent and Enter (the owner's ruling of 2026-11-04), so
+Enter never starts a run that moves gigabytes. Its states: a closed archive, "Open the archive to
+see its unused space." and *Compact…* alone, "Rewrites the whole file; needs up to 48 GB free on
+D:" (the file's size bounds it); under the floor, "No unused space worth reclaiming · 48 GB" and
+*Reclaim space* greyed, "Nothing to reclaim"; reclaimable, "**2.9 GB** unused of 48 GB · Reclaim
+space gives all of it back", or, split, "**3.1 GB** unused of 8.3 GB · Reclaim space gives back
+1.2 GB; only Compact reaches the rest", the hint "Moves about 11 GB inside the file. Adding and
+extracting wait until it ends; you can cancel it."; only Compact's, "**2.9 GB** unused of 48 GB ·
+only Compact reaches it" and *Reclaim space* greyed, "Moving files would give nothing back"; a
+plan cut short or not made yet, "**2.9 GB** unused of 48 GB" with no in-place figure and
+*Reclaim space* live, "Moves files inside the archive until no more space comes back. You can
+cancel it."; a reclaim running, the user's or the core's own, *Cancel* in *Reclaim space*'s place
+with a progress line (`.fprog`) and "Reclaiming space · 4.5 GB of 11 GB moved · 1.1 GB back so
+far", *Compact…* greyed with "Reclaiming space… wait for it to end"; after a cancel, reclaimable
+again, nothing taking the run up by itself; a compaction running, both greyed with "Compacting…
+wait for it to end" and the last figures kept until the reopen refreshes them (opened while
+one already runs, with no figure kept, the block says nothing of a closed archive: no bar, no
+line, *Compact…* greyed with that reason); another
+operation, both greyed with its reason. *Compact…*'s hint is "Rewrites the whole file; needs
+about 45 GB free on D:", the core's figure (`ArchiveStat.CompactNeeds`, about `Size − FreeSpace`)
+and the drive the path names ("its drive" when it names none). The bar's accent stands beside
+the surface's accent button, Close here and *Extract…* in the pane, as `.fprog`'s does.
 
 **The Archive page's menus** (ruled 2026-10-26, phase 4b of the design review's direction 7,
 Explorer's habits; `lib/filemenu.ts`; the menu is the app's own, §6 *Menus*). A right-click on
@@ -2954,7 +3069,9 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   some were left out; "Added 2 files to Photos 2024", "Added 2 of 4 files to Photos 2024"
   [*Details*], "Added 1 folder to …" when only folders were made (folders made along the way are
   never counted as files), "Replaced 1 file in …"; "Compacted Photos 2024: 2.9 GB given back"
-  (§2.3); "Reclaimed 1.2 GB", said only when something came back; "Fingerprint refreshed for
+  (§2.3); "Reclaimed 2.9 GB in Photos 2024", said for the core's own run only when something came
+  back, and for the user's *Reclaim space* always — "Reclaimed no space in Photos 2024: the files
+  that remain cannot move lower" when nothing did; "Fingerprint refreshed for
   Photos 2024"; "Re-keyed Photos 2024"; "4 items left Enfold as ordinary files" for a drag out
   that moved or copied. A user's stop, neutral: "Stopped. 6 of 15 files were written to …"
   [*Show in Explorer*] or "Stopped. Nothing was written"; "Stopped. 6 of 20 files were added to
@@ -2964,7 +3081,9 @@ strip; a greyed one keeps its shape", is kept by a slot that never reflows at al
   skipped or failed; §2.3), "Stopped. Nothing was added to Photos 2024" for one that committed
   no file;
   "Stopped. Nothing was replaced in …"; "Stopped. The fingerprint of Photos 2024 was not
-  refreshed"; "Stopped. Reclaiming space in Photos 2024 did not finish"; "Stopped. Photos 2024
+  refreshed"; "Stopped reclaiming space in Photos 2024 · 1.1 GB given back", since every commit
+  the run made stands (the bare "Stopped reclaiming space in Photos 2024" when none gave anything
+  back); "Stopped. Photos 2024
   is as it was" for a compaction or a re-key the core stopped. This retires 2026-10-14's neutral
   "Adding 3 files: Stopped." toast; a reclaim's figure moves from its toast to the line; another
   archive's trouble, a toast until now, is the line with *Details*. A failure is an error

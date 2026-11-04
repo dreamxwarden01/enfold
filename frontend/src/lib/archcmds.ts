@@ -44,6 +44,11 @@ export interface ArchFacts {
   // the end, so *Delete archive…*, which stops every other operation on
   // the archive first (the user's ruling of 2026-11-03), waits for it.
   rekeying?: boolean;
+  // A reclaim of the archive runs, the user's or the core's own (APP.md
+  // §2.3): *Compact…* waits for it — both runs grey the commands in 1.0
+  // (ruled 2026-11-04) — while *Delete archive…* stops it first, as it
+  // stops every operation it can.
+  reclaiming?: boolean;
   hidden: boolean;
   // The core's archive.file_missing note: *Locate…* is offered.
   missing: boolean;
@@ -101,7 +106,7 @@ export function archCommands(f: ArchFacts | null): ArchGroups {
   const verbWhy = lockWhy ?? rowWhy;
   const verbs: ArchItem[] = [
     { cmd: "refreshFingerprint", label: commandCopy.refreshFingerprint, icon: "i-check", ...off(verbWhy) },
-    { cmd: "compact", label: commandCopy.compact, icon: "i-compact", ...off(verbWhy) },
+    { cmd: "compact", label: commandCopy.compact, icon: "i-compact", ...off(verbWhy ?? (f?.reclaiming ? why.reclaiming : undefined)) },
     { cmd: "rekey", label: commandCopy.rekeyArchive, icon: "i-rotate", ...off(verbWhy) },
   ];
 

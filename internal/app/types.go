@@ -312,6 +312,29 @@ type ArchiveSummary struct {
 	Files     int    `json:"files"`
 	FreeSpace uint64 `json:"freeSpace"`
 	State     string `json:"state,omitempty"` // open | compacting | needs_reopen
+	// Reclaim and CompactNeeds are ArchiveStat's (below), for an open
+	// archive only: nil and 0 for a closed one, whose figures need the index
+	// and so the key, and while it compacts or needs a reopen.
+	Reclaim      *ReclaimView `json:"reclaim"`
+	CompactNeeds uint64       `json:"compactNeeds"`
+}
+
+// ReclaimView is the last dry run of the in-place run (FORMAT.md R40) made
+// for an open archive, after the commit that changed it and off that
+// commit's own call (APP.md §2.3 "Space comes back"). Back is the bytes the
+// whole run would give the file system back and Move the ciphertext it
+// would copy to do so. Complete says the dry run walked the run to its end:
+// one longer than the walk's bounds is answered for what was walked, which
+// is a floor and not an answer, and the page then shows no in-place figure
+// rather than a low one. AtSeq is the ArchiveStat.Seq the plan was made at:
+// a figure whose AtSeq is behind Seq is from before the last change and is
+// pending — a fresh plan is on its way. What only Compact reaches is
+// FreeSpace less Back. Nothing of it is kept in the registry.
+type ReclaimView struct {
+	Back     uint64 `json:"back"`
+	Move     uint64 `json:"move"`
+	Complete bool   `json:"complete"`
+	AtSeq    uint64 `json:"atSeq"`
 }
 
 // VersionView is one key version of an archive record (FORMAT.md §7.2), for
@@ -413,6 +436,18 @@ type ArchiveStat struct {
 	State        string `json:"state"`
 	ReceiptOwed  bool   `json:"receiptOwed"`
 	CopyMismatch bool   `json:"copyMismatch"` // the file is not the copy the vault last saw
+	// Reclaim is the in-place run's last dry run (ReclaimView), nil until
+	// the first plan of this handle lands and while the archive compacts or
+	// needs a reopen. A plan lands after the commit that called for it, so
+	// the figure follows the change by a moment: archives.changed says when.
+	Reclaim *ReclaimView `json:"reclaim"`
+	// CompactNeeds is what a whole-file Compact needs free on the archive's
+	// drive for its fresh copy: about Size less FreeSpace, the live data,
+	// the index and the header (FORMAT.md R33). Compact is refused when the
+	// drive has less (archive.compact_no_space); the page says the figure
+	// beside the command before it is pressed. 0 while the archive compacts
+	// or needs a reopen.
+	CompactNeeds uint64 `json:"compactNeeds"`
 }
 
 // FileRow is one row of a page: one committed record, file or directory
@@ -563,6 +598,22 @@ type OpView struct {
 	// ended before its first commit, for a compaction that failed and for one
 	// whose file did not come out smaller.
 	Returned uint64 `json:"returned"`
+	// Requested, Moved and Ended are a reclaim's, and zero for every other
+	// kind (APP.md §2.3). Requested is true for the run the user started
+	// (ReclaimSpace) and false for the one the core started itself after a
+	// commit, so that the foot and the busy rule can tell them apart. Moved
+	// is the ciphertext the run's commits have moved so far — Done is the
+	// same figure with the copy in progress counted — and Returned is kept
+	// current after every commit while the run goes on, so the foot can say
+	// "1.1 GB back so far". Ended is why a run that was not cancelled and did
+	// not fail stopped: finished — nothing more can move lower; guard — the
+	// fresh plan no longer promised enough for what the moves cost (or a
+	// quarantined hole stayed in the way); bound — the user's run moved
+	// half again what its figure said it would. Empty while the run goes
+	// on, and for a cancel or a failure, which Error says.
+	Requested bool   `json:"requested"`
+	Moved     uint64 `json:"moved"`
+	Ended     string `json:"ended,omitempty"`
 	// DragResult is how a drag out ended, on a finished dragout and nothing
 	// else (APP.md §3, dragout.go). The drop is synchronous — the data
 	// object offers no IDataObjectAsyncCapability, so the target must finish

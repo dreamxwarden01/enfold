@@ -4,10 +4,10 @@
   import { Archive, Archives, Code, Shell, errorOf } from "../lib/api";
   import type { Clipboard as ClipboardView, Collision, Crumb, FileRow } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { archivePageCopy, archivesCopy, busyCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyNames, keyTitles, listCopy, noticeCopy, paneCopy, typeLabel } from "../lib/strings";
+  import { archivePageCopy, archivesCopy, busyCopy, codeText, vaultCopy, collisionCopy, columnLabels, commandCopy, compressedLabel, compressedText, conflictCopy, conflictTitle, dialogCopy, keyNames, keyTitles, listCopy, noticeCopy, paneCopy, spaceCopy, typeLabel } from "../lib/strings";
   import { bytes, dateTime, fileIcon, previewKind } from "../lib/format";
   import type { PreviewKind } from "../lib/format";
-  import { freeWorthShowing } from "../lib/status";
+  import SpaceBar, { barOf, spaceRow, spaceView } from "./SpaceBar.svelte";
   import { methodWord } from "../lib/method";
   import { CRUMB_CAP, ROOT_CAP, clampFolded, fold, menuRows } from "../lib/crumbs";
   import { closeButton } from "../lib/leave";
@@ -63,6 +63,16 @@
 
   const id = $derived(store.current ?? "");
   const stat = $derived(store.stat);
+  // The pane's row *Unused space* (APP.md §6; the reclaim study's ruling,
+  // its placement P1): the Stat's size and unused space, with the in-place
+  // run's figure from the list's row when it is the fresher (store.reclaimOf:
+  // a plan lands by archives.changed alone), and the reclaim of this
+  // archive that runs. Under the floor the row is today's figure alone —
+  // no bar and no link, the control hidden and never greyed (the owner's
+  // ruling of 2026-11-04). Another operation, or the drain, greys the link
+  // with its reason; the reclaim itself is said in its place.
+  const reclaimRun = $derived(store.runningOps.find((o) => o.kind === "reclaim" && o.archiveId === id) ?? null);
+  const paneSpace = $derived(stat ? spaceView({ size: stat.size, freeSpace: stat.freeSpace, reclaim: store.reclaimOf(id, stat.reclaim) }) : null);
   // The index is a tree (APP.md §3): a row is a record with an id, the
   // folder shown is a directory id, and the head is the page's own Crumbs —
   // root-inclusive, the archive's name first — drawn from nothing else
@@ -153,6 +163,20 @@
   // after its Close first, since nothing at all can be done then, and
   // otherwise a running operation. One path for both (lib/filemenu.ts Stop).
   const blockedWhy = $derived(closingWhy ?? busyWhy);
+  // The link's stop: what greys the page's commands, but for the reclaim
+  // itself, which the row says in the link's place.
+  const reclaimLinkWhy = $derived(busy?.kind === "reclaim" ? closingWhy : blockedWhy);
+  const paneRow = $derived(paneSpace ? spaceRow(paneSpace, reclaimRun, reclaimLinkWhy) : null);
+  let reclaimAsking = $state(false);
+  async function reclaimSpace() {
+    if (!id || reclaimAsking) return;
+    reclaimAsking = true;
+    try {
+      await store.reclaimSpace(id);
+    } finally {
+      reclaimAsking = false;
+    }
+  }
   const blocked = $derived(blockedWhy !== undefined);
   const menuStop = $derived<Stop | undefined>(draining ? CLOSING : busyWhy ? { why: busyWhy, reads: false } : undefined);
   // *Delete archive…* does not wait: it stops what runs first (store.stopOps),
@@ -2151,7 +2175,26 @@
             <dl class="kv pane-facts">
               <dt>{archivesCopy.facts.size}</dt><dd class="num">{stat ? bytes(stat.size) : ""}</dd>
               <dt>{archivesCopy.facts.lastSaved}</dt><dd class="num">{stat?.lastSavedAt ? dateTime(stat.lastSavedAt) : "—"}</dd>
-              <dt>{archivesCopy.facts.unused}</dt><dd><span class="num">{stat ? bytes(stat.freeSpace) : ""}</span>{#if freeWorthShowing(stat?.freeSpace)}{" "}<span class="hint">{paneCopy.compactHint}</span>{/if}</dd>
+              <dt>{archivesCopy.facts.unused}</dt>
+              <dd>
+                {#if paneSpace && paneRow?.bar}
+                  <!-- The figure and its share, the 4 px bar, then the
+                       one line: the Reclaim space link (titled with what
+                       it does while the figure is pending or cut short),
+                       "(Compact to reclaim)", or the run's note. -->
+                  <span class="spacerow">
+                    <span class="sr-fig"><span class="num">{bytes(paneSpace.freeSpace)}</span><span class="sr-share">{paneRow.share}</span></span>
+                    <SpaceBar {...barOf(paneSpace)} />
+                    {#if paneRow.line?.kind === "link"}
+                      <button type="button" class="btn link" disabled={paneRow.line.disabled || reclaimAsking} title={paneRow.line.title} onclick={reclaimSpace}>{spaceCopy.reclaim}</button>
+                    {:else if paneRow.line}
+                      <span class="sr-note">{paneRow.line.text}</span>
+                    {/if}
+                  </span>
+                {:else}
+                  <span class="num">{stat ? bytes(stat.freeSpace) : ""}</span>
+                {/if}
+              </dd>
               <dt>{archivesCopy.facts.compression}</dt><dd>{methodWord(method)}</dd>
             </dl>
           </div>

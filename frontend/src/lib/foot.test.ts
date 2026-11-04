@@ -13,7 +13,7 @@ const MB = 1024 * 1024;
 const GB = 1024 * MB;
 
 function op(o: Partial<OpView>): OpView {
-  return { id: "op1", kind: "add", archiveId: "a1", done: 0, total: 0, items: 0, dragItems: 0, phase: "", startedAt: 100, finished: true, returned: 0, ...o };
+  return { id: "op1", kind: "add", archiveId: "a1", done: 0, total: 0, items: 0, dragItems: 0, phase: "", startedAt: 100, finished: true, returned: 0, requested: false, moved: 0, ...o };
 }
 
 function out(o: Partial<FileOutcome>): FileOutcome {
@@ -301,9 +301,26 @@ describe("the done line", () => {
     expect(doneLine(op({ kind: "compact", returned: 0 }), names)?.text).toBe("Compacted Photos 2024");
   });
 
-  it("says a reclaim's figure, and nothing when it gave nothing back", () => {
-    expect(doneLine(op({ kind: "reclaim", returned: 1.2 * GB }), names)?.text).toBe(reclaimedText(1.2 * GB));
+  it("says a reclaim's figure with its archive, and nothing when the core's own run gave nothing back", () => {
+    expect(doneLine(op({ kind: "reclaim", returned: 2.9 * GB }), names)).toEqual({ tone: "ok", text: "Reclaimed 2.9 GB in Photos 2024" });
+    expect(doneLine(op({ kind: "reclaim", returned: 1.2 * GB }), names)?.text).toBe(reclaimedText(1.2 * GB, "Photos 2024"));
     expect(doneLine(op({ kind: "reclaim", returned: 0 }), names)).toBeNull();
+  });
+
+  it("says what the user's Reclaim space gave back, nothing included (APP.md §2.3)", () => {
+    expect(doneLine(op({ kind: "reclaim", requested: true, returned: 2.9 * GB, ended: "finished" }), names)?.text).toBe("Reclaimed 2.9 GB in Photos 2024");
+    expect(doneLine(op({ kind: "reclaim", requested: true, returned: 0, ended: "finished" }), names)).toEqual({
+      tone: "neutral",
+      text: "Reclaimed no space in Photos 2024: the files that remain cannot move lower",
+    });
+  });
+
+  it("says a stopped reclaim with what came back before the stop", () => {
+    const stopped = (returned: number) => doneLine(op({ kind: "reclaim", requested: true, returned, error: Code.CodeOpCancelled }), names);
+    expect(stopped(1.1 * GB)).toEqual({ tone: "neutral", text: "Stopped reclaiming space in Photos 2024 · 1.1 GB given back" });
+    expect(stopped(0)?.text).toBe("Stopped reclaiming space in Photos 2024");
+    // The line it replaced is gone (the reclaim study's words, 2026-11-03).
+    expect(stopped(0)?.text).not.toContain("did not finish");
   });
 
   it("says a refreshed fingerprint and a re-key in their buttons' words", () => {
@@ -328,7 +345,7 @@ describe("the done line", () => {
     expect(stop("add")).toEqual({ tone: "neutral", text: "Stopped. Nothing was added to Photos 2024" });
     expect(stop("replace")?.text).toBe("Stopped. Nothing was replaced in Photos 2024");
     expect(stop("verify")?.text).toBe("Stopped. The fingerprint of Photos 2024 was not refreshed");
-    expect(stop("reclaim")?.text).toBe("Stopped. Reclaiming space in Photos 2024 did not finish");
+    expect(stop("reclaim")?.text).toBe("Stopped reclaiming space in Photos 2024");
     expect(stop("compact")?.text).toBe("Stopped. Photos 2024 is as it was");
   });
 });

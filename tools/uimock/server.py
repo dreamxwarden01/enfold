@@ -28,8 +28,26 @@ fills as it goes (ruled 2026-11-03).
 POST /mock/preview {"name": "reclaim"} plays the in-place compaction the
 core runs itself after a commit whose plan would give enough of the tail
 back (APP.md 2.3, FORMAT.md R40) - the strip's *Reclaiming space*,
-cancellable, the space back on the status line and "Reclaimed 1.2 GB" said
-when it ends.
+cancellable, the space back on the status line and "Reclaimed 2.9 GB in
+Photos 2024" said when it ends.
+
+Unused space (APP.md 6; the reclaim study's ruling of 2026-11-03). The
+open archive's figures - ArchiveStat and its list row's Reclaim
+{back, move, complete, atSeq} and CompactNeeds - are staged with
+POST /mock/preview {"name": "space", "figure": F}, F one of SPACE_FIGURES:
+"some" (2.9 GB unused of 48 GB, all of it back, about 11 GB to move; the
+default), "split" (3.1 GB of 8.3 GB, 1.2 GB back in place), "compactOnly"
+(2.9 GB that no move gives back), "incomplete" (a plan cut short),
+"pending" (no plan yet), "under" (40 MiB) and "none" (0), each a commit
+of the archive. The row of a closed archive carries none.
+{"name": "reclaimSpace", "seconds": 20, "at": 0.38} is
+the user's *Reclaim space* (Archives.ReclaimSpace, which the page calls
+too): a requested run moving the figure's Move, its Returned growing as
+it goes, the figure's Back given back at its end, and part of it at a
+Cancel; "at" starts it that far through, for a shot of a run part way
+("Reclaiming space · 4.5 GB of 11 GB moved · 1.1 GB back so far"). POST /mock/state {"compactRoom": 12000000000} makes Compact
+refuse archive.compact_no_space with Needed, Free and Volume whenever the
+drive's free bytes are under what the fresh copy needs.
 
 An archive's lifetime (APP.md 2.3, ruled 2026-09-10) is played too: the
 page's Archives.Open mounts one archive and mints a preview token; every
@@ -489,6 +507,10 @@ state = {
     "stat": {"seq": 1, "id": "a1" * 16, "name": "Photos 2024", "size": 51_700_000_000, "files": 12406, "freeSpace": 3_100_000_000,
              "records": 0, "keyVersion": 3, "lastSavedAt": NOW - 7200, "state": "open",
              "receiptOwed": False, "copyMismatch": False},
+    # The in-place run's last plan for that archive (ArchiveStat.Reclaim
+    # less its atSeq, which is the Seq it is read at): the figure "some" of
+    # SPACE_FIGURES. None is no plan yet.
+    "reclaimFig": {"back": 3_100_000_000, "move": 11_800_000_000, "complete": True},
     # The index is a tree (APP.md 3, FORMAT.md R39): one record per
     # directory and per file, hanging off its parent by id, the root the
     # all-zero id and the path a derived thing. Every row is committed -
@@ -633,6 +655,8 @@ state = {
 # queued like every other event and drained by GET /mock/events.
 PREVIEW_OPS = {
     "reclaim": lambda body: start_reclaim(),
+    "reclaimSpace": lambda body: start_reclaim(requested=True, seconds=float(body.get("seconds", 12)), at=float(body.get("at", 0))),
+    "space": lambda body: stage_space(body.get("figure", "some")),
     "close": lambda body: emit("shell.close", None),
     "open": lambda body: shell_open(body),
     "unlock": lambda body: tray_unlock(body),
@@ -916,10 +940,13 @@ def crumbs_to(dir_id):
 
 def stat():
     """ArchiveStat, with Records counted live: files and directories
-    together, which is what Extract all is greyed on (APP.md 3)."""
+    together, which is what Extract all is greyed on (APP.md 3); and the
+    in-place run's figure and what Compact needs (reclaim_view)."""
     s = dict(state["stat"])
     s["records"] = len(state["records"])
     s["files"] = len([r for r in state["records"] if not r["isDir"]])
+    s["reclaim"] = reclaim_view()
+    s["compactNeeds"] = compact_needs()
     return s
 
 
@@ -1073,7 +1100,7 @@ def op_view(op):
 
 
 def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", archive_id=None,
-             policy="", destination="", on_cancel=None, quiet=0.0, on_step=None):
+             policy="", destination="", on_cancel=None, quiet=0.0, on_step=None, first=1):
     """An operation is a transaction (APP.md 2.3): it begins, ticks
     op.progress by *bytes* - Done against Total, both plaintext - and
     commits at its end. A Cancel aborts it and publishes nothing: the
@@ -1091,7 +1118,8 @@ def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", ar
     rate (5 s of samples) can say "about N min left". quiet is how long it
     says nothing first, its plan being made (an add's planSeconds); a
     cancel then ends it at once. on_step, given the step just ticked and
-    the steps in all, runs after each tick: an add's checkpoints."""
+    the steps in all, runs after each tick: an add's checkpoints. first
+    is the step it begins at, for a run shown part way through."""
     if steps is None:
         steps = max(24, int(seconds * 2))
     state["nextOp"] = state.get("nextOp", 0) + 1
@@ -1110,7 +1138,7 @@ def start_op(kind, total, commit, seconds=4.0, steps=None, items=0, phase="", ar
         while waited < quiet and not op.get("cancelled"):
             time.sleep(0.1)
             waited += 0.1
-        for i in range(1, steps + 1):
+        for i in range(first, steps + 1):
             if not op.get("cancelled"):
                 time.sleep(seconds / steps)
             if op.get("cancelled"):
@@ -1232,24 +1260,88 @@ def delete_records(args):
     bump()
     # The commit that freed the tail has truncated it; what is left is the
     # holes, and the core takes them itself once they are worth it.
+    # The plan after the commit (ops.go planLoop): the figure for the
+    # page, and the core's own run only when it is cheap.
+    plan_after_commit()
     if reclaim_due():
         start_reclaim()
     return None
 
 
-# The rule the core reclaims on (APP.md 2.3, FORMAT.md R40): a run of
-# moves happens when it would give the file system back 64 MiB or more of
-# the tail, and that is at least a quarter of what it would have to move.
-# The mock has no layout to plan on, so it takes the free space for the
-# tail and the live bytes for the move; what the core measures is bytes
-# returned, never the size of a hole.
+# The rule the core reclaims on by itself (APP.md 2.3, FORMAT.md R40, the
+# owner's softening of 2026-11-03): a whole plan that gives the file
+# system back 64 MiB or more of the tail, at least a quarter of what it
+# moves, and moves 256 MiB at most; a larger run waits for the user's
+# *Reclaim space*. The mock has no layout to plan on: after a delete it
+# takes all the unused space for what comes back and a quarter of the live
+# bytes for the move; what the core measures is bytes returned, never the
+# size of a hole.
 RECLAIM_FLOOR = 64 * 1024 * 1024
+RECLAIM_CHEAP = 256 * 1024 * 1024
 
 
 def reclaim_due():
     st = state["stat"]
+    f = state.get("reclaimFig")
+    return (f is not None and f["complete"] and f["move"] <= RECLAIM_CHEAP and f["back"] >= RECLAIM_FLOOR
+            and f["back"] * 4 >= f["move"] and st["freeSpace"] >= RECLAIM_FLOOR)
+
+
+# The staged figures (APP.md 6, *Unused space*): size, unused space, and
+# the plan's Back, Move and Complete - None for no plan yet.
+SPACE_FIGURES = {
+    "some":        (51_700_000_000, 3_100_000_000, (3_100_000_000, 11_800_000_000, True)),
+    "split":       (8_900_000_000, 3_330_000_000, (1_290_000_000, 430_000_000, True)),
+    "compactOnly": (51_700_000_000, 3_100_000_000, (0, 11_800_000_000, True)),
+    "incomplete":  (51_700_000_000, 3_100_000_000, (0, 3_960_000_000, False)),
+    "pending":     (51_700_000_000, 3_100_000_000, None),
+    "under":       (51_700_000_000, 40 * 1024 * 1024, (40 * 1024 * 1024, 0, True)),
+    "none":        (51_700_000_000, 0, (0, 0, True)),
+}
+
+
+def fig_of(back, move, complete):
+    return {"back": back, "move": move, "complete": complete}
+
+
+def stage_space(name):
+    """Stages one of SPACE_FIGURES on the open archive and tells the page,
+    as a plan landing does (archives.changed alone)."""
+    size, free, plan = SPACE_FIGURES.get(name, SPACE_FIGURES["some"])
+    st = state["stat"]
+    st["size"], st["freeSpace"] = size, free
+    state["reclaimFig"] = fig_of(*plan) if plan else None
+    a = archive(st["id"])
+    if a is not None:
+        a["storedSize"], a["freeSpace"] = size, free
+    bump(st["id"])
+    return name
+
+
+def plan_after_commit():
+    """A delete's plan (see reclaim_due): all the unused space back, a
+    quarter of the live bytes to move."""
+    st = state["stat"]
     live = max(0, st["size"] - st["freeSpace"])
-    return st["freeSpace"] >= RECLAIM_FLOOR and st["freeSpace"] * 4 >= live
+    state["reclaimFig"] = fig_of(st["freeSpace"], live // 4, True)
+
+
+def reclaim_view():
+    """ArchiveStat.Reclaim for the open archive, at the current Seq; None
+    before the first plan and while it compacts."""
+    f = state.get("reclaimFig")
+    if f is None or compacting_now():
+        return None
+    return dict(f, atSeq=state["stat"]["seq"])
+
+
+def compact_needs():
+    st = state["stat"]
+    return 0 if compacting_now() else max(0, st["size"] - st["freeSpace"])
+
+
+def compacting_now():
+    return any(o["kind"] == "compact" for o in running_ops(state["stat"]["id"]))
 
 
 def running_reclaim():
@@ -1262,7 +1354,26 @@ def running_reclaim():
     return None
 
 
-def start_reclaim():
+def reclaim_space(args):
+    """Archives.ReclaimSpace(id): the user's run (APP.md 2.3) - for an open
+    archive, refused when a reclaim of it runs (archive.busy) or the last
+    whole plan says nothing comes back (archive.nothing_to_reclaim)."""
+    a = archive(args[0]) if args else None
+    if a is None:
+        return Err("archive.not_found")
+    if not a.get("open") or a["id"] != state["stat"]["id"]:
+        return Err("archive.not_open")
+    if compacting_now():
+        return Err("archive.compacting")
+    if running_reclaim() is not None:
+        return Err("archive.busy")
+    f = state.get("reclaimFig")
+    if f is not None and f["complete"] and f["back"] == 0:
+        return Err("archive.nothing_to_reclaim")
+    return start_reclaim(requested=True)
+
+
+def start_reclaim(requested=False, seconds=6.0, at=0.0):
     """*Reclaiming space* (APP.md 2.3, 6): the in-place compaction the user
     did not ask for, cancellable, which lowers the live data into the holes
     a budget per commit and gives the tail back as it comes free. Its Items
@@ -1280,20 +1391,55 @@ def start_reclaim():
         return running["id"]
     st = state["stat"]
     before = st["size"]
-    holes = st["freeSpace"]           # what this run set out to give back
-    live = max(0, before - holes)     # and the bytes it has to move for it
+    f = state.get("reclaimFig")
+    # What this run set out to give back and the bytes it moves for it:
+    # the plan's, or for a run with no whole plan all the unused space for
+    # a quarter of the live bytes.
+    if f is not None and f["complete"]:
+        holes, live = min(f["back"], st["freeSpace"]), f["move"]
+    else:
+        holes = st["freeSpace"]
+        live = max(0, before - holes) // 4
+
+    def give(n, left):
+        n = min(n, st["freeSpace"])
+        st["size"] = max(0, st["size"] - n)
+        st["freeSpace"] -= n
+        # A run's end makes the figures again (ops.go finishOp): left is the
+        # plan made there, (back, move) - nothing for a run that finished,
+        # since what is left only Compact reaches.
+        state["reclaimFig"] = fig_of(left[0], left[1], True)
+        state["ops"][op_id]["returned"] = max(0, before - st["size"])
 
     def commit():
         # This run's own holes, and no more: space freed under it belongs to
-        # the run after, which the next commit plans.
-        give = min(holes, st["freeSpace"])
-        st["size"] = max(0, st["size"] - give)
-        st["freeSpace"] -= give
-        # The commit runs on the operation's thread, once start_op has
-        # answered the id below.
-        state["ops"][op_id]["returned"] = max(0, before - st["size"])
+        # the run after, which the next commit plans. Runs on the
+        # operation's thread, once start_op has answered the id below.
+        give(holes, (0, 0))
+        state["ops"][op_id]["ended"] = "finished"
 
-    op_id = start_op("reclaim", live, commit, seconds=6.0, phase="moving")
+    def step(i, n):
+        # Returned and Moved are kept current after every commit (OpView,
+        # APP.md 2.3), so the page can say "1.1 GB back so far".
+        o = state["ops"][op_id]
+        o["moved"] = live * i // n
+        o["returned"] = holes * i // n
+
+    def cancelled(i, n):
+        # Every commit before the cancel stands: what they gave back, and
+        # the page is told as a commit tells it. The plan made at the end
+        # finds the holes the run did not reach still there, so the archive
+        # is back to reclaimable (the judge's "Cancelled" row): what is left
+        # of them, for what is left of the moving.
+        given = holes * i // n
+        give(given, (holes - given, live * (n - i) // n))
+        bump(st["id"])
+        return []
+
+    steps = max(24, int(seconds * 2))
+    op_id = start_op("reclaim", live, commit, seconds=seconds, phase="moving", on_step=step, on_cancel=cancelled,
+                     steps=steps, first=max(1, int(at * steps)))
+    state["ops"][op_id].update({"requested": requested, "moved": 0})
     return op_id
 
 
@@ -2056,6 +2202,17 @@ def record_op(kind, args, total, seconds=4.0, phase=""):
         return Err("archive.not_found")
     if state["vault"]["state"] != "unlocked":
         return Err("vault.needs_unlock")
+    if kind == "compact" and state.get("compactRoom") is not None:
+        # The drive's check before a byte is written (ruled 2026-11-04):
+        # the fresh copy needs about Size - FreeSpace.
+        if a["id"] == state["stat"]["id"]:
+            need = max(0, state["stat"]["size"] - state["stat"]["freeSpace"])
+        else:
+            need = max(0, a["storedSize"] - a.get("freeSpace", 0))
+        room = int(state["compactRoom"])
+        if room < need:
+            vol = a["path"][:2].upper() if re.match(r"^[A-Za-z]:", a["path"]) else ""
+            return Err("archive.compact_no_space", needed=need, free=room, volume=vol)
 
     def commit():
         if kind == "rotate":
@@ -2073,6 +2230,7 @@ def record_op(kind, args, total, seconds=4.0, phase=""):
                 given = st["freeSpace"]
                 st["size"] = max(0, st["size"] - st["freeSpace"])
                 st["freeSpace"] = 0
+                state["reclaimFig"] = fig_of(0, 0, True)
             a["freeSpace"] = 0
             a["storedSize"] = max(0, a["storedSize"] - given)
             # The commit runs on the operation's thread, once start_op has
@@ -2321,7 +2479,25 @@ def create_archive(args):
 
 
 def listed(show_hidden):
-    return [a for a in state["archives"] if show_hidden or (not a["hidden"] and not a.get("forgottenAt"))]
+    return [decorated(a) for a in state["archives"] if show_hidden or (not a["hidden"] and not a.get("forgottenAt"))]
+
+
+def decorated(a):
+    """A row as the core decorates an open archive's (archives.go
+    decorateLocked): the open handle's size, unused space, Reclaim and
+    CompactNeeds - the mounted archive's from its status, none for another
+    open one, nothing at all for a closed one, and while it compacts its
+    state and no figure."""
+    row = dict(a, reclaim=None, compactNeeds=0)
+    if not a.get("open"):
+        return row
+    if a["id"] == state["stat"]["id"]:
+        if compacting_now():
+            row.update(state="compacting", freeSpace=0)
+            return row
+        st = state["stat"]
+        row.update(storedSize=st["size"], freeSpace=st["freeSpace"], reclaim=reclaim_view(), compactNeeds=compact_needs())
+    return row
 
 
 def close_decided(args):
@@ -3548,6 +3724,7 @@ METHODS = {
     # Verify, Compact and Rotate key run on a closed archive: the core
     # opens it for the operation and closes it again (APP.md 2.3).
     2111968017: lambda a: record_op("compact", a, 8_000_000_000, seconds=6.0, phase="compacting"),
+    2422192787: reclaim_space,                                  # archives.ReclaimSpace (APP.md 2.3)
     3689812034: held(lambda a: record_op("rotate", a, 1_000_000)),  # archives.RotateKey, held
     3359801409: lambda a: record_op("verify", a, 4_000_000_000, seconds=5.0),
     # The archive's tree, and its operations. Save, Discard and KeepOpen

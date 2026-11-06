@@ -5,7 +5,7 @@
 // be tested apart from the component. The steps themselves are the
 // core's (APP.md §2.2); this only says where each one is drawn.
 import { CeremonyStep, Code } from "./api";
-import { codeText } from "./strings";
+import { ceremonyCopy, codeText } from "./strings";
 
 // Way is the ceremony's way in, as far as the page knows it.
 export type Way = "token" | "password" | "recovery" | "";
@@ -500,7 +500,8 @@ export function typedProofLeads(f: { way: Way; shows: string; choose?: boolean; 
 
 // FootButton is one of a dialog ceremony's foot-band buttons, in their
 // order: the act first, the way out after it. "recovery" is Use recovery
-// key, the act at an enrolment's No match where the switch is offered.
+// key, the act at an enrolment's No match and at its blocked PIN where the
+// switch is offered.
 export type FootButton = "continue" | "again" | "recovery" | "cancel" | "close";
 
 // dialogFoot: what a dialog ceremony's foot band holds (APP.md §6,
@@ -511,10 +512,14 @@ export type FootButton = "continue" | "again" | "recovery" | "cancel" | "close";
 // act again; anything else over has Close alone. At No match, where the
 // recovery-key switch is offered (recovery, offersRecoverySwitch), the
 // lock screen's own row: Use recovery key, then Cancel (ruled 2026-10-27,
-// the one exception to a dialog's No match holding Cancel alone).
+// the one exception to a dialog's No match holding Cancel alone). A
+// blocked PIN in the same proof has the same row, as the lock screen's
+// Blocked view does (ruled 2026-11-06, R8); without the switch it keeps
+// Cancel alone.
 export function dialogFoot(f: { over: boolean; view: View; asks: boolean; again: boolean; recovery?: boolean; step?: CeremonyStep }): FootButton[] {
   if (f.over) return f.view === "failed" && f.again ? ["again", "cancel"] : ["close"];
   if (f.recovery && f.view === "edge" && f.step === CeremonyStep.StepNoMatch) return ["recovery", "cancel"];
+  if (f.recovery && f.view === "blocked" && f.step === CeremonyStep.StepBlocked) return ["recovery", "cancel"];
   return f.asks ? ["continue", "cancel"] : ["cancel"];
 }
 
@@ -591,10 +596,11 @@ export function nothingChanged(c: { kind: string; error?: string }): boolean {
   return CHANGES.has(c.kind) && c.error !== Code.CodeIndeterminate && c.error !== Code.CodeConflict;
 }
 
-// offersRecoverySwitch: Use recovery key instead is offered at an
-// enrolment's wait for a YubiKey of the vault, and Use recovery key at its
-// No match (ruled 2026-10-27): an enrolment of a YubiKey or a recovery key,
-// begun without the switch, in its first half (the proof), on a vault
+// offersRecoverySwitch: Use recovery key instead is offered through an
+// enrolment's proof, and Use recovery key at its No match and its blocked
+// PIN (ruled 2026-10-27; where in the proof, recoverySwitchAt, ruled
+// 2026-11-06): an enrolment of a YubiKey or a recovery key, begun without
+// the switch, in its first half (the proof), on a vault
 // whose unlock methods hold a YubiKey and a recovery key. Never for another
 // act, whose dialog holds Cancel alone at No match (APP.md §6).
 export function offersRecoverySwitch(
@@ -606,6 +612,109 @@ export function offersRecoverySwitch(
   if (c.kind !== "enroll" || !a || a.act !== "enroll" || a.withRecoveryKey || second) return false;
   if (a.type !== "token" && a.type !== "recovery") return false;
   return slots.some((s) => s.type === "hardware") && slots.some((s) => s.type === "recovery");
+}
+
+// SwitchAt is where a dialog's ceremony draws the recovery-key switch:
+//   under  Use recovery key instead, a standard button, the view's last
+//          thing (the insert view's, the PIN's, the vault's password asked
+//          alone after a wrong one)
+//   bar    Use recovery key, a small button inside the last try's bar,
+//          whose sentence then names the way out
+//   foot   Use recovery key in the foot band, at No match and at a blocked
+//          PIN, whose bar then names the way out (dialogFoot)
+//   ""     nowhere
+export type SwitchAt = "" | "under" | "bar" | "foot";
+
+// recoverySwitchAt: where the switch stands, once offersRecoverySwitch
+// has said it is offered at all (offered). The proof offers it wherever
+// the YubiKey's way waits on the user (ruled 2026-11-06, widening
+// 2026-10-27's wait and No match): the wait for a YubiKey of the vault,
+// the PIN's form, alone or merged with the vault's password and after a
+// wrong PIN too, and No match. On the last try the bar carries it, as the
+// lock screen's does, and it is not drawn twice. A blocked PIN offers it in
+// the foot, as No match does and as the lock screen's Blocked view does
+// (R8), and the vault's password asked alone after an accepted PIN and a
+// wrong password offers it under that form (R9; the core asks no PIN and
+// no touch again there, pinform's "password"). Never while the YubiKey is
+// read (Probing, and the found LED held before the next view), never with
+// two in (the core carries on by itself once one is out), never at the
+// touch or the derivation, never on the password prompt the merged form
+// answers by itself (sends: the held password going out, where a button
+// would flash for the instant before the touch), and never in the second
+// half, which offered already excludes.
+export function recoverySwitchAt(f: {
+  offered: boolean;
+  view: View;
+  step: CeremonyStep;
+  insertStep: CeremonyStep;
+  found: boolean;
+  shows: string;
+  sends: boolean;
+  lastTry: boolean;
+}): SwitchAt {
+  if (!f.offered) return "";
+  switch (f.view) {
+    case "insert":
+      return f.insertStep === CeremonyStep.StepWaitingForKey && !f.found ? "under" : "";
+    case "secret":
+      if (f.step === CeremonyStep.StepPIN && (f.shows === "pin" || f.shows === "both")) return f.lastTry ? "bar" : "under";
+      if (f.step === CeremonyStep.StepPassword && f.shows === "password" && !f.sends) return "under";
+      return "";
+    case "edge":
+      return f.step === CeremonyStep.StepNoMatch ? "foot" : "";
+    case "blocked":
+      return f.step === CeremonyStep.StepBlocked ? "foot" : "";
+  }
+  return "";
+}
+
+// blockedMeansOf: the sentence on a dialog's Blocked bar, by where the
+// switch stands (ruled 2026-11-06, R8). Where the foot offers the recovery
+// key, the lock screen's Blocked sentence with its way out, said as the
+// dialog's last try says it (the vault is open already, so the recovery
+// key proves it is you); elsewhere the meaning alone, since nothing on the
+// screen is a way out to name.
+export function blockedMeansOf(at: SwitchAt): string {
+  return at === "foot" ? ceremonyCopy.blockedMeansProve : ceremonyCopy.blockedMeans;
+}
+
+// mergesPassword: whether a dialog's PIN form carries the vault's password
+// beside the PIN (lib/pinform's merged). Only a proof by YubiKey on a vault
+// whose password is on: a chosen password is never merged, and an
+// enrolment's second half never, since the new YubiKey inherits the
+// vault's switch and is wrapped from the kept K_P, so the core asks the new
+// YubiKey's PIN alone there (keys.go BeginEnroll; ruled 2026-11-06: it drew
+// a password field the core never asked for, whenever the reader had been
+// seen empty between the halves).
+export function mergesPassword(f: { entangled: boolean; way: Way; choose?: boolean; second: boolean }): boolean {
+  return f.entangled && f.way === "token" && !f.choose && !f.second;
+}
+
+// enrolledAlready: an enrolment's second half waits for a YubiKey that
+// already unlocks this vault to come out (ruled 2026-11-06, R1): the core
+// read the opened card's keys before asking anything of it and found one
+// of the vault's, so it names that unlock method (removeLabel) beside the
+// note vault.duplicate_slot and carries on by itself with the next YubiKey
+// inserted. The proving YubiKey's own swap carries no note.
+export function enrolledAlready(c: { step: CeremonyStep; removeLabel?: string; error?: string } | null | undefined): boolean {
+  return !!c && c.step === CeremonyStep.StepSwapKey && !!c.removeLabel && c.error === Code.CodeDuplicateSlot;
+}
+
+// AddKind is an entry of Add an unlock method…'s Unlock method list.
+export type AddKind = "token" | "password" | "recovery";
+
+// addKinds: the entries the list holds (ruled 2026-11-06, R6). A
+// standalone password never joins a vault with a YubiKey (DESIGN §5), so
+// on such a vault the list has no Password, rather than a greyed one that
+// cannot be pressed.
+export function addKinds(hasHardware: boolean): AddKind[] {
+  return hasHardware ? ["token", "recovery"] : ["token", "password", "recovery"];
+}
+
+// addKindFor: the choice the list opens on, from the one remembered: a
+// remembered Password on a vault with a YubiKey falls back to the YubiKey.
+export function addKindFor(kind: AddKind, hasHardware: boolean): AddKind {
+  return addKinds(hasHardware).includes(kind) ? kind : "token";
 }
 
 // finishGreyed: the lock screen's Finish setting up… on a vault whose

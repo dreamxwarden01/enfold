@@ -187,7 +187,12 @@ type CeremonyState struct {
 	N            int    `json:"n"` // touch ordinal on this token handle
 	PINAsked     bool   `json:"pinAsked"`
 	Error        Code   `json:"error,omitempty"`
-	// SwapKey: the labels involved.
+	// SwapKey: the labels involved. At swap_key, Error is a note and never
+	// a failure: vault.duplicate_slot says the YubiKey inserted already
+	// unlocks the vault, as the unlock method RemoveLabel names, and is
+	// waited out until it leaves (enrollToken, waitOutEnrolled; APP.md §3
+	// Keys, ruled 2026-11-06); without it, RemoveLabel is the YubiKey that
+	// proved, to be taken out.
 	RemoveLabel string `json:"removeLabel,omitempty"`
 	InsertLabel string `json:"insertLabel,omitempty"`
 	// Verify, at Done: how many archives the backup's registry names.

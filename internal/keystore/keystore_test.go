@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -515,6 +516,111 @@ func TestInvariant(t *testing.T) {
 	}
 	if infos := u.k.Slots(); len(infos) != 2 || infos[0].RecipientID != rec || infos[1].Label != "second" {
 		t.Errorf("slots after removals: %+v", infos)
+	}
+}
+
+// TestHardwareRecordsListWhatAddSlotRefuses: HardwareRecords lists every
+// non-empty hardware record, a retired one included, and is exactly the set
+// of YubiKeys AddSlot and AddFirstWayIn refuse to enrol again, so that an
+// enrolment that excludes it refuses on insertion what the keystore would
+// refuse at the end (APP.md §3 Keys, ruled 2026-11-06); Slots keeps listing
+// the active records alone. No Enfold writer makes a retired record; a
+// foreign or hand-made file can, and the reader accepts it, so it is
+// crafted here as the rotation's tests craft one.
+func TestHardwareRecordsListWhatAddSlotRefuses(t *testing.T) {
+	retire := func(t *testing.T, u *Unlocked, pub []byte) {
+		t.Helper()
+		kept := cloneSlots(u.k.slots)
+		for i := range kept {
+			if kept[i].Type == format.SlotExternalECDH && bytes.Equal(kept[i].SlotPubkey, pub) {
+				kept[i].State = format.SlotRetired
+			}
+		}
+		if err := u.commitSlots(u.k.hdr, kept, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pubs := func(infos []SlotInfo) [][]byte {
+		var out [][]byte
+		for _, s := range infos {
+			if s.PublicKey != nil {
+				out = append(out, s.PublicKey)
+			}
+		}
+		return out
+	}
+	holds := func(set [][]byte, pub []byte) bool {
+		return slices.ContainsFunc(set, func(p []byte) bool { return bytes.Equal(p, pub) })
+	}
+
+	check := func(t *testing.T, k *Keystore, active, all [][]byte) {
+		t.Helper()
+		got := pubs(k.Slots())
+		if len(got) != len(active) {
+			t.Fatalf("Slots lists %d YubiKeys, want %d: a retired record is no unlock method", len(got), len(active))
+		}
+		for _, p := range active {
+			if !holds(got, p) {
+				t.Fatalf("Slots lacks the active record %x", p)
+			}
+		}
+		records := k.HardwareRecords()
+		if len(records) != len(all) {
+			t.Fatalf("HardwareRecords lists %d, want %d: %+v", len(records), len(all), records)
+		}
+		for _, p := range all {
+			if !holds(pubs(records), p) {
+				t.Fatalf("HardwareRecords lacks %x", p)
+			}
+		}
+		for _, r := range records {
+			if r.Type != format.SlotExternalECDH || r.Label == "" {
+				t.Fatalf("a hardware record described as %+v", r)
+			}
+		}
+		records[0].PublicKey[0] ^= 1 // a copy: the caller cannot reach the record
+		if holds(pubs(k.HardwareRecords()), records[0].PublicKey) {
+			t.Fatal("HardwareRecords handed out the record's own bytes")
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "v.eks")
+	tokA, tokB, tokC := newToken(t), newToken(t), newToken(t)
+	u := mustCreate(t, path, HardwareSlot{PublicKey: tokA.PublicKey(), Label: "A"},
+		HardwareSlot{PublicKey: tokB.PublicKey(), Label: "B"}, RecoverySlot{Key: recoveryKey(t)})
+	retire(t, u, tokB.PublicKey())
+	check(t, u.k, [][]byte{tokA.PublicKey()}, [][]byte{tokA.PublicKey(), tokB.PublicKey()})
+	// Every YubiKey listed is refused, the retired one too; one not listed
+	// is enrolled, and listed from then on.
+	for _, r := range u.k.HardwareRecords() {
+		if err := u.AddSlot(HardwareSlot{PublicKey: r.PublicKey, Label: "again"}); !errors.Is(err, ErrDuplicate) {
+			t.Fatalf("enrolling %q again: %v", r.Label, err)
+		}
+	}
+	if err := u.AddSlot(HardwareSlot{PublicKey: tokC.PublicKey(), Label: "C"}); err != nil {
+		t.Fatal(err)
+	}
+	all := [][]byte{tokA.PublicKey(), tokB.PublicKey(), tokC.PublicKey()}
+	check(t, u.k, [][]byte{tokA.PublicKey(), tokC.PublicKey()}, all)
+	u.Close()
+	u.k.Close()
+	// The reader accepts the retired record, and both lists read the same
+	// from the file.
+	k := mustOpen(t, path)
+	check(t, k, [][]byte{tokA.PublicKey(), tokC.PublicKey()}, all)
+	k.Close()
+
+	// An adopted backup's first way in: its active slots are recovery keys
+	// alone, but a retired YubiKey's record in it is listed and refused.
+	rpath := filepath.Join(t.TempDir(), "b.eks")
+	ub := mustCreate(t, rpath, HardwareSlot{PublicKey: tokA.PublicKey(), Label: "A"}, RecoverySlot{Key: recoveryKey(t)})
+	retire(t, ub, tokA.PublicKey())
+	check(t, ub.k, nil, [][]byte{tokA.PublicKey()})
+	if err := ub.AddFirstWayIn(HardwareSlot{PublicKey: tokA.PublicKey()}, nil); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("the first way in with the retired YubiKey: %v", err)
+	}
+	if err := ub.AddFirstWayIn(HardwareSlot{PublicKey: tokB.PublicKey(), Label: "B"}, nil); err != nil {
+		t.Fatalf("the first way in with another YubiKey: %v", err)
 	}
 }
 

@@ -6,8 +6,10 @@ import { samePath } from "./paths";
 import { firstRunCard, retiredAt } from "./firstrun";
 import type { VaultStatus } from "./api";
 import { VaultState } from "./api";
-import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, choosesVaultPassword, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, markAfter, nothingChanged, offersRecoverySwitch, openLineAfter, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
-import { codeText } from "./strings";
+import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, addKindFor, blockedMeansOf, addKinds, choosesVaultPassword, enrolledAlready, mergesPassword, recoverySwitchAt, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, markAfter, nothingChanged, offersRecoverySwitch, openLineAfter, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
+import { ceremonyCopy, codeText } from "./strings";
+import { NO_TRACK, track } from "./pinform";
+import type { Tracked } from "./pinform";
 import type { Mark, View, Way } from "./lockscreen";
 
 function ev(kind: string, step: CeremonyStep, promptId = "", archives = 0, method = ""): CeremonyState {
@@ -901,5 +903,192 @@ describe("openLineAfter", () => {
   it("is never drawn on the touch's green or at the first run", () => {
     expect(openLineAfter(true, "touch")).toBe(false);
     expect(openLineAfter(true, "firstrun")).toBe(false);
+  });
+});
+
+// Where an enrolment's proof offers the recovery key (ruled 2026-11-06,
+// R2): wherever the YubiKey's way waits on the user, by one rule, and
+// never twice.
+describe("recoverySwitchAt", () => {
+  const S = CeremonyStep;
+  const at = (o: Partial<Parameters<typeof recoverySwitchAt>[0]>) =>
+    recoverySwitchAt({ offered: true, view: "insert", step: S.StepWaitingForKey, insertStep: S.StepWaitingForKey, found: false, shows: "none", sends: false, lastTry: false, ...o });
+  it("stands under the wait for a YubiKey of the vault, and not while one is read, two are in or its found LED is held", () => {
+    expect(at({})).toBe("under");
+    expect(at({ step: S.StepProbing, insertStep: S.StepProbing })).toBe("");
+    expect(at({ step: S.StepTwoKeys, insertStep: S.StepTwoKeys })).toBe("");
+    expect(at({ step: S.StepPIN, found: true })).toBe("");
+  });
+  it("stands under the PIN's form, alone or merged and after a wrong PIN, and inside the bar on the last try", () => {
+    for (const shows of ["pin", "both"]) {
+      expect(at({ view: "secret", step: S.StepPIN, shows }), shows).toBe("under");
+      expect(at({ view: "secret", step: S.StepPIN, shows, lastTry: true }), shows).toBe("bar");
+    }
+  });
+  it("stands in the foot at No match, and nowhere at a YubiKey in use", () => {
+    expect(at({ view: "edge", step: S.StepNoMatch })).toBe("foot");
+    expect(at({ view: "edge", step: S.StepBusy })).toBe("");
+  });
+  it("is never drawn at the touch, the derivation, the password sent by itself, the management key or the swap", () => {
+    expect(at({ view: "touch", step: S.StepTouch })).toBe("");
+    expect(at({ view: "touch", step: S.StepDeriving })).toBe("");
+    expect(at({ view: "opening", step: S.StepDeriving })).toBe("");
+    // The prompt an accepted PIN brings, which the merged form answers with
+    // the password it holds: no button for the instant before the touch.
+    expect(at({ view: "secret", step: S.StepPassword, shows: "password", sends: true })).toBe("");
+    expect(at({ view: "secret", step: S.StepPassword, shows: "none" })).toBe("");
+    expect(at({ view: "secret", step: S.StepManagementKey, shows: "none" })).toBe("");
+    expect(at({ view: "swap", step: S.StepSwapKey })).toBe("");
+    expect(at({ view: "opening", step: S.StepReleasing })).toBe("");
+  });
+  // R9: after an accepted PIN and a wrong vault's password the core asks
+  // the password alone, with the card already given back; the switch
+  // stands under that form as it does under the PIN's.
+  it("stands under the vault's password asked alone after a wrong one", () => {
+    expect(at({ view: "secret", step: S.StepPassword, shows: "password" })).toBe("under");
+    expect(at({ view: "secret", step: S.StepPassword, shows: "password", lastTry: true })).toBe("under");
+  });
+  // R8: a blocked PIN offers it in the foot, as No match does.
+  it("stands in the foot at a blocked PIN, and not at a Blocked step drawn on another view", () => {
+    expect(at({ view: "blocked", step: S.StepBlocked })).toBe("foot");
+    expect(at({ view: "blocked", step: S.StepPIN })).toBe("");
+    expect(at({ view: "secret", step: S.StepBlocked, shows: "none" })).toBe("");
+  });
+  it("is nowhere when the switch is not offered: another act, the second half, once taken", () => {
+    const places = [
+      {},
+      { view: "secret" as View, step: S.StepPIN, shows: "pin" },
+      { view: "secret" as View, step: S.StepPIN, shows: "both", lastTry: true },
+      { view: "edge" as View, step: S.StepNoMatch },
+      { view: "blocked" as View, step: S.StepBlocked },
+      { view: "secret" as View, step: S.StepPassword, shows: "password" },
+    ];
+    for (const o of places) expect(at({ ...o, offered: false })).toBe("");
+  });
+  // The rule joined to offersRecoverySwitch, as the panel joins them: by
+  // the act, the half and the vault, at the two places R8 and R9 add.
+  it("offers the blocked PIN's and the password retry's switch in an enrolment's proof alone", () => {
+    const vault = [{ type: "hardware" }, { type: "recovery" }];
+    const where = (kind: string, act: { act: string; type?: string; withRecoveryKey?: boolean } | null, slots: { type: string }[], second: boolean) => {
+      const offered = offersRecoverySwitch({ kind }, act, slots, second);
+      return [at({ offered, view: "blocked", step: S.StepBlocked }), at({ offered, view: "secret", step: S.StepPassword, shows: "password" })];
+    };
+    expect(where("enroll", { act: "enroll", type: "token" }, vault, false)).toEqual(["foot", "under"]);
+    expect(where("enroll", { act: "enroll", type: "recovery" }, vault, false)).toEqual(["foot", "under"]);
+    // The second half: the new YubiKey's blocked PIN, Cancel alone.
+    expect(where("enroll", { act: "enroll", type: "token" }, vault, true)).toEqual(["", ""]);
+    // Begun with the switch already, another act, a vault without a recovery key.
+    expect(where("enroll", { act: "enroll", type: "token", withRecoveryKey: true }, vault, false)).toEqual(["", ""]);
+    expect(where("remove", { act: "remove", type: "hardware" }, vault, false)).toEqual(["", ""]);
+    expect(where("rotate", { act: "rotate" }, vault, false)).toEqual(["", ""]);
+    expect(where("enroll", { act: "enroll", type: "token" }, [{ type: "hardware" }, { type: "hardware" }], false)).toEqual(["", ""]);
+  });
+  it("puts Use recovery key beside Cancel at a blocked PIN where it is offered, and Cancel alone where it is not", () => {
+    const blocked = { over: false, view: "blocked" as View, asks: false, again: true, step: S.StepBlocked };
+    expect(dialogFoot({ ...blocked, recovery: at({ view: "blocked", step: S.StepBlocked }) === "foot" })).toEqual(["recovery", "cancel"]);
+    expect(dialogFoot({ ...blocked, recovery: at({ view: "blocked", step: S.StepBlocked, offered: false }) === "foot" })).toEqual(["cancel"]);
+    expect(dialogFoot(blocked)).toEqual(["cancel"]);
+    // The password retry asks: Continue beside Cancel, the switch under the form.
+    expect(dialogFoot({ over: false, view: "secret", asks: true, again: true, recovery: at({ view: "secret", step: S.StepPassword, shows: "password" }) === "foot", step: S.StepPassword })).toEqual(["continue", "cancel"]);
+  });
+  it("says the blocked PIN's way out on its bar only where the foot offers it", () => {
+    expect(blockedMeansOf("foot")).toBe(ceremonyCopy.blockedMeansProve);
+    expect(blockedMeansOf("")).toBe(ceremonyCopy.blockedMeans);
+    expect(blockedMeansOf(at({ view: "blocked", step: S.StepBlocked }))).toBe("It will not accept a PIN until it is reset; your recovery key can prove it is you instead.");
+    expect(blockedMeansOf(at({ view: "blocked", step: S.StepBlocked, offered: false }))).toBe("It will not accept a PIN until it is reset.");
+  });
+  it("leaves the foot's Use recovery key to No match and Blocked alone", () => {
+    expect(dialogFoot({ over: false, view: "secret", asks: true, again: true, recovery: at({ view: "secret", step: S.StepPIN, shows: "pin" }) === "foot", step: S.StepPIN })).toEqual(["continue", "cancel"]);
+    expect(dialogFoot({ over: false, view: "secret", asks: true, again: true, recovery: true, step: S.StepPIN })).toEqual(["continue", "cancel"]);
+    expect(dialogFoot({ over: false, view: "edge", asks: false, again: true, recovery: at({ view: "edge", step: S.StepNoMatch }) === "foot", step: S.StepNoMatch })).toEqual(["recovery", "cancel"]);
+  });
+});
+
+// The second half asks the new YubiKey's PIN alone (ruled 2026-11-06, R4):
+// the core never asks the vault's password there.
+describe("mergesPassword", () => {
+  const S = CeremonyStep;
+  it("merges only the proof by YubiKey on a vault whose password is on", () => {
+    expect(mergesPassword({ entangled: true, way: "token", second: false })).toBe(true);
+    expect(mergesPassword({ entangled: true, way: "token", second: true })).toBe(false);
+    expect(mergesPassword({ entangled: true, way: "token", choose: true, second: false })).toBe(false);
+    expect(mergesPassword({ entangled: false, way: "token", second: false })).toBe(false);
+    expect(mergesPassword({ entangled: true, way: "recovery", second: false })).toBe(false);
+  });
+
+  // The panel's two pre-effects, in their order: the halves first, then the
+  // form with merged read from them (CeremonyPanel).
+  function forms(entangled: boolean, way: Way, steps: { step: CeremonyStep; promptId?: string; removeLabel?: string; error?: string }[]): string[] {
+    let halves = NO_HALVES;
+    let tracked: Tracked = NO_TRACK;
+    return steps.map((e, i) => {
+      const c = { ...ev("enroll", e.step, e.promptId ?? ""), seq: i + 1, removeLabel: e.removeLabel ?? "", error: (e.error ?? "") as never };
+      halves = halvesAfter(halves, c);
+      tracked = track(tracked, c, mergesPassword({ entangled, way, choose: c.choose, second: halves.phase >= 1 }));
+      return tracked.form.shows;
+    });
+  }
+  it("draws the new YubiKey's PIN alone after the reader was seen empty between the halves (the owner's 33.png)", () => {
+    const shows = forms(true, "token", [
+      { step: S.StepWaitingForKey },
+      { step: S.StepPIN, promptId: "p1" },
+      { step: S.StepPassword, promptId: "w1" },
+      { step: S.StepDeriving },
+      { step: S.StepTouch },
+      { step: S.StepDeriving },
+      { step: S.StepSwapKey, removeLabel: "Desk" },
+      { step: S.StepSwapKey },
+      { step: S.StepWaitingForKey },
+      { step: S.StepPIN, promptId: "p2" },
+    ]);
+    expect(shows[1]).toBe("both");
+    expect(shows[2]).toBe("password");
+    expect(shows.at(-1)).toBe("pin");
+  });
+  it("draws it alone after an already-unlocks wait, and after a swap with no empty reader", () => {
+    const tail = [
+      { step: S.StepSwapKey },
+      { step: S.StepWaitingForKey },
+      { step: S.StepSwapKey, removeLabel: "YubiKey 35678166", error: "vault.duplicate_slot" },
+      { step: S.StepSwapKey },
+      { step: S.StepWaitingForKey },
+      { step: S.StepPIN, promptId: "p2" },
+    ];
+    expect(forms(true, "token", [{ step: S.StepWaitingForKey }, { step: S.StepPIN, promptId: "p1" }, { step: S.StepSwapKey, removeLabel: "Desk" }, ...tail]).at(-1)).toBe("pin");
+    expect(forms(true, "token", [{ step: S.StepWaitingForKey }, { step: S.StepPIN, promptId: "p1" }, { step: S.StepSwapKey, removeLabel: "Desk" }, { step: S.StepPIN, promptId: "p2" }]).at(-1)).toBe("pin");
+    // A proof by recovery key never merged; its second half neither.
+    expect(forms(true, "recovery", [{ step: S.StepRecovery, promptId: "r1" }, { step: S.StepDeriving }, ...tail]).at(-1)).toBe("pin");
+  });
+});
+
+// The already-unlocks wait (ruled 2026-11-06, R1 and R5) is told from the
+// proving YubiKey's swap by the core's note on it.
+describe("enrolledAlready", () => {
+  const S = CeremonyStep;
+  it("is the swap with an unlock method named and the duplicate note", () => {
+    expect(enrolledAlready({ step: S.StepSwapKey, removeLabel: "YubiKey 35678166", error: "vault.duplicate_slot" })).toBe(true);
+    expect(enrolledAlready({ step: S.StepSwapKey, removeLabel: "YubiKey 35678166", error: "" })).toBe(false);
+    expect(enrolledAlready({ step: S.StepSwapKey, removeLabel: "", error: "" })).toBe(false);
+    expect(enrolledAlready({ step: S.StepFailed, removeLabel: "", error: "vault.duplicate_slot" })).toBe(false);
+    expect(enrolledAlready(null)).toBe(false);
+  });
+  it("draws both waits on the swap's view, never a failure's", () => {
+    const c = { ...ev("enroll", S.StepSwapKey), removeLabel: "YubiKey 35678166", error: "vault.duplicate_slot" as never };
+    expect(dialogViewOf({ c, way: "token", passed: true })).toBe("swap");
+    expect(dialogFoot({ over: false, view: "swap", asks: false, again: true, step: S.StepSwapKey })).toEqual(["cancel"]);
+  });
+});
+
+// Add an unlock method…'s list (ruled 2026-11-06, R6).
+describe("addKinds", () => {
+  it("has no Password on a vault with a YubiKey, and all three on one without", () => {
+    expect(addKinds(true)).toEqual(["token", "recovery"]);
+    expect(addKinds(false)).toEqual(["token", "password", "recovery"]);
+  });
+  it("falls a remembered Password back to the YubiKey where the list has none, and keeps every other choice", () => {
+    expect(addKindFor("password", true)).toBe("token");
+    expect(addKindFor("password", false)).toBe("password");
+    expect(addKindFor("recovery", true)).toBe("recovery");
+    expect(addKindFor("token", true)).toBe("token");
   });
 });

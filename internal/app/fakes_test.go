@@ -343,6 +343,10 @@ func (f *fakeCards) Open(reader string) (Card, error) {
 	f.opens++
 	f.card.mu.Lock()
 	f.card.closed = false
+	if f.card.opened > f.card.closes {
+		f.card.reopened++ // opened again while an open of it stood
+	}
+	f.card.opened++
 	f.card.mu.Unlock()
 	return f.card, nil
 }
@@ -357,11 +361,21 @@ type fakeCard struct {
 	retries   int
 	closed    bool
 	closes    int
+	opened    int // opens of this card that succeeded, against closes
+	reopened  int // opens while an earlier open of it was not yet closed
+	overClose int // closes beyond its opens: a card closed twice
 	closeErr  error
 	mgmt      []byte // the PIN-protected management key; nil when none
 	touches   []TouchRequest
 	ops       int
 	removed   bool // pulled: every operation answers ErrTokenNoCard
+	// keysErr: Keys answers this while set; onKeys runs after every Keys
+	// that answered, outside the card's lock, so that a test can act at
+	// the exact moment between a read of the keys and what follows it.
+	keysErr error
+	onKeys  func()
+	// onClose runs after every Close, outside the card's lock.
+	onClose   func()
 	verified  bool // PIN-once: a VERIFY stands for this handle, as on the card
 	proofLies bool // the agreement the token computes is not its key's: the proof must refuse it
 	// verifies counts the VERIFYs the card was sent — the ceremony's own
@@ -415,6 +429,20 @@ func (f *fakeCard) closeCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.closes
+}
+
+// openedCount is how many times this card was opened.
+func (f *fakeCard) openedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opened
+}
+
+// setKeysErr makes Keys fail with err (nil: answer again).
+func (f *fakeCard) setKeysErr(err error) {
+	f.mu.Lock()
+	f.keysErr = err
+	f.mu.Unlock()
 }
 
 // setRemoved pulls the key, or puts it back.
@@ -505,10 +533,27 @@ func (f *fakeCard) info(slot Slot) KeyInfo {
 }
 
 func (f *fakeCard) Keys() ([]KeyInfo, error) {
+	out, err := f.keysLocked()
+	f.mu.Lock()
+	hook := f.onKeys
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return out, err
+}
+
+func (f *fakeCard) keysLocked() ([]KeyInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
 		return nil, ErrTokenClosed
+	}
+	if f.removed {
+		return nil, ErrTokenNoCard
+	}
+	if f.keysErr != nil {
+		return nil, f.keysErr
 	}
 	var out []KeyInfo
 	for _, s := range []Slot{0x9d, 0x82, 0x83, 0x84} {
@@ -589,8 +634,22 @@ func (f *fakeCard) Token(pub []byte, p Prompter) (keystore.Token, error) {
 }
 
 func (f *fakeCard) Close() error {
+	err := f.closeLocked()
+	f.mu.Lock()
+	hook := f.onClose
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return err
+}
+
+func (f *fakeCard) closeLocked() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.closes >= f.opened {
+		f.overClose++
+	}
 	f.closed = true
 	f.verified = false // the close resets the card
 	f.closes++

@@ -476,7 +476,10 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   nothing stops — it bounds how long a hardware-verified state can be used without the password
   (ruled 2026-09-08). `MaxOperations` exhausted → "remove and reinsert the key" (WaitingForKey).
 - Deriving: `keystore.Unlock(HardwareCredential{Token, Password})` → `Unlocked` → `Session()` →
-  `Unlocked.Close()`. Then the ceremony goroutine's deferred `Card.Close()` runs (Releasing);
+  `Unlocked.Close()`. Then the ceremony goroutine's deferred `Card.Close()` runs (Releasing) —
+  unless a wrong password had the attempt give the card back already (above): that release was
+  the card's one, and whatever ends the ceremony afterwards — the right password, a cancel, a
+  lock, the deadline — closes nothing more and shows no Releasing;
   `ErrResetFailed` from every release of a card the PIN step touched — this one, or an early
   exit from the PIN prompt on — is a warning event, never a failure, and a moment rather than a
   standing state (ruled 2026-10-13): the toast says it once, and `VaultStatus.Warnings` carries
@@ -1593,16 +1596,39 @@ sentinel of every package with a catch-all `internal` — and services are regis
   (`Choose`) — and then, for a YubiKey, the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
   — the one card present is probed for that key's public key (no PIN, no touch), because the
   swap may already have happened during the prompt and a swap in the same port shows the same
-  reader name throughout — then for the key to enrol; `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
-  (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` — and then,
-  reused or generated, **the key proves itself before it is enrolled**: its PIN (not asked again
-  when the management key's VERIFY still stands) and its touch, over an agreement with an
-  ephemeral key checked against its public key (`token.proof` when it does not match) — so a
-  vault never depends on a key that does not work, and a key in the reader is never enrolled
-  by merely being there (ruling 2026-09-07, third hardware test) → `AddSlot`. A key's label left
-  empty is its serial number ("YubiKey 12345678"), which tells one from another; a password's is
-  "Password"; a recovery key needs a name.
-  Sub-states mirror §2.2 plus `ManagementKey`. `BeginEnroll(recovery, label)` adds a recovery
+  reader name throughout — then for the key to enrol. **A YubiKey that already unlocks this
+  vault is refused on insertion, as a wait** (ruled 2026-11-06): the card opened to be enrolled
+  is read first (`Keys()`, no PIN, no touch), and when any key on it, in any slot, usable or
+  not, is the public key of any of the file's hardware records (the vault's YubiKeys, and a
+  retired record's too, which the keystore's duplicate rule counts: `HardwareRecords`, beside
+  `Slots`, after an outside audit the same day), nothing is asked of it — no PIN, no management
+  key, no key generated, no touch: `SwapKey` names that unlock method (`RemoveLabel`) with
+  `vault.duplicate_slot` as a note (`Error`), waits for it to leave, and carries on by itself
+  with the next YubiKey inserted, under the second half's one deadline. Its probe of the reader
+  never parks: a card another program holds is a poll that told nothing, the note standing,
+  never a park at `Busy`, which only *Cancel* would leave, and a device that cannot be read,
+  without PIV say, ends the wait and is met by the enrolment as any device inserted is. The
+  proving YubiKey left in is the first case of the rule and keeps its own swap, with no note;
+  the same YubiKey put back, another YubiKey of the vault, one in the reader under a recovery
+  key's proof, and one whose key in a retired slot is already enrolled (once given a second key
+  and enrolled twice) are the others. The check is made on the very card that would be
+  enrolled, held from the check to the enrolment, so no swap slips between them, and the
+  keystore's `ErrDuplicate` (`vault.duplicate_slot`) stays the backstop. An adopted backup's
+  first way in, at an import or *Finish setting up*, excludes its file's hardware records the
+  same way (its active slots are recovery keys alone, but a retired record may be there); a
+  creation has no file, so nothing. The refusal is never a failure and never offers *Start
+  again* (it was the failure, after the PIN and the touch). Then `Inspect(9d)` → reuse a `Usable`
+  key or `FirstEmptySlot` + management key (`ProtectedManagementKey(pin)` after `PINState`, else
+  the hex prompt) + `Generate` — and then, reused or generated, **the key proves itself before it
+  is enrolled**: its PIN (not asked again when the management key's VERIFY still stands) and its
+  touch, over an agreement with an ephemeral key checked against its public key (`token.proof`
+  when it does not match) — so a vault never depends on a key that does not work, and a key in
+  the reader is never enrolled by merely being there (ruling 2026-09-07, third hardware test) →
+  `AddSlot`. A key's label left empty is its serial number ("YubiKey 12345678"), which tells one
+  from another; a password's is "Password"; a recovery key needs a name.
+  Sub-states mirror §2.2 plus `ManagementKey`, and `SwapKey` in two senses: the proving YubiKey
+  to come out (no note), and a YubiKey that already unlocks the vault to come out
+  (`vault.duplicate_slot` as the note, above). `BeginEnroll(recovery, label)` adds a recovery
   slot and shows its digits: the reveal, below.
 - **The reveal.** Every showing of a recovery key — after a create, after enrolling one, and
   `RevealRecoveryKey(recipientID)` from the Vault page — ends its ceremony at
@@ -2072,7 +2098,7 @@ and a ceremony in a dialog says the same, its foot band holding *Cancel* alone �
 2026-10-27: the proof of *Add an unlock method…* adding a YubiKey or a recovery key, begun
 without the recovery key on a vault that has a YubiKey and a recovery key, draws the step's own
 line and *Use recovery key* (accent) before *Cancel*, as an unlock does, §13 *The recovery-key
-proof*).
+proof*, which since 2026-11-06 offers it through the whole proof, a blocked PIN's foot included).
 
 **The PIN's step**: the YubiKey's name as a chip, then, on a vault whose entangled password is
 on, the PIN and the password as two fields under one *Continue* (the ruling of 2026-09-08). The
@@ -2081,7 +2107,9 @@ the PIN field, with the retries, and nothing else moves — the password field k
 typed, as an ordinary masked field the user may still edit, and is sent only once the PIN is
 right, in the state it is in at that moment, by the page and with no further click. A wrong
 password, known only after the touch, comes back with the password field emptied and marked and
-the PIN not asked again (§2.2's cached `H`). Each field has one reserved 16 px line under it,
+the PIN not asked again (§2.2's cached `H`); in the proof of *Add an unlock method…* that form
+alone has "Use recovery key instead" under it, as the PIN's has, and the prompt the merged form
+answers by itself never does (ruled 2026-11-06). Each field has one reserved 16 px line under it,
 where its rule ("Up to 8 characters.") and what is wrong ("Wrong PIN.") cross-fade, so an error
 never pushes the fields and buttons below it; the retries stand in the PIN's label row — "3 tries
 left" in the second ink, attention at two, danger at one — and on the last try an attention bar
@@ -2097,16 +2125,34 @@ Blocked's *Use recovery key*, a timeout's *Start again* — and a *Cancel* that 
 step that asks nothing here, is the same standard button, never a subtle one (ruled 2026-10-17;
 No match's and Blocked's accent stood at its own width, and the quiet steps' *Cancel* was
 subtle); the recovery key's cells alone keep *Unlock* at its width, the count at the row's end.
-The same two-field form serves every token ceremony on the Vault page, where the last try's bar
-says its consequence alone — "Last try. A wrong PIN now blocks this YubiKey's PIN until it is
-reset." — since a dialog offers no recovery key there (two cases offer one, neither of them a
-PIN's: §13, *The recovery-key proof*, ruled 2026-10-27). Blocked stands on this step, under the
+The same two-field form serves the proof of every token ceremony on the Vault page, never an
+enrolment's second half, where the new YubiKey is asked for its PIN alone under "Type the new
+YubiKey's PIN", its own label on the chip (ruled 2026-11-06: the vault's password is not asked
+there, §3 Keys, and the form drew its field whenever the reader had been seen empty between the
+halves). The last try's bar there says its consequence alone — "Last try. A wrong PIN now blocks
+this YubiKey's PIN until it is reset." — save in the proof of *Add an unlock method…*, where §13's
+*The recovery-key proof* offers the recovery key: there the bar names the way out, "Last try. A
+wrong PIN now blocks this YubiKey's PIN; your recovery key can prove it is you instead.", with
+*Use recovery key*, a small standard button, inside it as on the lock screen, and the button under
+the form goes (ruled 2026-11-06, overturning 2026-10-27's "neither of them a PIN's"). Blocked
+stands on this step, under the
 YubiKey's chip, with its own lead that says whose PIN, "This YubiKey's PIN is blocked", then one
 sentence on a danger bar, what it means and, in an unlock, the way out — "It will not accept a
 PIN until it is reset; your recovery key still opens the vault." — and *Use recovery key*
-(accent, an unlock's alone) beside *Cancel* (ruled 2026-10-17; it was a title over a grey line,
-then a bar alone, then a lead that named no YubiKey over a caption and a bar that split one
-sentence).
+(accent) beside *Cancel* (ruled 2026-10-17; it was a title over a grey line, then a bar alone,
+then a lead that named no YubiKey over a caption and a bar that split one sentence). A dialog's
+Blocked is the same, save where the way out is offered: in the proof of *Add an unlock method…*
+(§13 *The recovery-key proof*) the bar reads "It will not accept a PIN until it is reset; your
+recovery key can prove it is you instead." over *Use recovery key* (accent) beside *Cancel*, as
+on the lock screen; wherever the switch is not offered (any other act, an enrolment's second
+half, a vault without a recovery key, an enrolment already begun with the switch) it says its
+meaning alone, "It will not accept a PIN until it is reset.", over *Cancel* alone (ruled
+2026-11-06; a dialog offered no recovery key at a blocked PIN before). Where the dialog's
+Blocked or No match offers the way out and replaces the view that held the focus, the focus
+goes to *Use recovery key*, its ring drawn only once the keyboard is used, as on the lock
+screen; a dialog's Blocked is also said in its panel's polite live region, its lead and its
+bar's sentence, since its view crosses in without a role of its own (2026-11-06; the focus fell
+to the document before).
 
 **The recovery key's step** (ruled 2026-10-17): the vault's name and "Type or paste the 48 digits
 from the sheet. The key ID at its top says which sheet it is.", the vault's recovery keys as a
@@ -3403,11 +3449,16 @@ scrolls — and at 1024 × 768 the create dialog ticked and the import dialog's 
 by about 50 px (measured 2026-10-17, when the import dialog was 460 px wide; it is 520 px since
 2026-10-28, the order of its body changed with it, above). *Finish setting up* uses
 the same cards, its recovery line and its next line those of an adopted backup (the import
-dialog, above). The enrol dialog names the key, never the secret: a token gets "Name this key" (the label
-shown in the list of unlock methods), and a password is chosen in the ceremony that follows,
-because the vault must first check an unlock method. The enrol dialog is *Add an unlock method*,
-its kind field *Unlock method*, and a recovery key's name field says "Shown in the list of unlock
-methods." (ruled 2026-10-17; it was *Add a key*, *Kind* and "ways in"). A YubiKey's name is
+dialog, above). The enrol dialog names the YubiKey, never the secret: a YubiKey gets "Name this
+YubiKey" (the label shown in the list of unlock methods; it read "Name this key" until
+2026-11-06, a bare "key"), and a password is chosen in the ceremony that follows, because the
+vault must first check an unlock method. The enrol dialog is *Add an unlock method*, its kind
+field *Unlock method*, and a recovery key's name field says "Shown in the list of unlock
+methods." (ruled 2026-10-17; it was *Add a key*, *Kind* and "ways in"). On a vault with a YubiKey
+its *Unlock method* list has no *Password*: a standalone password never joins a vault with a
+YubiKey (DESIGN §5), so the choice is not offered rather than offered greyed, and a remembered
+choice of *Password* falls back to *YubiKey (PIN and touch)* (ruled 2026-11-06; it read "Password
+(not in a vault with a YubiKey)", greyed and unpressable). A YubiKey's name is
 optional, in the create dialog and the enrol dialog alike, and its empty field says what an empty
 field produces — "Named after its serial number", the core's "YubiKey 12345678" — never an
 invented name that reads as a default already filled in; a recovery key's, which must be named,
@@ -4164,7 +4215,13 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   `SwapKey` or at the new secret's prompt; its swap is the key art over "Remove <the YubiKey
   that proved it>" and "Then insert the new YubiKey. Enfold carries on by itself.", and its
   second half's wait reads "Now insert the new YubiKey" (the core's own words for the swap, "the
-  key to enroll", are never shown). **The touch takes the box over** as it takes the lock's
+  key to enroll", are never shown); a YubiKey that already unlocks the vault, inserted as the new
+  one, is the same key art over "<its unlock method> already unlocks this vault" and "Remove it,
+  then insert the YubiKey to add. Enfold carries on by itself.", *Cancel* alone in the foot and
+  the lead said once to Narrator as it appears, told from the first swap by the core's note
+  `vault.duplicate_slot` (ruled 2026-11-06: it was refused only after its PIN, the vault's
+  password and its touch, as a failure offering *Start again*); and the new YubiKey's PIN stands
+  alone under "Type the new YubiKey's PIN", its chip the YubiKey's label. **The touch takes the box over** as it takes the lock's
   stage: the touch's gradient fills the body under an opacity that moves (220 ms on the entering
   curve; 160 ms on the exit's), the box's stroke fades with it, the title, the line and the
   words take the touch's inks, the rings, the hero, its line and the receipt stand in the middle
@@ -4244,9 +4301,11 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   dialog, which stays open, the failure standing until the new ceremony's first event takes its
   place; *Close* once the ceremony has otherwise ended. Escape is *Cancel* while it runs and
   closes the dialog after. The panel keeps one height for every step, the tallest's — the PIN's
-  last try under an enrolment's line, 354 px measured in Edge, 356 on the 4 px grid — so the
-  box, 519 px, never jumps as the steps swap (ruled 2026-10-17; it was the mock's 380, which
-  left 26 px of nothing under the tallest). A button that grows to share a row centres its
+  last try in an enrolment's proof, its bar's *Use recovery key* wrapping the sentence to three
+  lines over the PIN and the vault's password, 373.6 px measured in Edge, 376 on the 4 px grid —
+  so the box, 539 px, never jumps as the steps swap (ruled 2026-10-17; it was the mock's 380,
+  which left 26 px of nothing under the tallest, then 356, which rose by 20 when the bar took the
+  switch, ruled 2026-11-06). A button that grows to share a row centres its
   label, as a wide one does (*Continue*, *Unlock*, *Start again*). What the page cannot say in
   place is an InfoBar in the page's notice slot (*InfoBars*, under *Notices and their tiers*,
   above; ruled 2026-10-26, phase 4b of the design review's direction 4): the toasts, and
@@ -4257,7 +4316,12 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   what looks like a link: a command is a button — *Cancel*, *Lock now*, "Use recovery key
   instead" are subtle buttons, 24 px high in the layer's foot — the lock screen's further
   commands too (*Backups and copies…*, *Rebuild the vault…*, "Use recovery key instead": 28 px;
-  the panel's *Cancel* is a standard button beside its primary) and the replaced copy's *Restore
+  the panel's *Cancel* is a standard button beside its primary; in a dialog's ceremony "Use
+  recovery key instead" is a standard button at the default height, start-aligned, the recovery
+  key's glyph before its label, the last thing in its view one `--s4` under what precedes it, on
+  the insert view, the PIN's and the vault's password asked alone alike, the accent staying with
+  *Continue* — ruled 2026-11-06: the
+  subtle one read as ink, not as a way out) and the replaced copy's *Restore
   it…*, a small button on its bar's 40 px line (ruled 2026-10-17; each was a link) —
   and a hyperlink button (*Show in Explorer*, *Locate…*, *Details…*) is kept for going somewhere
   or revealing something, and for the create dialog's *Keep it elsewhere…* and *Use the usual
@@ -5003,21 +5067,34 @@ re-keying removal of the vault's only YubiKey, with no standalone password: the 
 is not asked for and nothing else proves, so the proof is one of the vault's recovery keys, its
 note saying why ("One of this vault's recovery keys proves it is you, since the YubiKey being
 removed is not asked for."). And *Add an unlock method…* adding a YubiKey or a recovery key on a
-vault that has a YubiKey and a recovery key: under the opening wait for a YubiKey of the vault
-stands *Use recovery key instead*, and at *No match* *Use recovery key* is the accent with the
-step's own line, as on the lock screen (§6 names this exception); pressed, the act is cancelled
-and begun again with `BeginEnroll(kind, label, true)`, the dialog staying up throughout, and the
-proof is the recovery key ("Your recovery key proves it is you, since no YubiKey of this vault
-is at hand. The new YubiKey comes next."). A new YubiKey then comes at once, with no YubiKey to
-take out first, and the end says the next step: "Now remove the lost YubiKey: Remove… on its
-card asks why, and re-keys the vault when it was lost." A new recovery key is shown as any added
+vault that has a YubiKey and a recovery key: wherever its proof waits on the user with the
+YubiKey — the wait for a YubiKey of the vault, the PIN's form, alone or with the vault's
+password, after a wrong PIN too, and the vault's password asked alone after an accepted PIN and
+a wrong password — stands *Use recovery key instead*, a standard button (§6, Controls); on the
+last try the attention bar carries *Use recovery key* in its place, as the lock screen's does,
+and it is not drawn twice; at *No match* and at a blocked PIN *Use recovery key* is the accent
+beside *Cancel*, as on the lock screen, No match keeping the step's own line and Blocked's bar
+naming the way out (§6 names these exceptions) (ruled 2026-11-06, widening 2026-10-27's wait and
+*No match*). Never while the YubiKey is read, touched or derived from, never on the password
+prompt the merged form answers by itself, never in the second half (a blocked PIN there has
+*Cancel* alone), never for another act; pressed, the act is cancelled, the page waits until it
+has ended, as the lock screen's own switch does, and begins it again with `BeginEnroll(kind,
+label, true)`, the dialog staying up throughout, and the
+proof is the recovery key ("Your recovery key proves it is you instead of a YubiKey. The new
+YubiKey comes next."; reworded 2026-11-06 for the owner to confirm: it read "since no YubiKey of this vault is at hand"
+until the switch stood at a blocked PIN and under the password asked alone, where the YubiKey
+is still in the reader). A new YubiKey then comes at once, with no YubiKey to
+take out first — unless a YubiKey of the vault is in the reader, which is waited out as any
+YubiKey that already unlocks the vault is (§3 Keys, ruled 2026-11-06) — and the end says the
+next step: "Now remove the lost YubiKey: Remove… on its card asks why, and re-keys the vault
+when it was lost." A new recovery key is shown as any added
 one is, its caption saying "48 digits. They can be shown again from the Vault page only after
 you add a YubiKey or a password and prove it."; *Remove…* on the lost YubiKey is then enabled,
-which is how a user with no spare YubiKey yet withdraws the lost one. No other act, and no other
-moment of these two, offers a recovery key; the showing of a recovery key is still authorised by
-a YubiKey or a password and never by a recovery key (DESIGN §5), though that YubiKey may itself
-have been added with a recovery key, which is why the replacement asks for unknown unlock
-methods to be removed. So the case the feature exists for — one YubiKey, lost, and one recovery
+which is how a user with no spare YubiKey yet withdraws the lost one. No other act, and no moment
+of these two but the proof's waits on the user, offers a recovery key; the showing of a recovery
+key is still authorised by a YubiKey or a password and never by a recovery key (DESIGN §5),
+though that YubiKey may itself have been added with a recovery key, which is why the replacement
+asks for unknown unlock methods to be removed. So the case the feature exists for — one YubiKey, lost, and one recovery
 key — goes: unlock with the recovery key; add the new YubiKey, proving with the recovery key;
 remove the lost one, answered *Lost, stolen, or I am not sure*, proving with the new YubiKey and
 re-keying; with the password on, change it; then replace the recovery key. With no new YubiKey

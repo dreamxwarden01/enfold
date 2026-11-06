@@ -281,6 +281,31 @@ describe("the lock screen's and the dialogs' words", () => {
     expect(ceremonyCopy.swapLine).toBe("Then insert the new YubiKey. Enfold carries on by itself.");
     expect(stepCopy[CeremonyStep.StepBlocked].title).toBe("The PIN is blocked. Use your recovery key.");
   });
+  // The add flow (ruled 2026-11-06): the already-unlocks wait, the second
+  // half's PIN, the last try's way out and the list's field, in the house
+  // voice and the glossary's words.
+  it("says the add flow's new lines in the glossary's words", () => {
+    const said = [ceremonyCopy.alreadyLead("YubiKey 35678166"), ceremonyCopy.alreadyLead(""), ceremonyCopy.alreadyLine, ceremonyCopy.pinNew, ceremonyCopy.lastTryWayOut, ceremonyCopy.blockedMeansProve, dialogCopy.addUnlockMethod.nameKey];
+    for (const s of said) {
+      expect(s, s).not.toMatch(/n't|'re|'ll|'ve|it's/i);
+      expect(s, s).not.toMatch(/\b(the|this|a) key\b|^key\b/i);
+    }
+    expect(ceremonyCopy.alreadyLead("YubiKey 35678166")).toBe("YubiKey 35678166 already unlocks this vault");
+    expect(ceremonyCopy.alreadyLead("")).toBe("This YubiKey already unlocks this vault");
+    expect(ceremonyCopy.alreadyLine).toBe("Remove it, then insert the YubiKey to add. Enfold carries on by itself.");
+    expect(ceremonyCopy.pinNew).toBe("Type the new YubiKey's PIN");
+    expect(dialogCopy.addUnlockMethod.nameKey).toBe("Name this YubiKey");
+    // The last try's way out begins as the consequence alone does, and names the recovery key.
+    expect(ceremonyCopy.lastTryWayOut.startsWith("A wrong PIN now blocks this YubiKey's PIN")).toBe(true);
+    expect(ceremonyCopy.lastTryWayOut).toMatch(/recovery key/);
+    // A blocked PIN in an enrolment's proof (R8): the lock screen's Blocked
+    // sentence, its meaning first, then the way out as the last try says it.
+    expect(ceremonyCopy.blockedMeansProve.startsWith(ceremonyCopy.blockedMeans.slice(0, -1) + "; ")).toBe(true);
+    expect(ceremonyCopy.blockedMeansProve.endsWith(ceremonyCopy.lastTryWayOut.slice(ceremonyCopy.lastTryWayOut.indexOf(";")))).toBe(true);
+    expect(ceremonyCopy.blockedMeansProve.split(/(?<=[.?!])\s+/).length).toBe(1);
+    // The greyed Password is gone with its words (R6).
+    expect("passwordNotHere" in dialogCopy.addUnlockMethod).toBe(false);
+  });
 });
 
 // Direction 9 (ruled 2026-10-18): safety's receipts, said as what they are.
@@ -686,8 +711,8 @@ describe("the re-key question and the replacement (DESIGN §5, ruled 2026-10-27)
   });
   it("says why a recovery key proves it, by cause", () => {
     const n = ceremonyCopy.recoveryNote;
-    expect(n.enroll).toBe("Your recovery key proves it is you, since no YubiKey of this vault is at hand. The new YubiKey comes next.");
-    expect(n.enrollRecovery).toBe("Your recovery key proves it is you, since no YubiKey of this vault is at hand. The new recovery key comes next.");
+    expect(n.enroll).toBe("Your recovery key proves it is you instead of a YubiKey. The new YubiKey comes next.");
+    expect(n.enrollRecovery).toBe("Your recovery key proves it is you instead of a YubiKey. The new recovery key comes next.");
     expect(n.remove).toBe("One of this vault's recovery keys proves it is you, since the YubiKey being removed is not asked for.");
     expect(n.only).toBe("This vault has only its recovery keys, so one of them proves it is you.");
     expect(n.onlyOne).toBe("This vault has only its recovery key, so it proves it is you.");

@@ -529,7 +529,9 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 			return err
 		}
 		// A cancel during the proof's touch leaves the staged copy to the
-		// pending touch, which removes it when it ends (§2.2).
+		// pending touch when that attempt holds the handle (prove's own
+		// agreement), which removes it when it ends (§2.2); a YubiKey's
+		// proof that holds only the card leaves it here (startAttempt).
 		cer.cleanup = func() { os.Remove(staged) }
 		var unl *keystore.Unlocked
 		if info.Kind == FileKindBackup {
@@ -543,16 +545,19 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 				// removed below, with whatever the commit left in it.
 				unl.Close()
 			}
-			if errors.Is(err, errDisowned) {
-				// An unlock's attempt holds the handle and removes the copy
-				// at its end; a proof's holds only the card, so the handle
-				// is closed here and the attempt removes the copy after.
+			if errors.Is(err, errDisowned) && cer.pendingOwns(ks) {
+				// The proof's agreement on the copy itself holds the handle
+				// as the pending touch: it closes it and removes the copy
+				// after the close, at its end (attempt.release).
 				disowned = true
-				if !cer.pendingOwns(ks) {
-					ks.Close()
-				}
 				return err
 			}
+			// Every other end — the new YubiKey's proof gone on as the
+			// pending touch included, which holds only the card, and an
+			// agreement on the copy that has already ended — closes the
+			// handle here, and the deferred removal follows the close:
+			// Windows refuses to delete a file still open (the 2026-11-06
+			// outside audit's second pass, U2).
 			ks.Close()
 			return err
 		}
@@ -586,7 +591,11 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 		if err != nil {
 			return nil, err
 		}
-		unl, err := cer.unlockFile(ks, cred, hc)
+		// From here the card is the agreement's answer, not the one
+		// opened: nil once the attempt gave it back for a wrong password's
+		// retry, so that it is neither closed twice nor shown a release
+		// step again (attempt.card).
+		unl, card, err := cer.unlockFileHeld(ks, cred, hc)
 		if hc != nil {
 			hc.Token = nil
 		}
@@ -596,8 +605,7 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 		if err != nil && hc != nil && keyGone(err) {
 			// The plain close is deliberate: the pull took the verified
 			// state with it, so there is no reset to report.
-			cer.unhold(card)
-			card.Close()
+			cer.closeGone(card)
 			if err := cer.away(err); err != nil {
 				return nil, err
 			}
@@ -635,7 +643,12 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions, bef
 			return nil, err
 		}
 	}
-	spec, ent, err := cer.firstWayIn(first)
+	// The backup's hardware records go with the first way in: its active
+	// slots are recovery keys alone, but the reader accepts a retired
+	// record of a YubiKey, which AddFirstWayIn's duplicate rule refuses,
+	// so that YubiKey is waited out on insertion as on the Vault page
+	// (ruled 2026-11-06, APP.md §3 Keys).
+	spec, ent, err := cer.firstWayIn(first, hardwareRecords(unl.Keystore()))
 	if err != nil {
 		unl.Close()
 		return nil, err
@@ -655,8 +668,10 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions, bef
 // first, then the key (APP.md §3, Vault). The vault's password is returned
 // beside the slot rather than on it — since Revision 2 it is the file's,
 // not the slot's (FORMAT.md §18.1) — so a create passes it in CreateOptions
-// and an adopted backup to AddFirstWayIn. No card is held here.
-func (cer *ceremony) firstWayIn(first EnrollOptions) (keystore.SlotSpec, *keystore.Entangle, error) {
+// and an adopted backup to AddFirstWayIn. No card is held here. vault is
+// the file's hardware records, which a YubiKey is refused for (enrollToken):
+// none at a creation, where there is no file yet.
+func (cer *ceremony) firstWayIn(first EnrollOptions, vault []keystore.SlotInfo) (keystore.SlotSpec, *keystore.Entangle, error) {
 	switch first.Kind {
 	case EnrollPassword:
 		pw, err := cer.askNew("password", StepPassword)
@@ -673,7 +688,7 @@ func (cer *ceremony) firstWayIn(first EnrollOptions) (keystore.SlotSpec, *keysto
 			}
 			ent = &keystore.Entangle{Password: pw, Argon2: defaultArgon2}
 		}
-		pub, serial, err := cer.enrollToken(nil, first.Label) // nothing unlocked: no key to wait out
+		pub, serial, err := cer.enrollToken(nil, first.Label, vault) // nothing unlocked: no key to wait out
 		if err != nil {
 			return nil, nil, err
 		}

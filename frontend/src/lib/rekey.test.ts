@@ -29,8 +29,10 @@ import {
   replaceNotice,
   replaceResult,
   retireBar,
+  swapWordsOf,
 } from "./rekey";
 import type { AfterFacts, Chain, LastAct } from "./rekey";
+import { CeremonyStep } from "./api";
 import { ceremonyCopy, codeText, dialogCopy, replaceCopy, retireHeld, vaultCopy } from "./strings";
 
 // The acts that may re-key the vault (APP.md §13, ruled 2026-10-27): the
@@ -438,8 +440,8 @@ describe("the recovery view's note in a dialog (recoveryNoteOf)", () => {
     expect(recoveryNoteOf({ kind: "import" }, null, 1)).toBe(n.import);
     expect(recoveryNoteOf({ kind: "records" }, null, 1)).toBe(n.records);
   });
-  it("never says no YubiKey is at hand for an enrolment that did not say so", () => {
-    expect(recoveryNoteOf({ kind: "enroll" }, act({ act: "enroll", type: "password" }), 2)).not.toMatch(/at hand/);
+  it("never says the recovery key stands in for a YubiKey for an enrolment that did not say so", () => {
+    expect(recoveryNoteOf({ kind: "enroll" }, act({ act: "enroll", type: "password" }), 2)).not.toMatch(/instead of a YubiKey/);
   });
 });
 
@@ -595,5 +597,27 @@ describe("the small decisions of the page", () => {
     expect(removeRule("hardware")).toBe(vaultCopy.ruleYubiKey);
     expect(removeRule("recovery")).toBe(vaultCopy.rule);
     expect(removeRule("password")).toBe(vaultCopy.rule);
+  });
+});
+
+// The swap's two waits (ruled 2026-11-06, R5): the proving YubiKey's keeps
+// its words; a YubiKey that already unlocks the vault is named by its unlock
+// method, never by the chip's label, and told apart by the core's note.
+describe("the swap's words (swapWordsOf)", () => {
+  const S = CeremonyStep;
+  it("keeps the first swap's words with no note", () => {
+    expect(swapWordsOf({ step: S.StepSwapKey, removeLabel: "YubiKey 5C — desk", error: "" })).toEqual({
+      lead: "Remove YubiKey 5C — desk",
+      line: "Then insert the new YubiKey. Enfold carries on by itself.",
+      already: false,
+    });
+  });
+  it("names the unlock method a YubiKey already is, and says what to do", () => {
+    expect(swapWordsOf({ step: S.StepSwapKey, removeLabel: "YubiKey 35678166", error: "vault.duplicate_slot" })).toEqual({
+      lead: "YubiKey 35678166 already unlocks this vault",
+      line: "Remove it, then insert the YubiKey to add. Enfold carries on by itself.",
+      already: true,
+    });
+    expect(swapWordsOf({ step: S.StepSwapKey, removeLabel: "YubiKey 35678166", error: "vault.duplicate_slot" }).lead).toBe(ceremonyCopy.alreadyLead("YubiKey 35678166"));
   });
 });

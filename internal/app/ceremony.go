@@ -50,8 +50,10 @@ type ceremony struct {
 	recoveryProof bool
 	// held is the card open right now, probed while a prompt stands.
 	held Card
-	// att is the agreement in flight the ceremony waits on (attempt.go);
-	// prompter the piv-facing side of the token the ceremony opened,
+	// att is the agreement in flight the ceremony waits on (attempt.go),
+	// from its start or its adoption until await consumes it, even when a
+	// cancel has meanwhile made it the pending touch again; prompter the
+	// piv-facing side of the token the ceremony opened,
 	// which the attempt inherits; slot the vault slot that token is for;
 	// cleanup runs when a disowned attempt ends (an import's staged copy).
 	att      *attempt
@@ -706,6 +708,105 @@ func (cer *ceremony) holdsKey(reader string, pub []byte) (bool, error) {
 	return false, nil
 }
 
+// waitOutEnrolled is the wait for a YubiKey that already unlocks the vault,
+// inserted as the one to enrol, to leave (ruled 2026-11-06, APP.md §3
+// Keys): the swap's step, RemoveLabel naming the unlock method it is and
+// vault.duplicate_slot as the note, until no reader is listed, two are,
+// or the one card present is none of the vault's as far as can be told.
+// The card is probed as the first swap probes it (Keys: no PIN, no touch)
+// and closed unverified each time. Another of the vault's YubiKeys swapped
+// in, in the same port, is named in its turn rather than let through. At
+// the end the label and the note clear, the step staying the swap's (the
+// wait for the YubiKey to add), and the enrolment goes on by itself. It
+// sets no deadline of its own: it runs under the second half's
+// (enrollToken), which with Cancel and a lock is what ends it otherwise.
+//
+// The probe never parks, unlike the first swap's (holdsKey, through
+// openCard): a card another program holds for a moment is a poll that
+// told nothing, the label and the note standing, since a park here would
+// turn a wait that ends by itself into a dead end only Cancel leaves, the
+// proof to be made again (the outside audit of 2026-11-06, its finding 2).
+func (cer *ceremony) waitOutEnrolled(slot keystore.SlotInfo, vault []keystore.SlotInfo) error {
+	announce := func(s keystore.SlotInfo) {
+		cer.set(func(st *CeremonyState) {
+			st.Step, st.RemoveLabel, st.Error = StepSwapKey, mustString(s.Label, "YubiKey"), CodeDuplicateSlot
+		})
+	}
+	announce(slot)
+	shown := slot.RecipientID
+	poll := &readerPoller{cer: cer}
+	busy := false
+	for left := false; !left; {
+		names, err := poll.names()
+		if err != nil {
+			return err
+		}
+		if len(names) != 1 {
+			break
+		}
+		s, ok, err := cer.enrolledIn(names[0], vault)
+		switch {
+		case err != nil:
+			// Busy, or a key gone while its reader is still listed (the
+			// removal in progress): the next poll sees the reader go, the
+			// next key, or the same one free again. A busy spell is
+			// logged once, not every poll.
+			if errors.Is(err, ErrTokenBusy) && !busy {
+				cer.c.log("ceremony %s: the reader is busy; still waiting for the YubiKey to leave", cer.kind)
+			}
+			busy = errors.Is(err, ErrTokenBusy)
+		case !ok:
+			left = true
+			continue
+		default:
+			busy = false
+			if s.RecipientID != shown {
+				shown = s.RecipientID
+				announce(s)
+			}
+		}
+		if err := cer.wait(readerPoll); err != nil {
+			return err
+		}
+	}
+	cer.set(func(st *CeremonyState) { st.Step, st.RemoveLabel, st.Error = StepSwapKey, "", "" })
+	return nil
+}
+
+// enrolledIn opens the reader long enough to see which of the vault's
+// YubiKeys its card already is, if any, and never parks (waitOutEnrolled).
+// An error is a poll that told nothing and is only ever ErrTokenBusy or a
+// key gone (keyGone), from the open or from Keys. Any other failure, of
+// the open (no PIV, unsupported, anything else) or of Keys, is logged and
+// answered as none of the vault's (false, nil): the wait ends, and the
+// enrolment's own path (enrollOnce) meets that device as it meets any
+// device inserted, parking or failing as it does there. Every card opened
+// is closed once, unverified, so a failed reset is logged, never warned
+// of: nothing here sends a VERIFY.
+func (cer *ceremony) enrolledIn(reader string, vault []keystore.SlotInfo) (keystore.SlotInfo, bool, error) {
+	inconclusive := func(err error) bool { return errors.Is(err, ErrTokenBusy) || keyGone(err) }
+	card, err := cer.probeCard(reader)
+	if err != nil {
+		if inconclusive(err) {
+			return keystore.SlotInfo{}, false, err
+		}
+		cer.c.log("ceremony %s: open %q while waiting: %v; the enrolment meets it", cer.kind, reader, err)
+		return keystore.SlotInfo{}, false, nil
+	}
+	slot, _, _, ok, err := cer.matchSlot(card, vault)
+	cer.closeUnverified(card)
+	switch {
+	case err != nil && inconclusive(err):
+		return keystore.SlotInfo{}, false, err
+	case err != nil:
+		cer.c.log("ceremony %s: reading the keys while waiting: %v; the enrolment meets it", cer.kind, err)
+		return keystore.SlotInfo{}, false, nil
+	case ok:
+		return slot, true, nil
+	}
+	return keystore.SlotInfo{}, false, nil
+}
+
 // waitForOneReader is the WaitingForKey / TwoKeys loop.
 func (cer *ceremony) waitForOneReader() (string, error) {
 	deadline := cer.c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("wait_deadline") })
@@ -781,6 +882,23 @@ func (cer *ceremony) openCard(reader string) (Card, error) {
 		}
 		return nil, err // a key gone is the caller's to wait for again
 	}
+	return cer.opened(card), nil
+}
+
+// probeCard is one open of the reader for a wait that polls it
+// (waitOutEnrolled): no retry, since the next poll is the retry, and no
+// park, since the error is the wait's to weigh. A card it opens is held
+// as openCard's is, until the caller closes it.
+func (cer *ceremony) probeCard(reader string) (Card, error) {
+	card, err := cer.c.deps.Cards.Open(reader)
+	if err != nil {
+		return nil, err
+	}
+	return cer.opened(card), nil
+}
+
+// opened makes a card just opened the ceremony's held card.
+func (cer *ceremony) opened(card Card) Card {
 	c := cer.c
 	c.mu.Lock()
 	cer.held = card
@@ -793,7 +911,7 @@ func (cer *ceremony) openCard(reader string) (Card, error) {
 	if stale {
 		c.emitState()
 	}
-	return card, nil
+	return card
 }
 
 // unhold forgets a card that is being closed by hand.
@@ -983,7 +1101,19 @@ func (cer *ceremony) verifiedExit(card Card, err error) {
 	cer.closeCard(card)
 }
 
-// closeCard runs the release step; a failed reset is a warning.
+// closeGone closes, without the release step, a card whose key went
+// away; nil when nothing is held any more (the attempt gave it back).
+func (cer *ceremony) closeGone(card Card) {
+	if card == nil {
+		return
+	}
+	cer.unhold(card)
+	card.Close()
+}
+
+// closeCard runs the release step; a failed reset is a warning. A nil
+// card — none opened, or one the attempt already gave back — has no
+// release and shows no step.
 func (cer *ceremony) closeCard(card Card) {
 	if card == nil {
 		return
@@ -1040,9 +1170,17 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential)
 // ceremony"), on the handle given — the ceremony's own when own, else the
 // vault's — with the card the ceremony holds and the slot it matched, so
 // that a cancel ends the ceremony at once and the call goes on as the
-// pending touch. An adopted attempt is waited on instead of started.
-func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.HardwareCredential) (*keystore.Unlocked, error) {
+// pending touch. An adopted attempt is waited on instead of started, and
+// so is one that ended as the pending touch again between the adoption
+// and this wait: await then answers errDisowned, and the caller leaves the
+// handle and the card to it — an adoption never turns into an agreement
+// of the ceremony's own (attempt.disownLocked). The card it answers is
+// the one the caller now holds and must close: the held card handed to
+// the attempt, or nil when the attempt gave it back for a wrong
+// password's retry or went on as the pending touch.
+func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.HardwareCredential) (*keystore.Unlocked, Card, error) {
 	c := cer.c
+	handover("agree", cer, nil)
 	c.mu.Lock()
 	a, p, slot, card := cer.att, cer.prompter, cer.slot, cer.held
 	cer.prompter = nil
@@ -1058,21 +1196,21 @@ func (cer *ceremony) agree(ks *keystore.Keystore, own bool, hc keystore.Hardware
 		a.op = func() (*keystore.Unlocked, error) { return ks.Unlock(a.credential()) }
 		cer.startAttempt(a)
 	}
-	unl, err := a.await(cer)
+	unl, held, err := a.await(cer)
 	if err == nil {
-		return unl, nil
+		return unl, held, nil
 	}
 	switch {
 	case errors.Is(err, errDisowned):
-		return nil, err
+		return nil, nil, err
 	case errors.Is(err, ErrTokenPINBlocked):
-		return nil, &parkAt{StepBlocked, CodeTokenPINBlocked}
+		return nil, held, &parkAt{StepBlocked, CodeTokenPINBlocked}
 	case errors.Is(err, ErrTokenTooMany):
-		return nil, &parkAt{StepFailed, CodeTokenTooMany}
+		return nil, held, &parkAt{StepFailed, CodeTokenTooMany}
 	case errors.Is(err, keystore.ErrTampered):
-		return nil, &parkAt{StepFailed, CodeTamperedGeneration}
+		return nil, held, &parkAt{StepFailed, CodeTamperedGeneration}
 	}
-	return nil, err
+	return nil, held, err
 }
 
 // adopted is the attempt the ceremony took over, before it waits on it.
@@ -1144,7 +1282,11 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 				return err
 			}
 		}
-		unl, err = cer.unlockFile(ks, cred, hc)
+		// From here the card is the agreement's answer, not the one
+		// opened: nil once the attempt gave it back for a wrong password's
+		// retry, so that nothing below closes it twice or shows a release
+		// step for it (attempt.card).
+		unl, card, err = cer.unlockFileHeld(ks, cred, hc)
 		if err != nil {
 			c.noteTampered(err)
 			if errors.Is(err, errDisowned) {
@@ -1155,8 +1297,7 @@ func (cer *ceremony) unlock(method UnlockMethod) error {
 				// The key went during the PIN or the touch: back to waiting.
 				// The plain close is deliberate: the pull took the verified
 				// state with it, so there is no reset to report.
-				cer.unhold(card)
-				card.Close()
+				cer.closeGone(card)
 				if err := cer.away(err); err != nil {
 					return err
 				}
@@ -1281,7 +1422,7 @@ func (cer *ceremony) tokenCredential(slots []keystore.SlotInfo, entangled bool) 
 	delay := readerPoll
 	for {
 		if a := cer.adoptPending(cer.vaultPath(), slots); a != nil {
-			return a.credential(), a.card, a.slot, nil
+			return a.credential(), a.heldCard(), a.slot, nil
 		}
 		if err := cer.settlePending(); err != nil {
 			return keystore.HardwareCredential{}, nil, keystore.SlotInfo{}, err
@@ -1318,28 +1459,44 @@ func (cer *ceremony) away(err error) error {
 	return nil
 }
 
-// unlockFile derives the VMK from an open file, mapping a refusal to the
-// park the user must act on. The caller closes ks on error.
+// unlockFile derives the VMK from an open file with a typed credential —
+// a password, the recovery key — mapping a refusal to the park the user
+// must act on. The caller closes ks on error. A token's way in goes
+// through unlockFileHeld, whose answer says which card is still held; one
+// passed here by mistake has its card released here rather than left to
+// a caller that cannot see it.
 func (cer *ceremony) unlockFile(ks *keystore.Keystore, cred keystore.Credential, hc *keystore.HardwareCredential) (*keystore.Unlocked, error) {
+	unl, card, err := cer.unlockFileHeld(ks, cred, hc)
+	cer.closeCard(card)
+	return unl, err
+}
+
+// unlockFileHeld is unlockFile for every way in, and with a token it
+// answers the card the caller holds after the agreement (agree): the one
+// to close, or nil when the attempt already gave it back or holds it as
+// the pending touch. The caller closes that card, never the one it
+// passed in.
+func (cer *ceremony) unlockFileHeld(ks *keystore.Keystore, cred keystore.Credential, hc *keystore.HardwareCredential) (*keystore.Unlocked, Card, error) {
 	if cer.adopted() == nil {
 		// An adopted attempt is at its touch already, and the panel says
 		// so; the derivation is not begun until the card answers.
 		cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 	}
 	var unl *keystore.Unlocked
+	var card Card
 	var err error
 	if hc != nil {
-		unl, err = cer.agree(ks, true, *hc)
+		unl, card, err = cer.agree(ks, true, *hc)
 	} else {
 		unl, err = cer.unlockWith(ks, cred)
 	}
 	if err != nil {
 		if errors.Is(err, keystore.ErrAuth) || errors.Is(err, keystore.ErrNoSlot) || errors.Is(err, keystore.ErrVerifier) {
-			return nil, &parkAt{StepFailed, CodeAuth}
+			return nil, card, &parkAt{StepFailed, CodeAuth}
 		}
-		return nil, err
+		return nil, card, err
 	}
-	return unl, nil
+	return unl, card, nil
 }
 
 // setMethod records which way in this ceremony took, so the lock screen's

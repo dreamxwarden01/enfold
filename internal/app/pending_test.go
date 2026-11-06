@@ -446,8 +446,10 @@ func TestExitWaitsForAnOwnedTouch(t *testing.T) {
 }
 
 // A backup import whose enrolment proof is cancelled at its touch: the
-// ceremony ends at once, the staged copy's handle is closed by whoever
-// still holds it, and the copy is removed when the pending touch ends.
+// ceremony ends at once, and the import, which still holds the staged
+// copy's handle (the proof's attempt holds only the card), closes it and
+// removes the copy then; nothing is left when the pending touch ends
+// (the 2026-11-06 outside audit's second pass, U2; stagedcopy_test.go).
 func TestDisownedProofLeavesNoStagedCopy(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	backup := h.dir + "/backup.eks"

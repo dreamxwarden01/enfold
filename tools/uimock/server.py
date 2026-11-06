@@ -154,6 +154,33 @@ the names) - and "kind" for another act than the one parked ("enroll",
 "replace", or "records" with the import dialog open on its proof and
 Continue pressed). {"scene": "end"} ends what a scene left.
 
+Add an unlock method... (ruled 2026-11-06). Its proof offers Use recovery
+key instead wherever the YubiKey's way waits on the user, but only for an
+enrolment the page itself began (the page records the act), so stage it by
+opening Add an unlock method... from the page and pressing Add first, then
+play "insert", "pin", "wrong_pin", "last_try" (the bar's own button),
+"no_match", "blocked" or "blocked_last" (Use recovery key in the foot, the
+bar naming the way out) or "password_again" (the vault's password asked
+alone after a wrong one, the switch under it) over it; played with "kind"
+"remove" (or any other act) the same scenes offer no switch. The proof's
+PIN is merged with the vault's password
+while the password with every YubiKey is on, as staged; the PIN alone is
+POST /mock/state {"entangled": {"on": false}, "vault": {"entangled":
+false}} and a reload. The second half asks the new YubiKey's PIN alone
+("new_pin", after the reader was seen empty, the order that drew a password
+field there before). A YubiKey that already unlocks the vault is refused on
+insertion, as a wait (keys.go enrollOnce): "already" is the proving
+YubiKey put back after it was pulled, "already_other" another of the
+vault's, "already_pin" the first then the new YubiKey's PIN; the knob
+"already" (a label, or true for the first YubiKey staged) puts that wait
+before the new YubiKey in any scene that reaches it ("new_key", "new_pin",
+"new_touch", "done", "mgmt_key"), and POST /mock/state {"enrolAlready":
+true} does the same in the second half the recovery-key proof plays
+(play_on), as the core does with a YubiKey of the vault left in. The
+Unlock method list has no Password on a vault with a YubiKey, as staged;
+the list of a vault without one is POST /mock/state {"vault":
+{"hasHardwareSlot": false}} and a reload.
+
 The dialog's Start again (ruled 2026-10-17) calls again the act the page
 began, which parks again at the opening wait (begin_act): it is offered
 only for an act the page itself began, so stage it by opening the act
@@ -2844,12 +2871,25 @@ def begin_unlock(args):
 #   two_keys   two YubiKeys in;  no_match  one that is not the vault's
 #   pin        the YubiKey's PIN and the vault's password, merged
 #   wrong_pin  the PIN refused (2 tries left);  last_try  1 left: the bar
-#   blocked    the PIN blocked: the danger bar, Cancel alone
+#   blocked    the PIN blocked: the danger bar; in an enrolment's proof the
+#              bar names the way out and the foot holds Use recovery key
+#              beside Cancel (ruled 2026-11-06, R8), elsewhere Cancel alone
+#   blocked_last  the same, reached as the core reaches it from the last
+#              try: the wrong PIN, the release step, then the park
+#   password_again  the PIN accepted, the touch made, the vault's password
+#              refused (vault.auth) and asked alone (attempt.loop): in an
+#              enrolment's proof the switch under the form (R9)
 #   touch      the green takes the box: the rings, the hero lead
 #   deriving   still green, the rings held at half: "Checking that..."
 #   swap       an enrolment's swap: the proving YubiKey to come out
 #   new_key    an enrolment's second half: "Now insert the new YubiKey"
-#   new_pin    the new YubiKey's PIN, on the second half's line
+#   new_pin    the new YubiKey's PIN, alone, on the second half's line
+#   already    a YubiKey that already unlocks the vault inserted as the new
+#              one - the proving one put back after it was pulled - waited
+#              out with nothing asked of it (keys.go enrollOnce; ruled
+#              2026-11-06): the swap's key art, Cancel alone
+#   already_other  the same wait for another of the vault's YubiKeys
+#   already_pin    "already", that YubiKey out, then the new one's PIN
 #   new_touch  the new YubiKey's own touch (keys.go proveKey): the green
 #   done       ... and the enrolment's Done after it, on the same green,
 #              Close in the band (it was drawn neutral, with no touch)
@@ -2882,8 +2922,23 @@ _TOUCHED = _PROVE + [("password", {"promptId": "dpw-v", "slotLabel": "YubiKey 5C
 _SWAPPED = _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
                        ("swap_key", {"removeLabel": "YubiKey 5C \u2014 desk", "insertLabel": "the key to enroll"})]
 _NEW = _SWAPPED + [("swap_key", {"insertLabel": "the key to enroll"}), ("waiting_for_key", {"readerCount": 0})]
-_NEW_TOUCHED = _NEW + [("pin", {"promptId": "dpin-n2", "retries": 3, "retriesKnown": True, "slotLabel": "YubiKey 5 NFC \u2014 travel"}),
-                       ("touch", {"slotLabel": "YubiKey 5 NFC \u2014 travel", "pinAsked": True, "n": 1})]
+# The new YubiKey is a fresh one, named after its serial as the core names
+# one left unnamed (keys.go enrollOn): one of the vault's own is refused on
+# insertion (_already), so it can never be the one asked for its PIN here.
+_NEW_KEY = "YubiKey 21043355"
+_NEW_TOUCHED = _NEW + [("pin", {"promptId": "dpin-n2", "retries": 3, "retriesKnown": True, "slotLabel": _NEW_KEY}),
+                       ("touch", {"slotLabel": _NEW_KEY, "pinAsked": True, "n": 1})]
+
+
+def _already(label):
+    """The core's wait for a YubiKey that already unlocks the vault (keys.go
+    enrollOnce, waitOutEnrolled; ruled 2026-11-06): the swap naming that
+    unlock method with the note vault.duplicate_slot, while it is in; then,
+    once it is out, the swap cleared and the reader seen empty."""
+    return [("swap_key", {"insertLabel": "the key to enroll", "removeLabel": label, "error": "vault.duplicate_slot"})]
+
+
+_OUT = [("swap_key", {"insertLabel": "the key to enroll"}), ("waiting_for_key", {"readerCount": 0})]
 DIALOG_SCENES = {
     "insert": _PROVE[:1],
     "two_keys": _PROVE[:1] + [("two_keys", {"readerCount": 2})],
@@ -2892,16 +2947,31 @@ DIALOG_SCENES = {
     "wrong_pin": _PROVE + [("pin", {"promptId": "dpin-2", "retries": 2, "retriesKnown": True, "error": "token.pin", "slotLabel": "YubiKey 5C \u2014 desk"})],
     "last_try": _PROVE + [("pin", {"promptId": "dpin-3", "retries": 1, "retriesKnown": True, "error": "token.pin", "slotLabel": "YubiKey 5C \u2014 desk"})],
     "blocked": _PROVE[:1] + [("blocked", {"error": "token.pin_blocked", "slotLabel": "YubiKey 5C \u2014 desk"})],
+    # The last try typed wrong: the core releases the card through its
+    # release step before it parks at Blocked (ceremony.go verifyPIN,
+    # verifiedExit, park).
+    "blocked_last": _PROVE + [("pin", {"promptId": "dpin-3", "retries": 1, "retriesKnown": True, "error": "token.pin", "slotLabel": "YubiKey 5C \u2014 desk"}),
+                              ("releasing", {"slotLabel": "YubiKey 5C \u2014 desk"}),
+                              ("blocked", {"error": "token.pin_blocked", "slotLabel": "YubiKey 5C \u2014 desk"})],
+    # A wrong vault's password is known only after the touch (APP.md 2.2):
+    # the merged card's password went out by itself, the touch was made,
+    # and the core asks the password alone, with vault.auth as its note
+    # (attempt.go loop, after releaseCardForRetry).
+    "password_again": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
+                                  ("password", {"promptId": "dpw-2", "error": "vault.auth", "slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1})],
     "touch": _TOUCHED,
     "deriving": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1})],
     "swap": _SWAPPED,
     "new_key": _NEW,
-    "new_pin": _NEW + [("pin", {"promptId": "dpin-n", "retries": 3, "retriesKnown": True, "slotLabel": "YubiKey 5 NFC \u2014 travel"})],
+    "new_pin": _NEW + [("pin", {"promptId": "dpin-n", "retries": 3, "retriesKnown": True, "slotLabel": _NEW_KEY})],
+    "already": _NEW + _already("YubiKey 5C \u2014 desk"),
+    "already_other": _NEW + _already("YubiKey 5 NFC \u2014 travel"),
+    "already_pin": _NEW + _already("YubiKey 5C \u2014 desk") + _OUT + [("pin", {"promptId": "dpin-n", "retries": 3, "retriesKnown": True, "slotLabel": _NEW_KEY})],
     # The new YubiKey proves itself by its PIN and its touch before the
     # vault depends on it (keys.go proveKey), so the enrolment's Done comes
     # after that touch, on its green (APP.md 6, Controls; ruled 2026-10-17).
     "new_touch": _NEW_TOUCHED,
-    "done": _NEW_TOUCHED + [("done", {"slotLabel": "YubiKey 5 NFC \u2014 travel", "pinAsked": True, "n": 1})],
+    "done": _NEW_TOUCHED + [("done", {"slotLabel": _NEW_KEY, "pinAsked": True, "n": 1})],
     "proof_done": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
                               ("done", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1})],
     "timeout": _TOUCHED + [("failed", {"error": "token.touch", "slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "n": 1})],
@@ -2910,7 +2980,7 @@ DIALOG_SCENES = {
                  ("password", {"promptId": "dpw-1", "method": "password"})],
     "choose": _TOUCHED + [("deriving", {"slotLabel": "YubiKey 5C \u2014 desk", "pinAsked": True, "verified": True, "n": 1}),
                           ("password", {"promptId": "dpw-c", "choose": True})],
-    "mgmt_key": _NEW + [("management_key", {"promptId": "dmk-1", "slotLabel": "YubiKey 5 NFC \u2014 travel"})],
+    "mgmt_key": _NEW + [("management_key", {"promptId": "dmk-1", "slotLabel": _NEW_KEY})],
     "recovery": [("waiting_for_key", {"readerCount": 0, "method": "recovery"}),
                  ("recovery", {"promptId": "drk-1", "method": "recovery"})],
     # Turning the password on (keys.go SetEntangled): the proof, then the
@@ -2982,6 +3052,11 @@ def dialog_scene(body):
     steps = DIALOG_SCENES.get(scene)
     if steps is None:
         return {"scenes": sorted(list(DIALOG_SCENES) + ["end", "replace"])}
+    # "already": a YubiKey of the vault inserted first as the new one, in a
+    # scene that reaches the second half's wait: refused on insertion, then
+    # out, then the scene goes on (ruled 2026-11-06).
+    if body.get("already") and steps[:len(_NEW)] == _NEW:
+        steps = _NEW + _already(already_label(body["already"])) + _OUT + steps[len(_NEW):]
     supersede()
     parked = state.get("act") or {}
     kind = body.get("kind") or SCENE_KINDS.get(scene) or parked.get("kind") or "enroll"
@@ -3022,6 +3097,14 @@ def dialog_scene(body):
         events[-1] = (events[-1][0], with_fields(events[-1][1], {"phase": body["phase"]}))
     threading.Thread(target=play_events, args=(kind, events, time.sleep, gap), daemon=True).start()
     return {"scene": scene, "kind": kind, "steps": [s for s, _ in events]}
+
+
+def already_label(knob):
+    """The unlock method the "already" knobs name: the label given, or the
+    first YubiKey the vault has staged."""
+    if isinstance(knob, str):
+        return knob
+    return next((x["label"] for x in state["slots"] if x["type"] == "hardware"), "YubiKey 5C \u2014 desk")
 
 
 def replace_scene(body):
@@ -3464,7 +3547,8 @@ def play_on(act, base):
     act parks at its proof, but one the page can answer, since no YubiKey
     is needed from there on. Answered, the act plays on as the core runs
     it: an enrolment's second half - no YubiKey proved, so none is asked
-    out first, and the new one's PIN timed as the first way in's is - or
+    out first; a YubiKey of the vault left in waited out ("enrolAlready");
+    then the new one's PIN, which the page answers, and its touch - or
     the chosen password, then the commit, the backup and the end
     (end_events)."""
     kind = act["kind"]
@@ -3476,9 +3560,22 @@ def play_on(act, base):
         pause(0.8)
         if kind == "enroll" and act["type"] == "token":
             emit_ceremony(kind, "swap_key", insertLabel="the key to enroll", **ev)
+            wait = float(state.get("enrolWait", 1.5))
+            if state.get("enrolAlready"):
+                # A YubiKey of the vault left in the reader: no first swap on
+                # this path, so it is the first card the second half opens,
+                # and it is waited out with nothing asked (keys.go
+                # enrollOnce; ruled 2026-11-06).
+                emit_ceremony(kind, "swap_key", insertLabel="the key to enroll", removeLabel=already_label(state["enrolAlready"]),
+                              error="vault.duplicate_slot", **ev)
+                pause(wait * 2)
+                emit_ceremony(kind, "swap_key", insertLabel="the key to enroll", **ev)
             emit_ceremony(kind, "waiting_for_key", readerCount=0, **ev)
-            pause(float(state.get("enrolWait", 1.5)))
-            ev = dict(ev, slotLabel=act["label"] or "YubiKey 21043355")
+            pause(wait)
+            # The new YubiKey proves itself by its PIN, asked alone, and its
+            # touch (keys.go proveKey).
+            ev = dict(ev, slotLabel=act["label"] or _NEW_KEY)
+            ask(kind, "pin", "pin", retries=3, retriesKnown=True, **ev)
             emit_ceremony(kind, "touch", pinAsked=True, n=1, **ev)
             pause(1.5)
         elif kind == "password" or kind == "entangle" and act["on"] or kind == "enroll" and act["type"] == "password":

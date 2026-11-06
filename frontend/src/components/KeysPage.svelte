@@ -22,6 +22,7 @@
   import { backupLine as backupDone, checkedLine } from "../lib/foot";
   import type { Answer, FollowUp } from "../lib/rekey";
   import { backupSavedOnClose, ceremonyTitleOf, lastProtector, primaryOf, questionOf, rekeyLimitOf, removeRule, replaceGreyed, replaceMinutes } from "../lib/rekey";
+  import { addKindFor, addKinds } from "../lib/lockscreen";
   import { date, dateTime, leaf, minutesLabel } from "../lib/format";
   import { pending } from "../lib/pending";
   import { fieldMenu } from "../lib/fieldmenu";
@@ -166,8 +167,18 @@
       addKind = "token";
       addLabel = "";
     }
+    addKind = addKindFor(addKind, !!st?.hasHardwareSlot);
     adding = true;
   }
+
+  // A remembered Password, on a vault that has gained a YubiKey while the
+  // dialog stands, falls back to the YubiKey: the list no longer holds it
+  // (lib/lockscreen addKindFor; ruled 2026-11-06).
+  $effect(() => {
+    if (!adding) return;
+    const k = addKindFor(addKind, !!st?.hasHardwareSlot);
+    if (k !== addKind) addKind = k;
+  });
 
   // Add an unlock method, preset to a recovery key: the action beside the
   // greyed password switch (APP.md §13).
@@ -820,10 +831,11 @@
     <p>{dialogCopy.addUnlockMethod.body}</p>
     <div class="field">
       <div class="field-top"><label for="ak-kind">{dialogCopy.addUnlockMethod.kind}</label></div>
+      <!-- The entries by the vault's unlock methods (lib/lockscreen
+           addKinds; ruled 2026-11-06): no Password on a vault with a
+           YubiKey, rather than a greyed one that cannot be pressed. -->
       <select id="ak-kind" class="input" bind:value={addKind}>
-        <option value="token">{dialogCopy.addUnlockMethod.token}</option>
-        <option value="password" disabled={st?.hasHardwareSlot}>{st?.hasHardwareSlot ? dialogCopy.addUnlockMethod.passwordNotHere : dialogCopy.addUnlockMethod.password}</option>
-        <option value="recovery">{dialogCopy.addUnlockMethod.recovery}</option>
+        {#each addKinds(!!st?.hasHardwareSlot) as k (k)}<option value={k}>{dialogCopy.addUnlockMethod[k]}</option>{/each}
       </select>
     </div>
     {#if addKind === "password"}

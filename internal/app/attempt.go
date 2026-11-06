@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dreamxwarden01/enfold/internal/kdf"
@@ -30,8 +31,15 @@ type attempt struct {
 	adoptable bool
 	path      string // the vault file, for the adoption's match
 	slot      keystore.SlotInfo
-	card      Card
-	ks        *keystore.Keystore
+	// card is the attempt's from its start until it answers, whoever
+	// opened it: given back early for a wrong entangled password's retry
+	// (releaseCardForRetry, nil from then on), else handed to the owner
+	// with the answer (await) or released by the attempt itself (discard).
+	// A caller never closes the card it passed in: it closes only the card
+	// the answer gives back, so that the card is released once (APP.md
+	// §2.2, Wrong password; the 2026-11-06 page review's finding 1).
+	card Card
+	ks   *keystore.Keystore
 	// ownsKS: the ceremony opened the handle for this attempt (an unlock
 	// from Locked, an import's or a verification's staged copy): released
 	// with the attempt when nobody owns it. vaultHandle: the handle is
@@ -79,6 +87,29 @@ var errDisowned = fmt.Errorf("%w: the pending touch goes on", ErrTokenCancelled)
 // errProof is the proof's own refusal: the agreement is not the key's.
 var errProof = errors.New("the key's agreement does not match its public key")
 
+// handoverHook, when set, runs at three moments of the handover between a
+// ceremony and its attempt: "agree" on the ceremony's goroutine as agree
+// begins, before it reads the attempt it waits on (a nil then); "await"
+// on the same goroutine as await begins, before its select; "answered" on
+// the attempt's goroutine once its agreement has ended, before run takes
+// the lock (cer nil then). It is the tests' way to hold one side while a
+// cancel lands on the other, as checkpointFlip is for an add, so that the
+// orders a scheduler picks only now and then are each run on purpose.
+// Nil outside the tests. It is read through handover, which loads it
+// once: a test that fails takes its hook away while an attempt may still
+// be running, and a plain variable would then be read as it is written,
+// or found nil between the check and the call (the 2026-11-06 outside
+// audit's third pass).
+var handoverHook atomic.Pointer[func(at string, cer *ceremony, a *attempt)]
+
+// handover runs the tests' hook at one of its three moments, when one is
+// set. Never under Core.mu: a hook may wait.
+func handover(at string, cer *ceremony, a *attempt) {
+	if h := handoverHook.Load(); h != nil {
+		(*h)(at, cer, a)
+	}
+}
+
 // startAttempt begins the agreement on its own goroutine, owned by cer.
 func (cer *ceremony) startAttempt(a *attempt) *attempt {
 	a.c = cer.c
@@ -92,9 +123,13 @@ func (cer *ceremony) startAttempt(a *attempt) *attempt {
 	}
 	// What the ceremony would clean up at its end — an import's staged
 	// copy — is the attempt's to do instead when the attempt outlives
-	// the ceremony; an attempt that ends owned runs no cleanup, and the
-	// ceremony's own runs as before.
-	if own, prev := cer.cleanup, a.cleanup; own != nil {
+	// the ceremony, but only when the attempt holds the handle: the copy
+	// is removed by whoever closes it, after the close, since Windows
+	// refuses to delete a file still open. A proof's attempt holds only
+	// the card, and the import closes and removes its copy itself (the
+	// 2026-11-06 outside audit's second pass, U2). An attempt that ends
+	// owned runs no cleanup, and the ceremony's own runs as before.
+	if own, prev := cer.cleanup, a.cleanup; own != nil && a.ownsKS {
 		a.cleanup = func() {
 			if prev != nil {
 				prev()
@@ -123,6 +158,7 @@ func (cer *ceremony) pendingOwns(ks *keystore.Keystore) bool {
 // answer is closed unused and everything released.
 func (a *attempt) run() {
 	unl, err := a.loop()
+	handover("answered", nil, a)
 	// The touch's shared secret never outlives the attempt: this is the
 	// success, the cancel, the lock trigger and the ordinary end of
 	// APP.md §2.2's list in one place (the deadline zeroes it itself).
@@ -131,8 +167,29 @@ func (a *attempt) run() {
 	c.mu.Lock()
 	a.finished = true
 	a.unl, a.err = unl, err
+	// An attempt ended by its owner's own cancel — a prompt of the
+	// attempt's (the vault's password asked alone, the token's PIN) that
+	// the cancel closed — has not answered: it is disowned here, exactly as
+	// await disowns it when it sees the cancel first. Otherwise which of
+	// the two goroutines saw the cancel first would decide who releases
+	// what the attempt holds, and the ceremony would at random take an
+	// answer that is only its own cancel (the 2026-11-06 page review's
+	// finding 1). A wrong entangled password refused after the cancel is
+	// the cancel's too: with no live owner to ask the password again, loop
+	// answers it as ErrTokenCancelled, so it is disowned here and the card
+	// is released by the attempt (discard). An answer that landed with the
+	// cancel and is not one — the touch, a key gone, the touch the key
+	// gave up on, a blocked PIN, a refused proof — is still the owner's.
+	var disowned *ceremony
+	if o := a.owner; o != nil && o.ctx.Err() != nil && errors.Is(err, ErrTokenCancelled) {
+		a.disownLocked(o)
+		disowned = o
+	}
 	owned := a.owner != nil
 	c.mu.Unlock()
+	if disowned != nil {
+		a.saidPending(disowned)
+	}
 	if owned {
 		close(a.done)
 		return
@@ -364,6 +421,14 @@ func (a *attempt) releaseCardForRetry() {
 	c.releaseCard(card, a.kind)
 }
 
+// heldCard is the card the attempt holds now: nil once it gave it back.
+// Read under the lock, since the attempt's goroutine releases it.
+func (a *attempt) heldCard() Card {
+	a.c.mu.Lock()
+	defer a.c.mu.Unlock()
+	return a.card
+}
+
 // credential is the token's credential as it stands: the entangled
 // password may have been asked again meanwhile.
 func (a *attempt) credential() keystore.HardwareCredential {
@@ -413,44 +478,80 @@ func (a *attempt) noteTouch(req TouchRequest) {
 
 // await waits for the answer or the ceremony's cancellation, whichever
 // comes first. Answered, the owner takes the Unlocked (or the error) and
-// what the attempt held — the card, the handle — as if it had made the
-// call itself. Cancelled first, the attempt is disowned and becomes the
-// core's pending touch, and errDisowned says the ceremony holds nothing
-// of it.
-func (a *attempt) await(cer *ceremony) (*keystore.Unlocked, error) {
+// the card the attempt still holds, as if it had made the call itself:
+// nil when the attempt gave the card back for the password's retry, so
+// that the caller closes only what is still held and shows no release
+// step for a card already released. Cancelled first — or ended by the
+// cancel, which run disowns the same way — the attempt is the core's
+// pending touch, and errDisowned says the ceremony holds nothing of it:
+// no card, no handle. Whichever way it returns, await is what clears the
+// ceremony's reference to the attempt (cer.att): a disowning clears only
+// the ownership, so that an adopter ended before it reached its wait
+// still finds here the attempt it adopted, and is told it is the pending
+// touch's, rather than finding none and beginning an agreement of its own
+// on the same handle (the 2026-11-06 outside audit's second pass, U1).
+func (a *attempt) await(cer *ceremony) (*keystore.Unlocked, Card, error) {
 	c := a.c
+	handover("await", cer, a)
 	select {
 	case <-a.done:
 	case <-cer.ctx.Done():
 		c.mu.Lock()
 		if a.finished {
 			// The answer landed with the cancel: it is the owner's, to
-			// close as a cancelled ceremony closes everything.
+			// close as a cancelled ceremony closes everything — unless it
+			// was the cancel itself, which run has disowned (below).
 			c.mu.Unlock()
 			<-a.done
 			break
 		}
-		a.owner = nil
-		if cer.latch {
-			a.dropped = true // a lock trigger: never adopted
-		}
-		if a.prompter != nil {
-			a.prompter.attach(nil, a)
-		}
-		c.pending = a
+		a.disownLocked(cer)
 		cer.att = nil
-		if cer.held == a.card {
-			cer.held = nil // the attempt's to release now, not the ceremony's
-		}
 		c.mu.Unlock()
-		c.log("ceremony %s: cancelled with the key still answering: the touch is pending", cer.kind)
-		c.emitState()
-		return nil, errDisowned
+		a.saidPending(cer)
+		return nil, nil, errDisowned
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	cer.att = nil
-	c.mu.Unlock()
-	return a.unl, a.err
+	if a.owner != cer {
+		return nil, nil, errDisowned
+	}
+	return a.unl, a.card, a.err
+}
+
+// disownLocked hands the attempt from its cancelled owner to the core as
+// the pending touch: the owner keeps nothing of it — not the card it
+// held, not the handle — and a lock trigger leaves it unadoptable. The
+// owner's reference to it (cer.att) stays until its await consumes it:
+// the reference says which attempt the ceremony waits on, the owner field
+// whose it is, and an adopter that has not reached its wait yet must
+// still find the attempt it adopted there (await). Caller holds the state
+// mutex; saidPending follows once it is released.
+func (a *attempt) disownLocked(cer *ceremony) {
+	c := a.c
+	a.owner = nil
+	if cer.latch {
+		a.dropped = true // a lock trigger: never adopted
+	}
+	if a.prompter != nil {
+		a.prompter.attach(nil, a)
+	}
+	c.pending = a
+	if a.card != nil && cer.held == a.card {
+		cer.held = nil // the attempt's to release now, not the ceremony's
+	}
+}
+
+// saidPending logs and publishes the disowning by cer. The key need not
+// be answering any more — a wrong password's retry gave the card back
+// before it asked, and a cancel there leaves no card call outstanding —
+// so the line says what is left: the attempt, the pending touch, which
+// releases what it still holds when it ends. The tests look for "the touch
+// is pending", which stays.
+func (a *attempt) saidPending(cer *ceremony) {
+	a.c.log("ceremony %s: cancelled before its agreement answered: the touch is pending, and its attempt releases what it holds as it ends", cer.kind)
+	a.c.emitState()
 }
 
 // discard ends a pending touch nobody adopted: the answer, if a touch

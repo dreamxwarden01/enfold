@@ -227,6 +227,61 @@ describe("the dialogs that may re-key, read as source", () => {
     expect(src("ImportDialog")).toMatch(/if \(!way\) \{[^}]*first\?\.reveal\(\);\s*return;\s*\}/);
   });
 
+  // The add flow, polished (ruled 2026-11-06, R2-R6).
+  it("draws the recovery-key switch where the tested rule puts it, a standard button with the recovery key's glyph", () => {
+    const c = src("CeremonyPanel");
+    expect(c).toMatch(/recoverySwitchAt\(\{\s*offered: switchOn,/);
+    expect(c).toContain('recovery: switchAt === "foot"');
+    // The password prompt the merged form answers by itself draws no switch (R9).
+    expect(c).toContain('sends: form.send === "password",');
+    // A blocked PIN's bar says the way out by the same rule as the foot (R8).
+    expect(markup("CeremonyPanel")).toContain('<div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{blockedMeansOf(switchAt)}</span></div>');
+    expect(c).not.toContain("ceremonyCopy.blockedMeansWayOut");
+    const m = markup("CeremonyPanel");
+    // One button, rendered on the insert view and under the PIN's form.
+    expect(m.match(/\{@render switchButton\(\)\}/g)).toHaveLength(2);
+    expect(m.match(/\{#if switchAt === "under"\}\{@render switchButton\(\)\}\{\/if\}/g)).toHaveLength(2);
+    const b = m.match(/<button type="button" class="btn start switch" onclick=\{recovery\}><svg class="i"><use href="#i-recovery" \/><\/svg>\{lockCopy\.useRecoveryInstead\}<\/button>/);
+    expect(b).not.toBeNull();
+    expect(m).not.toMatch(/class="btn subtle[^"]*"[^>]*onclick=\{recovery\}/);
+    // The last try's bar carries the small one, and its sentence names the way out.
+    expect(m).toMatch(/\{switchAt === "bar" \? ceremonyCopy\.lastTryWayOut : ceremonyCopy\.lastTryHere\}<\/span>\s*\{#if switchAt === "bar"\}<button type="button" class="btn sm" onclick=\{recovery\}>\{lockCopy\.useRecoveryKey\}<\/button>\{\/if\}/);
+    // Each view's switch is its last thing: after the Smart Card line, after the form.
+    const insert = m.slice(m.indexOf('{#if shown === "insert"}'), m.indexOf('{:else if shown === "swap"}'));
+    expect(insert.indexOf("@render switchButton")).toBeGreaterThan(insert.indexOf('class="infoline"'));
+    const secret = m.slice(m.indexOf('{:else if shown === "secret"}'), m.indexOf('{:else if shown === "recovery"}'));
+    expect(secret.trimEnd().endsWith('{#if switchAt === "under"}{@render switchButton()}{/if}')).toBe(true);
+  });
+
+  it("asks the second half's PIN alone under its own lead, and words the swap by the core's note", () => {
+    const c = src("CeremonyPanel");
+    expect(c).toContain("mergesPassword({ entangled: !!store.status?.entangled, way, choose: c.choose, second })");
+    expect(markup("CeremonyPanel")).toContain("{second ? ceremonyCopy.pinNew : lockCopy.pinLead}");
+    expect(c).toContain("swapWordsOf(c)");
+    expect(markup("CeremonyPanel")).toContain('<div class="lead"><h3 class="t-section">{swapWords.lead}</h3><div class="cap">{swapWords.line}</div></div>');
+    expect(c).not.toContain("ceremonyCopy.swapLead(");
+    // Keyed on the wait it is, and said once to Narrator as it appears.
+    expect(c).toContain(":already:${c.removeLabel");
+    expect(markup("CeremonyPanel")).toContain('<p class="said-aloud" aria-live="polite">{saidAloud}</p>');
+  });
+
+  it("gives the foot's Use recovery key the focus at Blocked and No match, and says a blocked PIN aloud", () => {
+    const c = src("CeremonyPanel");
+    expect(markup("CeremonyPanel")).toContain('<button type="button" class="btn accent" onclick={recovery} use:takeFocus>{lockCopy.useRecoveryKey}</button>');
+    // Only from the dialog or the document, never another place's focus.
+    expect(c).toContain('if (at && at !== document.body && !node.closest(\'[role="dialog"]\')?.contains(at)) return;');
+    expect(c).toContain('shown === "blocked" ? `${ceremonyCopy.blockedLead}. ${blockedMeansOf(switchAt)}`');
+    // The bar's own switch and the view's switch do not take it.
+    expect(markup("CeremonyPanel").match(/use:takeFocus/g)?.length).toBe(1);
+  });
+
+  it("lists the unlock methods by the tested rule, with no greyed Password", () => {
+    const k = src("KeysPage");
+    expect(markup("KeysPage")).toContain("{#each addKinds(!!st?.hasHardwareSlot) as k (k)}<option value={k}>{dialogCopy.addUnlockMethod[k]}</option>{/each}");
+    expect(k).not.toContain("passwordNotHere");
+    expect(k).toContain("addKind = addKindFor(addKind, !!st?.hasHardwareSlot);");
+  });
+
   it("says nothing on screen that strings.ts does not, in the components this act added", () => {
     for (const name of ["RekeyQuestion", "BackupChoice", "ReplaceDialog"]) {
       const words = markup(name).match(/>\s*[A-Za-z][^<{]*</g) ?? [];

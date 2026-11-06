@@ -332,6 +332,24 @@ func (k *Keystore) Slots() []SlotInfo {
 	return out
 }
 
+// HardwareRecords describes every hardware record the file holds that is
+// not empty, active or retired (slot_state 2, §6): the YubiKeys AddSlot and
+// AddFirstWayIn refuse to enrol again (ErrDuplicate). It is what an
+// enrolment excludes, so that a YubiKey the keystore would refuse at the
+// end is refused when it is inserted, before its PIN and its touch (APP.md
+// §3 Keys, ruled 2026-11-06). Slots lists the active records alone, the
+// unlock methods; nothing in Enfold writes a retired record, but the reader
+// accepts one, so the two lists can differ.
+func (k *Keystore) HardwareRecords() []SlotInfo {
+	var out []SlotInfo
+	for i := range k.slots {
+		if k.slots[i].State != format.SlotEmpty && k.slots[i].Type == format.SlotExternalECDH {
+			out = append(out, infoOf(&k.slots[i]))
+		}
+	}
+	return out
+}
+
 // registryAEAD returns the GCM instance for the registry under meta.
 func registryAEAD(meta []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(meta)

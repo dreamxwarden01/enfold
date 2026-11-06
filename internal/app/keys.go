@@ -386,7 +386,11 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 				// An adopted attempt is at its touch already (unlockFile).
 				cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
 			}
-			unl, err := cer.agree(ks, false, h)
+			// From here the card is the agreement's answer, not the one
+			// opened: nil once the attempt gave it back for a wrong
+			// password's retry, so that it is neither closed twice nor
+			// shown a release step again (attempt.card).
+			unl, card, err := cer.agree(ks, false, h)
 			if err == nil {
 				return unl, card, nil
 			}
@@ -397,8 +401,7 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 				// Pulled during the PIN or the touch: back to waiting. The
 				// plain close is deliberate: the pull took the verified
 				// state with it, so there is no reset to report.
-				cer.unhold(card)
-				card.Close()
+				cer.closeGone(card)
 				if err := cer.away(err); err != nil {
 					return nil, nil, err
 				}
@@ -522,9 +525,14 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 			// not held across a prompt. An enrolled key inherits the vault's
 			// switch and is wrapped from the kept K_P, so no password is
 			// asked here (APP.md §13).
+			// The vault's YubiKeys go with it, so that one the keystore
+			// would refuse to enrol again is told on insertion and asked
+			// nothing (ruled 2026-11-06, APP.md §3 Keys): every hardware
+			// record, a retired one too, since AddSlot's duplicate rule
+			// counts them all.
 			unlockPub := cer.releaseUnlocking()
 			hs := keystore.HardwareSlot{Label: o.Label}
-			pub, serial, err := cer.enrollToken(unlockPub, o.Label)
+			pub, serial, err := cer.enrollToken(unlockPub, o.Label, hardwareRecords(unl.Keystore()))
 			if err != nil {
 				return err
 			}
@@ -536,30 +544,62 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 }
 
 // releaseUnlocking releases the card that unlocked, when the ceremony
-// holds one, and returns the public key it unlocked with (nil when none):
-// the key enrollToken waits to see leave the reader. The card is held
-// exclusively — opening the reader again while it is would only report
-// it busy — and a verified card must not stay held into a prompt, where
-// the user may pull it and the close would then report a reset that
-// never happened.
+// still holds one, and returns the public key it unlocked with (nil when
+// the proof was not a YubiKey's): the key enrollToken waits to see leave
+// the reader. The card is held exclusively — opening the reader again
+// while it is would only report it busy — and a verified card must not
+// stay held into a prompt, where the user may pull it and the close would
+// then report a reset that never happened. The key is the proof's even
+// when the card is no longer held: a wrong vault's password had the
+// attempt give it back before the password was asked alone
+// (attempt.releaseCardForRetry), and the YubiKey that proved may still be
+// in the reader, to be named as the one to take out. unlockPub names the
+// slot a YubiKey's proof was matched to: it is set before the agreement
+// (acquireUnlocked, adoptPending), overwritten by another YubiKey's try,
+// and read here only once an agreement has succeeded — a proof that failed
+// never reaches the enrolment — so that what it names is the YubiKey that
+// proved. A proof by a typed secret runs in a fresh ceremony and leaves it
+// nil.
 func (cer *ceremony) releaseUnlocking() []byte {
 	cer.c.mu.Lock()
 	pub := cer.unlockPub
-	if cer.card == nil {
-		pub = nil
-	}
 	cer.c.mu.Unlock()
 	cer.releaseCard()
 	return pub
 }
 
-// enrollToken is the token half of an enrollment, after releaseUnlocking:
-// wait for the key that unlocked (unlockPub, when one did) to be out of
-// the reader and the key to enroll inserted, then reuse a usable key in
-// 9d or generate one in the first empty slot. Waiting for the unlocking
-// key to leave is what keeps it from being re-opened and enrolled twice by
-// accident.
-func (cer *ceremony) enrollToken(unlockPub []byte, label string) ([]byte, uint32, error) {
+// hardwareRecords is the keystore's HardwareRecords: the YubiKeys an
+// enrolment excludes. It is a variable so that a test can hand the core a
+// retired record, which the reader accepts and nothing in Enfold writes:
+// only the keystore's own tests can craft one in a file, since the
+// registry authenticates the slot region (FORMAT R25), and they pin that
+// HardwareRecords lists it and AddSlot refuses it.
+var hardwareRecords = (*keystore.Keystore).HardwareRecords
+
+// enrollToken is the token half of an enrollment, after
+// releaseUnlocking: wait for the key that unlocked (unlockPub, when one
+// did) to be out of the reader and the key to enroll inserted, then reuse
+// a usable key in 9d or generate one in the first empty slot. Waiting for
+// the unlocking key to leave is what keeps it from being re-opened and
+// enrolled twice by accident. It is also the token half of a first way
+// in (firstWayIn): a vault's creation, with no file yet and so no vault
+// passed, and an adopted backup's, at an import or FinishSetup.
+//
+// vault is the file's hardware records (hardwareRecords): its YubiKeys,
+// and a retired record's too, since the keystore's duplicate rule refuses
+// those as well. A card that holds the public key of any of them, in any
+// slot, usable or not, already unlocks the vault as far as the keystore
+// is concerned: it is refused on insertion, as a wait, before anything is
+// asked of it (ruled 2026-11-06, APP.md §3 Keys). The state is the swap's,
+// StepSwapKey, with RemoveLabel naming the unlock method it already is
+// and Error carrying vault.duplicate_slot as a note, the way the waits
+// carry token.no_card: the page tells it from the proving YubiKey's swap,
+// which carries no note, and it is never a failure. The wait ends by
+// itself when the card leaves and goes on with the next one inserted. It
+// runs under the second half's one deadline, so that however often it
+// comes it never lengthens that half. The keystore's ErrDuplicate stays
+// the backstop.
+func (cer *ceremony) enrollToken(unlockPub []byte, label string, vault []keystore.SlotInfo) ([]byte, uint32, error) {
 	cer.c.mu.Lock()
 	remove := cer.unlockLabel
 	cer.c.mu.Unlock()
@@ -579,7 +619,15 @@ func (cer *ceremony) enrollToken(unlockPub []byte, label string) ([]byte, uint32
 	defer deadline.Stop()
 	delay := readerPoll
 	for {
-		pub, serial, err := cer.enrollOnce(label)
+		pub, serial, err := cer.enrollOnce(label, vault)
+		var already *enrolledAlready
+		if errors.As(err, &already) {
+			if err := cer.waitOutEnrolled(already.slot, vault); err != nil {
+				return nil, 0, err
+			}
+			delay = readerPoll
+			continue
+		}
 		if err == nil || !keyGone(err) {
 			return pub, serial, err
 		}
@@ -596,10 +644,19 @@ func (cer *ceremony) enrollToken(unlockPub []byte, label string) ([]byte, uint32
 // which tells one YubiKey from another.
 func keyName(serial uint32) string { return fmt.Sprintf("YubiKey %d", serial) }
 
+// enrolledAlready is enrollOnce's answer for a card that already unlocks
+// the vault as slot: enrollToken turns it into a wait, never a
+// failure, so it never leaves the token half.
+type enrolledAlready struct{ slot keystore.SlotInfo }
+
+func (e *enrolledAlready) Error() string {
+	return fmt.Sprintf("the YubiKey already unlocks the vault as %q", e.slot.Label)
+}
+
 // enrollOnce is one attempt at the key to enrol: wait for it, open it,
-// reuse or generate, and have it prove itself. The serial comes back with
-// the key, to name it.
-func (cer *ceremony) enrollOnce(label string) ([]byte, uint32, error) {
+// see that it is not already one of the vault's, reuse or generate, and
+// have it prove itself. The serial comes back with the key, to name it.
+func (cer *ceremony) enrollOnce(label string, vault []keystore.SlotInfo) ([]byte, uint32, error) {
 	reader, err := cer.waitForOneReader()
 	if err != nil {
 		return nil, 0, err
@@ -607,6 +664,28 @@ func (cer *ceremony) enrollOnce(label string) ([]byte, uint32, error) {
 	card, err := cer.openCard(reader)
 	if err != nil {
 		return nil, 0, err
+	}
+	// The card that would be enrolled is read first (Keys: no PIN, no
+	// touch) and held from here to the enrolment, so no swap slips between
+	// the check and the work: a card swapped meanwhile comes back through
+	// the gone-key wait and is checked again. Nothing has asked it for its
+	// PIN, so it closes unverified (ruled 2026-11-06).
+	if len(vault) > 0 {
+		slot, _, _, ok, err := cer.matchSlot(card, vault)
+		switch {
+		case keyGone(err):
+			cer.unhold(card)
+			card.Close()
+			return nil, 0, err
+		case err != nil:
+			cer.c.log("ceremony %s: reading the keys: %v", cer.kind, err)
+			cer.closeUnverified(card)
+			return nil, 0, err
+		case ok:
+			cer.c.log("ceremony %s: the YubiKey inserted already unlocks the vault as %q; nothing asked of it", cer.kind, slot.Label)
+			cer.closeUnverified(card)
+			return nil, 0, &enrolledAlready{slot: slot}
+		}
 	}
 	serial := card.Serial()
 	pub, err := cer.enrollOn(card, mustString(label, keyName(serial)))
@@ -687,7 +766,9 @@ func (cer *ceremony) proveKey(card Card, pub []byte, label string) error {
 	}
 	a.cleanup = func() { kdf.Zero(want) }
 	cer.startAttempt(a)
-	_, err = a.await(cer)
+	// The proof's attempt carries no password, so it never gives the card
+	// back early: the card it answers is enrollOnce's own, which closes it.
+	_, _, err = a.await(cer)
 	switch {
 	case err == nil:
 		kdf.Zero(want)
@@ -1669,7 +1750,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 		if err != nil {
 			return err
 		}
-		spec, ent, err := cer.firstWayIn(first)
+		spec, ent, err := cer.firstWayIn(first, nil) // no file yet: no YubiKey to refuse
 		if err != nil {
 			return err
 		}

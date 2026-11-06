@@ -6583,3 +6583,143 @@ that fast, and `IncomingRecords`, which the merge dialog calls on its own, is no
 core's event order is unchanged; if ever it must be guaranteed, `finish` becomes the only
 sender of a final step. Also: a twenty-run race pass of the package takes about fourteen
 minutes, past `go test`'s ten-minute default, so it needs `-timeout=40m`.
+
+## 2026-11-06 — Add an unlock method, after the first real-key pass
+
+The owner began the VMK real-key pass on a real YubiKey, the vault's password with every YubiKey
+on, and came back from *Add an unlock method…* with four findings: with a YubiKey already in,
+*Use recovery key instead* was never shown; where it was shown it did not read as a button, "not
+even a supporting one"; a YubiKey whose serial was already one of the vault's was refused only
+at the very end; and the list carried a *Password* entry that could not be pressed. Reading the
+code for them found two more. Three read-only walks (the core's state machine, the page, the
+record) confirmed each with file and line before anything was built. Ruled the same day:
+
+- **A YubiKey that already unlocks the vault is refused on insertion, as a wait.** Before, an
+  enrolment's second half compared nothing until `AddSlot`: the proving YubiKey put back as the
+  new one was asked its PIN and a touch, and only then did the keystore's `ErrDuplicate` end the
+  ceremony as "Could not continue" with *Start again* — which is the proof again. Worse, and
+  never seen: the comparison is by public key alone, so a YubiKey whose vault key is not a
+  usable 9d key (9d unusable while a key Enfold generated in a retired PIV slot is the unlock
+  method, or a usable 9d that belongs elsewhere) was given a second key and enrolled twice, a
+  slot on the card spent. Now the card opened to be enrolled is read first (`Keys`: no PIN, no
+  touch) and held from that read to the enrolment; when any key on it, in any slot, usable or
+  not, is the public key of any hardware record of the file, nothing is asked of it — no PIN,
+  no management key, no generated key, no touch — and the ceremony waits for it to leave: the
+  swap's step with `RemoveLabel` naming that unlock method and `vault.duplicate_slot` as a note,
+  the way the waits carry `token.no_card`. The proving YubiKey left in is only the first case
+  of the same rule, and keeps its own words and no note; the rule also covers the same YubiKey
+  put back, another YubiKey of the vault (named in its turn if swapped in through the same
+  port), and a proof by recovery key with one of the vault's YubiKeys in the reader, which
+  before went straight to its PIN. The wait ends by itself, runs under the second half's one
+  deadline so that it never lengthens that half, and is ended by *Cancel* or a lock. No step,
+  type or binding was added; `ErrDuplicate` stays as the backstop.
+- **The switch through the whole proof**, widening 2026-10-27's "under the opening wait and at
+  *No match*" and overturning, for this act, 2026-10-17's "a dialog offers no recovery key" at
+  the last try. Where the YubiKey's way waits on the user, *Use recovery key instead* stands:
+  the wait for a YubiKey of the vault, the PIN's form, alone or with the vault's password,
+  after a wrong PIN too, the vault's password asked alone after a wrong one (never on the
+  prompt the merged form answers by itself), and *No match* as before. On the last try the
+  attention bar carries it as the lock screen's does — a small standard *Use recovery key*
+  inside the bar, whose sentence names the way out ("…; your recovery key can prove it is you
+  instead.") — and it is not drawn twice. A blocked PIN in the proof offers it too: *Use
+  recovery key* in the foot beside *Cancel*, the bar saying "It will not accept a PIN until it
+  is reset; your recovery key can prove it is you instead." (the lock screen's "still opens the
+  vault" would be false of a vault already open). The accent stays on *Use recovery key* at
+  *No match*, and Blocked has it likewise: neither view has a *Continue* (the owner, asked).
+  There the button takes the focus and the blocked PIN is announced, as on the lock screen.
+  Never while the YubiKey is read, with two in, at the touch or the derivation, in the second
+  half, or for another act; `offersRecoverySwitch` keeps its meaning and one pure rule,
+  `recoverySwitchAt`, says where. The recovery proof's note no longer says "since no YubiKey
+  of this vault is at hand", which the switch under a PIN's form made false: "Your recovery
+  key proves it is you instead of a YubiKey. The new YubiKey comes next."
+- **In a dialog the switch is a button**, overturning there the Controls rule that this command
+  is a subtle one: alone under a caption a borderless button read as a line of text. A standard
+  button at the default height, start-aligned, the recovery key's glyph before its label, the
+  last thing in its view one `--s4` under what precedes it, on the insert view, the PIN's and
+  the password's alike; the accent stays with *Continue*. The lock screen keeps its subtle
+  button, where it stands in a row of buttons: one command drawn two ways, knowingly, until
+  the owner says otherwise.
+- **The second half asks the new YubiKey for its PIN alone.** The page drew the merged form
+  there — the PIN and "The vault's password" — though the core never asks that password (the
+  new YubiKey inherits the vault's switch and is wrapped from the kept K_P), refused *Continue*
+  until something was typed in it, and dropped what was typed. It came and went with timing:
+  the form forgot that the password had gone out whenever a poll saw the reader empty between
+  the halves, which pulling the proving YubiKey nearly always causes. `mergesPassword` is now
+  false in the second half whatever came before, the lead reads "Type the new YubiKey's PIN",
+  and the chip names it.
+- **No *Password* in the list where none can be added**: on a vault with a YubiKey the list
+  holds the YubiKey and another recovery key; a remembered choice of *Password* falls back to
+  the YubiKey. The name field reads "Name this YubiKey", never a bare "key".
+- **The one height** of a dialog's ceremony rose from 356 to 376 px (the box from 519 to 539):
+  the last try's bar, carrying its button, wraps its sentence to three lines over the merged
+  form. The import's proof shares the height and grows with it.
+
+**The outside audit, three passes** (Codex, gpt-6-astra, read-only, before the commit, as every
+change to the core now has). The first pass found two things in the refusal's wait. Its re-probe of
+the reader went through the ordinary open, whose exhausted busy retries park the ceremony: a
+program taking the reader for two seconds turned the promised wait into a dead end only
+*Cancel* left. The probe now never parks — a card another program holds is a poll that told
+nothing, the note standing; a device that cannot be read ends the wait and is met by the
+enrolment as any inserted device is. And the early check matched the active unlock methods
+while `AddSlot` refuses a public key held by any non-empty hardware record, a retired one
+included (FORMAT §6's state 2: nothing in 1.0 writes one, the reader accepts it): the check
+now reads `HardwareRecords`, beside `Slots`, so that it and the backstop refuse the same
+YubiKeys, and the first way in of an adopted backup (an import, *Finish setting up*) excludes
+its file's records the same way. Where that last case would show on the lock screen, which has
+no view for it, the generic swap's words stand — false there, and unreachable with any file
+1.0 writes; left.
+
+**A double close, older than this change.** The new test of the switch — the page cancels a
+proof and begins the recovery-key one the moment the cancelled one ends — failed twice in a
+hundred runs at the password asked alone. After a wrong password the attempt gives the card
+back before it asks again, since the retry re-derives from the kept touch; every caller of the
+agreement (the lock screen's unlock, the Vault page's proofs, the import's) kept its own
+reference to that card and closed it once more, with a needless Releasing step: on the right
+password after a wrong one, always, and on a cancel whenever the attempt's own end won the
+race against the ceremony's. On a YubiKey the second close does nothing (`Card.Close` is
+idempotent); the fakes counted it. The card now comes back with the answer: `await` returns
+the card the attempt still holds — none after the early release, none when disowned — and each
+caller closes that and nothing else; and an attempt its owner's cancel ended is disowned by
+the same handover whichever side saw the cancel first, so a cancel, a lock or the deadline at
+that prompt always ends as the pending touch (§2.2). Two things the fix brought to light and
+mended: after a retried password the enrolment's swap no longer forgot which YubiKey had
+proved, and an adopted attempt's card is read under the lock. Three hundred runs of the
+failing case, a hundred of the whole test and forty under the race detector: none failed.
+
+The audit's second pass, on that repair, found what the repair had opened: the handover on a
+cancel also cleared the ceremony's reference to its attempt, so a ceremony that had *adopted* a
+pending touch and was cancelled before it began to wait found no attempt and started a second
+agreement on the keystore handle the first was closing. Ownership and the reference are now
+two things: a disowning clears the ownership alone, and only the wait clears the reference, so
+whoever adopted an attempt waits for that attempt, is told it is the pending touch's again,
+and touches neither its handle nor its card. A test holds the adopter in that window — a
+cancel, a lock, the kept touch's deadline, on the lock screen and on the Vault page — and
+fails six times in six without the fix. The same pass had an import's staged copy outlive a
+cancel at the new YubiKey's PIN until the next start swept it, since the proof's attempt, which
+holds the card and not the file, tried the removal while the import still held the file open:
+the copy is now removed by whoever closes its handle, after the close. A third pass, on that
+repair alone, found nothing in the core and one hazard in the tests' own hook — a plain
+variable that a failing test could take away while an attempt still read it — which is now
+loaded atomically.
+
+Left, each a question the walks or the reviews raised and the owner has not ruled: a vault
+with a standalone password and no YubiKey still learns that a YubiKey cannot join it only at
+`AddSlot` (`vault.slot_policy`), after the PIN, perhaps a key generated on the card, and the
+touch — the mirror of the dead end closed here. The owner asked for a dedicated upgrade flow,
+and for its reverse, the last YubiKey traded for a password, with ample warning either way;
+both are designed and judged (three designs, an analysis of what one commit can do, three
+critiques; the study with the session's notes) and nothing is built until the owner rules. A
+device without PIV, or a card held busy, in the second half is a failure where it could be a
+wait (the owner: the next round); a deadline ends a ceremony as a cancel does; the focus still
+falls to the body when the PIN's view leaves for a view with neither a field nor a way out in
+the foot; the first swap shows for one event when the proving YubiKey is already out; under
+the merged form the switch stands 41 px below the password field, since the field's reserved
+error line comes first; a YubiKey found blocked on insertion passes through a Releasing step
+it does not need (no warning can come of it on a real YubiKey); the comments on the pending
+touch that feed the bindings still say its key call "is still answering", loose since the
+early release, and wait for the next change that regenerates them.
+
+Also: the checklist for the real-key pass asked the owner to "add the test key again", which is
+exactly what the vault refuses, and a vault keeps two unlock methods, one of them a recovery
+key; with one physical YubiKey the lost-key scenario is a second recovery key, an unlock by
+recovery key, a re-keying removal of the YubiKey, and the YubiKey added back.

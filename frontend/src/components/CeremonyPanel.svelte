@@ -24,9 +24,13 @@
   // not land, the next step's button (follow), the line after an enrolment
   // proved with the switch — is drawn on the neutral done view, those items
   // under the title in that order (lib/lockscreen endsWithMore). And an
-  // enrolment whose proof waits for a YubiKey of the vault offers the
-  // recovery key instead (onrecovery; lib/lockscreen offersRecoverySwitch),
-  // the one exception to a dialog's No match holding Cancel alone.
+  // enrolment's proof offers the recovery key instead wherever the YubiKey's
+  // way waits on the user (onrecovery; lib/lockscreen offersRecoverySwitch,
+  // recoverySwitchAt; ruled 2026-11-06): under the wait, the PIN's form and
+  // the vault's password asked alone after a wrong one, inside the last
+  // try's bar, and in the foot at No match and at a blocked PIN, the two
+  // exceptions to a dialog's foot holding Cancel alone where nothing is
+  // asked.
   import { CeremonyStep, Code, Vault, submitSecret } from "../lib/api";
   import type { CeremonyState } from "../lib/api";
   import { fade } from "svelte/transition";
@@ -36,8 +40,8 @@
   import { ceremonyCopy, codeText, dialogCopy, doneTitleOf, lockCopy, phaseLeadOf, replaceCopy, retriesText, stepText } from "../lib/strings";
   import { motion, delay, FAST, GAP } from "../lib/motion";
   import { NO_TRACK, key as formKey, track } from "../lib/pinform";
-  import { NO_HALVES, choosesVaultPassword, dialogFoot, dialogViewOf, dialogWay, discs, endsWithMore, green, halvesAfter, insertLed, lastTry, offersRecoverySwitch, pinLeads, provesFirst, retriesTone, typedProofLeads } from "../lib/lockscreen";
-  import { afterRecoveryProof, backupBar, failedNotes, pairRows, primaryOf, recoveryNoteOf, replaceBackupItems, retireBar } from "../lib/rekey";
+  import { NO_HALVES, blockedMeansOf, choosesVaultPassword, dialogFoot, dialogViewOf, dialogWay, discs, endsWithMore, green, halvesAfter, insertLed, lastTry, mergesPassword, offersRecoverySwitch, pinLeads, provesFirst, recoverySwitchAt, retriesTone, typedProofLeads } from "../lib/lockscreen";
+  import { afterRecoveryProof, backupBar, failedNotes, pairRows, primaryOf, recoveryNoteOf, replaceBackupItems, retireBar, swapWordsOf } from "../lib/rekey";
   import { HeldView } from "../lib/stage.svelte";
   import { DIALOG_HOST } from "../lib/dialogs";
   import type { DialogHost } from "../lib/dialogs";
@@ -105,11 +109,14 @@
   // phase: the change (and its re-key), then the backup asked for.
   const derivingLead = $derived(phaseLeadOf(c) ?? (second ? lockCopy.derivingLead.adding : ceremonyCopy.checking));
 
-  // The PIN's step, as on the lock screen (APP.md §6): every token
-  // ceremony here asks the PIN and the vault's password in one form, in
-  // the order the core asks them (APP.md §2.2). A chosen password — an
-  // enrolment's, the password with every YubiKey's — is never merged.
-  const merged = $derived(!!store.status?.entangled && way === "token" && !c.choose);
+  // The PIN's step, as on the lock screen (APP.md §6): the proof of every
+  // token ceremony here asks the PIN and the vault's password in one form,
+  // in the order the core asks them (APP.md §2.2). A chosen password — an
+  // enrolment's, the password with every YubiKey's — is never merged, and
+  // an enrolment's second half asks the new YubiKey's PIN alone (ruled
+  // 2026-11-06, R4; lib/lockscreen mergesPassword). The halves are settled
+  // above, before this pre-effect reads them.
+  const merged = $derived(mergesPassword({ entangled: !!store.status?.entangled, way, choose: c.choose, second }));
   let tracked = $state(NO_TRACK);
   $effect.pre(() => {
     const next = track(untrack(() => tracked), c, untrack(() => merged));
@@ -183,8 +190,19 @@
   // fast first, the new one arrives a gap later (APP.md §6, Motion).
   const xin = () => motion(FAST, { delay: delay(GAP) });
   const xout = () => motion(FAST, { easing: cubicOut });
+  // An enrolment's swap is keyed on what it waits for too: the proving
+  // YubiKey to come out, or a YubiKey that already unlocks the vault, by
+  // its unlock method (ruled 2026-11-06, R5), so a turn from one to the
+  // other crosses as every view does rather than changing words in place.
+  const swapWords = $derived(swapWordsOf(c));
   const viewKey = $derived(
-    shown === "secret" ? `secret:${secretKey}` : shown === "edge" || shown === "opening" || shown === "wait" || shown === "swap" ? `${shown}:${c.step}` : shown,
+    shown === "secret"
+      ? `secret:${secretKey}`
+      : shown === "swap"
+        ? `swap:${c.step}${swapWords.already ? `:already:${c.removeLabel ?? ""}` : ""}`
+        : shown === "edge" || shown === "opening" || shown === "wait"
+          ? `${shown}:${c.step}`
+          : shown,
   );
   // The form's id, one per view, for the foot's Continue: the leaving view
   // keeps its own while it fades, so the button never names two forms.
@@ -197,9 +215,51 @@
   );
   // The recovery-key switch (ruled 2026-10-27): an enrolment of a YubiKey
   // or a recovery key, begun without it, in its proof, on a vault with a
-  // YubiKey and a recovery key — one tested rule (lib/lockscreen).
+  // YubiKey and a recovery key — one tested rule (lib/lockscreen). Where
+  // it stands is a second tested rule (recoverySwitchAt; ruled 2026-11-06):
+  // under the wait's lead, the PIN's form and the password asked alone
+  // after a wrong one, inside the last try's bar, in the foot at No match
+  // and at a blocked PIN, and never twice. The form's send says the
+  // password prompt is the one the merged form answers by itself, where no
+  // button is drawn for the instant before the touch (R9).
   const switchOn = $derived(!!onrecovery && offersRecoverySwitch(c, store.lastAct, store.slots, second));
-  const buttons = $derived(dialogFoot({ over, view: shown, asks, again: !!onagain, recovery: switchOn, step: c.step }));
+  const switchAt = $derived(
+    recoverySwitchAt({
+      offered: switchOn,
+      view: shown,
+      step: c.step,
+      insertStep,
+      found: held.found,
+      shows: form.shows,
+      sends: form.send === "password",
+      lastTry: lastTry(c),
+    }),
+  );
+  const buttons = $derived(dialogFoot({ over, view: shown, asks, again: !!onagain, recovery: switchAt === "foot", step: c.step }));
+  // Narrator hears the already-unlocks wait's lead once, as it appears
+  // (ruled 2026-11-06, R5): the panel's views cross without moving the
+  // focus, so the lead is also said in a polite live region that stands
+  // through the ceremony and holds it only while that view does. A blocked
+  // PIN is said there too, its lead and its bar's sentence: its view has no
+  // role of its own, and the focus its foot takes names only the button
+  // (APP.md §6, 2026-11-06; nothing was said before).
+  const saidAloud = $derived(
+    shown === "swap" && swapWords.already ? swapWords.lead : shown === "blocked" ? `${ceremonyCopy.blockedLead}. ${blockedMeansOf(switchAt)}` : "",
+  );
+
+  // A view that replaces the one holding the focus gives the focus to its
+  // first button, as the lock screen's do (APP.md §6, Lock.svelte
+  // takeFocus): at No match and at a blocked PIN, the foot's Use recovery
+  // key, where the switch stands there. Taken only while the focus is in
+  // this dialog or on the document, which is where the leaving view's
+  // field leaves it, so nothing else's focus is taken; its ring is drawn
+  // only once the keyboard is used. It fell to the document before
+  // (2026-11-06).
+  function takeFocus(node: HTMLElement) {
+    const at = document.activeElement;
+    if (at && at !== document.body && !node.closest('[role="dialog"]')?.contains(at)) return;
+    node.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
+  }
 
   // Use recovery key instead, pressed once per ceremony: the page cancels
   // this one and begins the act again in this same dialog, so the panel
@@ -326,23 +386,24 @@
         {#if shown === "insert"}
           <KeyArt led={insertLed(insertStep, held.found, c)} />
           <div class="lead"><h3 class="t-section">{waitTitle}</h3>{#if waitLine}<div class="cap">{waitLine}</div>{/if}</div>
-          {#if switchOn && insertStep !== CeremonyStep.StepTwoKeys}
-            <!-- No YubiKey of this vault at hand: the lock screen's own words
-                 for the same switch, a subtle button under the lead. Two
-                 YubiKeys in, the core carries on by itself once one is out. -->
-            <button type="button" class="btn subtle sm start" onclick={recovery}>{lockCopy.useRecoveryInstead}</button>
-          {/if}
           {#if c.error && c.step === CeremonyStep.StepWaitingForKey}
             <!-- A cancelled touch still pending is a note, not a fault; the
                  Smart Card service not running is said in the attention ink
                  (APP.md §6, ruled 2026-10-17). -->
             <div class="infoline" class:att={c.error !== Code.CodeTokenPending}><svg class="i"><use href={c.error === Code.CodeTokenPending ? "#i-info" : "#i-warn"} /></svg><span>{codeText(c.error)}</span></div>
           {/if}
+          <!-- No YubiKey of this vault at hand: the switch, the view's last
+               thing. Two YubiKeys in, or one being read, it is not drawn:
+               the core carries on by itself (recoverySwitchAt). -->
+          {#if switchAt === "under"}{@render switchButton()}{/if}
         {:else if shown === "swap"}
           <!-- The YubiKey that proved it is you comes out first, so the same
-               one is not added twice (keys.go enrollToken). -->
+               one is not added twice (keys.go enrollToken); or a YubiKey
+               that already unlocks this vault, inserted as the new one, is
+               waited out with nothing asked of it (ruled 2026-11-06, R5;
+               lib/rekey swapWordsOf). Cancel alone in the foot. -->
           <KeyArt led="found" />
-          <div class="lead"><h3 class="t-section">{ceremonyCopy.swapLead(c.removeLabel ?? "")}</h3><div class="cap">{ceremonyCopy.swapLine}</div></div>
+          <div class="lead"><h3 class="t-section">{swapWords.lead}</h3><div class="cap">{swapWords.line}</div></div>
         {:else if shown === "edge"}
           <KeyArt led={c.step === CeremonyStep.StepNoMatch ? "off" : "found"} />
           <div class="lead">
@@ -356,7 +417,9 @@
           <!-- With no step line naming it, the PIN's step heads with its own
                instruction, as the waits and the touch do (APP.md §6). -->
           {#if pinLeads(c.kind, form.shows)}
-            <div class="lead"><h3 class="t-section">{lockCopy.pinLead}</h3></div>
+            <!-- In an enrolment's second half the lead names the new
+                 YubiKey, its chip the new one's label (ruled 2026-11-06). -->
+            <div class="lead"><h3 class="t-section">{second ? ceremonyCopy.pinNew : lockCopy.pinLead}</h3></div>
           {:else if typedProofLeads({ way, shows: form.shows, choose: c.choose, second })}
             <!-- A typed proof heads as the YubiKey's wait does: what to type,
                  and why (APP.md §13, ruled 2026-10-17). -->
@@ -365,9 +428,16 @@
           {#if c.slotLabel && c.step !== CeremonyStep.StepManagementKey && form.shows !== "password"}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           {#if c.promptId && form.shows !== "none"}
             {#if (form.shows === "pin" || form.shows === "both") && lastTry(c)}
-              <!-- The last try, before it is typed: the consequence. The
-                   dialog offers no recovery key, so no way out is named. -->
-              <div class="bar attention"><svg class="i"><use href="#i-warn" /></svg><span class="grow"><strong>{lockCopy.lastTryHead}</strong> {ceremonyCopy.lastTryHere}</span></div>
+              <!-- The last try, before it is typed: the consequence, and in
+                   an enrolment's proof the way out, its small standard
+                   button inside the bar as on the lock screen (ruled
+                   2026-11-06, R2); elsewhere a dialog offers no recovery
+                   key, so none is named. -->
+              <div class="bar attention">
+                <svg class="i"><use href="#i-warn" /></svg>
+                <span class="grow"><strong>{lockCopy.lastTryHead}</strong> {switchAt === "bar" ? ceremonyCopy.lastTryWayOut : ceremonyCopy.lastTryHere}</span>
+                {#if switchAt === "bar"}<button type="button" class="btn sm" onclick={recovery}>{lockCopy.useRecoveryKey}</button>{/if}
+              </div>
             {/if}
             <SecretInput
               kind={form.shows === "pin" ? "pin" : "password"}
@@ -386,6 +456,11 @@
           {:else if c.promptId && c.step === CeremonyStep.StepManagementKey}
             <SecretInput kind="mgmtkey" promptId={c.promptId} label={ceremonyCopy.managementKeyField} note={stepText(c.step).body} reserve {formId} />
           {/if}
+          <!-- The switch under the PIN's form, after a wrong PIN too, and
+               under the vault's password asked alone after a wrong one
+               (ruled 2026-11-06, R9); on the last try the bar above
+               carries it instead. -->
+          {#if switchAt === "under"}{@render switchButton()}{/if}
         {:else if shown === "recovery"}
           <RecoveryInput
             promptId={c.promptId ?? ""}
@@ -479,10 +554,14 @@
           {/if}
         {:else if shown === "blocked"}
           <!-- On the PIN's step, where it arises: whose PIN, then what it
-               means on a danger bar (APP.md §6, ruled 2026-10-17). -->
+               means on a danger bar (APP.md §6, ruled 2026-10-17). In an
+               enrolment's proof the bar names the way out after its
+               meaning, as the lock screen's Blocked view does, and the foot
+               holds it, Use recovery key beside Cancel (ruled 2026-11-06,
+               R8); elsewhere the meaning alone and Cancel alone. -->
           {#if c.slotLabel}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           <div class="lead"><h3 class="t-section">{ceremonyCopy.blockedLead}</h3></div>
-          <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{ceremonyCopy.blockedMeans}</span></div>
+          <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{blockedMeansOf(switchAt)}</span></div>
         {:else if c.step !== CeremonyStep.StepWaitingForKey}
           <!-- A step that asks nothing here (the records found, a recovery
                key being shown). The opening wait of a typed proof draws
@@ -495,7 +574,16 @@
       </div>
     {/key}
   </div>
+  <p class="said-aloud" aria-live="polite">{saidAloud}</p>
 </div>
+
+<!-- Use recovery key instead (ruled 2026-11-06, R3): a standard button, the
+     supporting one beside the foot's accent, start-aligned under what it
+     follows, with the glyph the Vault page's recovery-key row wears; the
+     same on the wait and on the PIN's form. -->
+{#snippet switchButton()}
+  <button type="button" class="btn start switch" onclick={recovery}><svg class="i"><use href="#i-recovery" /></svg>{lockCopy.useRecoveryInstead}</button>
+{/snippet}
 
 <!-- The foot band's buttons follow the step (APP.md §6, Controls; ruled
      2026-10-17): the act first and the way out after it, as every dialog's.
@@ -508,7 +596,7 @@
       <!-- At the replacement's confirmation the submit names what it does. -->
       <button type="submit" class="btn accent" form={formId}>{shown === "confirm" ? primaryOf("replace", true, false, keys) : lockCopy.continue}</button>
     {:else if b === "recovery"}
-      <button type="button" class="btn accent" onclick={recovery}>{lockCopy.useRecoveryKey}</button>
+      <button type="button" class="btn accent" onclick={recovery} use:takeFocus>{lockCopy.useRecoveryKey}</button>
     {:else if b === "again"}
       <button type="button" class="btn accent" onclick={again}>{lockCopy.startAgain}</button>
     {:else if b === "close"}
@@ -522,15 +610,20 @@
 <style>
   /* One height for every step, the tallest's, so the box never jumps as
      the steps swap (APP.md §13, ruled 2026-10-17). The tallest is the
-     PIN's last try under an enrolment's line: the line (16 and its 16
-     below), the lead, the slot chip, the last try's bar and the PIN and
-     the vault's password with their reserved lines, 354 px in Edge
-     (2026-10-17), to the 4 px grid 356; the dialog is then 519 px at
-     every step. The touch's 240, the recovery key's cells and a chosen
-     password's two fields (228) stand inside it. It was 380, the mock's
-     guess, which left 26 px of nothing under the tallest. The views
-     share one cell, so the old one leaves where the new one arrives. */
-  .cer-panel { --ceremony-h: 356px; min-height: var(--ceremony-h); display: flex; flex-direction: column; }
+     PIN's last try in an enrolment's proof: the line (16 and its 16
+     below), the lead, the slot chip, the last try's bar, whose small Use
+     recovery key narrows its sentence to three lines, and the PIN and
+     the vault's password with their reserved lines, 373.6 px in Edge
+     (2026-11-06), to the 4 px grid 376; the dialog is then 539 px at
+     every step. It was 356 (354 measured, 2026-10-17) before the bar
+     carried the switch (ruled 2026-11-06), so it rose by 20. The PIN's
+     form with the switch under it (332), the touch's 240, the recovery
+     key's cells and a chosen password's two fields (228), a blocked PIN's
+     view with the way out on its bar (162) and the vault's password asked
+     alone with the switch under it (164; both 2026-11-06) stand inside
+     it. The views share one cell, so the old one leaves where the
+     new one arrives. */
+  .cer-panel { --ceremony-h: 376px; min-height: var(--ceremony-h); display: flex; flex-direction: column; }
   .views { flex: 1; display: grid; min-width: 0; }
   .view { grid-area: 1 / 1; display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
   /* The touch, and the end on the neutral panel, stand in the middle, as
@@ -544,8 +637,13 @@
   .view .touch-lead { margin: 0; }
   .view .touch-sub { min-height: 20px; }
   .view .touch-slot { padding-top: 0; }
-  /* The switch under the wait's lead stands at the view's start. */
+  /* The switch stands at the view's start, its last thing, one --s4 under
+     what precedes it where the views' own gap is --s3 (ruled 2026-11-06). */
   .view .start { align-self: flex-start; }
+  .view .switch { margin-top: calc(var(--s4) - var(--s3)); }
+  /* The live region that says the already-unlocks wait's lead: heard, not
+     seen, and never in the layout. */
+  .said-aloud { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* The confirmation is the view's own column. */
   .confirm { display: contents; }
   /* An end's items: under the centred check and title, at the view's

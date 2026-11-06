@@ -203,3 +203,18 @@ describe("track", () => {
     expect(track(NO_TRACK, null, true)).toBe(NO_TRACK);
   });
 });
+
+// An enrolment's second half (ruled 2026-11-06, R4): the panel passes
+// merged false there (lib/lockscreen mergesPassword), so the new YubiKey's
+// PIN stands alone whatever came before it, an empty reader included.
+describe("the second half's PIN", () => {
+  it("stands alone when merged is false, after the reader was seen empty", () => {
+    const S = CeremonyStep;
+    const f = run(ev(S.StepPIN, "p1"), ev(S.StepPassword, "w1"), ev(S.StepTouch), ev(S.StepSwapKey, "", "", false), ev(S.StepWaitingForKey, "", "", false), ev(S.StepPIN, "p2", "", false));
+    expect(f.shows).toBe("pin");
+    expect(f.answers).toBe("pin");
+    // The merged flag alone decided it: the same events with it on drew the
+    // password field the core never asks there (the owner's 33.png).
+    expect(run(ev(S.StepPIN, "p1"), ev(S.StepPassword, "w1"), ev(S.StepTouch), ev(S.StepSwapKey), ev(S.StepWaitingForKey), ev(S.StepPIN, "p2")).shows).toBe("both");
+  });
+});

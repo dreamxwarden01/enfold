@@ -15,7 +15,7 @@
 // since a later act answers a later exposure.
 import { Code, CeremonyStep } from "./api";
 import type { AfterFacts } from "./api";
-import { nothingChanged } from "./lockscreen";
+import { enrolledAlready, nothingChanged } from "./lockscreen";
 import { ceremonyCopy, codeText, dialogCopy, replaceCopy, retireLeadOf, vaultCopy } from "./strings";
 
 // The committed facts an act's final state carries (CeremonyState.after),
@@ -469,18 +469,33 @@ export function removeRule(type: string): string {
 
 // recoveryNoteOf is the recovery view's note in a dialog, by why a recovery
 // key proves it: a YubiKey the removal takes away is not asked for; the user
-// said no YubiKey of the vault is at hand (Use recovery key instead), by the
-// kind the enrolment adds; the kinds that always ask a recovery key (a
+// chose the recovery key instead of a YubiKey (Use recovery key instead, on
+// the wait, the PIN's form, a blocked PIN or the password asked alone), by
+// the kind the enrolment adds; the kinds that always ask a recovery key (a
 // backup's test, an import, the merge's inspection), theirs; any other act
 // proves with one because every unlock method is a recovery key, with what
 // comes next for an enrolment, in the singular where the vault has one
 // recovery key (recoveryKeys: a vault never set up, whose Vault page adds
 // its first unlock method). Never by kind alone: adding a password to a
-// vault of recovery keys would read "no YubiKey is at hand".
+// vault of recovery keys would read "instead of a YubiKey".
 export function recoveryNoteOf(c: { kind: string; without?: string }, a: LastAct | null, recoveryKeys: number): string {
   const n = ceremonyCopy.recoveryNote;
   if (c.without) return n.remove;
   if (c.kind === "enroll" && a?.act === "enroll" && a.withRecoveryKey) return a.type === "recovery" ? n.enrollRecovery : n.enroll;
   if (c.kind === "verify" || c.kind === "import" || c.kind === "records") return n[c.kind];
   return (recoveryKeys === 1 ? n.onlyOne : n.only) + (c.kind === "enroll" ? n.nextMethod : "");
+}
+
+// swapWordsOf is what an enrolment's swap view says (APP.md §6): the
+// proving YubiKey to come out first, so the same one is not added twice
+// (keys.go enrollToken), in the words it has had since 2026-10-17; or a
+// YubiKey that already unlocks this vault, inserted as the new one and
+// refused on insertion with nothing asked of it (ruled 2026-11-06, R1 and
+// R5), told from the first by the core's note (lib/lockscreen
+// enrolledAlready). Both name the YubiKey by the unlock method's label
+// (removeLabel), never by slotLabel, which may still hold the proof's.
+export function swapWordsOf(c: { step: CeremonyStep; removeLabel?: string; error?: string }): { lead: string; line: string; already: boolean } {
+  const label = c.removeLabel ?? "";
+  if (enrolledAlready(c)) return { lead: ceremonyCopy.alreadyLead(label), line: ceremonyCopy.alreadyLine, already: true };
+  return { lead: ceremonyCopy.swapLead(label), line: ceremonyCopy.swapLine, already: false };
 }

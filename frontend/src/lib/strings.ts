@@ -160,6 +160,11 @@ export const ceremonyCopy = {
   blockedLead: "This YubiKey's PIN is blocked",
   blockedMeans: "It will not accept a PIN until it is reset.",
   blockedMeansWayOut: "It will not accept a PIN until it is reset; your recovery key still opens the vault.",
+  // The same bar in an enrolment's proof, which offers the recovery key
+  // (ruled 2026-11-06, R8): the lock screen's sentence, its way out said as
+  // the dialog's last try says it, since the vault is open already and the
+  // recovery key proves it is you rather than opening anything.
+  blockedMeansProve: "It will not accept a PIN until it is reset; your recovery key can prove it is you instead.",
   // The recovery key's cells (APP.md §6, ruled 2026-10-17): the group to
   // fix by its number, and how far the typing is.
   groupsMistyped: (groups: number[]): string =>
@@ -190,12 +195,24 @@ export const ceremonyCopy = {
   // core's own InsertLabel ("the key to enroll") is never shown.
   swapLead: (label: string): string => (label ? `Remove ${label}` : "Remove the YubiKey"),
   swapLine: "Then insert the new YubiKey. Enfold carries on by itself.",
+  // A YubiKey that already unlocks this vault, inserted as the new one
+  // (ruled 2026-11-06, R1 and R5): refused on insertion, as a wait, with
+  // nothing asked of it. The lead names the unlock method the core found
+  // on it; the line says what to do, and that nothing needs pressing.
+  alreadyLead: (label: string): string => `${label || "This YubiKey"} already unlocks this vault`,
+  alreadyLine: "Remove it, then insert the YubiKey to add. Enfold carries on by itself.",
+  // The new YubiKey's PIN in an enrolment's second half, asked alone
+  // (ruled 2026-11-06, R4): the lead names which YubiKey it is.
+  pinNew: "Type the new YubiKey's PIN",
   // The proof's derivation in a dialog: the vault is open already, so
   // nothing is being opened.
   checking: "Checking that it is you…",
-  // The last try in a dialog: the consequence alone, since the dialog
-  // offers no recovery key (ruled 2026-10-17).
+  // The last try in a dialog: the consequence alone where the dialog
+  // offers no recovery key (ruled 2026-10-17); in an enrolment's proof,
+  // which offers one, the bar names the way out and carries its button,
+  // as the lock screen's does (ruled 2026-11-06, R2).
   lastTryHere: "A wrong PIN now blocks this YubiKey's PIN until it is reset.",
+  lastTryWayOut: "A wrong PIN now blocks this YubiKey's PIN; your recovery key can prove it is you instead.",
   // The end of a dialog's ceremony, by kind: what is now true, over the
   // dialog's Close.
   // A password change is its own act with its own end (kind "password");
@@ -309,13 +326,18 @@ export const ceremonyCopy = {
   // §13): the kinds that always ask one, by kind; the others by cause, a
   // YubiKey left out of a removal, the switch, or a vault of recovery keys
   // alone (lib/rekey.ts recoveryNoteOf), never by kind, since adding a
-  // password to such a vault would read "no YubiKey is at hand".
+  // password to such a vault would read "instead of a YubiKey". The
+  // switch's note says the recovery key stands in for a YubiKey, not that
+  // none is at hand: the switch is offered at a blocked PIN and under the
+  // password asked alone, with the YubiKey still in the reader (ruled
+  // 2026-11-06, R8 and R9; it read "since no YubiKey of this vault is at
+  // hand" until then).
   recoveryNote: {
     verify: "The backup's recovery key. Nothing here changes.",
     import: "The copy's own recovery key: it replaces this vault only once it opens.",
     records: "This vault's recovery key first, if the file is a copy of this vault; if it does not open the file, the file's own recovery key is asked for next.",
-    enroll: "Your recovery key proves it is you, since no YubiKey of this vault is at hand. The new YubiKey comes next.",
-    enrollRecovery: "Your recovery key proves it is you, since no YubiKey of this vault is at hand. The new recovery key comes next.",
+    enroll: "Your recovery key proves it is you instead of a YubiKey. The new YubiKey comes next.",
+    enrollRecovery: "Your recovery key proves it is you instead of a YubiKey. The new recovery key comes next.",
     remove: "One of this vault's recovery keys proves it is you, since the YubiKey being removed is not asked for.",
     only: "This vault has only its recovery keys, so one of them proves it is you.",
     nextMethod: " The new unlock method comes next.",
@@ -2031,10 +2053,10 @@ export const dialogCopy = {
     kind: "Unlock method",
     token: "YubiKey (PIN and touch)",
     password: "Password",
-    passwordNotHere: "Password (not in a vault with a YubiKey)",
     recovery: "Another recovery key",
     passwordNext: "You choose the password once the vault has checked an unlock method.",
-    nameKey: "Name this key",
+    // A YubiKey is never a bare "key" on screen (the glossary).
+    nameKey: "Name this YubiKey",
     optional: "Optional",
     keyPlaceholder: "Named after its serial number",
     nameRecovery: "Name this recovery key",

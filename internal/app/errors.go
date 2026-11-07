@@ -64,6 +64,12 @@ const (
 	// write; the vault is unlocked with a recovery key and given a YubiKey
 	// on the Vault page instead.
 	CodeSetupPasswordOn Code = "vault.setup_password_on"
+	// CodeSlotsFull: the vault's slot region has no room for one more unlock
+	// method (keystore.ErrFull: FORMAT.md §4's 32 records, or §6's 128 KiB).
+	// Refused before any card work and before any derivation, since
+	// 2026-11-07 (the switch audit's finding 3); before, a commit met it only
+	// at its encoding, where format.ErrInvalid read as archive.invalid.
+	CodeSlotsFull Code = "vault.slots_full"
 	// CodeNotThisVault: no VMK of this vault and no key given opened the
 	// incoming registry — another vault, or a backup from a generation this
 	// vault no longer keeps. Never corruption (FORMAT.md §18.2, APP.md §13).
@@ -388,6 +394,7 @@ var classifyTable = []struct {
 	{keystore.ErrAuth, CodeAuth},
 	{keystore.ErrInvariant, CodeInvariant},
 	{keystore.ErrPolicy, CodeSlotPolicy},
+	{keystore.ErrFull, CodeSlotsFull},
 	{keystore.ErrDuplicate, CodeDuplicateSlot},
 	{keystore.ErrNoRecoverySlot, CodeNoRecoverySlot},
 	{keystore.ErrNotFound, CodeSlotNotFound},

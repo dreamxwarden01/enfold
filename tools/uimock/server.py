@@ -452,7 +452,66 @@ Three knobs for the choices that apply at once (direction 10):
 Vault.Activity moves locksAt to now plus the idle minutes and emits the
 status while unlocked, as the core's grant does: the last minute's Stay
 unlocked is staged with {"vault": {"locksAt": <now + 45>}} and undone by
-any press the page reports, as in the app."""
+any press the page reports, as in the app.
+
+Switch to a YubiKey... (ruled 2026-11-07; APP.md 13). The vault's shape is
+staged with POST /mock/preview {"name": "vaultShape", "shape": S} and then
+a reload, S one of VAULT_SHAPES: "password" (a standalone password and one
+recovery key, its switch off), "password_on" (the same with the switch left
+on, as a vault made before option A could be), "password_two_recovery" (two
+recovery keys, for the plural), "two_passwords" (two passwords and a
+recovery key: the command greyed), "recovery_only" and "recovery_only_on"
+(two recovery keys alone, the switch off or on: option A's bar in Add an
+unlock method... with Password chosen, and the row's lines), "yubikeys" (the
+staged default). Each leaves the vault unlocked, its cards' Remove... and the
+row's facts read again (slot_facts), and Keys.EntangledState answers as the
+core does: hasHardware, hasStandalone, and on an unlocked vault with a
+standalone password canSwitch or switchReason (vault.tampered,
+vault.no_recovery_slot, vault.slot_policy, in that order).
+
+Keys.BeginSwitchToToken(label, keepPassword, rekey, withRecoveryKey) is
+refused as the core refuses it before any card work (params for a recovery
+key with the same words; vault.tampered; vault.slot_not_found,
+vault.no_recovery_slot, vault.slot_policy; vault.needs_unlock;
+ceremony.in_progress; the barrier) and is otherwise played through the
+page's own answers (play_switch): the proof - the vault's password, or with
+withRecoveryKey the recovery key's cells - then, with a new password, the
+chosen one typed twice, then the new YubiKey's wait, its PIN (any), its
+touch, the commit's phase and Done, the staged vault given the trade (the
+password's card gone, the YubiKey's added, the switch on) and After read
+from it. Every event carries keepPassword and rekey; no backup is ever
+asked or taken. The knob POST /mock/state {"switchPlay": {...}} steers the
+next acts until it is cleared with {"switchPlay": null}:
+
+    "wrongPassword": true   the first password is refused (vault.auth) and
+                            asked again on the same step
+    "generate": true        a key is made on the YubiKey after its PIN, so
+                            every state after it carries generated, and a
+                            Cancel from there ends on the end that says so
+    "card": "blocked"       the new YubiKey's PIN is blocked: the act stands
+                            at Blocked with token.pin_blocked and the prompt
+                            "another"; Use another YubiKey waits for that
+                            YubiKey to leave (the swap naming it), then the
+                            next one passes
+    "card": "proof" | "full" | "not_usable"
+                            the same at Failed with token.proof (after a key
+                            was made and touched), token.no_empty_slot or
+                            token.not_usable
+    "touch": "timeout"      the YubiKey stops waiting at its touch: Failed
+                            with token.touch, nothing committed (with
+                            "generate", the key made is left on the card)
+    "fail": "io"            the commit fails with that code: Failed, with
+                            Start again (vault.indeterminate or
+                            vault.conflict: the outcome unknown)
+    "retireError": "io"     Done, the retirement owed (the house's bar)
+
+The page's Add an unlock method... with YubiKey chosen on a password vault
+opens the switch's form (no Keys call), and with Password chosen on
+"recovery_only" or "recovery_only_on" draws option A's bar. Keys.BeginEnroll
+for a YubiKey on a vault with a standalone password is refused
+vault.slot_policy before anything is asked, as the core refuses it; a
+password added to a vault of recovery keys alone turns the switch off at
+its Done, in the same commit as the core's AddSlot."""
 import json, os, re, secrets, sys, threading, time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -690,6 +749,7 @@ PREVIEW_OPS = {
     "dialog": lambda body: dialog_scene(body),
     "lock": lambda body: lock_scene(body),
     "ops": lambda body: two_ops(body),
+    "vaultShape": lambda body: stage_vault_shape(body.get("shape", "password")),
 }
 
 PREVIEWS = {
@@ -2580,7 +2640,9 @@ def emit_status():
 # The re-keying acts' fields the core leaves out of its JSON while they are
 # empty (types.go CeremonyState, omitempty): left out here too, so the page
 # meets the shape the app sends it.
-OMIT_EMPTY = ("phase", "without", "backupError", "retireError", "retireRemnant", "oldIds", "newIds", "after")
+OMIT_EMPTY = ("phase", "without", "backupError", "retireError", "retireRemnant", "oldIds", "newIds", "after",
+              # Switch to a YubiKey...'s two (types.go, omitempty).
+              "keepPassword", "generated")
 
 
 def ceremony_event(kind, step, **extra):
@@ -2594,7 +2656,8 @@ def ceremony_event(kind, step, **extra):
          # the retirement's outcomes, a replacement's keys and the vault
          # the act left (After).
          "rekey": False, "phase": "", "without": "", "backedUp": False, "backupError": "", "retireError": "",
-         "retireRemnant": False, "keepIndex": 0, "keepCount": 0, "oldIds": [], "newIds": [], "after": None}
+         "retireRemnant": False, "keepIndex": 0, "keepCount": 0, "oldIds": [], "newIds": [], "after": None,
+         "keepPassword": False, "generated": False}
     c.update(extra)
     for k in OMIT_EMPTY:
         if not c[k]:
@@ -3000,7 +3063,7 @@ DIALOG_SCENES = {
 # import and verify). "password" is the password's change, an act of its
 # own since it can re-key the vault (keys.go ChangeEntangledPassword), and
 # "replace" the recovery keys' replacement (ruled 2026-10-27).
-DIALOG_KINDS = ("enroll", "remove", "rotate", "export", "reveal", "entangle", "password", "replace", "records")
+DIALOG_KINDS = ("enroll", "remove", "rotate", "export", "reveal", "entangle", "password", "replace", "records", "toToken")
 
 # The acts whose commit writes the slot region, through the core's
 # landChange: each passes Phase "commit" once its proof has passed and
@@ -3439,6 +3502,11 @@ def refusal_of(act):
         code = tampered or (None if state["entangled"].get("canEnable") else "vault.invariant")
     elif kind == "password":
         code = tampered or (None if state["entangled"].get("on") else "params")
+    elif kind == "enroll" and act["type"] == "token" and "password" in types:
+        # A YubiKey never joins beside a standalone password: refused before
+        # the proof and any card work (ruled 2026-11-07); the way is Switch
+        # to a YubiKey... on the password's card.
+        code = tampered or "vault.slot_policy"
     elif kind == "enroll" and act["recovery"]:
         code = tampered or ("params" if "hardware" not in types
                             else None if "recovery" in types else "vault.no_recovery_slot")
@@ -3585,6 +3653,216 @@ def play_on(act, base):
     run_act(kind, run)
 
 
+# ---- Switch to a YubiKey... (ruled 2026-11-07; keys.go BeginSwitchToToken)
+
+def _pw(rid, label="Password", days=60):
+    return {"recipientId": rid * 16, "type": "password", "label": label, "createdAt": NOW - days * 86400, "removable": True}
+
+
+def _rk(rid, label, days=60):
+    r = rid * 16
+    return {"recipientId": r, "type": "recovery", "label": label, "createdAt": NOW - days * 86400, "recoveryId": recovery_id(r), "removable": True}
+
+
+# The vaults the switch and option A are seen on: the slots, and whether the
+# header's switch is on.
+VAULT_SHAPES = {
+    "password": (lambda: [_pw("11"), _rk("12", "Recovery key \u2014 printed, in the safe")], False),
+    "password_on": (lambda: [_pw("11"), _rk("12", "Recovery key \u2014 printed, in the safe")], True),
+    "password_two_recovery": (lambda: [_pw("11"), _rk("12", "Recovery key \u2014 printed, in the safe"), _rk("13", "Recovery key \u2014 the drawer", 30)], False),
+    "two_passwords": (lambda: [_pw("11"), _pw("14", days=20), _rk("12", "Recovery key \u2014 printed, in the safe")], False),
+    "recovery_only": (lambda: [_rk("12", "Recovery key \u2014 printed, in the safe"), _rk("13", "Recovery key \u2014 the drawer", 30)], False),
+    "recovery_only_on": (lambda: [_rk("12", "Recovery key \u2014 printed, in the safe"), _rk("13", "Recovery key \u2014 the drawer", 30)], True),
+    "yubikeys": (lambda: [
+        {"recipientId": "01" * 16, "type": "hardware", "label": "YubiKey 5C \u2014 desk", "createdAt": NOW - 600000, "removable": True},
+        {"recipientId": "02" * 16, "type": "hardware", "label": "YubiKey 5 NFC \u2014 travel", "createdAt": NOW - 500000, "removable": True},
+        _rk("03", "Recovery key \u2014 printed, in the safe"), _rk("04", "Recovery key \u2014 the first one", 100)], True),
+}
+
+
+def stage_vault_shape(name):
+    """POST /mock/preview {"name": "vaultShape", "shape": ...}: the staged
+    vault takes one of VAULT_SHAPES, unlocked, with the facts the core reads
+    from its slots (slot_facts); the page reads them at its next load."""
+    shape = VAULT_SHAPES.get(name)
+    if shape is None:
+        return {"shapes": sorted(VAULT_SHAPES)}
+    slots, on = shape
+    state["slots"] = slots()
+    state["entangled"]["on"] = state["vault"]["entangled"] = on
+    slot_facts()
+    _unlocked_for_dialogs()
+    emit_status()
+    return {"shape": name}
+
+
+def trade_reason():
+    """keystore.CanTradePassword from the staged slots, as the core ranks
+    it: no standalone password, or a YubiKey beside one (not found); no
+    recovery key; a second password (policy)."""
+    types = [s["type"] for s in state["slots"]]
+    if "password" not in types or "hardware" in types:
+        return "vault.slot_not_found"
+    if "recovery" not in types:
+        return "vault.no_recovery_slot"
+    if types.count("password") > 1:
+        return "vault.slot_policy"
+    return ""
+
+
+def entangled_state(args=None):
+    """Keys.EntangledState (keys.go): the switch and whether it could be
+    turned on, then the ways in known while Locked too, and on an unlocked
+    vault with a standalone password whether Switch to a YubiKey... could
+    begin, with the first reason it could not (the tampered one first)."""
+    e = dict(state["entangled"])
+    types = [s["type"] for s in state["slots"]]
+    e["hasHardware"], e["hasStandalone"] = "hardware" in types, "password" in types
+    if state["vault"].get("state") == "unlocked" and e["hasStandalone"]:
+        why = "vault.tampered" if state["vault"].get("tampered") else trade_reason()
+        if why:
+            e["switchReason"] = why
+        else:
+            e["canSwitch"] = True
+    return e
+
+
+def begin_switch(args):
+    """Keys.BeginSwitchToToken(label, keepPassword, rekey, withRecoveryKey),
+    refused as the core refuses it before any ceremony and any card call,
+    then played (play_switch)."""
+    a = list(args or []) + ["", False, False, False]
+    label, keep, rekey, recovery = str(a[0] or ""), bool(a[1]), bool(a[2]), bool(a[3])
+    v = state["vault"]
+    if recovery and keep:
+        return Err("params")
+    if v.get("state") == "unlocked":
+        why = "vault.tampered" if v.get("tampered") else trade_reason()
+        if why:
+            return Err(why)
+    if v.get("state") != "unlocked":
+        return Err("vault.needs_unlock")
+    if CEREMONY["kind"] or _dialog_running():
+        return Err("ceremony.in_progress")
+    e = barrier()
+    if e is not None:
+        return e
+    act = {"kind": "toToken", "label": label, "keep": keep, "rekey": rekey, "rekeyAsked": rekey, "recovery": recovery,
+           "without": "", "backup": ""}
+    state["act"] = act
+    play_switch(act)
+    return None
+
+
+def play_switch(act):
+    """The act of kind toToken as the core runs it (keys.go switchToToken),
+    through the page's answers: the proof, the new password when one is
+    chosen, the new YubiKey (enrollTokenOrAnother, steered by the
+    "switchPlay" knob), then one commit and Done (finish_switch)."""
+    kind = "toToken"
+    knobs = dict(state.get("switchPlay") or {})
+    base = {"rekey": act["rekey"], "keepPassword": act["keep"]}
+
+    def run(release):
+        wait = float(state.get("enrolWait", 1.5))
+        emit_ceremony(kind, "waiting_for_key", readerCount=0, **base)
+        # The opening wait reaches the page before the proof's prompt, as
+        # the core's two emits do (beginAs, then the goroutine's first ask):
+        # one drain of the queue would otherwise carry both at once.
+        pause(0.4)
+        if act["recovery"]:
+            ev = dict(base, method="recovery")
+            ask(kind, "recovery", "recovery", prompt_id="drk-1", **ev)
+        else:
+            ev = dict(base, method="password")
+            ask(kind, "password", "password", **ev)
+            if knobs.get("wrongPassword"):
+                emit_ceremony(kind, "deriving", **ev)
+                pause(0.6)
+                ask(kind, "password", "password", error="vault.auth", **ev)
+        emit_ceremony(kind, "deriving", **ev)
+        pause(0.8)
+        if not act["keep"]:
+            # The second half's first view, before the card.
+            ask(kind, "password", "password", choose=True, **ev)
+        serial, card, gen = 21043355, knobs.get("card", ""), {}
+        while True:
+            emit_ceremony(kind, "swap_key", insertLabel="the key to enroll", **ev, **gen)
+            emit_ceremony(kind, "waiting_for_key", readerCount=0, **ev, **gen)
+            pause(wait)
+            slot = dict(ev, slotLabel=act["label"] or "YubiKey %d" % serial, **gen)
+            if card == "blocked":
+                emit_ceremony(kind, "releasing", **slot)
+                pause(0.4)
+                ask(kind, "another", "blocked", error="token.pin_blocked", **slot)
+            else:
+                ask(kind, "pin", "pin", retries=3, retriesKnown=True, **slot)
+                if knobs.get("generate") or card == "proof":
+                    # The key made on the YubiKey before its touch.
+                    emit_ceremony(kind, "deriving", pinAsked=True, **slot)
+                    pause(1.0)
+                    gen = {"generated": True}
+                    slot.update(gen)
+                if card in ("full", "not_usable"):
+                    code = "token.no_empty_slot" if card == "full" else "token.not_usable"
+                    emit_ceremony(kind, "releasing", pinAsked=True, **slot)
+                    pause(0.4)
+                    ask(kind, "another", "failed", error=code, pinAsked=True, **slot)
+                elif card == "proof":
+                    emit_ceremony(kind, "touch", pinAsked=True, n=1, **slot)
+                    pause(1.5)
+                    emit_ceremony(kind, "releasing", pinAsked=True, n=1, **slot)
+                    pause(0.4)
+                    ask(kind, "another", "failed", error="token.proof", pinAsked=True, n=1, **slot)
+                else:
+                    break
+            # Use another YubiKey: the refused one is waited out, named by
+            # its serial, and the next one passes.
+            emit_ceremony(kind, "swap_key", insertLabel="the key to enroll", removeLabel="YubiKey %d" % serial, **ev, **gen)
+            pause(wait * 1.5)
+            serial, card = 30117264, ""
+        emit_ceremony(kind, "touch", pinAsked=True, n=1, **slot)
+        pause(1.5)
+        commit = dict(slot, pinAsked=True, n=1, phase="commit")
+        if knobs.get("touch") == "timeout":
+            # The YubiKey stopped waiting at the touch: the act ends there,
+            # nothing committed, the key made (if any) left on the card.
+            emit_ceremony(kind, "releasing", pinAsked=True, n=1, **slot)
+            pause(0.4)
+            play_events(kind, [("failed", dict(slot, pinAsked=True, n=1, error="token.touch"))], pause, 0.8, release)
+            return
+        if knobs.get("fail"):
+            events = [("deriving", commit), ("failed", dict(commit, error=knobs["fail"]))]
+        else:
+            end = {k: knobs[k] for k in ("retireError",) if knobs.get(k)}
+            events = [("deriving", commit), ("done", lambda: finish_switch(act, commit, end))]
+        play_events(kind, events, pause, 0.8, release)
+
+    run_act(kind, run)
+
+
+def finish_switch(act, ev, end):
+    """The trade on the staged vault (keystore.TradePasswordForToken): the
+    standalone password's card gone and the YubiKey's added in its place in
+    the list, the switch on; a retirement left owed by the knob; the backups
+    card's facts moved by the re-key, no backup taken; After read from the
+    vault so left."""
+    slots, now = state["slots"], int(time.time())
+    label = ev.get("slotLabel") or "YubiKey 21043355"
+    at = next((i for i, s in enumerate(slots) if s["type"] == "password"), len(slots))
+    slots[:] = [s for s in slots if s["type"] != "password"]
+    slots.insert(min(at, len(slots)), {"recipientId": secrets.token_hex(16), "type": "hardware", "label": label, "createdAt": now, "removable": True})
+    state["entangled"]["on"] = state["vault"]["entangled"] = True
+    slot_facts()
+    if end.get("retireError") and not state.get("retire_owed"):
+        state["retire_owed"] = True
+    note_backup(act, False)
+    out = dict(ev)
+    out.update(end)
+    out["after"] = after_facts()
+    return out
+
+
 def play_events(kind, events, wait, gap, ended=None):
     """Emits an act's events a step apart - wait is pause for an act a
     cancel may end, time.sleep for a scene. An end (Done, Failed, or a
@@ -3679,6 +3957,10 @@ def apply_act(act):
         if typ == "recovery":
             s["recoveryId"] = recovery_id(rid)
             out = {"slotLabel": "/s/" + secrets.token_hex(8), "recoveryId": s["recoveryId"]}
+        if typ == "password" and not any(x["type"] == "hardware" for x in slots):
+            # Option A (ruled 2026-11-07): a password joins only a vault with
+            # no YubiKey, and its commit ends the switch (keystore AddSlot).
+            state["entangled"]["on"] = state["vault"]["entangled"] = False
         slots.append(s)
     elif kind == "remove":
         slots[:] = [s for s in slots if s["recipientId"] != act.get("recipientId")]
@@ -3850,7 +4132,8 @@ METHODS = {
     # whatever its arguments become (BeginEnroll lost one and later gained
     # one; the acts that re-key gained theirs) and a rename moves one in
     # silence.
-    898464716: lambda a: state["entangled"],                    # keys.EntangledState
+    898464716: entangled_state,                                 # keys.EntangledState (the switch's facts too)
+    3195461596: begin_switch,                                   # keys.BeginSwitchToToken (ruled 2026-11-07)
     2247223905: lambda a: None,                                 # keys.SetEntangled (a ceremony: begin_act, below)
     3747209322: lambda a: None,                                 # keys.ChangeEntangledPassword (the same)
     3774546620: last_export_at,                                 # vault.LastExportAt (backup.at)

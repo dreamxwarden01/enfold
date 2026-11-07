@@ -491,6 +491,19 @@ WaitingForKey ──1 reader──▶ Probing ──match, password slot──�
   and reports nothing. The publish point checks the lock latch.
 - Recovery key and standalone password skip the token states. `Vault.SubmitPassword` serves
   both the standalone slot and the entangled password; there is one submit per secret kind.
+- The password a slot change's proof is typed with opens the standalone slot and is dropped with
+  the unlock, save in one act: *Switch to a YubiKey…* with the vault's password in the same words
+  (§13, ruled 2026-11-07) keeps the words the slot opened with — proved right by the slot itself,
+  so nothing is typed twice — from the proof to its commit, where they derive the vault's `K_P`,
+  and a new password chosen there is kept the same way. Either lives on the ceremony goroutine
+  alone, in ordinary memory (the locked pages are for the VMK, the KWK and `K_P`, SCOPE), is
+  never logged and never in a state, and the buffer it is kept in is zeroed on every way out of
+  the act: Done, a failure, a cancel, a lock, a proof that failed. The guarantee is that buffer's
+  alone: the strings the password arrives and travels as — the mailbox's answer, the credential,
+  and the copy the commit hands the keystore — cannot be zeroed in Go, as for every password the
+  core handles today (a byte path into the keystore was weighed and not taken: R4's normaliser
+  takes a string, and a second one for this act would be one more place the same words could
+  derive two keys). A recovery key's proof keeps nothing.
 - No rotation is deferred (FORMAT §8), so there is no rewrap loop and no `SwapKey` between
   tokens at the lock screen. A recovered generation that is not the superblock's is reported
   through the vault's `Tampered` state with the tampering reason (FORMAT §6.2, R25) — a spliced
@@ -1079,7 +1092,9 @@ sentinel of every package with a catch-all `internal` — and services are regis
   `Readers() []Reader{Name}`.
 - `BeginUnlock()`, `CancelUnlock()`, `Lock()`, `Reopen()`, `Activity()`. Secret submissions
   arrive on the raw channel: `pin`, `password`, `recovery`, `mgmtkey`, each with its `PromptID`,
-  and a replacement's two answers, `kept` and `confirm`, with no value (since 2026-10-27, §13).
+  and a replacement's two answers, `kept` and `confirm`, with no value (since 2026-10-27, §13),
+  and *Switch to a YubiKey…*'s *Use another YubiKey*, `another`, with no value (since
+  2026-11-07, §13).
 - `CreateVault(path, displayName, kind, label, entangle, replace)` (`path` empty = the one place,
   §2.1; the first way in's ceremony, then the keystore built as the incoming file and installed,
   the recovery key shown, ending Unlocked — the installed file opened with that key — with a
@@ -1137,7 +1152,10 @@ sentinel of every package with a catch-all `internal` — and services are regis
   what it left committed — its recovery keys' IDs, the switch, whether the vault
   now needs setting up — which the end's next step reads (§13); `StepKeepKey` and
   `StepConfirm` are a replacement's steps, each with a prompt of kind `kept` or
-  `confirm`, answered with no value on the raw channel, §13), `vault.warning`,
+  `confirm`, answered with no value on the raw channel, §13; `KeepPassword`, kind `toToken`
+  only, from its first event on, the same words carried over rather than a new password chosen;
+  `Generated`, the key the act enrols or was enrolling is one Enfold generated on the YubiKey in
+  this unlock, so that an end short of Done can say it stays there, unused), `vault.warning`,
   and from the shell `secret.refused {Code}`. A ceremony whose last step is the
   recovery key's reveal ends with that step in its final event, so the page shows the one-time
   URL above whatever view it is on.
@@ -1585,12 +1603,52 @@ sentinel of every package with a catch-all `internal` — and services are regis
   invariant would still hold without the slot (`keystore.Removable`, which reads the vault's
   entangled switch as well as the records, FORMAT §6.4), so the page greys *Remove* before any
   ceremony is run for it. The entangled password is the vault's, not a slot's: its row is
-  `EntangledState()` (§13).
+  `EntangledState()` (§13), `{On, CanEnable, Reason, HasHardware, HasStandalone, CanSwitch,
+  SwitchReason}` since 2026-11-07: whether the vault has an active YubiKey and an active
+  standalone password (known while Locked), and whether *Switch to a YubiKey…* could begin, with
+  the first reason it cannot on a vault with a standalone password, in the page's order:
+  `vault.tampered`, `vault.no_recovery_slot`, `vault.slot_policy` (a second password).
+- `BeginSwitchToToken(label, keepPassword, rekey, withRecoveryKey)` (since 2026-11-07, §13) is
+  the act of kind `toToken`: it switches a password vault to a YubiKey, the password going on as
+  the vault's, asked after the YubiKey's PIN. Refused before its ceremony, from the cached facts
+  and before anything is asked of a card: `params` for `withRecoveryKey` with `keepPassword` (the
+  same words are what is carried over, so only typing them proves them), `token.no_service`,
+  `vault.needs_unlock`, then `vault.tampered`, `vault.slot_not_found` (no standalone password),
+  `vault.no_recovery_slot`, `vault.slot_policy` (a second password) — `keystore.CanTradePassword`,
+  asked again of the handle after the proof with the label and the vault file's room
+  (`keystore.CanTradePasswordTo`: `params`, `vault.slots_full`), before the new password and any
+  card; a label that is not valid UTF-8 of at most 120 characters (`keystore.CheckLabel`) is
+  `params` before the ceremony. Its first half proves with the vault's password
+  (`Password`, kept for the commit with `keepPassword`) or, with `withRecoveryKey`, a recovery key
+  (`Recovery`); its second half asks the new password first when one is chosen (`Password` with
+  `Choose`, typed twice on the page), then runs the enrolment's token flow exactly — `SwapKey`
+  with no YubiKey to take out, the wait out of a YubiKey that already unlocks the vault, the new
+  YubiKey's PIN alone, `ManagementKey` where needed, the touch — and ends in one commit,
+  `keystore.TradePasswordForToken`, through the act's retirement (R41). Where the YubiKey
+  inserted is refused in a way another could pass — its PIN blocked (`Blocked`,
+  `token.pin_blocked`), no free slot (`Failed`, `token.no_empty_slot`), a key it cannot use
+  (`token.not_usable`), a key that does not prove itself (`token.proof`) — the act stands at that
+  step and code with the prompt of kind `another`; answered, `SwapKey` names that YubiKey by its
+  serial (`RemoveLabel`) until it leaves, and the next one inserted is enrolled, the proof kept. A
+  key generated on a card that comes back, in this act or in one begun again in this unlock, is
+  reused rather than a second one made (`Generated`). It saves no backup.
 - `BeginEnroll(kind, label, withRecoveryKey)` runs the ceremony for the VMK — proved with a
   recovery key instead of a YubiKey when `withRecoveryKey` says no YubiKey of the vault is at
   hand, for a YubiKey or a recovery key added to a vault that has a YubiKey and a recovery key
   (§13, *The recovery-key proof*; `params` for a password or on a vault with no YubiKey,
-  `vault.no_recovery_slot` on one with no recovery key) — and releases the key that unlocked —
+  `vault.no_recovery_slot` on one with no recovery key; a YubiKey on a vault with a standalone
+  password is refused before the proof and before any card is opened with `vault.slot_policy`,
+  since 2026-11-07, the way there being `BeginSwitchToToken`; a label that is not valid UTF-8 of at
+  most 120 characters is `params` before the ceremony) — and, for a YubiKey, asks the handle the
+  proof opened before any card work (`keystore.CanAddSlot`: `vault.slot_policy` from a stale cache,
+  `vault.slots_full` for a vault file with no room for one more unlock method; the switch audit of
+  2026-11-07), as an adopted backup's first way in asks the file the recovery key opened
+  (`keystore.CanAddFirstWayIn`, and `vault.setup_password_on` for a header whose switch is on);
+  a YubiKey with no name given is measured at the longest name its serial could give, which only
+  admits, and at the shortest, which only refuses, and where only a shorter name than the longest
+  fits, with its own serial's once the card is read, before its PIN or any key
+  (`vault.slots_full`; the audit's second pass, the same day) —
+  and releases the key that unlocked —
   an enrolled hardware key inherits the vault's entangled password and is wrapped from the kept
   `K_P` offline, so no password is asked (§13); a `kind = password` slot asks for its own
   (`Choose`) — and then, for a YubiKey, the token flow: `SwapKey` waits for the unlocking key to be *out* of the reader
@@ -1617,13 +1675,27 @@ sentinel of every package with a catch-all `internal` — and services are regis
   first way in, at an import or *Finish setting up*, excludes its file's hardware records the
   same way (its active slots are recovery keys alone, but a retired record may be there); a
   creation has no file, so nothing. The refusal is never a failure and never offers *Start
-  again* (it was the failure, after the PIN and the touch). Then `Inspect(9d)` → reuse a `Usable`
-  key or `FirstEmptySlot` + management key (`ProtectedManagementKey(pin)` after `PINState`, else
-  the hex prompt) + `Generate` — and then, reused or generated, **the key proves itself before it
-  is enrolled**: its PIN (not asked again when the management key's VERIFY still stands) and its
-  touch, over an agreement with an ephemeral key checked against its public key (`token.proof`
-  when it does not match) — so a vault never depends on a key that does not work, and a key in
-  the reader is never enrolled by merely being there (ruling 2026-09-07, third hardware test) →
+  again* (it was the failure, after the PIN and the touch). Then, first (since 2026-11-07), a
+  `Usable` key Enfold generated on this very YubiKey earlier in this unlock and has not enrolled
+  is reused, by its public key, in whatever slot it is — an act begun again, or the same YubiKey
+  back after another was tried, spends no second slot on a second key; the rule is every
+  enrolment's, and the act still counts the key as generated. The list holds public keys alone,
+  a key leaves it once a commit enrols it — any enrolment's, a first way in's and a creation's
+  too — and a lock or Broken empties it, so a YubiKey removed and enrolled again in the same
+  unlock meets the rules that follow, never its old key. It belongs to one vault and one unlock:
+  an act reuses and records keys only for the vault it writes (an import's or a setup's own file,
+  a creation's none) and only while no lock, no Broken and no open of another vault has come since
+  it began, so a key a generation returns after a lock is never remembered, one made before Broken
+  is not reused after Reopen, and one made for a backup's first way in is never another vault's;
+  an open refused as busy between two opens of the same vault is none of these (the switch audit
+  of 2026-11-07, finding 2, and its second pass, findings 1 and 4). Then
+  `Inspect(9d)` → reuse a `Usable` key or `FirstEmptySlot` + management key
+  (`ProtectedManagementKey(pin)` after `PINState`, else the hex prompt) + `Generate` — and then,
+  reused or generated, **the key proves itself before it is enrolled**: its PIN (not asked again
+  when the management key's VERIFY still stands) and its touch, over an agreement with an
+  ephemeral key checked against its public key (`token.proof` when it does not match) — so a
+  vault never depends on a key that does not work, and a key in the reader is never enrolled by
+  merely being there (ruling 2026-09-07, third hardware test) →
   `AddSlot`. A key's label left empty is its serial number ("YubiKey 12345678"), which tells one
   from another; a password's is "Password"; a recovery key needs a name.
   Sub-states mirror §2.2 plus `ManagementKey`, and `SwapKey` in two senses: the proving YubiKey
@@ -2890,15 +2962,22 @@ line's *Unlock* while locked. Three sections, in the order they are read:
   shown again only through one." where its unlock methods are all recovery keys), the three
   wrapping under the title where the column is narrow. The cards are not a selection (they were:
   *Show recovery key…* showed only while a recovery card was selected); each carries its own
-  small buttons at its right — *Show recovery key…* on a recovery key's card, *Remove…* on every
-  card (its dialog asks why the method is removed and re-keys the vault on its first,
-  pre-selected answer, §13), greyed with its reason as its title (the vault locked, changes off
-  while Tampered, or the invariant, "At least 2 unlock methods are always kept, one of them a
-  recovery key.", or on a YubiKey's card "To remove this YubiKey, add a new one or a recovery
-  key first: the vault always keeps at least 2 unlock methods.") — shown on hover and focus,
+  small buttons at its right — *Show recovery key…* on a recovery key's card, *Switch to a
+  YubiKey…* on a password's card on a vault with no YubiKey (§13; ruled 2026-11-07), its title
+  "Open this vault with a YubiKey from now on; the password goes with it, asked after its PIN."
+  and greyed with the house's reasons first, then "Add a recovery key first: it opens the vault
+  if the YubiKey is lost." and "Remove the other password first: a YubiKey carries one password
+  with it.", in that order, *Remove…* on every card (its dialog asks why the method is removed
+  and re-keys the vault on its first, pre-selected answer, §13), greyed with its reason as its
+  title (the vault locked, changes off while Tampered, or the invariant, "At least 2 unlock
+  methods are always kept, one of them a recovery key.", on a password's card with "To open the
+  vault with a YubiKey instead, use Switch to a YubiKey… on this card." after it, or on a
+  YubiKey's card "To remove this YubiKey, add a new one or a recovery key first: the vault
+  always keeps at least 2 unlock methods.", on the vault's last YubiKey's with "A password can
+  be added once the YubiKey is gone." after it, ruled 2026-11-07) — shown on hover and focus,
   staying while that card's dialog is up, and always shown where nothing hovers. A method cannot
   be renamed: no call does it. Then the rule line, then the *Password with every YubiKey* row
-  (§13; it read *Entangled password*).
+  (§13; it read *Entangled password*), whose line names a vault with no YubiKey (§13).
 - **This vault**: *Name*, with *Rename…* beside it, a hyperlink button — the only place the name
   is edited — opening *Rename the vault*, a one-field form whose line reads "The name this PC
   gives the vault. The file keeps its own name." and which writes `Settings.DisplayName` (§3).
@@ -3458,7 +3537,17 @@ methods." (ruled 2026-10-17; it was *Add a key*, *Kind* and "ways in"). On a vau
 its *Unlock method* list has no *Password*: a standalone password never joins a vault with a
 YubiKey (DESIGN §5), so the choice is not offered rather than offered greyed, and a remembered
 choice of *Password* falls back to *YubiKey (PIN and touch)* (ruled 2026-11-06; it read "Password
-(not in a vault with a YubiKey)", greyed and unpressable). A YubiKey's name is
+(not in a vault with a YubiKey)", greyed and unpressable). On a vault with a standalone password,
+*YubiKey* chosen keeps its name field and puts an info bar in the body's place, "A YubiKey cannot
+stand beside a password that opens the vault by itself. Switch to a YubiKey instead, and the
+password goes with it, asked after the YubiKey's PIN.", and the accent primary becomes *Switch to a
+YubiKey…*, which closes the dialog and opens §13's form with the name carried over (ruled
+2026-11-07). On a vault of recovery keys alone, *Password* chosen draws an attention bar, "**This
+password opens the vault by itself, so the vault is only as strong as the password: whoever has a
+copy of the vault file can try passwords against it.** A YubiKey keeps it stronger: choose YubiKey
+above.", and, while the password with every YubiKey is on, the line "Password with every YubiKey
+ends here, since the vault has no YubiKey for it to go with." (ruled 2026-11-07, option A; the
+core ends the switch in the same commit, §13). A YubiKey's name is
 optional, in the create dialog and the enrol dialog alike, and its empty field says what an empty
 field produces — "Named after its serial number", the core's "YubiKey 12345678" — never an
 invented name that reads as a default already filled in; a recovery key's, which must be named,
@@ -4221,7 +4310,8 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   the lead said once to Narrator as it appears, told from the first swap by the core's note
   `vault.duplicate_slot` (ruled 2026-11-06: it was refused only after its PIN, the vault's
   password and its touch, as a failure offering *Start again*); and the new YubiKey's PIN stands
-  alone under "Type the new YubiKey's PIN", its chip the YubiKey's label. **The touch takes the box over** as it takes the lock's
+  alone under "Type the new YubiKey's PIN", its chip the YubiKey's label. *Switch to a YubiKey…*
+  draws the same line and the same second half (§13). **The touch takes the box over** as it takes the lock's
   stage: the touch's gradient fills the body under an opacity that moves (220 ms on the entering
   curve; 160 ms on the exit's), the box's stroke fades with it, the title, the line and the
   words take the touch's inks, the rings, the hero, its line and the receipt stand in the middle
@@ -4240,8 +4330,9 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   re-keying the vault…", "Turning the password on and re-keying the vault…", "Replacing the
   recovery keys and re-keying the vault…" ("…the recovery key…" for one), "Re-keying the
   vault…", or without the re-key "Removing the unlock method…", "Changing the password…",
-  "Updating every YubiKey…", and for an enrolment "Adding the unlock method…"; then, when a
-  backup was asked for, "Saving the backup…". The end keeps its title and adds under it, as they
+  "Updating every YubiKey…", and for an enrolment "Adding the unlock method…"; "Adding the
+  YubiKey and re-keying the vault…" or "Adding the YubiKey…" for *Switch to a YubiKey…*; then,
+  when a backup was asked for, "Saving the backup…". The end keeps its title and adds under it, as they
   apply, read from the left on the neutral panel — an end that adds anything is never drawn on
   the touch's green: a replacement's receipt, one row per recovery key, its label
   and "<new ID> replaces <old ID>", and what to do with the replaced recovery keys'
@@ -4263,9 +4354,10 @@ transition starts, the tokens collapse to 0 — and the settle with them.
   with its sentence and, under it, a small standard button that closes this dialog and opens the
   next act's, in one chain with the password first (§13), its line ending "Enfold first tries
   again to finish clearing the vault file." while the retirement's bar stands: after a re-keying
-  removal of a YubiKey that left only recovery keys, "Add the new YubiKey now; then, if an
-  earlier copy of the vault file may be out there, replace the recovery keys." ("…change the
-  password and replace the recovery keys." with the password on) with *Add an unlock method…*,
+  removal of a YubiKey that left only recovery keys, "Add the new YubiKey or a password now;
+  then, if an earlier copy of the vault file may be out there, replace the recovery keys."
+  ("…change the password and replace the recovery keys." with the password on; "or a password"
+  since 2026-11-07, option A) with *Add an unlock method…*,
   which stays the next step while the vault has recovery keys alone, an unlock method added from
   it going on in the same chain; after a re-keying removal with the password on, "If an earlier
   copy of the vault file may be out there, change the password, then replace the recovery keys."
@@ -4839,6 +4931,15 @@ since nothing should suggest weakening the vault (ruled 2026-10-18; its primary 
 *Turn off password*, over a body that said nothing of the proof asked next), while turning it on
 and changing it keep the accent; each is a ceremony for the VMK by any way in and then re-wraps
 every hardware slot offline from the kept `K_P`, drawing a fresh `entangle_salt` (FORMAT §6).
+On a vault with no YubiKey the row says so (ruled 2026-11-07, from the cached facts the status and
+`EntangledState.HasHardware` / `HasStandalone` carry): beside a standalone password with the switch
+off, "Off: this vault has no YubiKey.", *Turn on…* greyed "This takes effect with a YubiKey: Switch
+to a YubiKey… on the password's card sets it."; beside one with the switch left on (a vault made
+before option A), "On, but this vault has no YubiKey: Switch to a YubiKey… sets the password asked
+with it.", *Change…* greyed "Switch to a YubiKey… sets it." and *Turn off…* live; on recovery keys
+alone with it on, "On: the next YubiKey added asks for its PIN and then this password.", *Change…*
+and *Turn off…* live, since a YubiKey added later is wrapped from the kept `K_P`; on recovery keys
+alone with it off, the row as before.
 **No field asks for the old password** (the ruling of 2026-09-07; reworded 2026-10-27, since the
 proof itself may ask it): the change proves an unlock method first, as every act on this page
 does, so proving with a YubiKey asks for the vault's current password with its PIN, as an unlock
@@ -4863,6 +4964,117 @@ key asks for no password — an enrolled key inherits the vault's setting and is
 kept `K_P` offline — except the first way in of an adopted backup, which sets the vault's
 entanglement afresh, a backup carrying no `K_P` (FORMAT R28). The rotate dialog loses its
 "except a key whose entangled password…" clause: every way in is re-wrapped, always.
+
+**Switch to a YubiKey…, the core's part** (ruled 2026-11-07; the page's forms and words are the
+study's, under the owner's rulings). A password vault reaches a YubiKey in one act and one commit,
+never through recovery keys alone: `Keys.BeginSwitchToToken(label, keepPassword, rekey,
+withRecoveryKey)` (§3) proves it is the user, then sets up the new YubiKey exactly as *Add an
+unlock method…* does, then commits `keystore.TradePasswordForToken`: the standalone password's
+slot removed, the YubiKey's added, and the header's switch on with a fresh `entangle_salt` and the
+`K_P` of the password the vault keeps, in the same flip (FORMAT §6), re-keying the vault in it on
+`rekey` (FORMAT §8), then the commit that retires the state before (R41), then nothing more: the
+act saves no backup and has no backup step (ruled 2026-11-07). The password always goes on — the
+vault's password with every YubiKey, asked after its PIN — in the same words, typed once as the
+proof and kept by the core until the commit (§2.2), or new ones, chosen in the second half's first
+view, before the card, so that nothing typed can fail after a key is made on the YubiKey. A vault
+that kept a `K_P` beside its standalone password has it replaced by the words typed. Every rule
+the vault decides — no standalone password, no recovery key, a second password, a tampered
+region, and, since the switch audit of the same day, the YubiKey's name (valid UTF-8 of at most
+120 characters, `keystore.CheckLabel`: `params`) and the vault file's room for one more unlock
+method (`vault.slots_full`) — is decided from the cached facts before the ceremony and from the
+handle after the proof (`keystore.CanTradePasswordTo`), so nothing is written to a YubiKey for a
+vault that would refuse it, and no refusal of the records follows Argon2id: the keystore asks the
+same before its derivation. The YubiKey's name left empty is its serial's, unknown before the card:
+its room is measured at the longest such name, which only admits, and at the shortest, which only
+refuses, and between the two with the card's own once it is read, before its PIN; the key the
+preflight stands in for the YubiKey's own is a size, never an identity, so a vault whose record
+holds that very key refuses no other (the audit's second pass, the same day).
+`BeginEnroll(token)` on a vault with a standalone password is refused the same way, as
+`vault.slot_policy`, before any card is opened — from the cached facts before the ceremony, and
+again from the handle the proof opened (`keystore.CanAddSlot`), which a cache made stale by an act
+that added a password in between cannot pass (it was refused by the keystore at `AddSlot`, after a
+key could have been made). The page's name fields take at most 120 characters.
+A failure whose outcome is known, the commit's own included, changed nothing: the trade is one
+commit, and what a failed commit wrote is retired at once, as for every act. Its end at Done
+carries `Rekey`, `KeepPassword`, the YubiKey's label in `SlotLabel` and `After` (the switch on, the
+recovery keys' IDs); an end short of Done after a key was generated carries `Generated`.
+
+**Switch to a YubiKey…, the page's part** (ruled 2026-11-07, the study's words under the owner's
+rulings: the verb a switch, never *Replace* or "in the password's place"; no *No password*; no
+backup anywhere in the act). It is met on the password's card and in *Add an unlock method…* with
+*YubiKey* chosen (§6), and named by the password's greyed *Remove…* and the row's lines (above);
+`vault.slot_policy` says "A YubiKey cannot be added beside a password that opens the vault by
+itself. Use Switch to a YubiKey… on the password's card." should the core's refusal ever reach the
+page. The form, *Switch to a YubiKey?* (520 px, a form that opens on the checked answer of its
+password's question, its height not changing with the answers; where the window is too short its
+body scrolls under the fixed foot, as every dialog's does — 777 px of body in a 580 px view at
+1086 × 694 and a 440 px one at 866 × 554, the bar and its tick within the first 330 px), says
+everything before anything is asked: "From now on the vault opens with a YubiKey and a password
+together: the YubiKey's PIN, then the password, then a touch. The password stops opening it by
+itself. The recovery key stays as it is." ("The recovery keys stay as they are."); while
+Enfold's folder keeps replaced vault files, the removal's line for "the password"; one attention
+bar, "**If this YubiKey is lost, only the recovery key opens the vault.**" ("…only a recovery
+key…"), holding the tick "I know where this vault's recovery key is kept." ("…one of this vault's
+recovery keys…"), unticked each time the form opens, and under it "If not, Cancel, then use Show
+recovery key… on its card, or Replace recovery keys… on this page."; *Name this YubiKey*, optional,
+its placeholder the enrol dialog's; **The password asked after the YubiKey's PIN** over *This
+vault's password, the same words* (pre-selected; "Typed once, as the proof. The vault then needs
+the YubiKey and the password together.") and *A new password* ("Typed twice, before the YubiKey
+is set up. A recovery key can prove it is you instead of the old password."); *Turn on…*'s
+question, *Could the vault file have been copied before now?*, re-keying on its first,
+pre-selected answer; an info line whichever the answers, "Re-keying protects the future, not the
+past: … whoever opened it with the password knows those words and could read the recovery key,
+which still opens this vault: choose a new password here or change it afterwards, then replace
+the recovery key with Replace recovery keys… on this page." (plural as the house's); *How this
+works*; and *Switch to a YubiKey* or *Switch and re-key* (accent), greyed until the tick is
+given, its title "Tick that you know where the recovery key is kept.", beside *Cancel*. A user who
+wants the YubiKey alone turns the password off afterwards with *Turn off…*.
+
+The ceremony's dialog is *Switch to a YubiKey*, with the enrolment's two-part line (§6). Its proof
+heads "Type this vault's password" over "It stays the vault's password, asked after the YubiKey's
+PIN." with the same words, or "Then you choose the new one." with a new password, whose form alone
+has *Use recovery key instead* under it (§13's *The recovery-key proof*; its note "One of this
+vault's recovery keys proves it is you."); a wrong password is the house's line under the field.
+With a new password the second half opens on "Choose the password asked after the YubiKey's PIN",
+*Password* and *Type it again*, "Every YubiKey in this vault will ask for it. Longer is better; a
+passphrase of several words is best.", before the card; then the enrolment's views exactly, the
+first wait reading "Now insert the new YubiKey" with nothing to take out. A YubiKey the second half
+refuses in a way another could pass stands with *Use another YubiKey* (accent, taking the focus)
+beside *Cancel*: a blocked PIN under "Type the new YubiKey's PIN" with the danger bar "This
+YubiKey's PIN is blocked, so it cannot be used here. Nothing was changed: the password still opens
+the vault."; no free slot, a key it cannot use, or a key that did not prove itself under "This
+YubiKey cannot be used here", the code's sentence on the bar and "Nothing was changed: the password
+still opens the vault." under it; pressed, the swap names the refused YubiKey by its serial until
+it is out. A failure the user did not choose heads "Could not add the YubiKey" over the code's bar
+and "Nothing was changed: the password still opens the vault.", with *Start again* beside
+*Cancel*. Every end after a key was made on the YubiKey adds "The YubiKey keeps a key Enfold made
+for this vault; it is unused, and takes one of the YubiKey's slots.", a cancel included: a
+cancelled switch with such a key stays on its dialog as "The switch was cancelled" over the
+nothing-changed line and that one, with *Close* alone, where every other cancel closes its dialog.
+A retirement owed is the house's bar, its first sentence "…a copy of it taken now still opens with
+the password alone." Done reads *Switched to a YubiKey* or *Switched to a YubiKey and vault
+re-keyed*, over "<label> now opens this vault with its PIN, then the password, and a touch. The
+password no longer opens it by itself." ("…then the new password, and a touch. The old password no
+longer opens it." with a new password) and "If <label> is lost, unlock with the recovery key, then
+add a new YubiKey here." ("…with a recovery key…"), then one next step, an info line with a small
+standard button: re-keyed with the same words, "If an earlier copy of the vault file may be out
+there, change the password, then replace the recovery key." with *Change…*; re-keyed with a new
+password, "…replace the recovery key too." with *Replace recovery keys…* (a new password chosen in
+a re-keying switch counts as the chain's change); not re-keyed, "A second YubiKey, kept apart,
+opens the vault when this one is not at hand." with *Add an unlock method…*, an act of its own
+rather than a step in a chain; *Close* in the foot. Afterwards the password's card is gone, the
+YubiKey's reads "added today", the row reads "On: every YubiKey asks for its PIN and then this
+password.", and the backups card says the last backup is behind when the vault was re-keyed.
+
+**A password added to a vault whose switch is on ends the switch** (ruled 2026-11-07, the
+downgrade's option A for 1.0). A standalone password joins only a vault with no YubiKey (FORMAT
+§6.4), so on a vault of recovery keys alone whose switch is on, *Add an unlock method…* with
+*Password* commits the slot with the header zeroed and the `entangled_key` record dropped, in the
+one flip (`AddSlot`, FORMAT §6): no `K_P` is left for a later YubiKey to be wrapped from, and the
+row reads off from then. The proof and the prompt are the enrolment's as before; nothing new is
+asked. The page says it where it is decided, in the enrol dialog's attention bar and its line
+(§6); the vault's last YubiKey's greyed *Remove…*, the removal's last-protector line and the
+re-keying removal's end name a password beside the new YubiKey (below and §6).
 
 **Merge records.** Beside *Replace this vault with a copy…* (which replaces the vault kept here)
 an *Import archives from a backup…* action (ruled 2026-10-17; it was *Import records…*: the
@@ -4917,11 +5129,12 @@ gets the new key now; one of them proves it is you first, and the other YubiKeys
 present. Backups made before today keep opening with the methods they had." (ruled 2026-10-27;
 it said "no YubiKey is needed for this", while the proof is a YubiKey wherever the vault has
 one; on a vault with no YubiKey the first sentence ends at "first") and its buttons *Re-key
-vault*, or *Re-key, then back up* with the backup ticked, as it is whenever the vault has a
-recovery key, and *Cancel* — shows the last backup's time and offers a backup by the rule every
-dialog that re-keys shares (below): it asks, it never refuses to rotate without one, and it
-never keeps a copy of the vault (FORMAT §18.3, DESIGN trap 29). **The backup is taken after the
-re-key**, inside the rotation's own ceremony once the re-key and its retiring commit have landed
+vault*, or *Re-key, then back up* once the backup is ticked (it opens unticked, ruled
+2026-11-07; it opened ticked whenever the vault had a recovery key), and *Cancel* — shows
+the last backup's time and offers a backup by the rule every dialog that re-keys shares
+(below): it asks, it never refuses to rotate without one, and it never keeps a copy of the
+vault (FORMAT §18.3, DESIGN trap 29). **The backup is taken after the re-key**, inside the
+rotation's own ceremony once the re-key and its retiring commit have landed
 (`RotateNow(backupPath)`: one proof, one dialog), at the vault's new key, and, like every
 `Keys.Export`, records `lastExportAt`. Ruled 2026-10-27, reversing 2026-09-07 and 2026-10-17,
 which took it before ("no backup means no rotation"): a backup taken before is at the vault's
@@ -4938,7 +5151,8 @@ backups of the vault made earlier still open with it."; while Enfold's folder ke
 vault files (`RetiredCopies`), a line says that those which had the method still open with it
 until they are deleted; where the YubiKey removed is the last of the vault's YubiKeys and no
 password remains, a line says "After this the vault has only its recovery keys: add the new
-YubiKey here now, or after unlocking with a recovery key." Then it asks DESIGN §5's factual
+YubiKey or a password here now, or after unlocking with a recovery key." ("or a password" since
+2026-11-07, option A) Then it asks DESIGN §5's factual
 question, naming the method: "Why are you removing this YubiKey?" (or "this recovery key?") over
 *Lost, stolen, or I am not sure*, first and pre-selected, and *I still have it and it was never
 out of my control*; a standalone password is asked "Why are you removing this password?" over
@@ -4978,13 +5192,17 @@ password's removal is proved by typing a password, the one removed included. **T
 one rule in the five dialogs, the rotate dialog's and the replacement's included: the *Last
 backup* fact, a reason — the replacement's, the removed recovery key's on either answer, the
 re-key's, or, where a backup is owed, why a backup matters — then *Export a backup afterwards*,
-drawn whenever a recovery key remains after the act and ticked on every answer that re-keys —
+drawn whenever a recovery key remains after the act and, since 2026-11-07, unticked as the
+dialog opens whatever the act and the answer (the owner: a local backup is a marginal feature for
+most users, and ticked by default it added confusion and copies of the key material; it may
+matter again with a cloud backup or sync); until then it was ticked on every answer that re-keys —
 the act's own re-key leaves every earlier backup at the vault's old key, which the backups card
 then calls behind — at a recovery key's removal on either answer, since the backups made while
 it was enrolled hold it, and otherwise while no backup is recorded here, the last is over a week
 old, was made before the vault was last re-keyed or holds only replaced recovery keys; where no
 recovery key would remain, "No backup of this vault can be made without a recovery key." stands
-in its place, with no reason above it. The tick follows the answer as it changes, and the two
+in its place, with no reason above it. The tick is the user's from then on: the answer no longer
+moves it (it followed the answer until 2026-11-07), and the two
 answers' reasons share one place, so that the dialog's height does not change. Each primary
 names what its press does, the backup included: *Remove and re-key*, *Remove unlock method*,
 *Remove, re-key and back up*, *Remove, then back up*, and likewise *Change…*, *Turn on…*,
@@ -5028,7 +5246,8 @@ to change the password too, unless a re-keying password change or turning the pa
 earlier in the same chain; to have somewhere to keep each new recovery key before starting, and
 that Enfold's idle lock, after the vault's idle time without input (`idleEffectiveMinutes`, the
 time the session runs on, never a stored value the core clamps), ends the replacement with
-nothing changed; the backup block, always ticked, since every earlier backup then opens only
+nothing changed; the backup block, unticked as it opens (ruled 2026-11-07; it was always
+ticked), its reason saying that every earlier backup then opens only
 with replaced recovery keys; and *Replace recovery keys* (accent; *Replace recovery key* for
 one) or *Replace, then back up*, and *Cancel*. `Keys.ReplaceRecoveryKeys(backupPath)` is one
 ceremony of kind `replace`: the proof (a YubiKey, else the password; never a recovery key);
@@ -5062,7 +5281,10 @@ is recorded, that the last one "opens only with recovery keys this vault no long
 
 **The recovery-key proof** (ruled 2026-10-27, narrowing 2026-10-17's "the dialogs offer no
 recovery key"). An act on this page proves with a recovery key in two cases only, besides a
-vault whose methods are all recovery keys, which proves every act with one as before. A
+vault whose methods are all recovery keys, which proves every act with one as before, and
+besides *Switch to a YubiKey…* with a new password, which may be proved by one of the vault's
+recovery keys instead of the password (ruled 2026-11-07: `withRecoveryKey`, refused with
+`params` beside the same words, which only their typing proves). A
 re-keying removal of the vault's only YubiKey, with no standalone password: the YubiKey removed
 is not asked for and nothing else proves, so the proof is one of the vault's recovery keys, its
 note saying why ("One of this vault's recovery keys proves it is you, since the YubiKey being
@@ -5110,8 +5332,9 @@ exported and the hex IDs of the recovery slots the backup holds (a stamp without
 claim about either) — written only by `Keys.Export` and by the backup an act takes after its
 change. It reads as *never* when absent, zero, ahead of the clock, or carrying another vault's
 id, and *never* makes the confirmations above say that no backup is recorded here rather than
-name a date. It is a local, unauthenticated convenience: it chooses wording, ticks the backup of
-the dialogs that re-key and dates the backups card's status, which also says when the vault was
+name a date. It is a local, unauthenticated convenience: it chooses wording (it also ticked the
+backup of the dialogs that re-key until 2026-11-07, when that tick began to open unticked
+whatever it says) and dates the backups card's status, which also says when the vault was
 re-keyed after it or its recovery keys were replaced (§6, through `Vault.BackupStatus`, §3), and
 it never gates a cryptographic operation.
 
@@ -5121,14 +5344,16 @@ answered, once *Export backup…*'s Save dialog has named a place, and at once f
 key…*, the act's ceremony stands in a dialog that bears its name — *Add an unlock method*,
 *Remove an unlock method*, *Re-key the vault*, *Show the recovery key*, *Export a backup*,
 *Password with every YubiKey* (turning it on or off), *Change the password for every YubiKey*,
-*Replace the recovery keys* (*Replace the recovery key* for one) — drawn as §6, *Controls*,
+*Replace the recovery keys* (*Replace the recovery key* for one), *Switch to a YubiKey* — drawn
+as §6, *Controls*,
 says: the lock screen's views at a dialog's size, one height for every step, the touch's green
 over the body, and its buttons in the foot band. The proof is the core's way in for a slot
 change — the YubiKey where the vault has one, else its password (`acquireUnlocked`), not asking
 for the YubiKey a re-keying removal takes away, and a recovery key in the two cases of *The
 recovery-key proof* (above) — so the dialog opens on the YubiKey's wait at once rather than on a
 quiet instant. The enrolment's is the one two-part line (*Prove it is you · Add the new unlock
-method*); a recovery key enrolled, and the reveal, end in the recovery key's dialog (§6), which
+method*, which *Switch to a YubiKey* shares); a recovery key enrolled, and the reveal, end in
+the recovery key's dialog (§6), which
 takes over from the act's; a replacement's new recovery keys are shown in it before
 its commit, and the act's dialog returns for the confirmation and the end. The
 proof of *Import archives from a backup…* runs the same panel inside that dialog,

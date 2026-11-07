@@ -77,6 +77,14 @@ func Create(path string, opts CreateOptions) (*Unlocked, error) {
 		return nil, err
 	}
 	const gen = 1
+	// The labels before the password's Argon2id: a label the format or the
+	// house refuses is refused before anything is derived (CheckLabel).
+	for _, spec := range opts.Slots {
+		if err := CheckLabel(labelOf(spec)); err != nil {
+			kdf.Zero(vmk[:])
+			return nil, err
+		}
+	}
 	// The header comes first: every hardware slot below is wrapped from the
 	// K_P it derives, and checkInvariant is evaluated over its entangle byte.
 	hdr, kp, err := newHeader(opts.Entangle, vaultID)
@@ -170,7 +178,9 @@ func (u *Unlocked) mutable() error {
 // AddSlot wraps the VMK into a new slot and commits. The result must satisfy
 // the invariant, and a token may be enrolled once. A hardware slot is wrapped
 // from the vault's kept K_P with no token present and no password typed
-// (§18.1); the header is copied forward.
+// (§18.1); the header is copied forward, save where a standalone password
+// joins a vault whose switch is on, which turns the switch off in the same
+// commit (below).
 func (u *Unlocked) AddSlot(spec SlotSpec) error {
 	if err := u.mutable(); err != nil {
 		return err
@@ -199,6 +209,13 @@ func (u *Unlocked) AddSlot(spec SlotSpec) error {
 			}
 		}
 	}
+	// Every refusal the records alone decide, before a password slot's
+	// Argon2id runs in newRecord and before the commit's encoding would
+	// refuse a label or a full region (admit; the switch audit of
+	// 2026-11-07, finding 3).
+	if err := admit(u.k.hdr, u.k.slots, spec); err != nil {
+		return err
+	}
 	s, err := newRecord(spec, u.k.sb.VaultID, kp, u.vmk(), u.gen)
 	if err != nil {
 		return err
@@ -219,6 +236,21 @@ func (u *Unlocked) AddSlot(spec SlotSpec) error {
 			return err
 		}
 		secret = &rec
+	}
+	// A standalone password added to a vault whose switch is on ends the
+	// switch in the same commit (§6, ruled 2026-11-07): checkInvariant has
+	// just shown that no active hardware slot is left beside it, and none can
+	// join while it stands, so a K_P kept beside it would protect nothing and
+	// would wrap the next YubiKey from words the user may no longer know. The
+	// header's five fields are zeroed and the entangled_key record dropped in
+	// the one flip, as turning the password off does; a retired hardware
+	// record keeps its pre, as it does there.
+	if _, ok := spec.(PasswordSlot); ok && u.k.hdr.Entangle {
+		if err := u.writeEntangle(format.SlotRegionHeader{}, nil, slots, len(slots)-1, nil); err != nil {
+			return err
+		}
+		u.installKP(nil)
+		return nil
 	}
 	return u.commitSlots(u.k.hdr, slots, func(reg *format.Registry) {
 		if secret != nil {
@@ -247,6 +279,12 @@ func (u *Unlocked) AddFirstWayIn(spec SlotSpec, e *Entangle) error {
 		return fmt.Errorf("%w: AddFirstWayIn is the first way in of an adopted backup, whose header carries no entanglement", ErrParams)
 	}
 	vaultID := u.k.sb.VaultID
+	// Every refusal the records alone decide, under the header this call
+	// writes, before newHeader's Argon2id (admit; CanAddFirstWayIn asks the
+	// same before any card work).
+	if err := admit(format.SlotRegionHeader{Entangle: e != nil}, u.k.slots, spec); err != nil {
+		return err
+	}
 	// The header first: a hardware slot is wrapped from the K_P it derives, and
 	// the invariant below is evaluated over its entangle byte.
 	hdr, kp, err := newHeader(e, vaultID)
@@ -672,6 +710,97 @@ func (u *Unlocked) SetEntangledAndRotate(e Entangle) error {
 	if err := u.rotate(slots, &hdr, kp, nil); err != nil {
 		kdf.Zero(kp[:])
 		return err
+	}
+	u.installKP(kp)
+	return nil
+}
+
+// TradePasswordForToken switches a password vault to a YubiKey in ONE commit
+// (APP.md §13, ruled 2026-11-07): the standalone password slot passwordRID is
+// removed, a hardware slot for hs added, and the header written with the
+// switch on, a fresh entangle_salt and the K_P e derives at the caller's
+// Argon2id parameters, with the entangled_key record holding that K_P. The
+// password goes on as the vault's, asked after the YubiKey's PIN: the words
+// are e's, the same ones the slot held or new ones, and a K_P a vault kept
+// beside its standalone password (its switch left on with no YubiKey) is
+// replaced, never inherited. rotate re-keys the vault in the same commit
+// (§8), the hardware slot then wrapped the new VMK alone.
+//
+// No two-commit route exists: no legal state holds a standalone password
+// beside a hardware slot (§6.4), and the only legal middle state, recovery
+// keys alone, is the one this avoids. A crash therefore leaves the password
+// vault or the YubiKey vault, never a mix; the caller retires the state
+// before with Retire (R41), as after every slot change.
+//
+// Refused before anything is derived: CanTradePassword's reasons in its
+// order (ErrNotFound, ErrNoRecoverySlot, ErrPolicy), ErrNotFound for a
+// passwordRID that is not the active standalone password, ErrParams for a
+// public key that is not a P-256 point, and §6.4 over the final set under the
+// header the commit writes (ErrDuplicate for a token any record of the
+// region already holds, a retired one included), ErrParams for a label the
+// format or the house refuses (CheckLabel) and ErrFull for a region with no
+// room for the record — all before Argon2id runs (admit).
+func (u *Unlocked) TradePasswordForToken(passwordRID [16]byte, hs HardwareSlot, e Entangle, rotate bool) error {
+	if err := u.mutable(); err != nil {
+		return err
+	}
+	if err := canTradePassword(u.k.slots); err != nil {
+		return err
+	}
+	slots := cloneSlots(u.k.slots)
+	idx := -1
+	for i := range slots {
+		if slots[i].RecipientID == passwordRID && slots[i].State == format.SlotActive && slots[i].Type == format.SlotStandalonePassword {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return ErrNotFound
+	}
+	slots = append(slots[:idx], slots[idx+1:]...)
+	if _, err := ecdh.P256().NewPublicKey(hs.PublicKey); err != nil {
+		return fmt.Errorf("%w: token public key: %v", ErrParams, err)
+	}
+	// §6.4 over the set the commit writes, under the header it writes, then
+	// the label and the region's room, before the salt is drawn and Argon2id
+	// runs (admit): the predicate reads the records' state, type and
+	// slot_pubkey and the entangle byte, and the encoding their sizes, so a
+	// stand-in with the token's public key and label gives the verdict the
+	// wrapped record will. CanTradePasswordTo asks the same before any card.
+	if err := admit(format.SlotRegionHeader{Entangle: true}, slots, hs); err != nil {
+		return err
+	}
+	vaultID := u.k.sb.VaultID
+	hdr, kp, err := newHeader(&e, vaultID)
+	if err != nil {
+		return err
+	}
+	fail := func(err error) error {
+		kdf.Zero(kp[:])
+		return err
+	}
+	s, err := newRecord(hs, vaultID, kp, u.vmk(), u.gen)
+	if err != nil {
+		return fail(err)
+	}
+	for i := range slots {
+		if slots[i].RecipientID == s.RecipientID {
+			return fail(ErrDuplicate)
+		}
+	}
+	slots = append(slots, s)
+	if rotate {
+		// The record arrives in the set step 4 wraps: wrapped the new VMK from
+		// the new K_P, the one just made never written.
+		err = u.rotate(slots, &hdr, kp, nil)
+	} else {
+		// The new record is already wrapped for this header, so it is the one
+		// slot writeEntangle does not re-wrap; there is no other active
+		// hardware slot to re-wrap.
+		err = u.writeEntangle(hdr, kp, slots, len(slots)-1, nil)
+	}
+	if err != nil {
+		return fail(err)
 	}
 	u.installKP(kp)
 	return nil

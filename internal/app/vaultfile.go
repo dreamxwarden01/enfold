@@ -383,7 +383,7 @@ func (c *Core) dropFactsLocked(path, displayName string) {
 	v := &c.vault
 	v.state, v.path, v.displayName = StateNone, path, displayName
 	v.vaultID, v.modifiedAt, v.slots, v.stale = [16]byte{}, 0, nil, nil
-	v.entangled, v.canEnable, v.vaultFileSize = false, false, 0
+	v.entangled, v.canEnable, v.switchReason, v.vaultFileSize = false, false, "", 0
 	v.tampered, v.tamperedReason = nil, ""
 	v.generation, v.retireOwed, v.retireFailed = 0, false, false
 	v.busyID = [16]byte{}
@@ -473,6 +473,9 @@ func (c *Core) ImportFile(path, displayName string, method UnlockMethod, first E
 	c.mu.Unlock()
 	if configured && !replace {
 		return coded(CodeVaultExists)
+	}
+	if keystore.CheckLabel(first.Label) != nil {
+		return coded(CodeParams) // the format's limit and the house's 120 characters, before any ceremony
 	}
 	if displayName == "" {
 		displayName = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -629,6 +632,11 @@ func (cer *ceremony) prove(ks *keystore.Keystore, method UnlockMethod) (*keystor
 // file is the vault kept here, retires it through that Unlocked at once
 // (FORMAT R41); a caller handed an Unlocked with an error closes it.
 func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions, before func(unl *keystore.Unlocked) error) (*keystore.Unlocked, error) {
+	// A key generated for this first way in is this file's (madeScope): an
+	// import's staged copy may be another vault than the one kept here.
+	cer.c.mu.Lock()
+	cer.scope.vault = ks.VaultID()
+	cer.c.mu.Unlock()
 	cred, _, _, err := cer.credential(MethodRecovery, nil, false)
 	if err != nil {
 		return nil, err
@@ -643,6 +651,19 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions, bef
 			return nil, err
 		}
 	}
+	// The file the recovery key opened is asked before the first way in is,
+	// and before any card work: the facts that let the act begin were
+	// cached while Locked, and another process may have changed the file
+	// since — turned its password on, given it a password or a YubiKey —
+	// so nothing is asked of the user or written to a YubiKey for a first
+	// way in AddFirstWayIn would refuse (the switch audit of 2026-11-07,
+	// findings 1 and 3).
+	again, err := firstWayInAdmitted(unl.Keystore(), first)
+	if err != nil {
+		unl.Close()
+		return nil, err
+	}
+	cer.nameAdmits = again
 	// The backup's hardware records go with the first way in: its active
 	// slots are recovery keys alone, but the reader accepts a retired
 	// record of a YubiKey, which AddFirstWayIn's duplicate rule refuses,
@@ -661,7 +682,33 @@ func (cer *ceremony) adoptBackup(ks *keystore.Keystore, first EnrollOptions, bef
 	if err := unl.AddFirstWayIn(spec, ent); err != nil {
 		return unl, err
 	}
+	// A key the first way in generated is enrolled now, as landChange
+	// forgets one after every other commit (forgetEnrolled).
+	cer.c.forgetEnrolled(unl.Keystore())
 	return unl, nil
+}
+
+// firstWayInAdmitted is AddFirstWayIn's verdict on first from the file
+// itself, with no secret asked: vault.setup_password_on for a header whose
+// switch is on (the refusal FinishSetup gives from the cached facts), then
+// keystore.CanAddFirstWayIn over the slot it would add — vault.slot_policy
+// beside a standalone password, or for a password beside a YubiKey,
+// vault.slots_full, params for a label refused. For a YubiKey with no
+// name given, again is the verdict to ask once the card's serial is known,
+// when the room for its name could not be decided before (tokenAdmitted).
+func firstWayInAdmitted(ks *keystore.Keystore, first EnrollOptions) (again func(label string) error, err error) {
+	if ks.Entangled() {
+		return nil, coded(CodeSetupPasswordOn)
+	}
+	switch first.Kind {
+	case EnrollPassword:
+		return nil, ks.CanAddFirstWayIn(keystore.PasswordSlot{Argon2: defaultArgon2, Label: mustString(first.Label, "Password")}, false)
+	case EnrollToken:
+		return tokenAdmitted(first.Label, func(label string) error {
+			return ks.CanAddFirstWayIn(keystore.HardwareSlot{Label: label}, first.Entangle)
+		})
+	}
+	return nil, coded(CodeParams)
 }
 
 // firstWayIn collects the first way in of a new vault: the chosen secret
@@ -718,6 +765,9 @@ func (c *Core) FinishSetup(first EnrollOptions) *Error {
 	}
 	if first.Kind == EnrollToken && c.deps.Cards == nil {
 		return coded(CodeTokenNoService)
+	}
+	if keystore.CheckLabel(first.Label) != nil {
+		return coded(CodeParams) // the format's limit and the house's 120 characters, before any ceremony
 	}
 	c.mu.Lock()
 	if e := c.importGateLocked(false); e != nil {

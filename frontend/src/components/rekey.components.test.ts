@@ -22,6 +22,7 @@ const sources = import.meta.glob(
     "./Dialog.svelte",
     "./Lock.svelte",
     "./ImportDialog.svelte",
+    "./SwitchDialog.svelte",
   ],
   { query: "?raw", import: "default", eager: true },
 ) as Record<string, string>;
@@ -52,7 +53,7 @@ function tagWith(s: string, marker: string): string {
 
 describe("the dialogs that may re-key, read as source", () => {
   it("reads every component it pins", () => {
-    expect(Object.keys(sources)).toHaveLength(10);
+    expect(Object.keys(sources)).toHaveLength(11);
   });
 
   it("asks the fact in a fieldset marked as the question, the re-keying answer first and each answer's second line drawn", () => {
@@ -186,7 +187,7 @@ describe("the dialogs that may re-key, read as source", () => {
   it("greys Replace recovery keys… and a YubiKey's Remove… with what to do as the title", () => {
     const k = markup("KeysPage");
     expect(k).toContain("disabled={!!replaceWhy} title={replaceWhy}");
-    expect(src("KeysPage")).toContain("removeRule(s.type)");
+    expect(src("KeysPage")).toContain("removeRule(s.type, last)");
   });
 
   it("greys Finish setting up… on a vault whose password is on, says why under the title, and gives the accent and the focus to the recovery key", () => {
@@ -202,7 +203,9 @@ describe("the dialogs that may re-key, read as source", () => {
   it("draws the backup's tick only where a backup can be made, and the line that says why in its place", () => {
     const b = markup("BackupChoice");
     expect(b).toMatch(/\{#if possible\}\s*<label class="check"><input type="checkbox" bind:checked=\{ticked\} \/>\{dialogCopy\.backupAfter\.tick\}<\/label>\s*\{:else\}\s*<p>\{dialogCopy\.backupAfter\.none\}<\/p>/);
-    expect(src("BackupChoice")).toContain("possible && backupTicked(");
+    expect(src("BackupChoice")).toContain("can && backupTicked(");
+    // Set once as the dialog opens, never moved by the answer (ruled 2026-11-07).
+    expect(src("BackupChoice")).toContain("if (!opened || !can) ticked =");
   });
 
   it("says the import's two sentences where the design puts them", () => {
@@ -270,9 +273,11 @@ describe("the dialogs that may re-key, read as source", () => {
     expect(markup("CeremonyPanel")).toContain('<button type="button" class="btn accent" onclick={recovery} use:takeFocus>{lockCopy.useRecoveryKey}</button>');
     // Only from the dialog or the document, never another place's focus.
     expect(c).toContain('if (at && at !== document.body && !node.closest(\'[role="dialog"]\')?.contains(at)) return;');
-    expect(c).toContain('shown === "blocked" ? `${ceremonyCopy.blockedLead}. ${blockedMeansOf(switchAt)}`');
-    // The bar's own switch and the view's switch do not take it.
-    expect(markup("CeremonyPanel").match(/use:takeFocus/g)?.length).toBe(1);
+    expect(c).toContain(': `${ceremonyCopy.blockedLead}. ${blockedMeansOf(switchAt)}`');
+    // The bar's own switch and the view's switch do not take it; the
+    // switch's Use another YubiKey, which stands where they would, does.
+    expect(markup("CeremonyPanel").match(/use:takeFocus/g)?.length).toBe(2);
+    expect(markup("CeremonyPanel")).toContain('<button type="button" class="btn accent" onclick={useAnother} use:takeFocus>{switchCopy.another}</button>');
   });
 
   it("lists the unlock methods by the tested rule, with no greyed Password", () => {
@@ -282,8 +287,42 @@ describe("the dialogs that may re-key, read as source", () => {
     expect(k).toContain("addKind = addKindFor(addKind, !!st?.hasHardwareSlot);");
   });
 
+  // Switch to a YubiKey… (ruled 2026-11-07): the form's gate, its primary's
+  // names, the call its press makes, and what it never offers.
+  it("gates the switch's primary on the tick in its bar, names its press, and offers no backup", () => {
+    const w = markup("SwitchDialog");
+    const sw = src("SwitchDialog");
+    expect(w).toMatch(/<Dialog title=\{switchCopy\.title\} medium \{onclose\} onsubmit=\{go\}>/);
+    expect(w).toMatch(/<div class="bar attention sw-bar">[\s\S]*<strong>\{switchCopy\.lost\(n\)\}<\/strong>\s*<label class="check"><input type="checkbox" bind:checked=\{known\} \/>\{switchCopy\.tick\(n\)\}<\/label>/);
+    expect(w).toContain('<button type="submit" class="btn accent" disabled={!known} title={known ? undefined : switchCopy.tickFirst(n)}>{primary}</button>');
+    expect(sw).toContain("let known = $state(false);");
+    expect(sw).toContain('const primary = $derived(switchPrimary(answer === "rekey"));');
+    expect(sw).toContain("if (!known) return;");
+    expect(sw).toContain('let password = $state<"same" | "new">("same");');
+    expect(sw).toContain('let answer = $state<Answer>("rekey");');
+    expect(sw).toContain('questionOf("on")');
+    expect(sw).not.toContain("BackupChoice");
+    expect(w).not.toMatch(/type="password"/);
+    const k = src("KeysPage");
+    expect(k).toContain("Keys.BeginSwitchToToken(o.label, o.keep, o.rekey, false)");
+    expect(k).toContain("toRecovery = o.keep ? null : () => begin(() => Keys.BeginSwitchToToken(o.label, false, o.rekey, true), true);");
+    expect(k).toContain('store.noteAct({ act: "toToken", rekey: o.rekey, keepPassword: o.keep, fromFollow: false });');
+    expect(markup("KeysPage")).toContain("{#if switchShown(m, !!st?.hasHardwareSlot)}");
+    expect(markup("KeysPage")).toContain("disabled={!!switchWhy} title={switchWhy ?? switchCopy.description}");
+  });
+
+  // The page's repairs (2026-11-07): the Add pointer greyed with the card's
+  // reason, the touch timeout's notes, and a lead that claims no failure
+  // when the save's outcome is unknown.
+  it("greys the Add pointer by the card's rule and words the switch's failures by what is known", () => {
+    expect(markup("KeysPage")).toContain('<button type="button" class="btn accent" disabled={!!switchWhy} title={switchWhy} onclick={() => { adding = false; const label = addLabel; addLabel = ""; openSwitch(label); }}>{commandCopy.switchToYubiKey}</button>');
+    const c = markup("CeremonyPanel");
+    expect(c).toMatch(/\{lockCopy\.stoppedLine\}<\/div><\/div>\s*\{#if switching\}\{#each failedNotes\(c\) as note, i \(i\)\}/);
+    expect(c).toContain("{switching && nothingChanged(c) ? switchCopy.failedLead : stepText(c.step).title}");
+  });
+
   it("says nothing on screen that strings.ts does not, in the components this act added", () => {
-    for (const name of ["RekeyQuestion", "BackupChoice", "ReplaceDialog"]) {
+    for (const name of ["RekeyQuestion", "BackupChoice", "ReplaceDialog", "SwitchDialog"]) {
       const words = markup(name).match(/>\s*[A-Za-z][^<{]*</g) ?? [];
       expect(words, name).toEqual([]);
     }

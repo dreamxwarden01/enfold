@@ -746,37 +746,34 @@ func TestTwoReadersDuringTheRefusalsWait(t *testing.T) {
 	h.done()
 }
 
-// A4: a vault with no YubiKey, its password the proof: the check has
-// nothing to match, no note ever stands, and the enrolment ends as it did
-// before the refusal existed (refused at AddSlot by the vault's policy,
-// since a standalone password never joins a vault with a YubiKey, a
-// question the walks left to the owner), the card opened and closed once.
+// A4: a vault with no YubiKey and a standalone password: adding a YubiKey
+// is refused before the proof and before any card is opened, as
+// vault.slot_policy (ruled 2026-11-07; until then the enrolment ran its PIN
+// and touch and the keystore refused it at AddSlot, after a key could have
+// been generated on the card). The way there is Switch to a YubiKey…
+// (switch_test.go).
 func TestAVaultWithNoYubiKeyHasNothingToRefuse(t *testing.T) {
 	fresh, _ := cardWithKey("654321")
 	cards := readerWith(fresh)
 	h := newHarness(t, cards, nil)
-	held := h.watchCards(fresh)
 	h.unlockWithPassword()
 	h.rec.reset()
-	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "first"}); e != nil {
-		t.Fatal(e)
-	}
-	p := h.rec.waitCeremony(t, StepPassword, true)
-	h.c.SubmitSecret("password", p.PromptID, testPassword)
-	pin := h.rec.waitCeremony(t, StepPIN, true)
-	h.c.SubmitSecret("pin", pin.PromptID, "654321")
-	f := h.end()
-	for _, s := range h.ceremoniesSince(0) {
-		if s.Error == CodeDuplicateSlot {
-			t.Fatalf("a duplicate note on a vault with no YubiKey: %+v", s)
+	mark := h.mark()
+	for _, recovery := range []bool{false, true} {
+		if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollToken, Label: "first", WithRecoveryKey: recovery}); !isCode(e, CodeSlotPolicy) {
+			t.Fatalf("a YubiKey beside the password (recovery proof %v): %v", recovery, e)
 		}
 	}
-	if f.Step != StepFailed || f.Error != CodeSlotPolicy {
-		t.Fatalf("the end: %+v", f)
+	h.noCeremonySince(mark, "the refused enrolment")
+	if cards.openAttempts() != 0 || fresh.openedCount() != 0 {
+		t.Fatalf("%d opens of the reader before the refusal", cards.openAttempts())
 	}
-	if fresh.openedCount() != 1 || fresh.closeCount() != 1 || held.Load() != 0 {
-		t.Fatalf("%d opens, %d closes, %d closed while held", fresh.openedCount(), fresh.closeCount(), held.Load())
+	// A password and a recovery key are still added as before.
+	if e := h.c.BeginEnroll(EnrollOptions{Kind: EnrollRecovery, Label: "Second sheet"}); e != nil {
+		t.Fatal(e)
 	}
+	h.proveWithPassword()
+	h.rec.waitCeremony(t, StepRecovery, false)
 }
 
 // A4: the check's every exit and the wait's every probe close each card

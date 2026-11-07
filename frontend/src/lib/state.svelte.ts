@@ -7,7 +7,7 @@ import type { ArchiveDetails, ArchiveStat, ArchiveSummary, BackupStatus, Ceremon
 import { CeremonyStep, VaultState } from "./api";
 import { codeText, moreNotOpened, noticeCopy, openElsewhereText, purgedText, warningCopy } from "./strings";
 import { methodAfter, outcomeAfter } from "./outcome";
-import { NOT_PASSED, explicitMethod, passedAfter } from "./lockscreen";
+import { NOT_PASSED, explicitMethod, keptAfterCancel, passedAfter } from "./lockscreen";
 import type { Passed } from "./lockscreen";
 import { actEnd, chainAfter, chainFor, followUp, replaceNotice } from "./rekey";
 import type { Chain, FollowUp, LastAct, ReplaceNotice } from "./rekey";
@@ -48,10 +48,10 @@ const REFILL_TRIES = 3;
 // The acts whose Done moves the backups card: an export's date, a re-key's
 // VaultRekeyed, a replacement's KeysReplaced, and the backup an act takes
 // after its change (ruled 2026-10-27).
-const BACKUP_KINDS = new Set(["export", "remove", "password", "entangle", "rotate", "replace"]);
+const BACKUP_KINDS = new Set(["export", "remove", "password", "entangle", "rotate", "replace", "toToken"]);
 // The acts whose end changes the unlock methods or the switch: Done, or a
 // recovery key's enrolment's final StepRecovery (lib/rekey.ts actEnd).
-const ACT_KINDS = new Set(["remove", "password", "entangle", "rotate", "enroll", "replace"]);
+const ACT_KINDS = new Set(["remove", "password", "entangle", "rotate", "enroll", "replace", "toToken"]);
 
 export type Route = "archives" | "archive" | "keys" | "settings" | "lock";
 
@@ -1136,6 +1136,9 @@ class Store {
       if (s.state !== VaultState.StateUnlocked) {
         this.lastAct = null;
         this.chain = null;
+        // A cancelled switch kept for its end goes with the dialog a lock
+        // closes, and never reaches the lock screen's stage.
+        if (keptAfterCancel(this.ceremony)) this.ceremony = null;
       }
       // So with the last Find missing files' answer: the presence it
       // measured was this session's (filesCheck).
@@ -1207,8 +1210,12 @@ class Store {
     this.ceremonySeq = c.seq;
     this.sendChosen(c);
     // A cancelled ceremony is over the moment it says so: nothing to
-    // read, nothing to close.
-    this.ceremony = c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled ? null : c;
+    // read, nothing to close — but for a cancelled Switch to a YubiKey…
+    // that made a key on the YubiKey, kept on its dialog while the vault is
+    // unlocked, so that its end says the key stays there (lib/lockscreen
+    // keptAfterCancel; ruled 2026-11-07).
+    const cancelled = c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled;
+    this.ceremony = cancelled && !(keptAfterCancel(c) && this.unlocked) ? null : c;
     this.noteOutcome(c);
     this.actEvent(c);
     if (c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || (c.step === CeremonyStep.StepRecovery && !c.promptId)) {
@@ -2659,6 +2666,9 @@ class Store {
   get ceremonyIsOver(): boolean {
     const c = this.ceremony;
     if (!c) return true;
+    // A cancel is always an end, whatever prompt its final state still
+    // names (a cancel at a new YubiKey's PIN keeps that prompt's id).
+    if (c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled) return true;
     if (c.promptId) return false;
     return c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed || c.step === CeremonyStep.StepRecovery;
   }

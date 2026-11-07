@@ -224,6 +224,8 @@ export const ceremonyCopy = {
     rotate: "Vault re-keyed",
     export: "Backup saved",
     password: "Password changed",
+    // Switch to a YubiKey… (ruled 2026-11-07): the verb is the act's.
+    toToken: "Switched to a YubiKey",
   } as Record<string, string>,
   // An act that re-keyed the vault in the same step as its own change
   // says both (ruled 2026-10-27; CeremonyState.rekey). doneTitleOf picks.
@@ -233,6 +235,7 @@ export const ceremonyCopy = {
     entangle: "Password turned on and vault re-keyed",
     replace: "Recovery keys replaced and vault re-keyed",
     replaceOne: "Recovery key replaced and vault re-keyed",
+    toToken: "Switched to a YubiKey and vault re-keyed",
   } as Record<string, string>,
   // What is being done once the proof has passed (CeremonyState.phase):
   // the change and its re-key under "commit", the backup asked for under
@@ -247,6 +250,10 @@ export const ceremonyCopy = {
     rotate: "Re-keying the vault…",
     replaceRekey: "Replacing the recovery keys and re-keying the vault…",
     replaceRekeyOne: "Replacing the recovery key and re-keying the vault…",
+    // Switch to a YubiKey…'s one commit: what the user sees happen is the
+    // YubiKey added; the password's going is said at the end.
+    toToken: "Adding the YubiKey…",
+    toTokenRekey: "Adding the YubiKey and re-keying the vault…",
     backup: "Saving the backup…",
   } as Record<string, string>,
   // Under the danger bar of a failed removal, password change, turning on
@@ -285,6 +292,9 @@ export const ceremonyCopy = {
     replace: "still opens with the replaced recovery keys",
     replaceOne: "still opens with the replaced recovery key",
     rotate: "still holds the vault's old key",
+    // Switch to a YubiKey…: the state before opened with the password by
+    // itself, which is what the switch withdrew.
+    toToken: "still opens with the password alone",
   } as Record<string, string>,
   // A failed replacement, by what is known of the keys it showed
   // (lib/rekey.ts replaceResult): never added, so the sheets name keys
@@ -298,8 +308,11 @@ export const ceremonyCopy = {
   // and an unlock method first where only recovery keys are left
   // (lib/rekey.ts followUp picks one; the button names its command).
   followUp: {
-    addFirst: "Add the new YubiKey now; then, if an earlier copy of the vault file may be out there, replace the recovery keys.",
-    addFirstOn: "Add the new YubiKey now; then, if an earlier copy of the vault file may be out there, change the password and replace the recovery keys.",
+    // A password is named beside the YubiKey (ruled 2026-11-07, option A):
+    // one added to a vault of recovery keys alone ends the switch, which
+    // the Add dialog says where it is chosen.
+    addFirst: "Add the new YubiKey or a password now; then, if an earlier copy of the vault file may be out there, replace the recovery keys.",
+    addFirstOn: "Add the new YubiKey or a password now; then, if an earlier copy of the vault file may be out there, change the password and replace the recovery keys.",
     changeFirst: "If an earlier copy of the vault file may be out there, change the password, then replace the recovery keys.",
     changeFirstRecovery: "If an earlier copy or backup may be out there, change the password, then replace the other recovery keys.",
     replace: "If an earlier copy of the vault file may be out there, replace the recovery keys too.",
@@ -444,8 +457,15 @@ export const codeCopy: Record<CodeKey, string> = {
   [Code.CodeNoSlot]: "None of this vault's unlock methods matches.",
   [Code.CodePasswordNeeded]: "This YubiKey also needs the vault's password.",
   [Code.CodeInvariant]: "At least 2 unlock methods are always kept, one of them a recovery key.",
-  [Code.CodeSlotPolicy]: "A password on its own cannot unlock a vault that also has a YubiKey.",
+  // Met where a YubiKey would join a vault with a standalone password,
+  // which the core refuses before any card work (ruled 2026-11-07); the
+  // way there is the switch, on the password's card.
+  [Code.CodeSlotPolicy]: "A YubiKey cannot be added beside a password that opens the vault by itself. Use Switch to a YubiKey… on the password's card.",
   [Code.CodeDuplicateSlot]: "This YubiKey is already one of this vault's unlock methods.",
+  // Met before any card work when the vault file has no room for one more
+  // unlock method (FORMAT.md §4: 32 records, or §6's 128 KiB), since
+  // 2026-11-07 (the switch audit's finding 3).
+  [Code.CodeSlotsFull]: "This vault has as many unlock methods as it can hold. Remove one first.",
   [Code.CodeNoRecoverySlot]: "A vault always keeps a recovery key.",
   [Code.CodeSlotNotFound]: "That unlock method no longer exists.",
   [Code.CodeEscrowMissing]: "The vault keeps no copy of this recovery key. Add a new recovery key, then remove this one.",
@@ -1549,6 +1569,9 @@ export const commandCopy = {
   findMissing: "Find missing files",
   addUnlockMethod: "Add an unlock method…",
   addRecoveryKey: "Add a recovery key…",
+  // On the password's card (ruled 2026-11-07): the password goes on with
+  // the YubiKey, so the verb is a switch, not a replacement.
+  switchToYubiKey: "Switch to a YubiKey…",
   removeUnlockMethod: "Remove…",
   showRecoveryKey: "Show recovery key…",
   // Every recovery key at once, so it stands in the head of Unlock
@@ -2006,7 +2029,7 @@ export const dialogCopy = {
     // Only when the YubiKey removed leaves no YubiKey and no password: such
     // a vault cannot finish its setup from the lock screen while its
     // password is on, and this page adds an unlock method either way.
-    lastProtector: "After this the vault has only its recovery keys: add the new YubiKey here now, or after unlocking with a recovery key.",
+    lastProtector: "After this the vault has only its recovery keys: add the new YubiKey or a password here now, or after unlocking with a recovery key.",
     // A re-key changes no archive's key and no recovery key (FORMAT R38),
     // so this promises neither.
     how: (label: string, type: string): string =>
@@ -2064,6 +2087,16 @@ export const dialogCopy = {
     needName: "Name the recovery key first.",
     passwordInherited: "This vault asks for its password with every YubiKey, so this one will too. Nothing is asked for here.",
     primary: "Add unlock method",
+    // A YubiKey chosen on a vault with a standalone password (ruled
+    // 2026-11-07): the info bar in the body's place, and the primary that
+    // opens Switch to a YubiKey… with the name carried over.
+    switchPointer: "A YubiKey cannot stand beside a password that opens the vault by itself. Switch to a YubiKey instead, and the password goes with it, asked after the YubiKey's PIN.",
+    // Password chosen on a vault of recovery keys alone (ruled 2026-11-07,
+    // option A): where the vault weakens, the attention bar, its consequence
+    // first; and, while the switch is on, that it ends with this password.
+    aloneHead: "This password opens the vault by itself, so the vault is only as strong as the password: whoever has a copy of the vault file can try passwords against it.",
+    aloneRest: "A YubiKey keeps it stronger: choose YubiKey above.",
+    aloneEnds: "Password with every YubiKey ends here, since the vault has no YubiKey for it to go with.",
   },
   // Password with every YubiKey (APP.md §13): no field asks for the old
   // password, though a YubiKey's proof asks the current one with its PIN;
@@ -2115,6 +2148,11 @@ export const vaultCopy = {
   // YubiKey, or a second recovery key added with Use recovery key instead
   // when none is at hand yet, either of which makes it removable.
   ruleYubiKey: "To remove this YubiKey, add a new one or a recovery key first: the vault always keeps at least 2 unlock methods.",
+  // The last YubiKey's (ruled 2026-11-07, option A): a password can follow
+  // it, once it is gone, never stand beside it.
+  ruleLastYubiKey: "To remove this YubiKey, add a new one or a recovery key first: the vault always keeps at least 2 unlock methods. A password can be added once the YubiKey is gone.",
+  // The password's (ruled 2026-11-07): the rule, then the way to a YubiKey.
+  rulePassword: `${codeCopy[Code.CodeInvariant]} To open the vault with a YubiKey instead, use Switch to a YubiKey… on this card.`,
   lockedLine: "Unlock the vault to change its unlock methods.",
   // By the recovery keys' count: one is a vault never set up; two or more
   // were left by a removal, and the vault was set up then.
@@ -2234,6 +2272,15 @@ export const vaultCopy = {
   // §2.2; ruled 2026-10-17, it said "before its PIN").
   passwordOn: "On: every YubiKey asks for its PIN and then this password.",
   passwordOff: "Off: a YubiKey opens the vault with its PIN and touch alone.",
+  // The row on a vault with no YubiKey (ruled 2026-11-07; lib/rekey.ts
+  // passwordRow picks): beside a standalone password the switch takes
+  // effect only through Switch to a YubiKey…, which sets the password asked
+  // with it; on recovery keys alone it waits for the next YubiKey.
+  passwordOffNoYubiKey: "Off: this vault has no YubiKey.",
+  passwordOnNoYubiKey: "On, but this vault has no YubiKey: Switch to a YubiKey… sets the password asked with it.",
+  passwordOnNext: "On: the next YubiKey added asks for its PIN and then this password.",
+  turnOnNeedsYubiKey: "This takes effect with a YubiKey: Switch to a YubiKey… on the password's card sets it.",
+  changeBySwitch: "Switch to a YubiKey… sets it.",
   change: "Change…",
   turnOn: "Turn on…",
   turnOff: "Turn off…",
@@ -2255,7 +2302,75 @@ export const vaultCopy = {
     password: "Change the password for every YubiKey",
     replace: "Replace the recovery keys",
     replaceOne: "Replace the recovery key",
+    toToken: "Switch to a YubiKey",
   } as Record<string, string>,
+};
+
+// ---- Switch to a YubiKey… (ruled 2026-11-07) -----------------------------
+//
+// A password vault reaches a YubiKey in one act and one commit (APP.md §13):
+// the password goes on with it, the vault's password asked after the
+// YubiKey's PIN, in the same words or new ones. The study's words, the verb
+// a switch (the owner: never "Replace" or "in the password's place"), and no
+// backup anywhere in the act. n is the vault's recovery keys: one is
+// singular everywhere (DECISIONS 2026-09-09).
+export const switchCopy = {
+  // The command's title on the card while it can be pressed, and its greyed
+  // reasons after the house's (locked, Tampered), in the order the page
+  // ranks them (lib/rekey.ts switchGreyed).
+  description: "Open this vault with a YubiKey from now on; the password goes with it, asked after its PIN.",
+  noRecovery: "Add a recovery key first: it opens the vault if the YubiKey is lost.",
+  twoPasswords: "Remove the other password first: a YubiKey carries one password with it.",
+  // The form, which says everything before anything is asked.
+  title: "Switch to a YubiKey?",
+  body: (n: number): string =>
+    `From now on the vault opens with a YubiKey and a password together: the YubiKey's PIN, then the password, then a touch. The password stops opening it by itself. ${n === 1 ? "The recovery key stays as it is." : "The recovery keys stay as they are."}`,
+  // The one bar (attention: a lost YubiKey leaves the recovery key alone),
+  // the tick inside it that gates the primary, and the way to check.
+  lost: (n: number): string => (n === 1 ? "If this YubiKey is lost, only the recovery key opens the vault." : "If this YubiKey is lost, only a recovery key opens the vault."),
+  tick: (n: number): string => (n === 1 ? "I know where this vault's recovery key is kept." : "I know where one of this vault's recovery keys is kept."),
+  tickCaption: "If not, Cancel, then use Show recovery key… on its card, or Replace recovery keys… on this page.",
+  tickFirst: (n: number): string => (n === 1 ? "Tick that you know where the recovery key is kept." : "Tick that you know where a recovery key is kept."),
+  legend: "The password asked after the YubiKey's PIN",
+  same: "This vault's password, the same words",
+  sameLine: "Typed once, as the proof. The vault then needs the YubiKey and the password together.",
+  fresh: "A new password",
+  freshLine: "Typed twice, before the YubiKey is set up. A recovery key can prove it is you instead of the old password.",
+  // Under Turn on…'s question, whichever the answers.
+  limit: (n: number): string =>
+    n === 1
+      ? "Re-keying protects the future, not the past: whatever someone could open until now, they may already have copied. If an earlier copy of the vault file may be out there, whoever opened it with the password knows those words and could read the recovery key, which still opens this vault: choose a new password here or change it afterwards, then replace the recovery key with Replace recovery keys… on this page."
+      : "Re-keying protects the future, not the past: whatever someone could open until now, they may already have copied. If an earlier copy of the vault file may be out there, whoever opened it with the password knows those words and could read the recovery keys, which still open this vault: choose a new password here or change it afterwards, then replace them with Replace recovery keys… on this page.",
+  how: "The vault asks for its password, or a recovery key when a new password is chosen, then sets up the YubiKey. The password's unlock method is removed and the YubiKey's added in the same write, so the vault is never without an unlock method and never has both. Re-keying gives the vault a new key in the same step: an earlier copy of the vault file then reaches nothing added from now on. The recovery keys it held still open this vault until they are replaced, and an archive that existed then stays open to it until that archive is re-keyed with Re-key archive… on its page.",
+  // [kept, re-keyed]: no backup form (ruled 2026-11-07).
+  primary: ["Switch to a YubiKey", "Switch and re-key"] as [string, string],
+  // The ceremony: the proof's lead and its line by the choice; the recovery
+  // key's note, with a new password only.
+  proveLead: "Type this vault's password",
+  proveSame: "It stays the vault's password, asked after the YubiKey's PIN.",
+  proveNew: "Then you choose the new one.",
+  recoveryNote: "One of this vault's recovery keys proves it is you.",
+  // The second half's first view with a new password, before the card.
+  chooseLead: "Choose the password asked after the YubiKey's PIN",
+  // A YubiKey refused in the second half that another could pass: its PIN
+  // blocked, or a key it cannot hold or use; the accent offers another.
+  blocked: "This YubiKey's PIN is blocked, so it cannot be used here. Nothing was changed: the password still opens the vault.",
+  refusedLead: "This YubiKey cannot be used here",
+  another: "Use another YubiKey",
+  // A failure the user did not choose, and a cancel after a key was made.
+  failedLead: "Could not add the YubiKey",
+  cancelledLead: "The switch was cancelled",
+  nothingChanged: "Nothing was changed: the password still opens the vault.",
+  // Every end after a key was made on the YubiKey (CeremonyState.generated):
+  // nothing can take it back off the card.
+  keyLeft: "The YubiKey keeps a key Enfold made for this vault; it is unused, and takes one of the YubiKey's slots.",
+  // Done: the first line by the choice, then what a loss means.
+  doneSame: (label: string): string => `${label} now opens this vault with its PIN, then the password, and a touch. The password no longer opens it by itself.`,
+  doneNew: (label: string): string => `${label} now opens this vault with its PIN, then the new password, and a touch. The old password no longer opens it.`,
+  ifLost: (label: string, n: number): string =>
+    n === 1 ? `If ${label} is lost, unlock with the recovery key, then add a new YubiKey here.` : `If ${label} is lost, unlock with a recovery key, then add a new YubiKey here.`,
+  // The next step after a switch that kept the vault's key.
+  addSecond: "A second YubiKey, kept apart, opens the vault when this one is not at hand.",
 };
 
 // ---- The lock screen (APP.md §6) -----------------------------------------

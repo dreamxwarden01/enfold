@@ -209,7 +209,7 @@ export interface CeremonyState {
     "seq": number;
 
     /**
-     * unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal | records | entangle | password | replace
+     * unlock | create | enroll | remove | rotate | export | import | setup | verify | reveal | records | entangle | password | replace | toToken
      */
     "kind": string;
 
@@ -264,11 +264,30 @@ export interface CeremonyState {
 
     /**
      * Rekey: the act re-keys the vault in the same commit as its own change
-     * (a removal, a password change, turning the password on, a replacement),
-     * from its first event on, so that the panel's end says both. False for
-     * kind rotate, which is the re-key itself.
+     * (a removal, a password change, turning the password on, a replacement,
+     * the switch to a YubiKey), from its first event on, so that the panel's
+     * end says both. False for kind rotate, which is the re-key itself.
      */
     "rekey": boolean;
+
+    /**
+     * KeepPassword, kind toToken only, from its first event on: the vault's
+     * password goes on with the YubiKey in the same words, typed once as the
+     * proof; false, a new password is chosen in the second half's first view
+     * (APP.md §13, ruled 2026-11-07). The proof's lead line and the end's
+     * first line follow it.
+     */
+    "keepPassword"?: boolean;
+
+    /**
+     * Generated: the key this act enrols, or was enrolling, is one Enfold
+     * generated on the YubiKey in this unlock — in this act, or in an earlier
+     * one that ended without enrolling it and whose key this act reused — so
+     * every end that follows short of Done, a cancel and a failure included,
+     * can say that the key stays on the YubiKey, unused, in one of its slots.
+     * A usable key found in 9d otherwise does not set it.
+     */
+    "generated"?: boolean;
 
     /**
      * Phase, once the proof has passed: "commit" while the act's change and
@@ -545,6 +564,15 @@ export enum Code {
      * on the Vault page instead.
      */
     CodeSetupPasswordOn = "vault.setup_password_on",
+
+    /**
+     * CodeSlotsFull: the vault's slot region has no room for one more unlock
+     * method (keystore.ErrFull: FORMAT.md §4's 32 records, or §6's 128 KiB).
+     * Refused before any card work and before any derivation, since
+     * 2026-11-07 (the switch audit's finding 3); before, a commit met it only
+     * at its encoding, where format.ErrInvalid read as archive.invalid.
+     */
+    CodeSlotsFull = "vault.slots_full",
 
     /**
      * CodeNotThisVault: no VMK of this vault and no key given opened the
@@ -910,6 +938,27 @@ export interface EntangledState {
      * vault.invariant when CanEnable is false
      */
     "reason"?: Code;
+
+    /**
+     * HasHardware: an active YubiKey is among the vault's unlock methods;
+     * HasStandalone: an active standalone password is. The row's words for a
+     * vault with no YubiKey, and the greying of Turn on… and Change… there,
+     * follow them (APP.md §13, ruled 2026-11-07). Known while Locked too.
+     */
+    "hasHardware"?: boolean;
+    "hasStandalone"?: boolean;
+
+    /**
+     * CanSwitch: Switch to a YubiKey… could begin now
+     * (keystore.CanTradePassword, from the cached facts, on an unlocked vault
+     * that is not tampered); SwitchReason, when it cannot on a vault with a
+     * standalone password, the first reason in the order the page ranks them:
+     * vault.tampered, vault.no_recovery_slot (add a recovery key first),
+     * vault.slot_policy (a second password). Empty on a vault with no standalone
+     * password, where the command is not drawn, and while Locked.
+     */
+    "canSwitch"?: boolean;
+    "switchReason"?: Code;
 }
 
 /**

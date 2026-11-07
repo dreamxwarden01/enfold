@@ -6723,3 +6723,118 @@ Also: the checklist for the real-key pass asked the owner to "add the test key a
 exactly what the vault refuses, and a vault keeps two unlock methods, one of them a recovery
 key; with one physical YubiKey the lost-key scenario is a second recovery key, an unlock by
 recovery key, a re-keying removal of the YubiKey, and the YubiKey added back.
+
+## 2026-11-07 — Switch to a YubiKey: a password vault gains a YubiKey in one commit
+
+The mirror of the dead end closed the day before: a vault whose unlock methods are a standalone
+password and a recovery key could not gain a YubiKey — DESIGN §5's rule that a standalone
+password never stands beside a hardware slot, refused by the keystore as `ErrPolicy` — and the
+page learned it only at `AddSlot`, after the new YubiKey's PIN, perhaps a key generated on the
+card, and its touch. DESIGN had said what should happen instead: carry the passphrase over as
+the password asked with every YubiKey, OR becomes AND, nothing destroyed in silence. The owner
+asked for a dedicated upgrade flow, then for its reverse too — the last YubiKey given up for a
+password — with ample notice and warning either way; a read-only study followed (an analysis
+of what the keystore can commit, three designs of both directions from three stances, a judge,
+three critics, a second judging), kept with the session's notes, and the owner ruled on it:
+
+- **Build the upgrade for 1.0; the downgrade gets today's acts with their words and one warning
+  repaired (the study's option A), its own flow later.** Its usefulness is doubtful, and a user
+  who lost the YubiKey is usually better served by a new one, which today's chain offers.
+- **The verb is *Switch*.** *Switch to a YubiKey…* on the password's card (and *Switch to a
+  password…* when the day comes), not the judge's *Replace with…*: *Replace* already names two
+  other acts on the page, and the upgrade keeps the password rather than replacing it.
+- **The password always goes on.** No "No password" answer: a vault whose every slot is hybrid
+  would turn into one classical slot that a harvested file opens; *Turn off…* afterwards stays
+  the deliberate act for that.
+- **No backup in either flow, and the backup tick unticked everywhere.** The study carried the
+  house's "Export a backup afterwards"; the owner struck it: a local backup is a marginal feature
+  for most users and, ticked by default, adds confusion and copies of the key material (what may
+  matter is a cloud backup or sync, later). For consistency every act that offers the tick —
+  *Turn on…*, the re-keying removal, *Replace recovery keys…* and the rest — now opens with it
+  unticked; the tick itself stays.
+- The judge's other defaults stand: the same words by default, typed once as the proof; the
+  re-key by *Turn on…*'s question, re-keying by default; a tick inside the one attention bar, "I
+  know where this vault's recovery key is kept.", unticked each time, gating the primary — the
+  one mistake that costs access; the recovery-key proof widened to this act when a new password
+  is chosen (the old one forgotten is not a dead end) and refused with the same words (those are
+  what is carried over); attention for a weaker guarantee, danger only for a failure.
+
+**What was built.** In the keystore, `CanTradePassword` ranks its refusals (not a password vault,
+no recovery key, a second password) with no key derived, and `TradePasswordForToken` is one
+commit over the final slot set: the standalone slot removed, the hardware slot added wrapped from
+the new K_P, the header with the switch on and a fresh `entangle_salt`, the kind-2 record written
+— through the writes `Turn on…` and a re-key already make — with the invariant checked over
+that set before any Argon2id runs, so no refusal follows a derivation; a vault whose switch had
+been left on with no YubiKey gets its old K_P replaced; a crash at any write leaves the old vault
+or the new. Option A's half: a standalone password added to a vault with no hardware slot zeroes
+the header and drops the kind-2 record in the same commit, so the switch never outlives the last
+YubiKey. In the core, `BeginSwitchToToken` runs the act as a ceremony of its own kind: the proof
+with the password — the typed words kept, in ordinary memory, zeroed on every way out, only when
+they are to be carried over — or, with a new password, with the password or a recovery key; then
+the new password, typed twice, before any card; then the enrolment's second half as it is (the
+swap, the new YubiKey's PIN alone, the touch, the day before's wait for a YubiKey that already
+unlocks a vault); then the trade through the one landing every slot-region change takes, with
+the retiring commit after it. Every vault-side rule is decided from the unlocked keystore before
+the ceremony begins and again after the proof, and `BeginEnroll` of a YubiKey on a password vault
+is refused before any card is opened: nothing is written to a YubiKey that the vault will refuse.
+A blocked PIN, a full card, an unusable key or a failed proof in the second half parks on a
+prompt of its own, which the page answers with *Use another YubiKey*: the refused card is waited
+out by its serial and the next one goes through; a key Enfold generated in this unlock is reused
+when the same card comes back — in any enrolment, until a record holds it or the vault locks —
+and every end after a key was made says that the YubiKey keeps it. On the page: the command on
+the password's card with its greyed reasons in order, hidden on any other vault; *Add an unlock
+method…* with YubiKey chosen on a password vault says why and points to it, the name carried
+over; the password's greyed *Remove…* names it; the row *Password with every YubiKey* says its
+four no-YubiKey states instead of describing a YubiKey the vault does not have; the form
+*Switch to a YubiKey?* as the study drew it, less the backup; the ceremony's halves and ends
+(*Switched to a YubiKey*, *…and vault re-keyed*, the next step as a small standard button:
+*Change…*, *Replace recovery keys…* or *Add an unlock method…* by the case); a cancel after a
+key was made stays as an end with *Close*, since it has something to say. Option A on the page:
+*Add an unlock method…* with Password chosen on a vault of recovery keys alone carries the
+downgrade's warning, "This password opens the vault by itself, so the vault is only as strong as
+the password…", and, with the switch on, "Password with every YubiKey ends here, since the vault
+has no YubiKey for it to go with."; the last YubiKey's greyed *Remove…*, the last-protector line
+and the re-keying removal's end name a password as well as a YubiKey.
+
+**The outside audit** (Codex, gpt-6-astra, read-only, twice, before the commit). It found the one
+commit sound — the stand-in record gives the invariant's verdict, the salt is fresh, the old
+K_P and the password record's material leave the live state, the rotation keeps the recovery
+escrow and the VMK history, the same words normalise the same way — and three places where
+"nothing is written to a YubiKey the vault will refuse" did not yet hold. The ordinary enrolment
+of a YubiKey, and an adopted backup's first way in, decided the policy from cached facts alone,
+so a cache made stale by another act could let a key be generated before `ErrPolicy`: both now
+ask the handle the proof opened, before any card work. The memory of keys generated in this
+unlock was a map by serial that a generation finishing under a lock could repopulate, and that an
+import of another vault did not clear: it is now scoped to the vault and an unlock epoch, written
+under the mutex only while the act's epoch stands, cleared at every lock and at every open of
+another vault, and forgotten on every commit path. And a label past the format's 65 535 bytes, or
+a slot region with no room, was refused only at the encoding, after the key and the derivation: a
+preflight shared by the switch, the enrolment and the first way in now checks the label (valid
+UTF-8, the house's 120 characters, the format's bytes) and the region's room on the exact
+encoding before any card, and the keystore asks the same before its Argon2id; the two name
+fields take 120 characters. The kept password's guarantee is now stated as it is: the retained
+buffer is zeroed on every way out; the strings it arrives and travels as cannot be, as for every
+password the core handles. The second pass, on those repairs, found the memory of generated keys
+surviving Broken (cleared there too now, the epoch moved), a Busy detour on Reopen dropping it
+for no reason (the known-vault comparison decides now), and two false refusals in the preflight
+— an unnamed YubiKey measured at the longest name its serial could give, and the stand-in key's
+identity counted by the duplicate rule: the longest name now only admits and the shortest only
+refuses, between them the card's own name is measured once the card is read and before its PIN
+or any key, and an unknown key is a size, never an identity. Left from it: on a real YubiKey a
+generation whose readback fails (the card pulled at that instant) leaves a key the app never
+recorded, so the next attempt generates in the next slot and the end omits the sentence about it
+— the smallest fix is written with the notes (the PIV layer returning the key with the error);
+the registry's 64 MiB is not measured by the preflight (tens of bytes against it); a failed
+import of another vault drops this vault's memory of a generated key, which only wastes a slot;
+a switch refused at that re-measure ends rather than offering another YubiKey.
+
+**Left.** The form does not fit in one view: 777 px of body against 580 visible at the default
+window and 440 at the smallest; it scrolls under its fixed foot, the bar and its tick always in
+view, as no other dialog of the house does at the default window — the owner decides whether to
+trim it (the info line folded into *How this works*, the name field out) or to let it stand. A
+ceremony dialog that mounts straight onto a typed prompt can take the focus from the field and
+mark it required (a house race, older than this act; the real core's events land apart). *Turn
+on…* on a vault with a standalone password and no YubiKey is still accepted by the core, which
+is how the switch-on-with-no-YubiKey state is made; the page greys it. The study's downgrade
+flow, *Switch to a password…*, with its primitives (`TradeTokenForPassword`, a rotation that
+turns the switch off), waits for 1.1.

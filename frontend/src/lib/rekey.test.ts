@@ -17,6 +17,8 @@ import {
   followUp,
   lastProtector,
   pairRows,
+  passwordAlone,
+  passwordRow,
   primaryOf,
   questionOf,
   recoveryNoteOf,
@@ -30,10 +32,14 @@ import {
   replaceResult,
   retireBar,
   swapWordsOf,
+  switchEndItems,
+  switchGreyed,
+  switchPrimary,
+  switchShown,
 } from "./rekey";
 import type { AfterFacts, Chain, LastAct } from "./rekey";
-import { CeremonyStep } from "./api";
-import { ceremonyCopy, codeText, dialogCopy, replaceCopy, retireHeld, vaultCopy } from "./strings";
+import { CeremonyStep, Code } from "./api";
+import { ceremonyCopy, codeText, dialogCopy, replaceCopy, retireHeld, switchCopy, vaultCopy } from "./strings";
 
 // The acts that may re-key the vault (APP.md §13, ruled 2026-10-27): the
 // backup taken after the change, the dialogs' primaries, the end's next
@@ -119,24 +125,19 @@ describe("whether a backup can be taken after the act (backupPossible)", () => {
   });
 });
 
+// The owner, 2026-11-07 (O8): the tick stays in every dialog that offers it,
+// and opens unticked whatever the act, the answer and the backup's date.
 describe("the backup's tick (backupTicked)", () => {
-  it("is ticked by the re-keying answer whatever the date", () => {
-    expect(backupTicked({ owed: false, act: "remove", rekey: true, removing: "hardware" })).toBe(true);
-    expect(backupTicked({ owed: false, act: "password", rekey: true })).toBe(true);
-    expect(backupTicked({ owed: false, act: "on", rekey: true })).toBe(true);
-  });
-  it("follows the owed backup on the answer that keeps the vault's key", () => {
-    expect(backupTicked({ owed: false, act: "remove", rekey: false, removing: "hardware" })).toBe(false);
-    expect(backupTicked({ owed: true, act: "remove", rekey: false, removing: "hardware" })).toBe(true);
-    expect(backupTicked({ owed: false, act: "password", rekey: false })).toBe(false);
-  });
-  it("is ticked at a recovery key's removal on either answer", () => {
-    expect(backupTicked({ owed: false, act: "remove", rekey: false, removing: "recovery" })).toBe(true);
-    expect(backupTicked({ owed: false, act: "remove", rekey: true, removing: "recovery" })).toBe(true);
-  });
-  it("is always ticked for a re-key and a replacement", () => {
-    expect(backupTicked({ owed: false, act: "rotate", rekey: true })).toBe(true);
-    expect(backupTicked({ owed: false, act: "replace", rekey: true })).toBe(true);
+  it("is never ticked by default, in any act, on any answer, owed or not", () => {
+    for (const act of ["remove", "password", "on", "rotate", "replace"] as const) {
+      for (const rekey of [true, false]) {
+        for (const owed of [true, false]) {
+          for (const removing of [undefined, "hardware", "recovery", "password"]) {
+            expect(backupTicked({ owed, act, rekey, removing }), `${act} ${rekey} ${owed} ${removing}`).toBe(false);
+          }
+        }
+      }
+    }
   });
 });
 
@@ -244,6 +245,128 @@ describe("the step an act ends at (actEnd)", () => {
     expect(actEnd({ kind: "enroll", step: "recovery", promptId: "p1", after: after(["AAAA-0001"]) })).toBe(false);
     expect(actEnd({ kind: "enroll", step: "deriving", after: after(["AAAA-0001"]) })).toBe(false);
     expect(actEnd({ kind: "remove", step: "failed" })).toBe(false);
+  });
+});
+
+// ---- Switch to a YubiKey… (ruled 2026-11-07) ------------------------------
+
+describe("Switch to a YubiKey…'s command (switchShown, switchGreyed)", () => {
+  const live = { unlocked: true, tampered: false, recoveryKeys: 1, passwords: 1 };
+  it("stands on a password's card on a vault with no YubiKey, and nowhere else", () => {
+    expect(switchShown({ type: "password" }, false)).toBe(true);
+    expect(switchShown({ type: "password" }, true)).toBe(false);
+    expect(switchShown({ type: "recovery" }, false)).toBe(false);
+    expect(switchShown({ type: "hardware" }, true)).toBe(false);
+  });
+  it("is live with one password, no YubiKey and a recovery key, unlocked and not Tampered", () => {
+    expect(switchGreyed(live)).toBeUndefined();
+    expect(switchGreyed({ ...live, recoveryKeys: 3 })).toBeUndefined();
+  });
+  it("is greyed with the reasons in their order: locked, Tampered, no recovery key, a second password", () => {
+    const all = { unlocked: false, tampered: true, recoveryKeys: 0, passwords: 2 };
+    expect(switchGreyed(all)).toBe(codeText(Code.CodeNeedsUnlock));
+    expect(switchGreyed({ ...all, unlocked: true })).toBe(vaultCopy.changesOff);
+    expect(switchGreyed({ ...all, unlocked: true, tampered: false })).toBe(switchCopy.noRecovery);
+    expect(switchGreyed({ ...all, unlocked: true, tampered: false, recoveryKeys: 1 })).toBe(switchCopy.twoPasswords);
+  });
+  it("says the core's reason where the cards do not show it, in the same order", () => {
+    expect(switchGreyed({ ...live, reason: Code.CodeNoRecoverySlot })).toBe(switchCopy.noRecovery);
+    expect(switchGreyed({ ...live, reason: Code.CodeSlotPolicy })).toBe(switchCopy.twoPasswords);
+    expect(switchGreyed({ ...live, reason: Code.CodeVaultTampered })).toBe(vaultCopy.changesOff);
+    expect(switchGreyed({ ...live, reason: Code.CodeNoRecoverySlot, passwords: 2 })).toBe(switchCopy.noRecovery);
+    expect(switchGreyed({ ...live, reason: "vault.slot_not_found" })).toBe(codeText("vault.slot_not_found"));
+  });
+});
+
+describe("Switch to a YubiKey…'s form and end (switchPrimary, switchEndItems)", () => {
+  it("names its press: the switch, and the re-key with it; never a backup", () => {
+    expect(switchPrimary(false)).toBe("Switch to a YubiKey");
+    expect(switchPrimary(true)).toBe("Switch and re-key");
+  });
+  it("says at Done what now opens the vault by the password chosen, then what a loss means", () => {
+    const d = { kind: "toToken", step: "done", slotLabel: "Desk YubiKey", after: after(["AAAA-0001"], true) };
+    expect(switchEndItems({ ...d, keepPassword: true }, 9).map((i) => i.text)).toEqual([switchCopy.doneSame("Desk YubiKey"), switchCopy.ifLost("Desk YubiKey", 1)]);
+    expect(switchEndItems({ ...d, keepPassword: false }, 9).map((i) => i.text)).toEqual([switchCopy.doneNew("Desk YubiKey"), switchCopy.ifLost("Desk YubiKey", 1)]);
+    expect(switchEndItems({ ...d, after: after(["AAAA-0001", "AAAA-0002"], true) }, 1)[1].text).toBe(switchCopy.ifLost("Desk YubiKey", 2));
+    expect(switchEndItems({ ...d, step: "failed" }, 1)).toEqual([]);
+    expect(switchEndItems({ ...d, kind: "enroll" }, 1)).toEqual([]);
+  });
+  it("says after a failure that the password still opens the vault, and that a key made stays on the YubiKey", () => {
+    expect(failedNotes({ kind: "toToken", step: "failed", error: "io" })).toEqual([switchCopy.nothingChanged]);
+    expect(failedNotes({ kind: "toToken", step: "failed", error: "io", generated: true })).toEqual([switchCopy.nothingChanged, switchCopy.keyLeft]);
+    // An outcome not known says nothing of what was changed, but the key on the card still stays.
+    expect(failedNotes({ kind: "toToken", step: "failed", error: "vault.indeterminate", generated: true })).toEqual([switchCopy.keyLeft]);
+    expect(failedNotes({ kind: "toToken", step: "done" })).toEqual([]);
+  });
+  it("says the recovery key's note of its own when it proves the switch", () => {
+    expect(recoveryNoteOf({ kind: "toToken" }, act({ act: "toToken", withRecoveryKey: true }), 1)).toBe(switchCopy.recoveryNote);
+  });
+});
+
+describe("Switch to a YubiKey…'s next step (followUp)", () => {
+  const t = ceremonyCopy.followUp;
+  const end = (o: { rekey: boolean; keepPassword: boolean; ids?: string[] }) => ({ kind: "toToken", step: "done", rekey: o.rekey, keepPassword: o.keepPassword, after: after(o.ids ?? ["AAAA-0001"], true) });
+  it("re-keyed with the same words: change the password first, then the recovery keys", () => {
+    const a = act({ act: "toToken", rekey: true, keepPassword: true, chain: { id: 1, replaced: [], changed: false } });
+    expect(followUp(a, end({ rekey: true, keepPassword: true }))).toEqual({ act: "change", text: t.changeFirstOne });
+    expect(followUp(a, end({ rekey: true, keepPassword: true, ids: ["AAAA-0001", "AAAA-0002"] }))).toEqual({ act: "change", text: t.changeFirst });
+  });
+  it("re-keyed with a new password: replace the recovery key", () => {
+    const a = act({ act: "toToken", rekey: true, keepPassword: false, chain: { id: 1, replaced: [], changed: false } });
+    expect(followUp(a, end({ rekey: true, keepPassword: false }))).toEqual({ act: "replace", text: t.replaceOne });
+    expect(followUp(a, end({ rekey: true, keepPassword: false, ids: ["AAAA-0001", "AAAA-0002"] }))).toEqual({ act: "replace", text: t.replace });
+  });
+  it("not re-keyed: a second YubiKey kept apart, whatever the password", () => {
+    for (const keepPassword of [true, false]) {
+      const a = act({ act: "toToken", rekey: false, keepPassword });
+      expect(followUp(a, end({ rekey: false, keepPassword }))).toEqual({ act: "add", text: switchCopy.addSecond });
+    }
+  });
+  it("says first that the press retries the clearing, while a retirement is owed", () => {
+    const a = act({ act: "toToken", rekey: false, keepPassword: true });
+    expect(followUp(a, { ...end({ rekey: false, keepPassword: true }), retireError: "io" })?.text).toBe(switchCopy.addSecond + t.retryFirst);
+  });
+  it("starts a chain when it re-keys, and counts a new password as the chain's change", () => {
+    expect(chainFor(null, false, "toToken", true, 7)).toEqual({ id: 7, replaced: [], changed: false });
+    expect(chainFor(null, false, "toToken", false, 7)).toBeNull();
+    const ch: Chain = { id: 7, replaced: [], changed: false };
+    expect(chainAfter(ch, { kind: "toToken", step: "done", rekey: true, keepPassword: false })).toEqual({ ...ch, changed: true });
+    expect(chainAfter(ch, { kind: "toToken", step: "done", rekey: true, keepPassword: true })).toBe(ch);
+    expect(chainAfter(ch, { kind: "toToken", step: "done", rekey: false, keepPassword: false })).toBe(ch);
+  });
+});
+
+// ---- The password's row and option A (ruled 2026-11-07) ----------------------
+
+describe("the password's row by the vault's ways in (passwordRow, E4)", () => {
+  it("says a vault with a standalone password and the switch off has no YubiKey, and greys Turn on…", () => {
+    expect(passwordRow({ on: false, hasHardware: false, hasStandalone: true })).toEqual({ line: vaultCopy.passwordOffNoYubiKey, turnOnWhy: vaultCopy.turnOnNeedsYubiKey });
+  });
+  it("says the switch left on beside a standalone password waits for the switch, and greys Change… alone", () => {
+    expect(passwordRow({ on: true, hasHardware: false, hasStandalone: true })).toEqual({ line: vaultCopy.passwordOnNoYubiKey, changeWhy: vaultCopy.changeBySwitch });
+  });
+  it("says on recovery keys alone with the switch on that the next YubiKey asks for it, nothing greyed", () => {
+    expect(passwordRow({ on: true, hasHardware: false, hasStandalone: false })).toEqual({ line: vaultCopy.passwordOnNext });
+  });
+  it("keeps today's two lines otherwise", () => {
+    expect(passwordRow({ on: false, hasHardware: false, hasStandalone: false })).toEqual({ line: vaultCopy.passwordOff });
+    expect(passwordRow({ on: true, hasHardware: true, hasStandalone: false })).toEqual({ line: vaultCopy.passwordOn });
+    expect(passwordRow({ on: false, hasHardware: true, hasStandalone: false })).toEqual({ line: vaultCopy.passwordOff });
+  });
+});
+
+describe("option A's bar in Add an unlock method… (passwordAlone)", () => {
+  const R = { type: "recovery" };
+  it("is drawn for a password on a vault of recovery keys alone", () => {
+    expect(passwordAlone("password", [R, R])).toBe(true);
+    expect(passwordAlone("password", [R])).toBe(true);
+  });
+  it("is not drawn for another kind, beside a YubiKey or a password, or on no vault at all", () => {
+    expect(passwordAlone("token", [R, R])).toBe(false);
+    expect(passwordAlone("recovery", [R, R])).toBe(false);
+    expect(passwordAlone("password", [R, { type: "password" }])).toBe(false);
+    expect(passwordAlone("password", [R, { type: "hardware" }])).toBe(false);
+    expect(passwordAlone("password", [])).toBe(false);
   });
 });
 
@@ -596,7 +719,14 @@ describe("the small decisions of the page", () => {
   it("says what to add first on a YubiKey's greyed Remove…, and the rule on the others", () => {
     expect(removeRule("hardware")).toBe(vaultCopy.ruleYubiKey);
     expect(removeRule("recovery")).toBe(vaultCopy.rule);
-    expect(removeRule("password")).toBe(vaultCopy.rule);
+    // The password's names the switch, on its card (ruled 2026-11-07, E3).
+    expect(removeRule("password")).toBe(vaultCopy.rulePassword);
+    expect(removeRule("password").startsWith(vaultCopy.rule)).toBe(true);
+  });
+  it("says on the last YubiKey's greyed Remove… that a password can follow it (option A)", () => {
+    expect(removeRule("hardware", true)).toBe(vaultCopy.ruleLastYubiKey);
+    expect(removeRule("hardware", false)).toBe(vaultCopy.ruleYubiKey);
+    expect(removeRule("recovery", true)).toBe(vaultCopy.rule);
   });
 });
 

@@ -53,7 +53,10 @@ export function errorOf(e: unknown): AppError {
 // go the same way with an empty value: the answer is that the prompt with
 // this id may go on, which is what the mailbox is, and its id and kind
 // must match, so neither can answer a PIN's prompt (ruled 2026-10-27).
-export function submitSecret(kind: "pin" | "password" | "recovery" | "mgmtkey" | "kept" | "confirm", promptId: string, value: string): void {
+// Switch to a YubiKey…'s "another" (Use another YubiKey, after the YubiKey
+// inserted was refused in its second half) goes the same way (ruled
+// 2026-11-07).
+export function submitSecret(kind: "pin" | "password" | "recovery" | "mgmtkey" | "kept" | "confirm" | "another", promptId: string, value: string): void {
   System.invoke(`secret ${kind} ${promptId} ${value}`);
 }
 

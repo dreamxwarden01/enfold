@@ -1069,12 +1069,13 @@ Argon2id; with `entangle` 1 all four are non-zero, R24's bounds and its work cei
 before any derivation, and a header that breaks either rule is invalid. `entangle_salt` is 16
 fresh random bytes, drawn from the OS CSPRNG **by exactly the writes that set the vault's
 password or change it** — creating a vault with one, taking the first way in of an adopted export
-(§15), turning the switch on, and a password change — and never reused. Turning the password off
-zeroes all four fields. **No other write draws one, and no other write alters the header**: a
-write that is not about the password carries the header forward byte for byte, `entangle_salt`
-included, whatever else it changes (see *What authenticates the header* below, which is why the
-carried bytes are the ones R25 already vouched for). The lock screen reads the header to know
-whether to ask for the password before the PIN.
+(§15), turning the switch on, a password change, and the switch of a password vault to a YubiKey
+(below) — and never reused. Turning the password off zeroes all four fields, and so does adding a
+standalone password to a vault whose switch is on (below). **No other write draws one, and no
+other write alters the header**: a write that is not about the password carries the header
+forward byte for byte, `entangle_salt` included, whatever else it changes (see *What
+authenticates the header* below, which is why the carried bytes are the ones R25 already vouched
+for). The lock screen reads the header to know whether to ask for the password before the PIN.
 
 *What authenticates the header.* No slot record does: R14's AAD is the record's own bytes, and
 extending it to the header would make turning the password on or off re-wrap the standalone
@@ -1095,6 +1096,35 @@ key. A write never takes these values from the file: setting or changing the pas
 fresh salt and takes `argon2_m/t/p` from the app's defaults, turning it off zeroes the switch and
 the other four fields with it, and every write that is neither — the whole of the rest — copies
 the header forward byte for byte after R25 has passed.
+
+**Two writes change the slot set and the header in one commit** (ruled 2026-11-07); each is a
+composition of what this section and §6.4 already allow, and neither changes a byte of the
+format. *The switch of a password vault to a YubiKey* removes the standalone password slot, adds
+the hardware slot, and writes the header with `entangle` 1, a fresh `entangle_salt`, the app's
+Argon2id parameters and the `entangled_key` record (§7.6) holding the `K_P` they derive from the
+password the vault keeps, in the same words or new ones, all in one superblock flip. No
+two-commit route exists: no legal set holds a standalone password beside a hardware slot (§6.4),
+and the only legal state between them, recovery slots alone, is the one this avoids, so a crash
+leaves the password vault or the YubiKey vault, never a mix. The invariant is evaluated over the
+final set under the header the commit writes before the salt is drawn and before Argon2id runs,
+and so is every other refusal the records alone decide: the new record's label (valid UTF-8 within
+its 65 535 bytes, and the writer's own bound of 120 characters) and the region's room for it (§4's
+32 records, the region's 128 KiB), measured on the encoding the commit would write. A writer asks
+the same of an enrolment and of a first way in before the token is asked to make a key, so that
+nothing is written to a token for a region that would refuse it (ruled 2026-11-07). Where the
+label is a default the writer derives from the token itself (Enfold's "YubiKey" and the serial),
+unknown until the token is read, the longest such label only admits and the shortest only refuses;
+between the two the writer measures the token's own once it is read, before anything is asked of
+it. A key not yet known is a size there, never an identity: the duplicate rule (R34) is decided
+with the real key (the switch audit's second pass, the same day).
+A vault that kept a `K_P` beside its standalone password (its switch turned on with no hardware
+slot) has that record replaced, never inherited. It may carry a rotation (§8). *Adding a
+standalone password to a vault whose switch is on* — possible only where no hardware slot is
+active, since the two never coexist — zeroes the header's five fields and drops the
+`entangled_key` record in the same commit as the slot, as turning the password off does: a `K_P`
+beside a password that opens the vault by itself protects nothing, and kept, it would wrap the
+next hardware slot from words the user may no longer know. Each is a slot-region change and is
+retired by the commit after it (R41).
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -1439,8 +1469,10 @@ the recovery slots deletes every recovery record, whatever its `slot_state`, and
 ones, whose public keys were derived from their recovery keys before the commit; step 3 drops
 the old records' escrow and seals the new ones' under `KWK_secrets'` alone, and step 4 wraps the
 new VMK into them as into every surviving slot, so no new recovery key is ever escrowed under a
-VMK an old one opens. A password change that rotates, and turning the password on with a
-rotation, write their new slot region header, `entangle_salt` included, in step 5. In step 3 the
+VMK an old one opens. A password change that rotates, turning the password on with a
+rotation, and the switch of a password vault to a YubiKey with a rotation (§6; ruled 2026-11-07:
+its new hardware slot is in the set step 4 wraps, from the new `K_P`) write their new slot region
+header, `entangle_salt` included, in step 5. In step 3 the
 `entangled_key` record, where there is one, still opens under the retiring `KWK_secrets` — a
 record that does not open fails the rotation — and its plaintext is discarded; the record
 written holds the new password's `K_P` sealed under `KWK_secrets'`, created when the switch was

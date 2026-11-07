@@ -17,11 +17,11 @@
   import { Archives, CeremonyStep, Keys, Shell, Vault, errorOf } from "../lib/api";
   import type { AfterFacts, ArchiveSummary, CeremonyState, FileInfo, SlotView } from "../lib/api";
   import { store } from "../lib/state.svelte";
-  import { ceremonyCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, lockCopy, noticeCopy, pendingCopy, replaceCopy, revealCopy, sinceText, vaultCopy } from "../lib/strings";
+  import { ceremonyCopy, chipCopy, codeText, commandCopy, dialogCopy, importCopy, lockCopy, noticeCopy, pendingCopy, replaceCopy, revealCopy, sinceText, switchCopy, vaultCopy } from "../lib/strings";
   import { backupLine } from "../lib/backup";
   import { backupLine as backupDone, checkedLine } from "../lib/foot";
   import type { Answer, FollowUp } from "../lib/rekey";
-  import { backupSavedOnClose, ceremonyTitleOf, lastProtector, primaryOf, questionOf, rekeyLimitOf, removeRule, replaceGreyed, replaceMinutes } from "../lib/rekey";
+  import { backupSavedOnClose, ceremonyTitleOf, lastProtector, passwordAlone, passwordRow, primaryOf, questionOf, rekeyLimitOf, removeRule, replaceGreyed, replaceMinutes, switchGreyed, switchShown } from "../lib/rekey";
   import { addKindFor, addKinds } from "../lib/lockscreen";
   import { date, dateTime, leaf, minutesLabel } from "../lib/format";
   import { pending } from "../lib/pending";
@@ -33,6 +33,7 @@
   import RekeyQuestion from "./RekeyQuestion.svelte";
   import BackupChoice from "./BackupChoice.svelte";
   import ReplaceDialog from "./ReplaceDialog.svelte";
+  import SwitchDialog from "./SwitchDialog.svelte";
   import RecoveryReveal from "./RecoveryReveal.svelte";
   import PendingLabel from "./PendingLabel.svelte";
   import RenameVaultDialog from "./RenameVaultDialog.svelte";
@@ -154,10 +155,54 @@
   // A card's *Remove…*: greyed by the vault's state first, then by the
   // two-method rule, each with its reason as the title. A YubiKey's says
   // what to add first, which is how a lost one becomes removable (ruled
-  // 2026-10-27).
+  // 2026-10-27), the last YubiKey's that a password can follow it, and a
+  // password's names Switch to a YubiKey… (both ruled 2026-11-07).
   function removeTitle(s: SlotView): string | undefined {
-    return greyed ?? (s.removable ? undefined : removeRule(s.type));
+    const last = s.type === "hardware" && !store.slots.some((o) => o.type === "hardware" && o.recipientId !== s.recipientId);
+    return greyed ?? (s.removable ? undefined : removeRule(s.type, last));
   }
+
+  // ---- Switch to a YubiKey… (ruled 2026-11-07) ------------------------------
+
+  // On a password's card, on a vault with no YubiKey (lib/rekey.ts
+  // switchShown), greyed with its reasons in the order they are ranked
+  // (switchGreyed): the house's two, then the vault's own, the core's
+  // reason read beside the cards.
+  const passwords = $derived(store.slots.filter((s) => s.type === "password").length);
+  const switchWhy = $derived(switchGreyed({ unlocked, tampered, recoveryKeys, passwords, reason: ent?.switchReason }));
+  // The form, open with the name it was given (Add's, carried over).
+  let switching = $state<{ label: string } | null>(null);
+
+  function openSwitch(label = "") {
+    fromFollow = false;
+    switching = { label };
+  }
+
+  // The form's press: the act recorded for its end's next step, and, with a
+  // new password, the recovery-key switch kept beside it, as an enrolment
+  // keeps its own (toRecovery; ruled 2026-11-07, O4): pressed under the
+  // proof's password, the act is begun again proved by a recovery key. The
+  // same words have no switch: only typing them proves them.
+  function startSwitch(o: { label: string; keep: boolean; rekey: boolean }) {
+    store.noteAct({ act: "toToken", rekey: o.rekey, keepPassword: o.keep, fromFollow: false });
+    toRecovery = o.keep ? null : () => begin(() => Keys.BeginSwitchToToken(o.label, false, o.rekey, true), true);
+    void begin(() => Keys.BeginSwitchToToken(o.label, o.keep, o.rekey, false));
+  }
+
+  // Add an unlock method… with a YubiKey chosen on a vault with a
+  // standalone password (ruled 2026-11-07): the YubiKey cannot join beside
+  // it, so the dialog says so in its body's place and its primary opens the
+  // switch, the name carried over; nothing has been proved, so nothing is
+  // lost by the turn.
+  const addPoints = $derived(addKind === "token" && !!st?.hasPasswordSlot);
+  // Password chosen where the vault has recovery keys alone (option A): the
+  // password will open the vault by itself, so the attention bar says what
+  // that costs; with the switch on, that it ends with this password.
+  const addAlone = $derived(passwordAlone(addKind, store.slots));
+
+  // The password's row by the vault's ways in (lib/rekey.ts passwordRow):
+  // its line and why Turn on… or Change… waits for a YubiKey.
+  const row = $derived(passwordRow({ on: !!ent?.on, hasHardware: !!st?.hasHardwareSlot, hasStandalone: !!st?.hasPasswordSlot }));
 
   // Add an unlock method…, from the head, or from an end's next step
   // (follow), which adds the new YubiKey first.
@@ -250,8 +295,9 @@
   // ---- The remove dialog (ruled 2026-10-27) -------------------------------
 
   // It asks why, and the answer that re-keys is pre-selected; the backup's
-  // tick follows the answer (BackupChoice), set again each time it opens.
+  // tick opens unticked each time (BackupChoice; ruled 2026-11-07).
   let removeAnswer = $state<Answer>("rekey");
+  // Unticked as the dialog opens (BackupChoice; ruled 2026-11-07).
   let removeTicked = $state(false);
 
   function openRemove(m: SlotView) {
@@ -332,11 +378,17 @@
   // goes on in the same chain: the Add dialog, the password's Change…, or
   // the replacement's with the end's committed facts and the chain's
   // changed (ruled 2026-10-27).
-  function openFollow(f: FollowUp, after: AfterFacts | null | undefined) {
+  function openFollow(f: FollowUp, after: AfterFacts | null | undefined, kind = "") {
     const changed = store.chain?.changed ?? false;
     closeCeremony();
     heldFollow = null;
-    if (f.act === "add") openAdd(true);
+    // A second YubiKey after a switch that kept the vault's key is an act
+    // of its own, not a step in a chain of repairs: its end then advises
+    // as any enrolment's does (ruled 2026-11-07).
+    if (f.act === "add" && kind === "toToken") {
+      openAdd(true);
+      fromFollow = false;
+    } else if (f.act === "add") openAdd(true);
     else if (f.act === "change") openEntangle("change", true);
     else openReplace(after ? { after, changed } : undefined);
   }
@@ -347,7 +399,7 @@
     const f = store.followUp;
     const ended = c;
     if (!f || !ended) return undefined;
-    return { text: f.text, label: followLabel(f), onpress: () => openFollow(f, ended.after) };
+    return { text: f.text, label: followLabel(f), onpress: () => openFollow(f, ended.after, ended.kind) };
   });
 
   // A recovery key's enrolment ends in the recovery key's dialog, which
@@ -443,9 +495,10 @@
   );
   const addAccent = $derived(unlocked && !tampered && !bline.suggestExport);
 
-  // The Re-key dialog: the backup is the shared block's, ticked whenever a
-  // recovery key is there to back up, and taken after the re-key (ruled
-  // 2026-10-27: a backup taken before would bring the old key back). It
+  // The Re-key dialog: the backup is the shared block's, offered whenever a
+  // recovery key is there to back up and unticked as it opens (ruled
+  // 2026-11-07), and taken after the re-key (ruled 2026-10-27: a backup
+  // taken before would bring the old key back). It
   // asks and never refuses, and never keeps a copy of the vault (APP.md
   // §13, DESIGN trap 29). One act, so Start again after a failed backup is
   // the re-key and its backup again, to the same file.
@@ -675,6 +728,12 @@
               {#if m.type === "recovery"}
                 <button type="button" class="btn sm" disabled={!unlocked} title={unlocked ? undefined : greyed} onclick={() => { const id = m.recipientId; store.noteAct(null); void begin(() => Keys.RevealRecoveryKey(id)); }}>{commandCopy.showRecoveryKey}</button>
               {/if}
+              {#if switchShown(m, !!st?.hasHardwareSlot)}
+                <!-- Switch to a YubiKey… (ruled 2026-11-07): on the card of
+                     the method that goes, beside its Remove…, its
+                     description as its title while it can be pressed. -->
+                <button type="button" class="btn sm" disabled={!!switchWhy} title={switchWhy ?? switchCopy.description} onclick={() => openSwitch()}>{commandCopy.switchToYubiKey}</button>
+              {/if}
               <button type="button" class="btn sm" disabled={!m.removable || !unlocked || tampered} title={removeTitle(m)} onclick={() => openRemove(m)}>{commandCopy.removeUnlockMethod}</button>
             </div>
           </li>
@@ -688,14 +747,16 @@
         <div class="setrow">
           <div class="lab">
             <b>{vaultCopy.password}</b>
-            <span>{ent?.on ? vaultCopy.passwordOn : vaultCopy.passwordOff}</span>
+            <!-- By the vault's ways in (ruled 2026-11-07; lib/rekey.ts
+                 passwordRow): a vault with no YubiKey says so. -->
+            <span>{row.line}</span>
           </div>
           <div class="ctl row">
             {#if ent?.on}
-              <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => openEntangle("change")}>{vaultCopy.change}</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered || !!row.changeWhy} title={greyed ?? row.changeWhy} onclick={() => openEntangle("change")}>{vaultCopy.change}</button>
               <button type="button" class="btn sm" disabled={!unlocked || tampered} title={greyed} onclick={() => openEntangle("off")}>{vaultCopy.turnOff}</button>
             {:else}
-              <button type="button" class="btn sm" disabled={!unlocked || tampered || !ent?.canEnable} title={greyed ?? (entangleBlocked ? vaultCopy.passwordBlockedShort : undefined)} onclick={() => openEntangle("on")}>{vaultCopy.turnOn}</button>
+              <button type="button" class="btn sm" disabled={!unlocked || tampered || !ent?.canEnable || !!row.turnOnWhy} title={greyed ?? row.turnOnWhy ?? (entangleBlocked ? vaultCopy.passwordBlockedShort : undefined)} onclick={() => openEntangle("on")}>{vaultCopy.turnOn}</button>
             {/if}
           </div>
         </div>
@@ -828,7 +889,13 @@
 
 {#if adding}
   <Dialog title={dialogCopy.addUnlockMethod.title} onclose={() => (adding = false)}>
-    <p>{dialogCopy.addUnlockMethod.body}</p>
+    {#if addPoints}
+      <!-- A YubiKey on a password vault (ruled 2026-11-07): the info bar in
+           the body's place, which says why and where the way is. -->
+      <div class="bar"><svg class="i" aria-hidden="true"><use href="#i-info" /></svg><span>{dialogCopy.addUnlockMethod.switchPointer}</span></div>
+    {:else}
+      <p>{dialogCopy.addUnlockMethod.body}</p>
+    {/if}
     <div class="field">
       <div class="field-top"><label for="ak-kind">{dialogCopy.addUnlockMethod.kind}</label></div>
       <!-- The entries by the vault's unlock methods (lib/lockscreen
@@ -839,6 +906,12 @@
       </select>
     </div>
     {#if addKind === "password"}
+      {#if addAlone}
+        <!-- Option A (ruled 2026-11-07): where the vault weakens, the
+             attention bar, its consequence first and the way out named. -->
+        <div class="bar attention"><svg class="i" aria-hidden="true"><use href="#i-warn" /></svg><span><strong>{dialogCopy.addUnlockMethod.aloneHead}</strong> {dialogCopy.addUnlockMethod.aloneRest}</span></div>
+        {#if ent?.on}<p>{dialogCopy.addUnlockMethod.aloneEnds}</p>{/if}
+      {/if}
       <p>{dialogCopy.addUnlockMethod.passwordNext}</p>
     {:else}
       <div class="field">
@@ -847,16 +920,23 @@
              key, which must be named, has none: an invented name there
              read as a default already filled in. -->
         <div class="field-top"><label for="ak-label">{addKind === "token" ? dialogCopy.addUnlockMethod.nameKey : dialogCopy.addUnlockMethod.nameRecovery}</label><span class="hint">{addKind === "token" ? dialogCopy.addUnlockMethod.optional : dialogCopy.addUnlockMethod.nameRecoveryHint}</span></div>
-        <input id="ak-label" class="input" bind:value={addLabel} placeholder={addKind === "token" ? dialogCopy.addUnlockMethod.keyPlaceholder : undefined} use:fieldMenu />
+        <input id="ak-label" class="input" bind:value={addLabel} maxlength="120" placeholder={addKind === "token" ? dialogCopy.addUnlockMethod.keyPlaceholder : undefined} use:fieldMenu />
       </div>
     {/if}
-    {#if addKind === "token" && ent?.on}
+    {#if addKind === "token" && ent?.on && !addPoints}
       <!-- The vault's switch is inherited, never chosen per key: the new
            key is wrapped from the kept K_P offline (APP.md §13). -->
       <p>{dialogCopy.addUnlockMethod.passwordInherited}</p>
     {/if}
     {#snippet actions()}
-      <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} title={!addLabel && addKind === "recovery" ? dialogCopy.addUnlockMethod.needName : undefined} onclick={() => { adding = false; const kind = addKind, label = addKind === "password" ? "Password" : addLabel; startEnroll(kind, label); addLabel = ""; }}>{dialogCopy.addUnlockMethod.primary}</button>
+      {#if addPoints}
+        <!-- Closes Add and opens the switch's form, the name carried over;
+             greyed with the card's own reason whenever the card's command
+             is (switchGreyed), so a refusal never points back to it. -->
+        <button type="button" class="btn accent" disabled={!!switchWhy} title={switchWhy} onclick={() => { adding = false; const label = addLabel; addLabel = ""; openSwitch(label); }}>{commandCopy.switchToYubiKey}</button>
+      {:else}
+        <button type="button" class="btn accent" disabled={!addLabel && addKind === "recovery"} title={!addLabel && addKind === "recovery" ? dialogCopy.addUnlockMethod.needName : undefined} onclick={() => { adding = false; const kind = addKind, label = addKind === "password" ? "Password" : addLabel; startEnroll(kind, label); addLabel = ""; }}>{dialogCopy.addUnlockMethod.primary}</button>
+      {/if}
       <button type="button" class="btn" onclick={() => (adding = false)}>{dialogCopy.cancel}</button>
     {/snippet}
   </Dialog>
@@ -920,6 +1000,10 @@
   <ReplaceDialog onclose={() => (replacing = false)} {beginWith} pick={pickBackup} from={replaceFrom} minutes={replaceMinutes(st)} />
 {/if}
 
+{#if switching}
+  <SwitchDialog label={switching.label} {recoveryKeys} retired={st?.retiredCopies ?? 0} onclose={() => (switching = null)} onstart={startSwitch} />
+{/if}
+
 {#if c && c.step === CeremonyStep.StepRecovery && !c.promptId && c.slotLabel}
   <!-- the recovery key is revealed by App, above every route -->
 {:else if c && c.step === CeremonyStep.StepKeepKey && c.promptId && c.slotLabel}
@@ -931,7 +1015,7 @@
   {/key}
 {:else if shownC}
   <Dialog title={ceremonyTitleOf(shownC, recoveryKeys)} onclose={escapeCeremony} dismissable={store.ceremonyIsOver && !held}>
-    <CeremonyPanel c={shownC} onclose={closeCeremony} onagain={again ? () => void again?.() : undefined} {follow} onrecovery={shownC.kind === "enroll" && toRecovery ? () => void switchToRecovery() : undefined} />
+    <CeremonyPanel c={shownC} onclose={closeCeremony} onagain={again ? () => void again?.() : undefined} {follow} onrecovery={(shownC.kind === "enroll" || shownC.kind === "toToken") && toRecovery ? () => void switchToRecovery() : undefined} />
   </Dialog>
 {/if}
 

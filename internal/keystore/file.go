@@ -1273,3 +1273,48 @@ func (k *Keystore) CanEnableEntangled() error {
 	hdr.Entangle = true
 	return checkInvariant(hdr, k.slots)
 }
+
+// CanTradePassword reports whether the vault's standalone password could be
+// traded for a YubiKey in one commit (TradePasswordForToken): evaluated over
+// the records alone, with no VMK and before any ceremony, so that a page can
+// grey the switch and the core can refuse it before anything is written to a
+// card. nil means it could. The reasons come in the order a page ranks them:
+// ErrNotFound for a vault that is not a password vault (no active standalone
+// password, or an active hardware slot beside it, which no file this writer
+// made holds), then ErrNoRecoverySlot for one with no recovery key, which
+// alone opens the vault if the YubiKey is lost, then ErrPolicy for a vault
+// with a second standalone password, which would be left standing beside the
+// YubiKey (§6.4, DESIGN.md §5). The invariant over the set the trade would
+// write holds whenever none of the three applies: the YubiKey and the
+// password together on one side, a recovery key on the other.
+func (k *Keystore) CanTradePassword() error {
+	return canTradePassword(k.slots)
+}
+
+// canTradePassword is CanTradePassword over a slot set, shared with the
+// trade itself, which asks it of the set it would change.
+func canTradePassword(slots []format.SlotRecord) error {
+	passwords, recovery, hardware := 0, false, false
+	for i := range slots {
+		if slots[i].State != format.SlotActive {
+			continue
+		}
+		switch slots[i].Type {
+		case format.SlotStandalonePassword:
+			passwords++
+		case format.SlotRecovery:
+			recovery = true
+		case format.SlotExternalECDH:
+			hardware = true
+		}
+	}
+	switch {
+	case passwords == 0 || hardware:
+		return ErrNotFound
+	case !recovery:
+		return ErrNoRecoverySlot
+	case passwords > 1:
+		return ErrPolicy
+	}
+	return nil
+}

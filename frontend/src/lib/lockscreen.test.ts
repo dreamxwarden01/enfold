@@ -6,7 +6,7 @@ import { samePath } from "./paths";
 import { firstRunCard, retiredAt } from "./firstrun";
 import type { VaultStatus } from "./api";
 import { VaultState } from "./api";
-import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, addKindFor, blockedMeansOf, addKinds, choosesVaultPassword, enrolledAlready, mergesPassword, recoverySwitchAt, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, markAfter, nothingChanged, offersRecoverySwitch, openLineAfter, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
+import { FOUND_HOLD, NOT_PASSED, NO_HALVES, NO_PHASE, PAST, addKindFor, anotherAsked, keptAfterCancel, twoHalves, blockedMeansOf, addKinds, choosesVaultPassword, enrolledAlready, mergesPassword, recoverySwitchAt, dialogFoot, derivingOf, dialogViewOf, dialogWay, discs, endsWithMore, explicitMethod, finishGreyed, halvesAfter, failedShown, green, holdBefore, insertLed, lastTry, lineKind, markAfter, nothingChanged, offersRecoverySwitch, openLineAfter, padlockOpen, passedAfter, phaseAfter, phaseOf, pinLeads, provesFirst, retriesTone, shownAfter, typedProofLeads, viewOf, wayOf } from "./lockscreen";
 import { ceremonyCopy, codeText } from "./strings";
 import { NO_TRACK, track } from "./pinform";
 import type { Tracked } from "./pinform";
@@ -1090,5 +1090,74 @@ describe("addKinds", () => {
     expect(addKindFor("password", false)).toBe("password");
     expect(addKindFor("recovery", true)).toBe("recovery");
     expect(addKindFor("token", true)).toBe("token");
+  });
+});
+
+// Switch to a YubiKey… (ruled 2026-11-07): drawn as an enrolment's two
+// halves, its proof's recovery-key switch with a new password only, and the
+// refusal another YubiKey could pass answered in the foot.
+describe("Switch to a YubiKey… in the dialog's panel", () => {
+  const sw = (step: CeremonyStep, o: Partial<CeremonyState> = {}): CeremonyState => ({ ...ev("toToken", step), ...o });
+  it("draws the enrolment's two halves, turned by the new password or the new YubiKey's wait", () => {
+    expect(twoHalves("toToken")).toBe(true);
+    expect(twoHalves("enroll")).toBe(true);
+    expect(twoHalves("entangle")).toBe(false);
+    let h = halvesAfter(NO_HALVES, { ...sw(CeremonyStep.StepPassword, { promptId: "p1" }), seq: 2 });
+    expect(h.phase).toBe(0);
+    h = halvesAfter(h, { ...sw(CeremonyStep.StepPassword, { promptId: "p2", choose: true }), seq: 3 });
+    expect(h.phase).toBe(1);
+    expect(halvesAfter({ seq: 2, phase: 0 }, { ...sw(CeremonyStep.StepSwapKey), seq: 4 }).phase).toBe(1);
+    expect(halvesAfter({ seq: 4, phase: 1 }, { ...sw(CeremonyStep.StepDone), seq: 9 }).phase).toBe(PAST);
+    // The new YubiKey's wait or PIN turns it even where the SwapKey before
+    // it was not seen; the proof's own steps and the opening wait do not.
+    expect(halvesAfter({ seq: 3, phase: 0 }, { ...sw(CeremonyStep.StepWaitingForKey, { method: "password" }), seq: 5 }).phase).toBe(1);
+    expect(halvesAfter({ seq: 3, phase: 0 }, { ...sw(CeremonyStep.StepPIN, { promptId: "n", method: "recovery" }), seq: 5 }).phase).toBe(1);
+    expect(halvesAfter(NO_HALVES, { ...sw(CeremonyStep.StepWaitingForKey), seq: 1 }).phase).toBe(0);
+    // The opening wait of an act begun again in the same dialog (Use recovery
+    // key instead, Start again) names no way yet, and stays in the first half.
+    expect(halvesAfter({ seq: 3, phase: 0 }, { ...sw(CeremonyStep.StepWaitingForKey), seq: 7 }).phase).toBe(0);
+    expect(halvesAfter({ seq: 1, phase: 0 }, { ...sw(CeremonyStep.StepDeriving), seq: 3 }).phase).toBe(0);
+    expect(halvesAfter({ seq: 1, phase: 0 }, { ...sw(CeremonyStep.StepRecovery, { promptId: "r" }), seq: 3 }).phase).toBe(0);
+    // An enrolment keeps its own rule: its proof waits for a YubiKey.
+    expect(halvesAfter({ seq: 3, phase: 0 }, { ...ev("enroll", CeremonyStep.StepPIN, "p"), seq: 5 }).phase).toBe(0);
+  });
+  it("offers the recovery key under the proof's password with a new password only, in the first half", () => {
+    const a = { act: "toToken", keepPassword: false };
+    expect(offersRecoverySwitch({ kind: "toToken" }, a, [], false)).toBe(true);
+    expect(offersRecoverySwitch({ kind: "toToken" }, { ...a, keepPassword: true }, [], false)).toBe(false);
+    expect(offersRecoverySwitch({ kind: "toToken" }, { ...a, withRecoveryKey: true }, [], false)).toBe(false);
+    expect(offersRecoverySwitch({ kind: "toToken" }, a, [], true)).toBe(false);
+    expect(offersRecoverySwitch({ kind: "toToken" }, { act: "enroll", type: "token" }, [], false)).toBe(false);
+    expect(offersRecoverySwitch({ kind: "toToken" }, null, [], false)).toBe(false);
+    // Where it stands: under the password asked alone, as the house's rule says.
+    expect(recoverySwitchAt({ offered: true, view: "secret", step: CeremonyStep.StepPassword, insertStep: CeremonyStep.StepWaitingForKey, found: false, shows: "password", sends: false, lastTry: false })).toBe("under");
+  });
+  it("asks for another YubiKey at a refusal another could pass, and only there", () => {
+    expect(anotherAsked(sw(CeremonyStep.StepBlocked, { promptId: "a1", error: "token.pin_blocked" as never }))).toBe(true);
+    for (const code of ["token.no_empty_slot", "token.not_usable", "token.proof"]) {
+      expect(anotherAsked(sw(CeremonyStep.StepFailed, { promptId: "a1", error: code as never })), code).toBe(true);
+    }
+    // A final Failed that still names the PIN's prompt is an end.
+    expect(anotherAsked(sw(CeremonyStep.StepFailed, { promptId: "pin-1", error: "ceremony.cancelled" as never }))).toBe(false);
+    expect(anotherAsked(sw(CeremonyStep.StepFailed, { promptId: "", error: "token.proof" as never }))).toBe(false);
+    expect(anotherAsked(sw(CeremonyStep.StepFailed, { promptId: "x", error: "io" as never }))).toBe(false);
+    expect(anotherAsked({ ...ev("enroll", CeremonyStep.StepBlocked, "a1"), error: "token.pin_blocked" as never })).toBe(false);
+    expect(dialogFoot({ over: false, view: "blocked", asks: false, again: true, another: true, step: CeremonyStep.StepBlocked })).toEqual(["another", "cancel"]);
+    expect(dialogFoot({ over: false, view: "failed", asks: false, again: true, another: true, step: CeremonyStep.StepFailed })).toEqual(["another", "cancel"]);
+  });
+  it("keeps a cancel after a key was made as an end with Close, and lets every other cancel go", () => {
+    const kept = sw(CeremonyStep.StepFailed, { error: "ceremony.cancelled" as never, generated: true });
+    expect(keptAfterCancel(kept)).toBe(true);
+    expect(keptAfterCancel({ ...kept, generated: false })).toBe(false);
+    expect(keptAfterCancel({ ...kept, kind: "enroll" })).toBe(false);
+    expect(keptAfterCancel({ ...kept, error: "io" as never })).toBe(false);
+    expect(dialogViewOf({ c: kept, way: "password" })).toBe("failed");
+    expect(dialogFoot({ over: true, view: "failed", asks: false, again: false })).toEqual(["close"]);
+  });
+  it("ends on the neutral done view, which always says what now opens the vault", () => {
+    expect(endsWithMore(sw(CeremonyStep.StepDone))).toBe(true);
+    expect(endsWithMore(sw(CeremonyStep.StepFailed))).toBe(false);
+    expect(nothingChanged({ kind: "toToken", error: "io" })).toBe(true);
+    expect(nothingChanged({ kind: "toToken", error: "vault.indeterminate" })).toBe(false);
   });
 });

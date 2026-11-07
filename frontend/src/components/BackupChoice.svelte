@@ -7,12 +7,15 @@
   // keys alone (FORMAT R28). It asks and never refuses: nothing is gated on
   // the date, which is local and unauthenticated (APP.md §13).
   //
-  // The decisions are lib/rekey.ts's. The tick follows the answer: set by
-  // the rule when the dialog opens and again whenever the answer changes, a
-  // clear the user made standing until then. Only the tick's state and the
-  // reason's words change with the answer, and the reasons the two answers
-  // can give share one cell, so the dialog keeps its height and stays
-  // centred (APP.md §6, Dialogs stay put).
+  // The decisions are lib/rekey.ts's. The tick opens unticked, in every act
+  // and on every answer (backupTicked; the owner, 2026-11-07: ticked by
+  // default it added confusion and copies of the key material), and is the
+  // user's from then on: the answer no longer moves it, so a tick given
+  // stands. It followed the answer from 2026-10-27 until then. Where no
+  // backup can be made it is cleared, the line that says why standing in
+  // its place. Only the reason's words change with the answer, and the
+  // reasons the two answers can give share one cell, so the dialog keeps
+  // its height and stays centred (APP.md §6, Dialogs stay put).
   import { untrack } from "svelte";
   import type { Act } from "../lib/rekey";
   import { backupOwed, backupPossible, backupReason, backupTicked } from "../lib/rekey";
@@ -50,10 +53,14 @@
   // none can.
   const reasons = $derived(possible ? [...new Set([reasonOf(true), reasonOf(false)].filter((r): r is string => !!r))] : []);
 
+  // Set once as the dialog opens, and again only if a backup stops being
+  // possible while it stands.
+  let opened = false;
   $effect.pre(() => {
-    const r = rekey;
+    const can = possible;
     untrack(() => {
-      ticked = possible && backupTicked({ owed, act, rekey: r, removing });
+      if (!opened || !can) ticked = can && backupTicked({ owed, act, rekey, removing });
+      opened = true;
     });
   });
 </script>

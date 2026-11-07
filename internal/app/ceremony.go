@@ -48,6 +48,26 @@ type ceremony struct {
 	// Both set at begin, before the goroutine starts, and never after.
 	without       [16]byte
 	recoveryProof bool
+	// keepProof: the act keeps the password its proof was typed with, the
+	// switch to a YubiKey with the same words (ruled 2026-11-07); set at
+	// begin, as without is. kept is that password once the standalone slot
+	// opened with it — the words proved right, NFC-normalised later as every
+	// password is (R4) — and nil otherwise. It is the ceremony goroutine's
+	// alone, never logged, never in a state, and zeroed by the act on every
+	// way out (keepProofFor); a proof by a recovery key keeps nothing.
+	keepProof bool
+	kept      []byte
+	// scope is whose generated keys the act may reuse and record (made,
+	// madeScope): the vault it writes and the epoch it began in, set at
+	// creation from the vault kept here, and from the file itself by a
+	// first way in (adoptBackup) and a creation. Guarded by Core.mu.
+	scope madeScope
+	// nameAdmits, when set, is the vault's verdict on the YubiKey to enrol
+	// under the name its serial gives it, asked by enrollOnce once the card
+	// is read and before anything is asked of it: set by an act whose
+	// preflight could not decide the default name's room without the
+	// serial (tokenAdmitted). The ceremony goroutine's alone.
+	nameAdmits func(label string) error
 	// held is the card open right now, probed while a prompt stands.
 	held Card
 	// att is the agreement in flight the ceremony waits on (attempt.go),
@@ -80,11 +100,12 @@ func (p *parkAt) Error() string { return "park: " + string(p.code) }
 // prompt is a mailbox with an identity: answered once, by the id it was
 // issued with, never by the next prompt's answer. Its kind is one of the
 // four secrets, or kept or confirm, a replacement's two answers with no
-// value (StepKeepKey, StepConfirm): they come through the same mailbox, so
-// that neither can answer a secret's prompt nor a secret theirs.
+// value (StepKeepKey, StepConfirm), or another, the switch to a YubiKey's
+// Use another YubiKey (ruled 2026-11-07): they come through the same
+// mailbox, so that none can answer a secret's prompt nor a secret theirs.
 type prompt struct {
 	id     string
-	kind   string // pin | password | recovery | mgmtkey | kept | confirm
+	kind   string // pin | password | recovery | mgmtkey | kept | confirm | another
 	choose bool   // a secret being chosen now: the minimum applies
 	ch     chan string
 	gone   chan error // the key held for this prompt went away
@@ -191,6 +212,7 @@ func (c *Core) newCeremonyLocked(kind string) *ceremony {
 		cer.restore = StateLocked
 	}
 	cer.state = CeremonyState{Kind: kind, Step: StepWaitingForKey, Seq: c.seq}
+	cer.scope = madeScope{vault: c.vault.vaultID, epoch: c.vault.madeEpoch}
 	c.cer = cer
 	return cer
 }
@@ -1133,13 +1155,21 @@ func (cer *ceremony) closeCard(card Card) {
 // place for a wrong one the way §2.2 says. A token's credential goes
 // through agree instead.
 func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential) (*keystore.Unlocked, error) {
+	unl, _, err := cer.unlockWithCred(ks, cred)
+	return unl, err
+}
+
+// unlockWithCred is unlockWith, answering as well the credential that
+// opened: the last one typed, after however many were refused, which is the
+// one a proof that keeps its password keeps (ceremony.kept).
+func (cer *ceremony) unlockWithCred(ks *keystore.Keystore, cred keystore.Credential) (*keystore.Unlocked, keystore.Credential, error) {
 	for {
 		if err := cer.check(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		unl, err := ks.Unlock(cred)
 		if err == nil {
-			return unl, nil
+			return unl, cred, nil
 		}
 		switch {
 		case errors.Is(err, keystore.ErrVerifier), errors.Is(err, keystore.ErrAuth):
@@ -1147,7 +1177,7 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential)
 			// the reason, never a failure the user has to start over from.
 			next, aerr := cer.credentialAgain(cred)
 			if aerr != nil {
-				return nil, aerr
+				return nil, nil, aerr
 			}
 			cred = next
 			cer.set(func(s *CeremonyState) { s.Step = StepDeriving })
@@ -1157,11 +1187,11 @@ func (cer *ceremony) unlockWith(ks *keystore.Keystore, cred keystore.Credential)
 			// superblock does not know means the region and the superblock
 			// do not belong together, which is tampering and never an
 			// invitation to unlock another way (§6.2).
-			return nil, &parkAt{StepFailed, CodeTamperedGeneration}
+			return nil, nil, &parkAt{StepFailed, CodeTamperedGeneration}
 		case errors.Is(err, ErrTokenCancelled), errors.Is(err, context.Canceled):
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, err
+		return nil, nil, err
 	}
 }
 

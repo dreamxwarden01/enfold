@@ -77,6 +77,7 @@ func TestBoundSurface(t *testing.T) {
 		},
 		"Keys": {
 			"BeginEnroll(string, string, bool) error",
+			"BeginSwitchToToken(string, bool, bool, bool) error",
 			"ChangeEntangledPassword(bool, string) error",
 			"DropRecoveryKey(string) error",
 			"EntangledState() app.EntangledState",

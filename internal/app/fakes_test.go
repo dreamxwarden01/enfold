@@ -375,7 +375,13 @@ type fakeCard struct {
 	keysErr error
 	onKeys  func()
 	// onClose runs after every Close, outside the card's lock.
-	onClose   func()
+	onClose func()
+	// onGenerate runs after Generate has put its key on the card and before
+	// it returns, outside the card's lock: a test holds the generation open
+	// there, the key made, and locks the vault meanwhile (the switch audit
+	// of 2026-11-07, finding 2).
+	onGenerate func()
+
 	verified  bool // PIN-once: a VERIFY stands for this handle, as on the card
 	proofLies bool // the agreement the token computes is not its key's: the proof must refuse it
 	// verifies counts the VERIFYs the card was sent — the ceremony's own
@@ -393,6 +399,10 @@ type fakeCard struct {
 	// blocks and cannot be interrupted (DESIGN.md §11 trap 23).
 	holdTouch bool
 	touchCh   chan touchAnswer
+	// serial is the card's serial number, 1234567 when zero: the fakes share
+	// one unless a test tells two cards apart by it, as the switch to a
+	// YubiKey's wait for a refused YubiKey to leave does. Set before use.
+	serial uint32
 }
 
 // touchAnswer is how a held touch ends.
@@ -469,7 +479,12 @@ func (f *fakeCard) addKey(slot Slot, usable bool) []byte {
 	return priv.PublicKey().Bytes()
 }
 
-func (f *fakeCard) Serial() uint32 { return 1234567 }
+func (f *fakeCard) Serial() uint32 {
+	if f.serial != 0 {
+		return f.serial
+	}
+	return 1234567
+}
 
 func (f *fakeCard) PINState() (PINStatus, error) {
 	f.mu.Lock()
@@ -612,8 +627,12 @@ func (f *fakeCard) Generate(mgmtKey []byte, o GenerateOptions) (KeyInfo, error) 
 		f.mu.Unlock()
 		return KeyInfo{}, &TokenOccupiedError{Slot: o.Slot, Key: k}
 	}
+	hook := f.onGenerate
 	f.mu.Unlock()
 	f.addKey(o.Slot, true)
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.info(o.Slot), nil

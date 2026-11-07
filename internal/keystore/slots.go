@@ -142,6 +142,28 @@ func secrets(hdr format.SlotRegionHeader, s *format.SlotRecord) []string {
 	return nil
 }
 
+// freshSecrets is secrets for a stand-in whose identity is not known yet
+// (checkSet): its token or its recovery key is its own, a name no record
+// in a file can carry, since every other name is a prefix and a key. No
+// region an act reaches today turns on it (a legal region already holds a
+// disjoint pair, and where the header changes the active records left are
+// recovery keys), but it keeps the check from reading a placeholder as a
+// secret some record shares, which is the identity mistake of the switch
+// audit's finding 3; it is not dead code.
+func freshSecrets(hdr format.SlotRegionHeader, s *format.SlotRecord) []string {
+	switch s.Type {
+	case format.SlotExternalECDH:
+		set := []string{"token?"}
+		if hdr.Entangle {
+			set = append(set, "pwd")
+		}
+		return set
+	case format.SlotRecovery:
+		return []string{"recovery?"}
+	}
+	return secrets(hdr, s)
+}
+
 func disjoint(a, b []string) bool {
 	for _, x := range a {
 		for _, y := range b {
@@ -160,13 +182,34 @@ func disjoint(a, b []string) bool {
 // write: a 0→1 switch of entangle is evaluated over the sets the new value
 // would make, before the header is written and before any slot is re-wrapped.
 func checkInvariant(hdr format.SlotRegionHeader, slots []format.SlotRecord) error {
+	return checkSet(hdr, slots, -1)
+}
+
+// checkSet is checkInvariant with slots[fresh] a stand-in whose identity is
+// not known yet (fresh -1: none): a YubiKey's public key before the card
+// has shown it, a password's or a recovery key's before the commit draws
+// it. Its stand-in key is a placeholder for the encoding's size alone, so
+// it takes no part in R34's comparison — a file holding a record with the
+// placeholder's value must not refuse every other card — and its secret
+// set is named so that no record shares it, as the real one's will not; the
+// one name every standalone password shares stays. The policy and the
+// disjointness are decided as for any record (the switch audit of
+// 2026-11-07, second pass, finding 3). The identity itself is checked at
+// the commit, with the real key, by checkInvariant.
+func checkSet(hdr format.SlotRegionHeader, slots []format.SlotRecord, fresh int) error {
 	var active []*format.SlotRecord
+	var sets [][]string
 	hardware, password := false, false
 	for i := range slots {
 		if slots[i].State != format.SlotActive {
 			continue
 		}
 		active = append(active, &slots[i])
+		set := secrets(hdr, &slots[i])
+		if i == fresh {
+			set = freshSecrets(hdr, &slots[i])
+		}
+		sets = append(sets, set)
 		hardware = hardware || slots[i].Type == format.SlotExternalECDH
 		password = password || slots[i].Type == format.SlotStandalonePassword
 	}
@@ -179,7 +222,7 @@ func checkInvariant(hdr format.SlotRegionHeader, slots []format.SlotRecord) erro
 	// decoder — an empty one carries no key.
 	seenPub := make(map[string]struct{}, len(slots))
 	for i := range slots {
-		if slots[i].State == format.SlotEmpty {
+		if slots[i].State == format.SlotEmpty || i == fresh {
 			continue
 		}
 		if _, dup := seenPub[string(slots[i].SlotPubkey)]; dup {
@@ -189,7 +232,7 @@ func checkInvariant(hdr format.SlotRegionHeader, slots []format.SlotRecord) erro
 	}
 	for i := range active {
 		for j := i + 1; j < len(active); j++ {
-			if disjoint(secrets(hdr, active[i]), secrets(hdr, active[j])) {
+			if disjoint(sets[i], sets[j]) {
 				return nil
 			}
 		}
@@ -297,11 +340,17 @@ func recoveryRecord(r kdf.RecoveryKey, label string, vaultID [16]byte) (format.S
 	return s, nil
 }
 
+// passwordSlotIKM is kdf.PasswordSlotIKM behind a variable, as entangledKey
+// is, so that a test counts a standalone password's Argon2id beside K_P's:
+// a refusal that must come before any derivation is shown to (the switch
+// audit of 2026-11-07, second pass, finding 5).
+var passwordSlotIKM = kdf.PasswordSlotIKM
+
 // passwordKeys derives a password slot's key pair from the password and the
 // record's salts.
 func passwordKeys(s *format.SlotRecord, pw []byte, vaultID [16]byte) (*ecdh.PrivateKey, *mlkem.DecapsulationKey1024, error) {
 	p := kdf.Argon2Params{MemKiB: s.Argon2M, Time: s.Argon2T, Threads: s.Argon2P}
-	ikm, err := kdf.PasswordSlotIKM(pw, kdf.Salt(s.Salt), vaultID, s.RecipientID, p)
+	ikm, err := passwordSlotIKM(pw, kdf.Salt(s.Salt), vaultID, s.RecipientID, p)
 	if err != nil {
 		return nil, nil, err
 	}

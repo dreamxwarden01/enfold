@@ -1564,6 +1564,34 @@ describe("the acts that may re-key the vault", () => {
     expect(store.replaceNotice).toBeNull();
   });
 
+  // Switch to a YubiKey… (ruled 2026-11-07): a cancel is over at once, but
+  // one after a key was made on the YubiKey stays on its dialog, as an end
+  // that says so, until it is closed or the vault locks; and its Done reads
+  // the unlock methods again and moves the chain like every act's.
+  it("keeps a cancelled switch that made a key, while unlocked, as an end", () => {
+    store.noteAct({ act: "toToken", rekey: true, keepPassword: true, fromFollow: false });
+    event({ seq: 10, kind: "toToken", step: "pin", promptId: "p1", keepPassword: true, rekey: true });
+    event({ seq: 11, kind: "toToken", step: "failed", error: "ceremony.cancelled", promptId: "p1", keepPassword: true, rekey: true });
+    expect(store.ceremony).toBeNull();
+    event({ seq: 12, kind: "toToken", step: "touch", keepPassword: true, rekey: true, generated: true });
+    event({ seq: 13, kind: "toToken", step: "failed", error: "ceremony.cancelled", promptId: "p2", keepPassword: true, rekey: true, generated: true });
+    expect(store.ceremony?.step).toBe("failed");
+    expect(store.ceremonyIsOver).toBe(true);
+    m.handlers["vault.state"]({ data: status(2, "locked") });
+    expect(store.ceremony).toBeNull();
+  });
+
+  it("reads the unlock methods again at a switch's Done, and counts its new password as the chain's change", () => {
+    store.noteAct({ act: "toToken", rekey: true, keepPassword: false, fromFollow: false });
+    m.Slots.mockClear();
+    event({ seq: 10, kind: "toToken", step: "deriving", phase: "commit", rekey: true });
+    expect(m.Slots).not.toHaveBeenCalled();
+    event({ seq: 11, kind: "toToken", step: "done", rekey: true, slotLabel: "Desk YubiKey", after: { recoveryIds: ["AAAA-0001"], entangled: true, setupNeeded: false } });
+    expect(m.Slots).toHaveBeenCalledTimes(1);
+    expect(store.chain?.changed).toBe(true);
+    expect(store.followUp?.act).toBe("replace");
+  });
+
   it("keeps the IDs it saw when the end does not repeat them", () => {
     event({ seq: 10, kind: "replace", step: "keep_key", rekey: true, promptId: "k1", keepIndex: 1, keepCount: 1, newIds: ["NEW1-0001"] });
     event({ seq: 11, kind: "replace", step: "failed", error: "ceremony.cancelled", rekey: true });

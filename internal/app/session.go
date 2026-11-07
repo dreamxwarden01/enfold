@@ -29,8 +29,12 @@ type vaultState struct {
 	// entangled is the slot region header's switch and canEnable the §6.4
 	// verdict for turning it on: both are read from the open handle, which
 	// is nil while Locked, so both are cached like removable (FORMAT.md §6).
+	// switchReason is keystore.CanTradePassword's verdict as a code, cached
+	// the same way: empty when Switch to a YubiKey… could begin
+	// (EntangledState).
 	entangled     bool
 	canEnable     bool
+	switchReason  Code
 	vaultFileSize uint64
 	slots         []keystore.SlotInfo
 	stale         error
@@ -58,6 +62,23 @@ type vaultState struct {
 	// Unlocked only.
 	ks   *keystore.Keystore
 	sess *keystore.Session
+	// made are the public keys Enfold generated on a YubiKey in this unlock
+	// and has not enrolled, by the card's serial: an act begun again, or the
+	// same YubiKey coming back to the same act, reuses one the card still
+	// holds rather than spend another of its slots on a second key (APP.md
+	// §3 and §13, ruled 2026-11-07). A key leaves it once a commit enrols it
+	// (forgetEnrolled). Public keys only. madeScope is the vault and epoch
+	// it belongs to; madeEpoch moves, and made is dropped, at every lock,
+	// at Broken and at every open of another vault (a Busy open between two
+	// of the same vault is none), so that a generation that returns after
+	// any of them records nothing and an act of another vault reuses
+	// nothing (madeScope in keys.go; the switch audit of 2026-11-07,
+	// finding 2, and its second pass, findings 1 and 4).
+	// Unlike the fields around it, it is used while Locked or with no vault
+	// too: a first way in records here, under its own scope.
+	made      map[uint32][][]byte
+	madeScope madeScope
+	madeEpoch uint64
 	// tampered is why the vault is frozen and tamperedReason which check
 	// said so (FORMAT.md §6.2, R25). A generation mismatch is met while
 	// unlocking and is the file's verdict, so it outlives the ceremony that
@@ -147,7 +168,7 @@ func (c *Core) openVaultFile(path, displayName string) error {
 			}
 			c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
 			c.vault.vaultID, c.vault.modifiedAt, c.vault.slots, c.vault.stale = [16]byte{}, 0, nil, nil
-			c.vault.entangled, c.vault.canEnable, c.vault.vaultFileSize = false, false, 0
+			c.vault.entangled, c.vault.canEnable, c.vault.switchReason, c.vault.vaultFileSize = false, false, "", 0
 			c.vault.tampered, c.vault.tamperedReason = nil, ""
 			// Nothing is known of what the file owes either: the next
 			// open reads it from the bytes.
@@ -181,6 +202,13 @@ func (c *Core) openVaultFile(path, displayName string) error {
 		// say for themselves what it owes. A Busy open in between does not
 		// make the same vault another one.
 		c.vault.retireFailed = false
+		// The keys generated for the previous vault, or for a first way in
+		// that did not finish, are no act's of this one (madeScope). A
+		// Busy open in between is no lock and no other vault, so the same
+		// vault's memory survives it (the switch audit of 2026-11-07,
+		// second pass, finding 4).
+		c.vault.made = nil
+		c.vault.madeEpoch++
 	}
 	c.vault.busyID = [16]byte{}
 	c.vault.path, c.vault.displayName, c.vault.missing, c.vault.damaged = path, displayName, "", false
@@ -221,6 +249,10 @@ func (c *Core) cacheFactsLocked(ks *keystore.Keystore) {
 	c.vault.vaultID = ks.VaultID()
 	c.vault.entangled = ks.Entangled()
 	c.vault.canEnable = ks.CanEnableEntangled() == nil
+	c.vault.switchReason = ""
+	if err := ks.CanTradePassword(); err != nil {
+		c.vault.switchReason = classify(err).Code
+	}
 	c.vault.slots = ks.Slots()
 	c.vault.removable = make(map[[16]byte]bool, len(c.vault.slots))
 	for _, s := range c.vault.slots {
@@ -766,6 +798,13 @@ func (c *Core) brokenLocked(err error) {
 		v.sess.Lock()
 		v.sess = nil
 	}
+	// Broken ends the unlock as a lock does, so the keys generated in it
+	// and not enrolled go with it, and the epoch moves so that a generation
+	// still finishing records nothing: after Reopen and an unlock, no act
+	// reuses the last unlock's key (the switch audit of 2026-11-07, second
+	// pass, finding 1).
+	v.made = nil
+	v.madeEpoch++
 	v.state = StateBroken
 	c.bump()
 }
@@ -849,6 +888,11 @@ func (c *Core) lockLocked(reason LockReason) func() {
 	// A merge's converted records hold this vault's archive keys: dropped in
 	// every state, like the recovery key a reveal holds (APP.md §13).
 	c.vault.incoming = nil
+	// The keys generated and not enrolled belong to the unlock that made
+	// them (made); the epoch moves, so that a generation still finishing on
+	// a card records nothing once it returns (rememberMadeLocked).
+	c.vault.made = nil
+	c.vault.madeEpoch++
 	// A failed reset is said once, by its toast; the status carries it only
 	// until the next lock, so that a later lock screen never says it hours
 	// after it stopped being true (APP.md §2.2). A release this trigger's

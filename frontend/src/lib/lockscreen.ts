@@ -445,11 +445,32 @@ export interface Halves {
 
 export const NO_HALVES: Halves = { seq: -1, phase: 0 };
 
-export function halvesAfter(prev: Halves, c: { seq: number; kind: string; step: CeremonyStep; choose?: boolean } | null | undefined): Halves {
-  if (!c || c.kind !== "enroll") return prev.seq === -1 ? prev : NO_HALVES;
+// twoHalves: the acts drawn as the enrolment's two halves — Add an unlock
+// method…, and Switch to a YubiKey…, which is an enrolment whose commit
+// also takes the password's slot away (ruled 2026-11-07). Its turn is the
+// same: the new password chosen first, or the wait for the new YubiKey.
+export function twoHalves(kind: string): boolean {
+  return kind === "enroll" || kind === "toToken";
+}
+
+// The steps of a switch's proof, and of its ends (twoHalves; halvesAfter).
+// Its opening wait is told by its Method, which no proof has named yet (the
+// core's newCeremonyLocked); a wait for a YubiKey once the proof has named
+// its way is the new YubiKey's.
+const SWITCH_PROOF = new Set<CeremonyStep>([CeremonyStep.StepPassword, CeremonyStep.StepRecovery, CeremonyStep.StepDeriving, CeremonyStep.StepFailed, CeremonyStep.StepDone]);
+
+export function halvesAfter(prev: Halves, c: { seq: number; kind: string; step: CeremonyStep; choose?: boolean; method?: string } | null | undefined): Halves {
+  if (!c || !twoHalves(c.kind)) return prev.seq === -1 ? prev : NO_HALVES;
   if (c.seq === prev.seq) return prev;
   if (c.step === CeremonyStep.StepDone) return { seq: c.seq, phase: PAST };
-  const turned = c.step === CeremonyStep.StepSwapKey || !!c.choose;
+  // A switch's proof is typed, so after its opening wait every step but the
+  // proof's own (a password, a recovery key, their derivation, an end) is
+  // the new YubiKey's: the turn holds even where the SwapKey that opens the
+  // second half was not seen, two events landing in one pass. The opening
+  // wait, of this act or of one begun again in the same dialog, is not.
+  const opening = c.step === CeremonyStep.StepWaitingForKey && !c.method;
+  const switchSecond = c.kind === "toToken" && prev.phase !== PAST && !opening && !SWITCH_PROOF.has(c.step);
+  const turned = c.step === CeremonyStep.StepSwapKey || !!c.choose || switchSecond;
   // Nothing follows Done in the same ceremony: an event after it opens
   // the next enrolment, from its first half.
   return { seq: c.seq, phase: turned ? 1 : prev.phase === PAST ? 0 : prev.phase };
@@ -501,8 +522,10 @@ export function typedProofLeads(f: { way: Way; shows: string; choose?: boolean; 
 // FootButton is one of a dialog ceremony's foot-band buttons, in their
 // order: the act first, the way out after it. "recovery" is Use recovery
 // key, the act at an enrolment's No match and at its blocked PIN where the
-// switch is offered.
-export type FootButton = "continue" | "again" | "recovery" | "cancel" | "close";
+// switch is offered; "another", Switch to a YubiKey…'s Use another YubiKey
+// where the YubiKey inserted was refused in a way another could pass
+// (anotherAsked).
+export type FootButton = "continue" | "again" | "recovery" | "another" | "cancel" | "close";
 
 // dialogFoot: what a dialog ceremony's foot band holds (APP.md §6,
 // Controls; ruled 2026-10-17). Continue beside Cancel at a prompt; Cancel
@@ -516,8 +539,9 @@ export type FootButton = "continue" | "again" | "recovery" | "cancel" | "close";
 // blocked PIN in the same proof has the same row, as the lock screen's
 // Blocked view does (ruled 2026-11-06, R8); without the switch it keeps
 // Cancel alone.
-export function dialogFoot(f: { over: boolean; view: View; asks: boolean; again: boolean; recovery?: boolean; step?: CeremonyStep }): FootButton[] {
+export function dialogFoot(f: { over: boolean; view: View; asks: boolean; again: boolean; recovery?: boolean; another?: boolean; step?: CeremonyStep }): FootButton[] {
   if (f.over) return f.view === "failed" && f.again ? ["again", "cancel"] : ["close"];
+  if (f.another) return ["another", "cancel"];
   if (f.recovery && f.view === "edge" && f.step === CeremonyStep.StepNoMatch) return ["recovery", "cancel"];
   if (f.recovery && f.view === "blocked" && f.step === CeremonyStep.StepBlocked) return ["recovery", "cancel"];
   return f.asks ? ["continue", "cancel"] : ["cancel"];
@@ -555,6 +579,10 @@ export function dialogViewOf(f: DialogFacts): View {
   const c = f.c;
   const v = viewOf({ running: true, firstRun: false, way: f.way, c, passed: f.passed, afterTouch: f.afterTouch });
   if (!c) return v;
+  // A cancelled switch that made a key on the YubiKey ends on the failed
+  // view, which says the key stays there (keptAfterCancel; ruled
+  // 2026-11-07); every other cancel closes its dialog.
+  if (keptAfterCancel(c)) return "failed";
   if (v === "wait" && c.step === CeremonyStep.StepSwapKey && c.removeLabel) return "swap";
   if (c.step === CeremonyStep.StepDone && f.endsWithMore && (v === "touch" || v === "done")) return "done";
   if (v === "touch" && c.step !== CeremonyStep.StepTouch && !f.afterTouch) return c.step === CeremonyStep.StepDone ? "done" : "opening";
@@ -570,6 +598,9 @@ export function endsWithMore(
   o: { follow?: boolean; nextLine?: boolean } = {},
 ): boolean {
   if (c.step !== CeremonyStep.StepDone) return false;
+  // Switch to a YubiKey…'s Done always says what now opens the vault and
+  // what a loss means (lib/rekey.ts switchEndItems).
+  if (c.kind === "toToken") return true;
   return !!c.retireError || !!c.backupError || (c.kind === "replace" && !!c.newIds?.length) || !!o.follow || !!o.nextLine;
 }
 
@@ -591,7 +622,7 @@ export function choosesVaultPassword(kind: string): boolean {
 // before the change landed leaves the file as it was, and no backup is
 // written before the change — unless the save could not be confirmed or
 // another writer changed the file, which Broken says in its own words.
-const CHANGES = new Set(["remove", "password", "entangle", "rotate", "replace"]);
+const CHANGES = new Set(["remove", "password", "entangle", "rotate", "replace", "toToken"]);
 export function nothingChanged(c: { kind: string; error?: string }): boolean {
   return CHANGES.has(c.kind) && c.error !== Code.CodeIndeterminate && c.error !== Code.CodeConflict;
 }
@@ -603,12 +634,19 @@ export function nothingChanged(c: { kind: string; error?: string }): boolean {
 // the switch, in its first half (the proof), on a vault
 // whose unlock methods hold a YubiKey and a recovery key. Never for another
 // act, whose dialog holds Cancel alone at No match (APP.md §6).
+//
+// Switch to a YubiKey… with a new password offers it too (ruled
+// 2026-11-07, O4): its proof is the vault's password, typed, so the switch
+// stands under that form (recoverySwitchAt's password asked alone) and the
+// recovery key proves it instead; never with the same words, which only
+// their typing proves, and never in its second half.
 export function offersRecoverySwitch(
   c: { kind: string },
-  a: { act: string; type?: string; withRecoveryKey?: boolean } | null | undefined,
+  a: { act: string; type?: string; withRecoveryKey?: boolean; keepPassword?: boolean } | null | undefined,
   slots: readonly { type: string }[],
   second: boolean,
 ): boolean {
+  if (c.kind === "toToken") return !!a && a.act === "toToken" && !a.withRecoveryKey && !a.keepPassword && !second;
   if (c.kind !== "enroll" || !a || a.act !== "enroll" || a.withRecoveryKey || second) return false;
   if (a.type !== "token" && a.type !== "recovery") return false;
   return slots.some((s) => s.type === "hardware") && slots.some((s) => s.type === "recovery");
@@ -698,6 +736,33 @@ export function mergesPassword(f: { entangled: boolean; way: Way; choose?: boole
 // inserted. The proving YubiKey's own swap carries no note.
 export function enrolledAlready(c: { step: CeremonyStep; removeLabel?: string; error?: string } | null | undefined): boolean {
   return !!c && c.step === CeremonyStep.StepSwapKey && !!c.removeLabel && c.error === Code.CodeDuplicateSlot;
+}
+
+// ANOTHER_HELPS: the second half's refusals of the YubiKey inserted that
+// another YubiKey could pass (keys.go anotherHelps): its PIN blocked, no
+// free slot for a key, a key it cannot use, a key that does not prove
+// itself.
+const ANOTHER_HELPS = new Set<string>([Code.CodeTokenPINBlocked, Code.CodeTokenFull, Code.CodeTokenNotUsable, Code.CodeTokenProof]);
+
+// anotherAsked: Switch to a YubiKey… stands at such a refusal with its
+// prompt of kind "another" (ruled 2026-11-07): Use another YubiKey answers
+// it, Cancel ends the act. The step is the refusal's own (Blocked, or
+// Failed), so a Failed with this prompt is not an end. A final Failed may
+// still carry a stale prompt (a cancel at the new YubiKey's PIN, as every
+// enrolment's does), which its code tells apart: it is never one of these.
+export function anotherAsked(c: { kind: string; step: CeremonyStep | string; promptId?: string; error?: string } | null | undefined): boolean {
+  if (!c || c.kind !== "toToken" || !c.promptId) return false;
+  if (c.step !== CeremonyStep.StepBlocked && c.step !== CeremonyStep.StepFailed) return false;
+  return ANOTHER_HELPS.has(c.error ?? "");
+}
+
+// keptAfterCancel: a cancelled Switch to a YubiKey… that made a key on the
+// YubiKey (CeremonyState.generated) stays on its dialog, so that its end can
+// say the key stays on the card (ruled 2026-11-07: every end after a key was
+// made says so); every other cancelled ceremony is over the moment it says
+// so, and its dialog closes.
+export function keptAfterCancel(c: { kind: string; step: CeremonyStep | string; error?: string; generated?: boolean } | null | undefined): boolean {
+  return !!c && c.kind === "toToken" && c.step === CeremonyStep.StepFailed && c.error === Code.CodeCancelled && !!c.generated;
 }
 
 // AddKind is an entry of Add an unlock method…'s Unlock method list.

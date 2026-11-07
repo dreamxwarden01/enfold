@@ -16,7 +16,7 @@
 import { Code, CeremonyStep } from "./api";
 import type { AfterFacts } from "./api";
 import { enrolledAlready, nothingChanged } from "./lockscreen";
-import { ceremonyCopy, codeText, dialogCopy, replaceCopy, retireLeadOf, vaultCopy } from "./strings";
+import { ceremonyCopy, codeText, dialogCopy, replaceCopy, retireLeadOf, switchCopy, vaultCopy } from "./strings";
 
 // The committed facts an act's final state carries (CeremonyState.after),
 // the core's own shape: recoveryIds may come as null for none.
@@ -32,7 +32,7 @@ export type Act = "remove" | "password" | "on" | "rotate" | "replace";
 export const WEEK = 604800;
 
 // The ceremony kind an act runs as.
-function kindOf(act: Act | "enroll"): string {
+function kindOf(act: Act | "enroll" | "toToken"): string {
   return act === "on" ? "entangle" : act;
 }
 
@@ -100,19 +100,20 @@ export function backupPossible(o: { recoveryKeys: number; removing?: string }): 
   return o.recoveryKeys - (o.removing === "recovery" ? 1 : 0) > 0;
 }
 
-// backupTicked: an act that re-keys — the re-keying answer, a re-key, a
-// replacement — since its own re-key leaves every earlier backup behind by
-// the backups card's rule; a recovery key's removal on either answer, since
-// the backups made while it was an unlock method hold it; otherwise while a
-// backup is owed. rekey is the answer (true for rotate and replace).
-export function backupTicked(o: { owed: boolean; act: Act; rekey: boolean; removing?: string }): boolean {
-  if (o.act === "rotate" || o.act === "replace") return true;
-  if (o.act === "remove" && o.removing === "recovery") return true;
-  return o.rekey || o.owed;
+// backupTicked: whether *Export a backup afterwards* opens ticked — never,
+// whatever the act and its answer (the owner, 2026-11-07: a local backup is
+// a marginal feature for most users, and ticked by default it added
+// confusion and copies of the key material). The tick stays, unticked, and
+// the reason under the Last backup fact still says why one would help. It
+// ticked on every answer that re-keyed, at a recovery key's removal and
+// while a backup was owed, from 2026-10-27 until then. The arguments stay,
+// so that every dialog still asks it the one question.
+export function backupTicked(_o: { owed: boolean; act: Act; rekey: boolean; removing?: string }): boolean {
+  return false;
 }
 
-// backupReason is the reason under the Last backup fact, by what ticks the
-// backup: the replacement's (singular for one key), the removed recovery
+// backupReason is the reason under the Last backup fact, by the act whose
+// backup is offered (unticked by default since 2026-11-07): the replacement's (singular for one key), the removed recovery
 // key's on either answer, the re-key's, the owed one's; or none.
 export function backupReason(o: { owed: boolean; act: Act; rekey: boolean; removing?: string; label?: string; count?: number }): string | undefined {
   if (o.act === "replace") return o.count === 1 ? dialogCopy.backupAfter.whyReplaceOne : dialogCopy.backupAfter.whyReplace;
@@ -152,10 +153,13 @@ export interface Chain {
 // button began it. Start again and Use recovery key instead keep fromFollow
 // and chain as the first begin recorded them.
 export interface LastAct {
-  act: Act | "enroll";
+  act: Act | "enroll" | "toToken";
   type?: string;
   rekey?: boolean;
   withRecoveryKey?: boolean;
+  // keepPassword: Switch to a YubiKey… with the vault's password in the same
+  // words, which only their typing proves (no recovery-key switch).
+  keepPassword?: boolean;
   fromFollow: boolean;
   chain: Chain | null;
 }
@@ -163,18 +167,21 @@ export interface LastAct {
 // chainFor is the chain an act begins in: begun from an end's button, the
 // one that end belongs to; begun from the page, a new chain when the act
 // re-keys (the re-keying answer, a re-key, a replacement), else none.
-export function chainFor(prev: Chain | null, fromFollow: boolean, act: Act | "enroll", rekey: boolean, nextId: number): Chain | null {
+export function chainFor(prev: Chain | null, fromFollow: boolean, act: Act | "enroll" | "toToken", rekey: boolean, nextId: number): Chain | null {
   if (fromFollow) return prev;
   return act !== "enroll" && rekey ? { id: nextId, replaced: [], changed: false } : null;
 }
 
 // chainAfter is the chain after an act's end: a replacement's new keys join
-// replaced; a re-keying password change or turning-on sets changed. Any
-// other end, and any end but Done, leaves it as it was.
-export function chainAfter(ch: Chain | null, c: { kind: string; step: string; rekey?: boolean; newIds?: readonly string[] | null }): Chain | null {
+// replaced; a re-keying password change or turning-on sets changed, and so
+// does a re-keying switch to a YubiKey with a new password, which chose the
+// vault's password afresh in the same commit. Any other end, and any end but
+// Done, leaves it as it was.
+export function chainAfter(ch: Chain | null, c: { kind: string; step: string; rekey?: boolean; keepPassword?: boolean; newIds?: readonly string[] | null }): Chain | null {
   if (!ch || c.step !== CeremonyStep.StepDone) return ch;
   if (c.kind === "replace" && c.newIds?.length) return { ...ch, replaced: [...ch.replaced, ...c.newIds.filter((id) => !ch.replaced.includes(id))] };
-  if ((c.kind === "password" || c.kind === "entangle") && c.rekey && !ch.changed) return { ...ch, changed: true };
+  const chose = c.kind === "password" || c.kind === "entangle" || (c.kind === "toToken" && !c.keepPassword);
+  if (chose && c.rekey && !ch.changed) return { ...ch, changed: true };
   return ch;
 }
 
@@ -211,7 +218,11 @@ export interface FollowUp {
 //    chain not changed -> "change"; else as above -> "replace";
 //  - a re-keying password change, or turning the password on with a
 //    re-key: a recovery key left that the chain did not make -> "replace";
-//  - a replacement: the password on and the chain not changed -> "change".
+//  - a replacement: the password on and the chain not changed -> "change";
+//  - Switch to a YubiKey… (ruled 2026-11-07): re-keyed with the same words
+//    -> "change", the password first, as the house chain has it; re-keyed
+//    with a new password -> "replace" for a recovery key the chain did not
+//    make; not re-keyed -> "add", a second YubiKey kept apart.
 // Never after a removal that kept the vault's key, a change or turning-on
 // without a re-key, a re-key alone or an export; and nothing for an end with
 // no after, which fails toward saying less. While the end carries a
@@ -219,13 +230,13 @@ export interface FollowUp {
 // first. One recovery key left is said in the singular.
 export function followUp(
   a: LastAct | null,
-  c: { kind: string; step: string; promptId?: string; rekey?: boolean; after?: AfterFacts | null; retireError?: string },
+  c: { kind: string; step: string; promptId?: string; rekey?: boolean; keepPassword?: boolean; after?: AfterFacts | null; retireError?: string },
 ): FollowUp | null {
   const f = nextStep(a, c);
   return f && c.retireError ? { ...f, text: f.text + ceremonyCopy.followUp.retryFirst } : f;
 }
 
-function nextStep(a: LastAct | null, c: { kind: string; step: string; promptId?: string; rekey?: boolean; after?: AfterFacts | null }): FollowUp | null {
+function nextStep(a: LastAct | null, c: { kind: string; step: string; promptId?: string; rekey?: boolean; keepPassword?: boolean; after?: AfterFacts | null }): FollowUp | null {
   const after = c.after;
   if (!a || !after || !actEnd(c) || kindOf(a.act) !== c.kind) return null;
   const t = ceremonyCopy.followUp;
@@ -256,6 +267,11 @@ function nextStep(a: LastAct | null, c: { kind: string; step: string; promptId?:
   }
   if ((c.kind === "password" || c.kind === "entangle") && c.rekey) return unreplaced ? { act: "replace", text: replace } : null;
   if (c.kind === "replace") return on && !changed ? { act: "change", text: t.changeAfterReplace } : null;
+  if (c.kind === "toToken") {
+    if (!c.rekey) return { act: "add", text: switchCopy.addSecond };
+    if (c.keepPassword) return { act: "change", text: change };
+    return unreplaced ? { act: "replace", text: replace } : null;
+  }
   return null;
 }
 
@@ -402,8 +418,11 @@ export function replaceBackupItems(c: { kind: string; backedUp?: boolean; backup
 // that could not be confirmed or a conflict, which Broken words); and, for a
 // replacement that showed keys, what is known of them (replaceResult), in
 // the singular for one key shown.
-export function failedNotes(c: { kind: string; step: string; error?: string; newIds?: readonly string[] | null }): string[] {
+export function failedNotes(c: { kind: string; step: string; error?: string; newIds?: readonly string[] | null; generated?: boolean }): string[] {
   if (c.step !== CeremonyStep.StepFailed) return [];
+  // Switch to a YubiKey… says what still opens the vault, and, after a key
+  // was made on the YubiKey, that it stays there (ruled 2026-11-07).
+  if (c.kind === "toToken") return [...(nothingChanged(c) ? [switchCopy.nothingChanged] : []), ...(c.generated ? [switchCopy.keyLeft] : [])];
   const out = nothingChanged(c) ? [ceremonyCopy.nothingChanged] : [];
   const r = replaceResult(c);
   const one = c.newIds?.length === 1;
@@ -460,9 +479,85 @@ export function ceremonyTitleOf(c: { kind: string; keepCount?: number }, recover
 }
 
 // removeRule is a card's greyed Remove… where the two-method rule stops it:
-// a YubiKey's says what to add first, the others the rule itself.
-export function removeRule(type: string): string {
-  return type === "hardware" ? vaultCopy.ruleYubiKey : vaultCopy.rule;
+// a YubiKey's says what to add first, and the vault's last YubiKey's that a
+// password can follow it once it is gone (ruled 2026-11-07, option A); a
+// password's names Switch to a YubiKey… on its card (ruled 2026-11-07);
+// a recovery key's the rule itself. last: no other YubiKey is left.
+export function removeRule(type: string, last = false): string {
+  if (type === "hardware") return last ? vaultCopy.ruleLastYubiKey : vaultCopy.ruleYubiKey;
+  return type === "password" ? vaultCopy.rulePassword : vaultCopy.rule;
+}
+
+// ---- Switch to a YubiKey… (ruled 2026-11-07) ------------------------------
+
+// switchShown: the command stands on a password's card, on a vault with no
+// YubiKey; on any vault without a standalone password it is not drawn.
+export function switchShown(card: { type: string }, hasHardware: boolean): boolean {
+  return card.type === "password" && !hasHardware;
+}
+
+// switchGreyed is why Switch to a YubiKey… is greyed, or nothing, in the
+// order the page ranks the reasons (judge E1): locked, Tampered (the house's
+// two), then no recovery key, first among the vault's own, since the switch
+// would leave a lost YubiKey with no way back; then a second standalone
+// password, since a YubiKey carries one password with it. The core's own
+// reason (EntangledState.switchReason) is read beside the cards' count, so
+// that a refusal the cards cannot show is still said, in its own words.
+export function switchGreyed(f: { unlocked: boolean; tampered: boolean; recoveryKeys: number; passwords: number; reason?: string }): string | undefined {
+  if (!f.unlocked) return codeText(Code.CodeNeedsUnlock);
+  if (f.tampered || f.reason === Code.CodeVaultTampered) return vaultCopy.changesOff;
+  if (f.recoveryKeys <= 0 || f.reason === Code.CodeNoRecoverySlot) return switchCopy.noRecovery;
+  if (f.passwords > 1 || f.reason === Code.CodeSlotPolicy) return switchCopy.twoPasswords;
+  return f.reason ? codeText(f.reason) : undefined;
+}
+
+// switchPrimary is the form's primary, naming its press: the switch, and
+// the re-key with it on the first answer. There is no backup form (ruled
+// 2026-11-07): the act takes none.
+export function switchPrimary(rekey: boolean): string {
+  return switchCopy.primary[rekey ? 1 : 0];
+}
+
+// switchEndItems are the lines of Switch to a YubiKey…'s Done under its
+// title, before the retirement's bar and the next step: what now opens the
+// vault, by the password chosen, and what a loss of this YubiKey means.
+// label is the YubiKey's (SlotLabel); n the vault's recovery keys, from the
+// end's committed facts.
+export function switchEndItems(c: { kind: string; step: string; keepPassword?: boolean; slotLabel?: string; after?: AfterFacts | null }, recoveryKeys: number): EndItem[] {
+  if (c.kind !== "toToken" || c.step !== CeremonyStep.StepDone) return [];
+  const label = c.slotLabel || "The YubiKey";
+  const n = c.after ? (c.after.recoveryIds ?? []).length : recoveryKeys;
+  return [
+    { tone: "plain", text: c.keepPassword ? switchCopy.doneSame(label) : switchCopy.doneNew(label) },
+    { tone: "plain", text: switchCopy.ifLost(label, n) },
+  ];
+}
+
+// ---- The password's row and option A (ruled 2026-11-07) ----------------------
+
+// passwordRow is the Password with every YubiKey row by the vault's ways in
+// (judge E4): its line, and why Turn on… or Change… is greyed where the
+// switch can take effect only through Switch to a YubiKey…. Beside a
+// standalone password, off: nothing to turn on until a YubiKey comes;
+// on (a vault left so before option A): the switch's words are set by the
+// switch, so Change… is greyed and Turn off… stays. On recovery keys alone
+// and on: the next YubiKey added inherits it, Change… and Turn off… live.
+// Otherwise the row's two lines as before.
+export function passwordRow(f: { on: boolean; hasHardware: boolean; hasStandalone: boolean }): { line: string; turnOnWhy?: string; changeWhy?: string } {
+  if (!f.hasHardware && f.hasStandalone) {
+    return f.on ? { line: vaultCopy.passwordOnNoYubiKey, changeWhy: vaultCopy.changeBySwitch } : { line: vaultCopy.passwordOffNoYubiKey, turnOnWhy: vaultCopy.turnOnNeedsYubiKey };
+  }
+  if (!f.hasHardware && f.on) return { line: vaultCopy.passwordOnNext };
+  return { line: f.on ? vaultCopy.passwordOn : vaultCopy.passwordOff };
+}
+
+// passwordAlone: Add an unlock method… with Password chosen on a vault whose
+// unlock methods are recovery keys alone, where the password will open the
+// vault by itself (option A): the attention bar is drawn, and with the
+// switch on the line that it ends here, which the core does in the same
+// commit (keystore AddSlot).
+export function passwordAlone(kind: string, slots: readonly { type: string }[]): boolean {
+  return kind === "password" && slots.length > 0 && slots.every((s) => s.type === "recovery");
 }
 
 // ---- The proof ---------------------------------------------------------------
@@ -481,6 +576,9 @@ export function removeRule(type: string): string {
 export function recoveryNoteOf(c: { kind: string; without?: string }, a: LastAct | null, recoveryKeys: number): string {
   const n = ceremonyCopy.recoveryNote;
   if (c.without) return n.remove;
+  // Switch to a YubiKey… with a new password, proved by a recovery key
+  // (ruled 2026-11-07): the recovery key stands in for the password.
+  if (c.kind === "toToken") return switchCopy.recoveryNote;
   if (c.kind === "enroll" && a?.act === "enroll" && a.withRecoveryKey) return a.type === "recovery" ? n.enrollRecovery : n.enroll;
   if (c.kind === "verify" || c.kind === "import" || c.kind === "records") return n[c.kind];
   return (recoveryKeys === 1 ? n.onlyOne : n.only) + (c.kind === "enroll" ? n.nextMethod : "");

@@ -94,6 +94,11 @@ var (
 	// not derive the slot's public key (§6.3): it is not this slot's key,
 	// and is never shown.
 	ErrEscrowMismatch = errors.New("keystore: the kept recovery key does not match its slot")
+	// ErrFull: the slot region has no room for one more record — format.
+	// MaxSlots records already, or the record would take the region past
+	// format.SlotRegionSize (§4, §6). Decided from the records alone, before
+	// anything is derived (Keystore.CanAddSlot and the mutations' own check).
+	ErrFull = errors.New("keystore: the slot region has no room for another record")
 	// ErrParams: an argument the package refuses.
 	ErrParams = errors.New("keystore: invalid parameters")
 	// ErrSeqExhausted: the superblock's seq is at 2^64 − 1 and the commit

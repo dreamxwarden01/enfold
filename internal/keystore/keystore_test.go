@@ -62,9 +62,13 @@ func mustCreateWith(t testing.TB, path string, opts CreateOptions) *Unlocked {
 	return u
 }
 
-// countArgon2 counts the K_P derivations of the tests that follow. K_P depends
-// on the password and the slot region header alone (§3.1), so an unlock runs
-// Argon2id once however many hardware slots it walks.
+// countArgon2 counts the Argon2id derivations of the tests that follow: the
+// K_P derivations and a standalone password slot's own (passwordSlotIKM),
+// so that a refusal asserted to come before any derivation is shown to for
+// a standalone password as for the vault's (the switch audit of
+// 2026-11-07, second pass, finding 5). K_P depends on the password and the
+// slot region header alone (§3.1), so an unlock runs Argon2id once however
+// many hardware slots it walks.
 func countArgon2(t testing.TB) *int {
 	t.Helper()
 	n := 0
@@ -73,7 +77,12 @@ func countArgon2(t testing.TB) *int {
 		n++
 		return saved(pw, es, vaultID, p)
 	}
-	t.Cleanup(func() { entangledKey = saved })
+	savedIKM := passwordSlotIKM
+	passwordSlotIKM = func(pw []byte, salt kdf.Salt, vaultID, recipientID [16]byte, p kdf.Argon2Params) ([]byte, error) {
+		n++
+		return savedIKM(pw, salt, vaultID, recipientID, p)
+	}
+	t.Cleanup(func() { entangledKey, passwordSlotIKM = saved, savedIKM })
 	return &n
 }
 

@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dreamxwarden01/enfold/internal/format"
@@ -44,7 +46,7 @@ func (c *Core) Slots() []SlotView {
 func (c *Core) EntangledState() EntangledState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	st := EntangledState{On: c.vault.entangled}
+	st := EntangledState{On: c.vault.entangled, HasHardware: hasHardware(c.vault.slots), HasStandalone: hasStandalone(c.vault.slots)}
 	if c.vault.state != StateUnlocked {
 		return st
 	}
@@ -52,7 +54,30 @@ func (c *Core) EntangledState() EntangledState {
 	if !st.CanEnable {
 		st.Reason = CodeInvariant
 	}
+	// The switch to a YubiKey, for the password's card: its reason only
+	// where there is a standalone password to carry it (the command is not
+	// drawn elsewhere), the freeze first, as every pre-check orders it.
+	if st.HasStandalone {
+		switch {
+		case c.vault.tampered != nil:
+			st.SwitchReason = CodeVaultTampered
+		case c.vault.switchReason != "":
+			st.SwitchReason = c.vault.switchReason
+		default:
+			st.CanSwitch = true
+		}
+	}
 	return st
+}
+
+// hasHardware and hasStandalone read the cached slots: an active YubiKey,
+// an active standalone password (keystore.Slots lists active slots alone).
+func hasHardware(slots []keystore.SlotInfo) bool {
+	return slices.ContainsFunc(slots, func(s keystore.SlotInfo) bool { return s.Type == format.SlotExternalECDH })
+}
+
+func hasStandalone(slots []keystore.SlotInfo) bool {
+	return slices.ContainsFunc(slots, func(s keystore.SlotInfo) bool { return s.Type == format.SlotStandalonePassword })
 }
 
 // SetEntangled turns the vault's password on or off (APP.md §13): a
@@ -161,6 +186,269 @@ func (c *Core) ChangeEntangledPassword(rekey bool, backupPath string) *Error {
 	})
 }
 
+// SwitchOptions is how Switch to a YubiKey… begins (APP.md §13, ruled
+// 2026-11-07). Label names the YubiKey, its serial number when empty.
+// KeepPassword carries the vault's password over in the same words, typed
+// once as the proof; false, a new password is chosen in the second half.
+// Rekey re-keys the vault in the same commit, as Turn on… does on its first
+// answer. WithRecoveryKey proves with one of the vault's recovery keys
+// instead of the password, and only with a new password: the same words are
+// what is carried over, so only typing them proves them.
+type SwitchOptions struct {
+	Label           string
+	KeepPassword    bool
+	Rekey           bool
+	WithRecoveryKey bool
+}
+
+// BeginSwitchToToken switches a password vault to a YubiKey (APP.md §13,
+// ruled 2026-11-07): the act of kind toToken. The first half proves it is
+// the user — the vault's password, or with a new password a recovery key —
+// and the second asks the new password first when one is chosen, then runs
+// the enrolment's views for the new YubiKey exactly (its swap, the wait out
+// of a YubiKey that already unlocks the vault, its PIN alone, the
+// management key where needed, the touch). Then ONE commit removes the
+// standalone password and adds the YubiKey with the password as the
+// vault's, asked after its PIN (keystore.TradePasswordForToken), re-keying
+// when asked, through landChange like every slot change, R41's retirement
+// after it. There is no backup step (ruled 2026-11-07).
+//
+// Everything the vault decides is decided before any card work, so nothing
+// is written to a YubiKey for a vault that would refuse it: here, from the
+// cached facts (keystore.CanTradePassword: vault.slot_not_found for a vault
+// with no standalone password, vault.no_recovery_slot, vault.slot_policy
+// for a second password; vault.tampered first), and again after the proof
+// from the handle itself, with the label and the slot region's room
+// (keystore.CanTradePasswordTo). params for a recovery-key proof with the
+// same words, or a label the keystore refuses (keystore.CheckLabel: the
+// format's limit and the house's 120 characters); token.no_service with no
+// smart-card service.
+func (c *Core) BeginSwitchToToken(o SwitchOptions) *Error {
+	if o.WithRecoveryKey && o.KeepPassword {
+		return coded(CodeParams)
+	}
+	if keystore.CheckLabel(o.Label) != nil {
+		return coded(CodeParams)
+	}
+	if c.deps.Cards == nil {
+		return coded(CodeTokenNoService)
+	}
+	c.mu.Lock()
+	var e *Error
+	if c.vault.state == StateUnlocked {
+		switch {
+		case c.vault.tampered != nil:
+			e = coded(CodeVaultTampered)
+		case c.vault.switchReason != "":
+			e = coded(c.vault.switchReason)
+		}
+	}
+	c.mu.Unlock()
+	if e != nil {
+		return e
+	}
+	return c.beginAs("toToken", actOpts{rekey: o.Rekey, recoveryProof: o.WithRecoveryKey, keepProof: o.KeepPassword}, func(cer *ceremony, unl *keystore.Unlocked) error {
+		return c.switchToToken(cer, unl, o)
+	})
+}
+
+// switchToToken is the act after its proof: the vault's own verdict from the
+// handle, the password to carry, the new YubiKey, the commit.
+func (c *Core) switchToToken(cer *ceremony, unl *keystore.Unlocked, o SwitchOptions) error {
+	ks := unl.Keystore()
+	// The handle's own answer, before the new password and before anything
+	// is asked of a card: the cached facts were the page's, and the
+	// keystore's are the authority — CanTradePassword's reasons, then every
+	// refusal of the final set the records alone decide, the label and the
+	// region's room among them, so that no deterministic refusal comes
+	// after a key was made on the YubiKey and Argon2id ran (the switch
+	// audit of 2026-11-07, finding 3).
+	again, err := tokenAdmitted(o.Label, func(label string) error {
+		return ks.CanTradePasswordTo(keystore.HardwareSlot{Label: label})
+	})
+	if err != nil {
+		return err
+	}
+	cer.nameAdmits = again
+	var pwRID [16]byte
+	for _, s := range ks.Slots() {
+		if s.Type == format.SlotStandalonePassword {
+			pwRID = s.RecipientID
+		}
+	}
+	cer.releaseCard() // nothing proved with a card; released all the same, as every act does
+	if o.KeepPassword {
+		if cer.kept == nil {
+			// The proof was not the password: BeginSwitchToToken refuses a
+			// recovery key with the same words, so this is not reached.
+			return coded(CodeParams)
+		}
+	} else {
+		// The second half's first view, before the card: nothing typed can
+		// fail after a key is made on the YubiKey. Typed twice on the page,
+		// sent once; kept where the proof's would be, so that it is zeroed
+		// the same way.
+		pw, err := cer.askNew("password", StepPassword)
+		if err != nil {
+			return err
+		}
+		cer.kept = []byte(pw)
+		if h := keptSeen.Load(); h != nil {
+			(*h)(cer.kept)
+		}
+	}
+	pub, serial, err := cer.enrollTokenOrAnother(o.Label, hardwareRecords(ks))
+	if err != nil {
+		return err
+	}
+	hs := keystore.HardwareSlot{PublicKey: pub, Label: mustString(o.Label, keyName(serial))}
+	cer.set(func(s *CeremonyState) { s.SlotLabel = hs.Label })
+	// The keystore takes the password as a string (keystore.Entangle), so
+	// the commit makes one more copy of the kept words, which nothing can
+	// zero, as nothing zeroes the strings it came from: the mailbox's
+	// answer and the credential's (APP.md §2.2). A byte path is not taken:
+	// R4's normaliser (kdf.NormalizePassword) takes a string, and a second
+	// normaliser over bytes for this act alone would be one more place where
+	// the same words could derive two keys, for one copy fewer of several.
+	return c.landChange(cer, unl, o.Rekey, func() error {
+		return unl.TradePasswordForToken(pwRID, hs, keystore.Entangle{Password: string(cer.kept), Argon2: defaultArgon2}, o.Rekey)
+	})
+}
+
+// regionTest, nil in every build but a test's, is asked before the
+// keystore's verdict in tokenAdmitted: a test stands in front of it a slot
+// region near its 128 KiB, which nothing Enfold writes can make — 32
+// records of names of at most 120 characters fill about 124 KB of it — and
+// only a file written elsewhere carries.
+var regionTest func(label string) error
+
+// tokenAdmitted is the vault's verdict on a YubiKey slot named label
+// joining it, asked of admits (the keystore's CanAddSlot, CanAddFirstWayIn
+// or CanTradePasswordTo) before any card is opened. A label given is
+// measured as it is. An empty one becomes the card's serial's name
+// (keyName), unknown until the card is read: it is measured at its
+// longest, which only admits — every name fits where the longest does —
+// and where the longest does not fit, at its shortest ("YubiKey 0"), which
+// only refuses: a region with no room for any name is refused here, before
+// any card. Between the two the act is admitted and again is returned, the
+// verdict to ask once the serial is known, before anything is asked of the
+// card (ceremony.nameAdmits): no default name is refused for the room a
+// longer one would take, and none is written to a card for a region that
+// would refuse it (the switch audit of 2026-11-07, second pass, finding 2).
+func tokenAdmitted(label string, admits func(label string) error) (again func(label string) error, err error) {
+	if test := regionTest; test != nil {
+		real := admits
+		admits = func(label string) error {
+			if err := test(label); err != nil {
+				return err
+			}
+			return real(label)
+		}
+	}
+	if label != "" {
+		return nil, admits(label)
+	}
+	err = admits(keyName(math.MaxUint32))
+	if err == nil || !errors.Is(err, keystore.ErrFull) {
+		return nil, err
+	}
+	if admits(keyName(0)) != nil {
+		return nil, err
+	}
+	return admits, nil
+}
+
+// dropKept zeroes the buffer the act kept the password in — the proof's,
+// or the new one chosen — and forgets it. Called on every way out of an act
+// (beginAs). The guarantee is that buffer's alone: the strings the password
+// arrived and travels as (the mailbox's answer, the credential, the
+// commit's keystore.Entangle) cannot be zeroed in Go, today as for every
+// password the core handles (APP.md §2.2, the switch audit's finding 5).
+func (cer *ceremony) dropKept() {
+	kdf.Zero(cer.kept)
+	cer.kept = nil
+}
+
+// anotherHelps is the second half's refusals of the YubiKey inserted that
+// another YubiKey could pass: its PIN blocked, no free slot for a key, a key
+// it cannot use, a key that does not prove itself. Switch to a YubiKey…
+// offers Use another YubiKey at them, the proof kept (enrollTokenOrAnother).
+func anotherHelps(code Code) bool {
+	switch code {
+	case CodeTokenPINBlocked, CodeTokenFull, CodeTokenNotUsable, CodeTokenProof:
+		return true
+	}
+	return false
+}
+
+// enrollTokenOrAnother is enrollToken for the switch to a YubiKey, with no
+// YubiKey of the proof to take out (the proof was typed): where the YubiKey
+// inserted is refused in a way another YubiKey could pass (anotherHelps),
+// the act stands at that refusal — its step and code, as the enrolment
+// parks there — with the prompt of kind another, answered through
+// SubmitSecret with an empty value as kept and confirm are, beside Cancel.
+// Answered, the refused YubiKey is waited out of the reader (the swap, its
+// serial's name in RemoveLabel) and the next one inserted is enrolled, the
+// proof and the password kept for the act's life (ruled 2026-11-07). A key
+// generated on a card that comes back is reused (keyToEnroll).
+func (cer *ceremony) enrollTokenOrAnother(label string, vault []keystore.SlotInfo) ([]byte, uint32, error) {
+	for {
+		pub, serial, err := cer.enrollToken(nil, label, vault)
+		var pk *parkAt
+		if err == nil || !errors.As(err, &pk) || !anotherHelps(pk.code) {
+			return pub, serial, err
+		}
+		cer.c.log("ceremony %s: the YubiKey inserted was refused (%s); another may be used", cer.kind, pk.code)
+		if _, err := cer.askNote("another", pk.step, PINStatus{}, pk.code); err != nil {
+			return nil, 0, err
+		}
+		if err := cer.waitForOtherCard(serial); err != nil {
+			return nil, 0, err
+		}
+	}
+}
+
+// waitForOtherCard waits for the YubiKey with this serial, refused for the
+// switch, to leave: no reader, two, or the one card present another serial.
+// The swap's step names it in RemoveLabel, with no note. The probe never
+// parks and reads only the serial (no PIN, no touch): a busy card or a key
+// on its way out is a poll that told nothing, and a device that cannot be
+// opened ends the wait for the enrolment to meet it. It runs under the
+// prompt deadline, as the swap of the enrolment does.
+func (cer *ceremony) waitForOtherCard(serial uint32) error {
+	cer.set(func(s *CeremonyState) {
+		s.Step, s.RemoveLabel, s.InsertLabel, s.Error = StepSwapKey, keyName(serial), "the key to enroll", ""
+	})
+	deadline := cer.c.deps.Clock.AfterFunc(promptWait, func() { cer.cancelWith("wait_deadline") })
+	defer deadline.Stop()
+	poll := &readerPoller{cer: cer}
+	for {
+		names, err := poll.names()
+		if err != nil {
+			return err
+		}
+		if len(names) != 1 {
+			return nil
+		}
+		card, err := cer.probeCard(names[0])
+		switch {
+		case err == nil:
+			same := card.Serial() == serial
+			cer.closeUnverified(card)
+			if !same {
+				return nil
+			}
+		case errors.Is(err, ErrTokenBusy), keyGone(err):
+		default:
+			cer.c.log("ceremony %s: open %q while waiting for the refused YubiKey to leave: %v; the enrolment meets it", cer.kind, names[0], err)
+			return nil
+		}
+		if err := cer.wait(readerPoll); err != nil {
+			return err
+		}
+	}
+}
+
 // EnrollKind is which kind of slot an enrollment adds.
 type EnrollKind string
 
@@ -215,6 +503,9 @@ type actOpts struct {
 	rekey         bool
 	without       [16]byte
 	recoveryProof bool
+	// keepProof: the act keeps the password its proof was typed with
+	// (ceremony.kept): the switch to a YubiKey with the same words alone.
+	keepProof bool
 	// reads: the act writes nothing into the vault file and saves no
 	// backup (the reveal), so the barrier does not hold it. The merge's
 	// inspection writes nothing either but is the first half of a held act,
@@ -288,12 +579,16 @@ func (c *Core) beginAs(kind string, o actOpts, fn func(cer *ceremony, unl *keyst
 	cer.mutation = true
 	cer.state.Rekey = o.rekey
 	cer.without, cer.recoveryProof = o.without, o.recoveryProof
+	cer.keepProof, cer.state.KeepPassword = o.keepProof, o.keepProof
 	if o.without != ([16]byte{}) {
 		cer.state.Without = hexID(o.without)
 	}
 	c.mu.Unlock()
 	c.emitState()
 	go cer.run(func(ctx context.Context) error {
+		// A password the proof kept is zeroed however the act ends: after
+		// fn, after a lock that landed before it, after a proof that failed.
+		defer cer.dropKept()
 		unl, card, err := cer.acquireUnlocked()
 		if err != nil {
 			return err
@@ -420,12 +715,28 @@ func (cer *ceremony) acquireUnlocked() (*keystore.Unlocked, Card, error) {
 	if err := cer.settlePending(); err != nil { // the handle a pending touch is inside
 		return nil, nil, err
 	}
-	unl, err := cer.unlockWith(ks, keystore.PasswordCredential{Password: pw})
+	unl, cred, err := cer.unlockWithCred(ks, keystore.PasswordCredential{Password: pw})
 	if err != nil {
 		return nil, nil, err
 	}
+	if pc, ok := cred.(keystore.PasswordCredential); ok && cer.keepProof {
+		// The words the standalone slot opened with, kept for the switch to a
+		// YubiKey with the same words (ruled 2026-11-07): proved right by the
+		// slot itself, so nothing is typed twice. Every other act keeps
+		// nothing of the proof.
+		cer.kept = []byte(pc.Password)
+		if h := keptSeen.Load(); h != nil {
+			(*h)(cer.kept)
+		}
+	}
 	return unl, nil, nil
 }
+
+// keptSeen, set by a test, is shown the buffer a proof's password is kept
+// in, so that the test can see it zeroed when the act ends. nil outside
+// tests; an atomic pointer, as handoverHook is, so that a test that sets it
+// races no other.
+var keptSeen atomic.Pointer[func(kept []byte)]
 
 // afterMutation refreshes the cached facts and tells the frontend.
 func (c *Core) afterMutation() {
@@ -449,6 +760,9 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 	if o.Label == "" && o.Kind == EnrollRecovery {
 		return coded(CodeParams) // a key's label defaults to its serial, a password's to "Password"
 	}
+	if keystore.CheckLabel(o.Label) != nil {
+		return coded(CodeParams) // the format's limit and the house's 120 characters, before any ceremony
+	}
 	switch o.Kind {
 	case EnrollToken:
 		if c.deps.Cards == nil {
@@ -457,6 +771,28 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 	case EnrollPassword, EnrollRecovery:
 	default:
 		return coded(CodeParams)
+	}
+	if o.Kind == EnrollToken {
+		// A YubiKey never joins beside a standalone password (FORMAT §6.4):
+		// refused here, from the cached facts, before the proof and before
+		// anything is written to a card, which the keystore's ErrPolicy at
+		// AddSlot would otherwise refuse only after a key was generated on it
+		// (ruled 2026-11-07). The way there is Switch to a YubiKey… on the
+		// password's card (BeginSwitchToToken). The tampered reason first.
+		c.mu.Lock()
+		var e *Error
+		if c.vault.state == StateUnlocked {
+			switch {
+			case c.vault.tampered != nil:
+				e = coded(CodeVaultTampered)
+			case hasStandalone(c.vault.slots):
+				e = coded(CodeSlotPolicy)
+			}
+		}
+		c.mu.Unlock()
+		if e != nil {
+			return e
+		}
 	}
 	if o.WithRecoveryKey {
 		if o.Kind == EnrollPassword {
@@ -530,6 +866,19 @@ func (c *Core) BeginEnroll(o EnrollOptions) *Error {
 			// nothing (ruled 2026-11-06, APP.md §3 Keys): every hardware
 			// record, a retired one too, since AddSlot's duplicate rule
 			// counts them all.
+			// The handle the proof opened is asked before any card work: the
+			// cached facts that let the act begin may be stale — another act
+			// may have added a password between the check above and this
+			// ceremony — and nothing is written to a YubiKey for a vault
+			// that would refuse it (the switch audit of 2026-11-07, findings
+			// 1 and 3): vault.slot_policy, vault.slots_full, params.
+			again, err := tokenAdmitted(o.Label, func(label string) error {
+				return unl.Keystore().CanAddSlot(keystore.HardwareSlot{Label: label})
+			})
+			if err != nil {
+				return err
+			}
+			cer.nameAdmits = again
 			unlockPub := cer.releaseUnlocking()
 			hs := keystore.HardwareSlot{Label: o.Label}
 			pub, serial, err := cer.enrollToken(unlockPub, o.Label, hardwareRecords(unl.Keystore()))
@@ -688,6 +1037,17 @@ func (cer *ceremony) enrollOnce(label string, vault []keystore.SlotInfo) ([]byte
 		}
 	}
 	serial := card.Serial()
+	if cer.nameAdmits != nil {
+		// The default name's room, which the preflight could not decide
+		// without the serial (tokenAdmitted), is decided now, before the
+		// PIN and before any key is made: the card closes unverified, as
+		// nothing was asked of it.
+		if err := cer.nameAdmits(mustString(label, keyName(serial))); err != nil {
+			cer.c.log("ceremony %s: the vault has no room for %q: %v", cer.kind, keyName(serial), err)
+			cer.closeUnverified(card)
+			return nil, 0, err
+		}
+	}
 	pub, err := cer.enrollOn(card, mustString(label, keyName(serial)))
 	if errors.Is(err, errDisowned) {
 		return nil, 0, err // the pending touch holds the card now
@@ -800,6 +1160,25 @@ func (cer *ceremony) keyToEnroll(card Card) ([]byte, error) {
 		return nil, err
 	}
 	cer.c.log("ceremony %s: token holds %s", cer.kind, describeKeys(keys))
+	// A key this unlock generated on this card and did not enrol comes first:
+	// an act begun again, or the same YubiKey back after another was tried,
+	// spends no second slot on a second key (ruled 2026-11-07). The rule is
+	// every enrolment's, not Switch to a YubiKey…'s alone, and lasts until
+	// the key is enrolled (every commit drops it from made) or the vault
+	// locks, and only for the act's own vault and unlock (madeScope, APP.md
+	// §3). It still counts as generated, for the ends that say it stays on
+	// the card.
+	serial := card.Serial()
+	cer.c.mu.Lock()
+	made := cer.c.madeForLocked(cer, serial)
+	cer.c.mu.Unlock()
+	for _, k := range keys {
+		if k.Usable && slices.ContainsFunc(made, func(p []byte) bool { return string(p) == string(k.PublicKey) }) {
+			cer.c.log("ceremony %s: reusing the key generated in %02x earlier in this unlock", cer.kind, byte(k.Slot))
+			cer.noteGenerated()
+			return k.PublicKey, nil
+		}
+	}
 	for _, k := range keys {
 		if k.Slot == 0x9d && k.Usable {
 			cer.c.log("ceremony %s: reusing the key in 9d", cer.kind)
@@ -868,7 +1247,24 @@ func (cer *ceremony) keyToEnroll(card Card) ([]byte, error) {
 		return nil, err
 	}
 	cer.c.log("ceremony %s: generated in %02x", cer.kind, byte(slot))
+	cer.c.mu.Lock()
+	kept := cer.c.rememberMadeLocked(cer, serial, info.PublicKey)
+	cer.c.mu.Unlock()
+	if !kept {
+		cer.c.log("ceremony %s: a lock or another vault came while the key was made: it is not remembered", cer.kind)
+	}
+	cer.noteGenerated()
 	return info.PublicKey, nil
+}
+
+// noteGenerated marks the act's state Generated (CeremonyState) without an
+// event of its own: the next step the act shows, the key's PIN or touch or
+// any end, carries it, so the panel sees no state that differs from the one
+// before it by this alone.
+func (cer *ceremony) noteGenerated() {
+	cer.c.mu.Lock()
+	cer.state.Generated = true
+	cer.c.mu.Unlock()
 }
 
 // RevealRecoveryKey shows a recovery slot's key again (APP.md §3 Keys):
@@ -1150,6 +1546,11 @@ func (c *Core) landChange(cer *ceremony, unl *keystore.Unlocked, rekeys bool, co
 	if err != nil {
 		return c.retireFailedCommit(cer, unl, err)
 	}
+	// A key the act generated is enrolled now: it leaves made, which lists
+	// the keys generated and not enrolled, so that a YubiKey removed later in
+	// this unlock and enrolled again is met by the rules of before (9d, else
+	// a fresh key), never by its old key (APP.md §3).
+	c.forgetEnrolled(ks)
 	if c.seams.committed != nil {
 		c.seams.committed() // a test, between the change and its retirement
 	}
@@ -1188,6 +1589,68 @@ func (c *Core) landChange(cer *ceremony, unl *keystore.Unlocked, rekeys bool, co
 	after := afterFactsOf(ks)
 	cer.set(func(s *CeremonyState) { s.After = after })
 	return nil
+}
+
+// madeScope is whose keys made lists: the vault the act writes (its ID; a
+// creation's is zero, as there is no file yet) and the epoch it began in. The
+// epoch moves at every lock and every open of another vault (session.go), so
+// a key a generation returns after either is never remembered, and an act
+// of another vault never reuses a key (the switch audit of 2026-11-07,
+// finding 2: a lock that landed while a key was being made, then the next
+// unlock reusing it; an import of backup B after a setup of backup A).
+type madeScope struct {
+	vault [16]byte
+	epoch uint64
+}
+
+// madeForLocked is the keys generated on the card with this serial that the
+// act may reuse: made's, when made belongs to the act's scope and the epoch
+// has not moved since the act began; none otherwise. Caller holds the state
+// mutex.
+func (c *Core) madeForLocked(cer *ceremony, serial uint32) [][]byte {
+	v := &c.vault
+	if cer.scope.epoch != v.madeEpoch || v.madeScope != cer.scope {
+		return nil
+	}
+	return slices.Clone(v.made[serial])
+}
+
+// rememberMadeLocked records a key the act generated, under the mutex the
+// lock holds: refused, false, when the epoch moved since the act began — a
+// lock, or another vault opened — since the lock already emptied made and
+// the key belongs to no unlock that will come; a made of another scope is
+// replaced. Caller holds the state mutex.
+func (c *Core) rememberMadeLocked(cer *ceremony, serial uint32, pub []byte) bool {
+	v := &c.vault
+	if cer.scope.epoch != v.madeEpoch {
+		return false
+	}
+	if v.made == nil || v.madeScope != cer.scope {
+		v.made, v.madeScope = make(map[uint32][][]byte), cer.scope
+	}
+	v.made[serial] = append(v.made[serial], slices.Clone(pub))
+	return true
+}
+
+// forgetEnrolled drops from made every public key the file now holds in a
+// hardware record (keystore.HardwareRecords), after a commit that landed;
+// a serial left with none is dropped too. It only removes, so a lock that
+// emptied made meanwhile is harmless. Every commit that can enrol a key
+// calls it: landChange, a first way in (adoptBackup) and a creation.
+func (c *Core) forgetEnrolled(ks *keystore.Keystore) {
+	recs := ks.HardwareRecords()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for serial, keys := range c.vault.made {
+		keys = slices.DeleteFunc(keys, func(p []byte) bool {
+			return slices.ContainsFunc(recs, func(r keystore.SlotInfo) bool { return string(r.PublicKey) == string(p) })
+		})
+		if len(keys) == 0 {
+			delete(c.vault.made, serial)
+		} else {
+			c.vault.made[serial] = keys
+		}
+	}
 }
 
 // retireFailedCommit ends an act whose commit through unl failed, err being
@@ -1697,7 +2160,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 	if path == "" {
 		path = c.defaultVaultPath()
 	}
-	if reservedName(path) || first.Kind != EnrollToken && first.Kind != EnrollPassword {
+	if reservedName(path) || first.Kind != EnrollToken && first.Kind != EnrollPassword || keystore.CheckLabel(first.Label) != nil {
 		return coded(CodeParams)
 	}
 	if first.Kind == EnrollToken && c.deps.Cards == nil {
@@ -1734,6 +2197,8 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 	}
 	cer := c.newCeremonyLocked("create")
 	cer.commits = true // installs at the vault's place: shutdown waits for it
+	// No file yet: a key made here is no other vault's (madeScope).
+	cer.scope.vault = [16]byte{}
 	c.vault.state = StateUnlocking
 	// The previous vault's path and facts stand until the new one exists.
 	c.mu.Unlock()
@@ -1766,6 +2231,7 @@ func (c *Core) CreateVault(path, displayName string, first EnrollOptions, replac
 			return err
 		}
 		ks := unl.Keystore()
+		c.forgetEnrolled(ks) // the key is the new vault's now (madeScope)
 		rid := newRecoveryID(ks.Slots(), nil)
 		unl.Close()
 		ks.Close()

@@ -27,6 +27,19 @@ export function BeginEnroll(kind: string, label: string, withRecoveryKey: boolea
 }
 
 /**
+ * BeginSwitchToToken switches a password vault to a YubiKey, the password
+ * going on as the vault's, asked after the YubiKey's PIN, in one commit:
+ * keepPassword carries it over in the same words, typed once as the proof,
+ * else a new one is chosen in the ceremony; rekey re-keys the vault in the
+ * same commit; withRecoveryKey proves with a recovery key, and only with a
+ * new password (ruled 2026-11-07). No password is an argument: each is typed
+ * into the ceremony's prompt.
+ */
+export function BeginSwitchToToken(label: string, keepPassword: boolean, rekey: boolean, withRecoveryKey: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3195461596, label, keepPassword, rekey, withRecoveryKey);
+}
+
+/**
  * ChangeEntangledPassword replaces the vault's password; a ceremony, and the
  * old password is never a field. rekey re-keys the vault in the same commit;
  * a backupPath that is not empty exports a backup inside the ceremony, after
@@ -45,7 +58,9 @@ export function DropRecoveryKey(handle: string): $CancellablePromise<void> {
 
 /**
  * EntangledState is the Keys page's row for the vault's password: whether
- * it is on, and whether the invariant would let it be turned on.
+ * it is on, whether the invariant would let it be turned on, whether the
+ * vault has a YubiKey or a standalone password, and whether Switch to a
+ * YubiKey… could begin.
  */
 export function EntangledState(): $CancellablePromise<app$0.EntangledState> {
     return $Call.ByID(898464716);

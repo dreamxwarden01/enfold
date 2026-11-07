@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CeremonyStep, Code } from "../../bindings/github.com/dreamxwarden01/enfold/internal/app";
 import * as strings from "./strings";
 import * as validate from "./validate";
-import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, collisionCopy, commandCopy, compareCopy, compressedText, conflictCopy, refusedCopy, lockedOpenText, dialogCopy, doneCopy, doneTitleOf, extensionNames, extractCopy, importCopy, lockCopy, phaseLeadOf, purgedText, reclaimedText, replaceCopy, retireHeld, retireLeadOf, retriesText, revealCopy, sinceText, spaceCopy, stepCopy, tamperedCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
+import { archivePageCopy, archivesCopy, bootCopy, leadText, tamperedLead, ceremonyCopy, chipCopy, closeCopy, codeCopy, codeText, collisionCopy, commandCopy, compareCopy, compressedText, conflictCopy, refusedCopy, lockedOpenText, dialogCopy, doneCopy, doneTitleOf, extensionNames, extractCopy, importCopy, lockCopy, phaseLeadOf, purgedText, reclaimedText, replaceCopy, retireHeld, retireLeadOf, retriesText, revealCopy, sinceText, spaceCopy, stepCopy, switchCopy, tamperedCopy, technicalCopy, typeLabel, unknownCodeParts, vaultCopy, warningCopy } from "./strings";
 
 // ---- One word per thing (APP.md §7, ruled 2026-10-17) -------------------
 //
@@ -48,6 +48,11 @@ const exceptions: { term: RegExp; line: string; why: string }[] = [
     term: /\bslots?\b/i,
     line: codeCopy[Code.CodeTokenFull],
     why: "a PIV slot on the YubiKey, the key's own word as Yubico's tools show it, not the vault's",
+  },
+  {
+    term: /\bslots?\b/i,
+    line: switchCopy.keyLeft,
+    why: "a PIV slot on the YubiKey that a key Enfold made takes, the key's own word as Yubico's tools show it, not the vault's",
   },
 ];
 
@@ -511,7 +516,7 @@ describe("the re-key question and the replacement (DESIGN §5, ruled 2026-10-27)
     const r = d.removeUnlockMethod;
     expect(r.retired(1, "Desk key")).toBe("Enfold keeps 1 replaced vault file in its folder; if it had Desk key, it still opens with it until you delete it.");
     expect(r.retired(2, "Desk key")).toBe("Enfold keeps 2 replaced vault files in its folder; those that had Desk key still open with it until you delete them.");
-    expect(r.lastProtector).toBe("After this the vault has only its recovery keys: add the new YubiKey here now, or after unlocking with a recovery key.");
+    expect(r.lastProtector).toBe("After this the vault has only its recovery keys: add the new YubiKey or a password here now, or after unlocking with a recovery key.");
     expect(r.how("Desk key", "hardware")).toBe(
       "Re-keying gives the vault a new key in the same step, and every unlock method that stays gets it. An earlier copy of the vault file opened with Desk key then reaches nothing in this vault through Desk key; the recovery keys it held still do, until they are replaced. An archive that existed then stays open to such a copy, files added later included, until that archive is re-keyed with Re-key archive… on its page. A backup made before now is at the old key; the one taken afterwards is at the new one. The vault refuses a removal that would leave fewer than 2 unlock methods.",
     );
@@ -622,6 +627,7 @@ describe("the re-key question and the replacement (DESIGN §5, ruled 2026-10-27)
       "Password turned on and vault re-keyed",
       "Recovery keys replaced and vault re-keyed",
       "Recovery key replaced and vault re-keyed",
+      "Switched to a YubiKey and vault re-keyed",
     ]);
     expect(doneTitleOf({ kind: "remove", rekey: true })).toBe("Unlock method removed and vault re-keyed");
     expect(doneTitleOf({ kind: "remove", rekey: false })).toBe("Unlock method removed");
@@ -694,8 +700,8 @@ describe("the re-key question and the replacement (DESIGN §5, ruled 2026-10-27)
   });
   it("says the end's next steps, the password first", () => {
     expect(ceremonyCopy.followUp).toEqual({
-      addFirst: "Add the new YubiKey now; then, if an earlier copy of the vault file may be out there, replace the recovery keys.",
-      addFirstOn: "Add the new YubiKey now; then, if an earlier copy of the vault file may be out there, change the password and replace the recovery keys.",
+      addFirst: "Add the new YubiKey or a password now; then, if an earlier copy of the vault file may be out there, replace the recovery keys.",
+      addFirstOn: "Add the new YubiKey or a password now; then, if an earlier copy of the vault file may be out there, change the password and replace the recovery keys.",
       changeFirst: "If an earlier copy of the vault file may be out there, change the password, then replace the recovery keys.",
       changeFirstRecovery: "If an earlier copy or backup may be out there, change the password, then replace the other recovery keys.",
       replace: "If an earlier copy of the vault file may be out there, replace the recovery keys too.",
@@ -708,6 +714,53 @@ describe("the re-key question and the replacement (DESIGN §5, ruled 2026-10-27)
       retryFirst: " Enfold first tries again to finish clearing the vault file.",
     });
     expect(ceremonyCopy.afterRecoveryProof).toBe("Now remove the lost YubiKey: Remove… on its card asks why, and re-keys the vault when it was lost.");
+  });
+  // Switch to a YubiKey… and option A (ruled 2026-11-07): the study's words
+  // under the owner's rulings — the verb a switch, never "Replace" or "in
+  // the password's place", no backup anywhere, one recovery key singular.
+  it("says Switch to a YubiKey… in the glossary's words and the house voice", () => {
+    const s = switchCopy;
+    const said: string[] = [];
+    for (const v of Object.values(s)) {
+      if (typeof v === "string") said.push(v);
+      else if (Array.isArray(v)) said.push(...v);
+      else if (typeof v === "function") said.push(String((v as (a: unknown, b?: unknown) => string)(1)), String((v as (a: unknown, b?: unknown) => string)(2)), String((v as (a: unknown, b?: unknown) => string)("Desk YubiKey", 1)), String((v as (a: unknown, b?: unknown) => string)("Desk YubiKey", 2)));
+    }
+    const a = dialogCopy.addUnlockMethod;
+    said.push(a.switchPointer, a.aloneHead, a.aloneRest, a.aloneEnds, vaultCopy.ruleLastYubiKey, vaultCopy.rulePassword, vaultCopy.passwordOffNoYubiKey, vaultCopy.passwordOnNoYubiKey, vaultCopy.passwordOnNext, vaultCopy.turnOnNeedsYubiKey, vaultCopy.changeBySwitch, vaultCopy.ceremonyTitle.toToken, commandCopy.switchToYubiKey, codeCopy[Code.CodeSlotPolicy], ceremonyCopy.doneTitle.toToken, ceremonyCopy.doneRekeyed.toToken, ceremonyCopy.phaseLead.toToken, ceremonyCopy.phaseLead.toTokenRekey, ceremonyCopy.retireWhat.toToken);
+    for (const t of said) {
+      // A YubiKey is never a bare "key" (a key Enfold made on it is the key's own).
+      expect(t, t).not.toMatch(/\b(the|this) key\b/i);
+      expect(t, t).not.toMatch(/\b(can't|won't|don't|doesn't|isn't|it's|you're|we're)\b/i);
+      // The verb is the switch's (the owner, 2026-11-07).
+      expect(t, t).not.toMatch(/\bReplace with\b|in the password's place|take the password's place/i);
+      // No backup in the act (O7).
+      expect(t, t).not.toMatch(/\bback(ed)? ?up\b|\bbackups?\b/i);
+    }
+    expect(s.title).toBe("Switch to a YubiKey?");
+    expect(s.primary).toEqual(["Switch to a YubiKey", "Switch and re-key"]);
+    expect(vaultCopy.ceremonyTitle.toToken).toBe("Switch to a YubiKey");
+    expect(doneTitleOf({ kind: "toToken", rekey: false })).toBe("Switched to a YubiKey");
+    expect(doneTitleOf({ kind: "toToken", rekey: true })).toBe("Switched to a YubiKey and vault re-keyed");
+    expect(phaseLeadOf({ kind: "toToken", phase: "commit", rekey: true })).toBe("Adding the YubiKey and re-keying the vault…");
+    expect(phaseLeadOf({ kind: "toToken", phase: "commit", rekey: false })).toBe("Adding the YubiKey…");
+    expect(retireLeadOf({ kind: "toToken", rekey: true })).toBe("The vault file still holds its state from before this change: a copy of it taken now still opens with the password alone.");
+    expect(commandCopy.switchToYubiKey).toBe("Switch to a YubiKey…");
+    expect(s.body(1).endsWith("The recovery key stays as it is.")).toBe(true);
+    expect(s.body(2).endsWith("The recovery keys stay as they are.")).toBe(true);
+    expect(s.lost(1)).toBe("If this YubiKey is lost, only the recovery key opens the vault.");
+    expect(s.tick(1)).toBe("I know where this vault's recovery key is kept.");
+    expect(s.tick(2)).toBe("I know where one of this vault's recovery keys is kept.");
+    expect(s.ifLost("Desk YubiKey", 1)).toBe("If Desk YubiKey is lost, unlock with the recovery key, then add a new YubiKey here.");
+    expect(s.doneSame("Desk YubiKey")).toBe("Desk YubiKey now opens this vault with its PIN, then the password, and a touch. The password no longer opens it by itself.");
+    expect(s.doneNew("Desk YubiKey")).toBe("Desk YubiKey now opens this vault with its PIN, then the new password, and a touch. The old password no longer opens it.");
+    expect(s.blocked).toBe("This YubiKey's PIN is blocked, so it cannot be used here. Nothing was changed: the password still opens the vault.");
+    expect(s.keyLeft).toBe("The YubiKey keeps a key Enfold made for this vault; it is unused, and takes one of the YubiKey's slots.");
+    expect(a.aloneHead).toBe("This password opens the vault by itself, so the vault is only as strong as the password: whoever has a copy of the vault file can try passwords against it.");
+    expect(a.aloneEnds).toBe("Password with every YubiKey ends here, since the vault has no YubiKey for it to go with.");
+    expect(vaultCopy.ruleLastYubiKey.endsWith("A password can be added once the YubiKey is gone.")).toBe(true);
+    expect(vaultCopy.rulePassword).toBe("At least 2 unlock methods are always kept, one of them a recovery key. To open the vault with a YubiKey instead, use Switch to a YubiKey… on this card.");
+    expect(codeText(Code.CodeSlotPolicy)).toBe("A YubiKey cannot be added beside a password that opens the vault by itself. Use Switch to a YubiKey… on the password's card.");
   });
   it("says why a recovery key proves it, by cause", () => {
     const n = ceremonyCopy.recoveryNote;

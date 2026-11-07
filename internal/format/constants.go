@@ -45,6 +45,11 @@ const (
 	// 1 024 bytes of UTF-8, longer is invalid.
 	MaxDescriptionLen = 1024
 
+	// MaxLabelBytes bounds a slot record's label (§6): its u16 length prefix,
+	// at most 65 535 bytes of UTF-8, the limit SlotRecord.Validate applies.
+	// Named so that a writer can refuse a label before any key exists.
+	MaxLabelBytes = 0xFFFF
+
 	MLKEMEKSize   = 1568
 	MLKEMCTSize   = 1568
 	P256PubSize   = 65 // 0x04 ‖ X ‖ Y

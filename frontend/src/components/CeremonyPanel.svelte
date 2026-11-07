@@ -31,17 +31,27 @@
   // try's bar, and in the foot at No match and at a blocked PIN, the two
   // exceptions to a dialog's foot holding Cancel alone where nothing is
   // asked.
+  //
+  // Switch to a YubiKey… (ruled 2026-11-07) is drawn as an enrolment, its
+  // two halves and its views, with its own words where they differ: the
+  // proof's lead and line by the password chosen, the new password's lead
+  // before the card, a YubiKey refused in the second half that another
+  // could pass (its PIN blocked, a key it cannot hold or use) answered by
+  // Use another YubiKey (lib/lockscreen anotherAsked), the line that a key
+  // made on the YubiKey stays there at every end after it, a cancel after
+  // that drawn as an end (keptAfterCancel), and its Done's lines (lib/rekey
+  // switchEndItems). No backup line anywhere in it.
   import { CeremonyStep, Code, Vault, submitSecret } from "../lib/api";
   import type { CeremonyState } from "../lib/api";
   import { fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import { getContext, untrack } from "svelte";
   import { store } from "../lib/state.svelte";
-  import { ceremonyCopy, codeText, dialogCopy, doneTitleOf, lockCopy, phaseLeadOf, replaceCopy, retriesText, stepText } from "../lib/strings";
+  import { ceremonyCopy, codeText, dialogCopy, doneTitleOf, lockCopy, phaseLeadOf, replaceCopy, retriesText, stepText, switchCopy } from "../lib/strings";
   import { motion, delay, FAST, GAP } from "../lib/motion";
   import { NO_TRACK, key as formKey, track } from "../lib/pinform";
-  import { NO_HALVES, blockedMeansOf, choosesVaultPassword, dialogFoot, dialogViewOf, dialogWay, discs, endsWithMore, green, halvesAfter, insertLed, lastTry, mergesPassword, offersRecoverySwitch, pinLeads, provesFirst, recoverySwitchAt, retriesTone, typedProofLeads } from "../lib/lockscreen";
-  import { afterRecoveryProof, backupBar, failedNotes, pairRows, primaryOf, recoveryNoteOf, replaceBackupItems, retireBar, swapWordsOf } from "../lib/rekey";
+  import { NO_HALVES, anotherAsked, blockedMeansOf, choosesVaultPassword, dialogFoot, dialogViewOf, dialogWay, discs, endsWithMore, green, halvesAfter, insertLed, keptAfterCancel, lastTry, mergesPassword, nothingChanged, offersRecoverySwitch, pinLeads, provesFirst, recoverySwitchAt, retriesTone, twoHalves, typedProofLeads } from "../lib/lockscreen";
+  import { afterRecoveryProof, backupBar, failedNotes, pairRows, primaryOf, recoveryNoteOf, replaceBackupItems, retireBar, swapWordsOf, switchEndItems } from "../lib/rekey";
   import { HeldView } from "../lib/stage.svelte";
   import { DIALOG_HOST } from "../lib/dialogs";
   import type { DialogHost } from "../lib/dialogs";
@@ -74,7 +84,11 @@
   // green are lent to the panel while it is mounted.
   const host = getContext<DialogHost | undefined>(DIALOG_HOST);
 
-  const over = $derived(c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed);
+  // Switch to a YubiKey…'s refusal that another YubiKey could pass stands
+  // at a Failed (or Blocked) step with its prompt, and is not an end.
+  const another = $derived(anotherAsked(c));
+  const over = $derived((c.step === CeremonyStep.StepDone || c.step === CeremonyStep.StepFailed) && !another);
+  const switching = $derived(c.kind === "toToken");
 
   // An enrolment is two halves, not three steps: proving it is you, then
   // adding the new unlock method. The core's SwapKey, or the new secret's
@@ -85,9 +99,9 @@
     const next = halvesAfter(untrack(() => halves), c);
     if (next !== halves) halves = next;
   });
-  const lineShown = $derived(c.kind === "enroll");
+  const lineShown = $derived(twoHalves(c.kind));
   const halfStates = $derived(discs(2, halves.phase));
-  const second = $derived(c.kind === "enroll" && halves.phase >= 1);
+  const second = $derived(twoHalves(c.kind) && halves.phase >= 1);
 
   // The way it proves it is you, and the view the step asks for.
   const way = $derived(dialogWay(c.method ?? "", !!store.status?.hasHardwareSlot, c));
@@ -129,15 +143,17 @@
     form.shows === "pin"
       ? ceremonyCopy.pin
       : c.choose
-        ? choosesVaultPassword(c.kind)
-          ? ceremonyCopy.chooseVaultPassword
-          : ceremonyCopy.choosePassword
+        ? switching
+          ? ceremonyCopy.password
+          : choosesVaultPassword(c.kind)
+            ? ceremonyCopy.chooseVaultPassword
+            : ceremonyCopy.choosePassword
         : way === "token"
           ? ceremonyCopy.vaultPassword
           : ceremonyCopy.password,
   );
   const secretNote = $derived(
-    form.shows === "pin" || !c.choose ? "" : choosesVaultPassword(c.kind) ? ceremonyCopy.chooseVaultPasswordNote : ceremonyCopy.chooseMethodPasswordNote,
+    form.shows === "pin" || !c.choose ? "" : switching || choosesVaultPassword(c.kind) ? ceremonyCopy.chooseVaultPasswordNote : ceremonyCopy.chooseMethodPasswordNote,
   );
   const secretError = $derived(form.shows === "pin" ? (form.pinError ? ceremonyCopy.wrongPin : "") : form.passwordError ? ceremonyCopy.wrongPassword : "");
 
@@ -167,20 +183,25 @@
   // so the line leaves it out.
   const proves = $derived(provesFirst(c.kind));
   const hardwareLabels = $derived(store.slots.filter((s) => s.type === "hardware" && !(c.without && s.recipientId === c.without)).map((s) => s.label));
+  // In the second half the insert view is the new YubiKey's wait, at its
+  // opening SwapKey with nothing to take out (a proof that was typed, or a
+  // recovery key's) as at its WaitingForKey: "Swap YubiKeys" there asked
+  // to remove a YubiKey that never proved anything (ruled 2026-11-07).
+  const newWait = $derived(second && (insertStep === CeremonyStep.StepWaitingForKey || insertStep === CeremonyStep.StepSwapKey));
   const waitTitle = $derived(
-    insertStep !== CeremonyStep.StepWaitingForKey
-      ? stepText(insertStep).title
-      : second
-        ? ceremonyCopy.insertNew
+    newWait
+      ? ceremonyCopy.insertNew
+      : insertStep !== CeremonyStep.StepWaitingForKey
+        ? stepText(insertStep).title
         : proves
           ? ceremonyCopy.insertProve
           : stepText(insertStep).title,
   );
   const waitLine = $derived(
-    insertStep !== CeremonyStep.StepWaitingForKey
-      ? stepText(insertStep).body
-      : second
-        ? ceremonyCopy.insertNewLine
+    newWait
+      ? ceremonyCopy.insertNewLine
+      : insertStep !== CeremonyStep.StepWaitingForKey
+        ? stepText(insertStep).body
         : proves
           ? ceremonyCopy.insertProveLine(hardwareLabels, c.kind === "enroll")
           : stepText(insertStep).body,
@@ -235,7 +256,9 @@
       lastTry: lastTry(c),
     }),
   );
-  const buttons = $derived(dialogFoot({ over, view: shown, asks, again: !!onagain, recovery: switchAt === "foot", step: c.step }));
+  // A cancel kept for its end (keptAfterCancel) has Close alone: the user
+  // chose it, so nothing begins it again from there.
+  const buttons = $derived(dialogFoot({ over, view: shown, asks, again: !!onagain && !keptAfterCancel(c), recovery: switchAt === "foot", another, step: c.step }));
   // Narrator hears the already-unlocks wait's lead once, as it appears
   // (ruled 2026-11-06, R5): the panel's views cross without moving the
   // focus, so the lead is also said in a polite live region that stands
@@ -244,7 +267,15 @@
   // role of its own, and the focus its foot takes names only the button
   // (APP.md §6, 2026-11-06; nothing was said before).
   const saidAloud = $derived(
-    shown === "swap" && swapWords.already ? swapWords.lead : shown === "blocked" ? `${ceremonyCopy.blockedLead}. ${blockedMeansOf(switchAt)}` : "",
+    shown === "swap" && swapWords.already
+      ? swapWords.lead
+      : shown === "blocked"
+        ? switching
+          ? switchCopy.blocked
+          : `${ceremonyCopy.blockedLead}. ${blockedMeansOf(switchAt)}`
+        : shown === "failed" && another
+          ? `${switchCopy.refusedLead}. ${codeText(c.error ?? "")}`
+          : "",
   );
 
   // A view that replaces the one holding the focus gives the focus to its
@@ -273,6 +304,16 @@
     onrecovery?.();
   }
 
+  // Use another YubiKey (ruled 2026-11-07): answers the refusal's prompt,
+  // once per ceremony state; the core then waits for the refused YubiKey to
+  // leave, naming it, and meets the next as the enrolment meets any.
+  let anotherFor = "";
+  function useAnother() {
+    if (!c.promptId || anotherFor === c.promptId) return;
+    anotherFor = c.promptId;
+    submitSecret("another", c.promptId, "");
+  }
+
   // The replacement's confirmation (ruled 2026-10-27, R-B): each new key
   // beside the one it replaces, under the old key's name, which the new one
   // takes; the press answers the confirm prompt, once.
@@ -290,7 +331,7 @@
   // 2026-10-27): a replacement's receipt and what its backup did, a
   // retirement that did not land, a backup that was not saved, the next
   // step, the line after an enrolment proved with the switch.
-  const ends = $derived(replaceBackupItems(c));
+  const ends = $derived([...switchEndItems(c, store.slots.filter((s) => s.type === "recovery").length), ...replaceBackupItems(c)]);
   const retire = $derived(retireBar(c));
   const backupNotSaved = $derived(backupBar(c));
   // The recovery view's note, by why a recovery key proves it (lib/rekey.ts
@@ -422,8 +463,18 @@
             <div class="lead"><h3 class="t-section">{second ? ceremonyCopy.pinNew : lockCopy.pinLead}</h3></div>
           {:else if typedProofLeads({ way, shows: form.shows, choose: c.choose, second })}
             <!-- A typed proof heads as the YubiKey's wait does: what to type,
-                 and why (APP.md §13, ruled 2026-10-17). -->
-            <div class="lead"><h3 class="t-section">{ceremonyCopy.typeProve}</h3><div class="cap">{ceremonyCopy.typeProveLine(c.kind === "enroll")}</div></div>
+                 and why (APP.md §13, ruled 2026-10-17); the switch's says
+                 whose password, and what becomes of it by the choice. -->
+            {#if switching}
+              <div class="lead"><h3 class="t-section">{switchCopy.proveLead}</h3><div class="cap">{c.keepPassword ? switchCopy.proveSame : switchCopy.proveNew}</div></div>
+            {:else}
+              <div class="lead"><h3 class="t-section">{ceremonyCopy.typeProve}</h3><div class="cap">{ceremonyCopy.typeProveLine(c.kind === "enroll")}</div></div>
+            {/if}
+          {:else if switching && c.choose && form.shows === "password"}
+            <!-- The switch's new password, the second half's first view,
+                 before the card: nothing typed can fail after a key is made
+                 on the YubiKey. -->
+            <div class="lead"><h3 class="t-section">{switchCopy.chooseLead}</h3></div>
           {/if}
           {#if c.slotLabel && c.step !== CeremonyStep.StepManagementKey && form.shows !== "password"}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
           {#if c.promptId && form.shows !== "none"}
@@ -538,14 +589,36 @@
               {#if nextLine}<p>{ceremonyCopy.afterRecoveryProof}</p>{/if}
             </div>
           {/if}
+        {:else if shown === "failed" && switching && (another || keptAfterCancel(c))}
+          <!-- The switch's YubiKey refused in a way another could pass, its
+               reason on the danger bar and Use another YubiKey in the foot;
+               or the switch cancelled after a key was made on the YubiKey,
+               an end the user chose, so no bar. Each says what still opens
+               the vault, and that the key made stays on the card. -->
+          {#if another}
+            {#if c.slotLabel}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
+            <div class="lead"><h3 class="t-section">{switchCopy.refusedLead}</h3></div>
+            <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{codeText(c.error ?? "")}</span></div>
+          {:else}
+            <div class="lead"><h3 class="t-section">{switchCopy.cancelledLead}</h3></div>
+          {/if}
+          <p class="t-quiet">{switchCopy.nothingChanged}</p>
+          {#if c.generated}<p class="t-quiet">{switchCopy.keyLeft}</p>{/if}
         {:else if shown === "failed"}
           {#if c.error === "token.touch"}
             <!-- Where it happened and in neutral ink: the YubiKey stopped
                  waiting, nothing refused anything (ruled 2026-10-17). -->
             <svg class="i restlock" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-touchdot" /></svg>
             <div class="lead"><h3 class="t-section">{lockCopy.stoppedWaiting}</h3><div class="cap">{lockCopy.stoppedLine}</div></div>
+            <!-- The switch makes its key before the touch, so a timeout
+                 there still says what opens the vault and that the key made
+                 stays on the YubiKey (judge U3; lib/rekey.ts failedNotes). -->
+            {#if switching}{#each failedNotes(c) as note, i (i)}<p class="t-quiet">{note}</p>{/each}{/if}
           {:else}
-            <div class="lead"><h3 class="t-section">{stepText(c.step).title}</h3></div>
+            <!-- The switch's own lead only where nothing was changed: when a
+                 save could not be confirmed it is not known whether the
+                 YubiKey was added, so the house's lead stands (judge U3). -->
+            <div class="lead"><h3 class="t-section">{switching && nothingChanged(c) ? switchCopy.failedLead : stepText(c.step).title}</h3></div>
             <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{codeText(c.error ?? "")}</span></div>
             <!-- That nothing was changed, for the acts whose failure before
                  the change leaves the file as it was, and what is known of
@@ -560,8 +633,18 @@
                holds it, Use recovery key beside Cancel (ruled 2026-11-06,
                R8); elsewhere the meaning alone and Cancel alone. -->
           {#if c.slotLabel}<span class="slotchip"><svg class="i"><use href="#i-yubi" /></svg>{c.slotLabel}</span>{/if}
-          <div class="lead"><h3 class="t-section">{ceremonyCopy.blockedLead}</h3></div>
-          <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{blockedMeansOf(switchAt)}</span></div>
+          {#if switching}
+            <!-- The switch's new YubiKey, its PIN found blocked in the second
+                 half (ruled 2026-11-07): the PIN's own lead, the bar's one
+                 sentence saying what it means here and what still opens the
+                 vault, and Use another YubiKey in the foot. -->
+            <div class="lead"><h3 class="t-section">{ceremonyCopy.pinNew}</h3></div>
+            <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{switchCopy.blocked}</span></div>
+            {#if c.generated}<p class="t-quiet">{switchCopy.keyLeft}</p>{/if}
+          {:else}
+            <div class="lead"><h3 class="t-section">{ceremonyCopy.blockedLead}</h3></div>
+            <div class="bar danger"><svg class="i"><use href="#i-error" /></svg><span>{blockedMeansOf(switchAt)}</span></div>
+          {/if}
         {:else if c.step !== CeremonyStep.StepWaitingForKey}
           <!-- A step that asks nothing here (the records found, a recovery
                key being shown). The opening wait of a typed proof draws
@@ -597,6 +680,8 @@
       <button type="submit" class="btn accent" form={formId}>{shown === "confirm" ? primaryOf("replace", true, false, keys) : lockCopy.continue}</button>
     {:else if b === "recovery"}
       <button type="button" class="btn accent" onclick={recovery} use:takeFocus>{lockCopy.useRecoveryKey}</button>
+    {:else if b === "another"}
+      <button type="button" class="btn accent" onclick={useAnother} use:takeFocus>{switchCopy.another}</button>
     {:else if b === "again"}
       <button type="button" class="btn accent" onclick={again}>{lockCopy.startAgain}</button>
     {:else if b === "close"}
